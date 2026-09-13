@@ -8,6 +8,7 @@
 | `components/settings/mcp-card.tsx` | One server: name, transport badge, side-effects tag, endpoint, tool count, status pill, enabled switch |
 | `components/settings/mcp-display.ts` | Pure: `mcpStatus`, `mcpStatusTone`, `mcpEndpoint`. Unit-tested |
 | `components/settings/mcp-editor.tsx` | The add / edit form, the probe result with its tool list, the stderr log, Test / Save / Delete |
+| `components/settings/mcp-text.ts` | Pure: `visibleText`, `canonicalArgs`, `canonicalEnv` — what the arguments / environment / headers boxes show. Unit-tested |
 | `components/agents/mcp-checklist.tsx` | The agent form's checklist, bound to `mcpServerIds` |
 | `components/chat/tool-call.ts` | Gained `serverName` and `label` (`serverName · toolName`) |
 | `components/chat/tool-card.tsx` | Renders `label`, and exposes `data-server` next to `data-tool` |
@@ -33,6 +34,34 @@ Pure helpers exported for the editor and for tests: `argsToText` / `textToArgs`
 (one argument per line) and `envToText` / `textToEnv` (`KEY=VALUE` per line,
 split on the **first** `=` so a value may contain one).
 
+## The line-list boxes
+
+The arguments, environment and headers boxes are edited as raw text, but the
+draft stores `args` as `string[]` and `env` as a map — the shapes the backend
+validates. The two are **not** kept in a controlled round-trip. Each box owns
+its raw text (`argsText` / `envText` in `McpEditor`, reset when `selectedId` or
+`mode` changes) and on every change does two things: keeps the text, and
+`patchDraft`s the normalised value. The draft is therefore always current, so
+Test and Save need no blur step; the box never renders the draft back while the
+text still accounts for it.
+
+The reason is that the normalisers are lossy exactly where a half-typed line
+lives: `textToArgs` drops empty lines, so the Enter that starts a second
+argument is an empty line until its first character arrives; `textToEnv` drops
+a line without `=`, so a variable name is nothing until its `=` is typed.
+Rendering the draft back on each keystroke erased that newline and put the
+caret back on the previous line, which is how `-y` + Enter + `@scope/pkg`
+became the single argument `-y@scope/pkg` (found while recording the README
+tour; see `docs/features/packaging/implement.md`, "Recording pitfalls").
+
+`visibleText(typed, stored, normalise)` in `mcp-text.ts` decides which of the
+two the box shows, with no effect and no reset key: the typed text, as long as
+`normalise(typed) === stored`; the stored text otherwise, which is what happens
+the moment another server is opened or "Add" starts a fresh draft. The next
+keystroke replaces the stale local text. `canonicalArgs` and `canonicalEnv`
+are the two `normalise` functions (`argsToText ∘ textToArgs`,
+`envToText ∘ textToEnv`).
+
 ## Backend calls
 
 | Call | From | When |
@@ -53,6 +82,7 @@ agent form asks only for the servers that agent actually uses.
 | State | What the user sees |
 |---|---|
 | Fresh draft | Test and Save both disabled until there is a name and a command (or URL) |
+| Typing a second argument / variable | Enter opens a new line and the caret stays on it; the draft already holds the lines above it |
 | Probing | Spinner on the button, "Connecting…" |
 | Probe succeeded | A green line with the latency and the tool count, then every tool with its description |
 | Probe failed | A red line: the translated `BackendError` plus the raw message in monospace |

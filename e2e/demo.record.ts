@@ -281,11 +281,10 @@ test('records the product tour', async () => {
     await beat(500)
     await type('mcp-command-input', 'npx')
     await beat(500)
-    // `fill`, not `pressSequentially`: the arguments box is a controlled textarea
-    // whose `textToArgs` drops empty lines, so a typed Enter is erased by the
-    // next render and the two arguments end up concatenated into one. Both lines
-    // have to arrive in a single change event. It also reads as a paste, which
-    // is what anyone actually does with an npx command.
+    // `fill`, not `pressSequentially`: it reads as a paste, which is what anyone
+    // actually does with an npx command. (It was once also a workaround — the
+    // arguments box used to erase a typed Enter on the next render; that is
+    // fixed, and `e2e/mcp.spec.ts` now types the newline for real.)
     await window
       .getByTestId('mcp-args-input')
       .fill('-y\n@modelcontextprotocol/server-everything')

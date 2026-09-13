@@ -12,7 +12,11 @@
  *   cleared, so flipping the switch twice does not lose what was typed.
  * - **Arguments and environment are edited as text.** One argument per line, one
  *   `KEY=VALUE` per line; see `argsToText` / `textToEnv` in the store for why
- *   neither is a chip list or a space-separated field.
+ *   neither is a chip list or a space-separated field. The boxes show their own
+ *   raw text (`argsText`, `envText`) and push the normalised value into the
+ *   draft on every change; `visibleText` in `mcp-text.ts` decides when the draft
+ *   has moved on and must be shown instead. Rendering the draft straight back
+ *   into the box would erase the newline that starts a second argument.
  * - **"Test connection" shows the tool list.** The point of the probe is not that
  *   a process started — it is which tools an agent would get, so the result lists
  *   them with their descriptions.
@@ -37,6 +41,7 @@ import {
   textToEnv,
   useMcpStore
 } from '../../stores/mcp'
+import { canonicalArgs, canonicalEnv, visibleText } from './mcp-text'
 
 /** How long the delete latch stays armed before it forgets it was clicked. */
 const CONFIRM_DELETE_MS = 4_000
@@ -56,6 +61,11 @@ export function McpEditor(): React.JSX.Element | null {
 
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [showLog, setShowLog] = useState(false)
+  // The raw text of the line-list boxes. `envText` backs both the environment
+  // box and the headers box: they edit the same `draft.env`, and only one of
+  // them is mounted at a time.
+  const [argsText, setArgsText] = useState('')
+  const [envText, setEnvText] = useState('')
 
   // The latch must not stay armed while the user is off doing something else.
   useEffect(() => {
@@ -68,6 +78,8 @@ export function McpEditor(): React.JSX.Element | null {
   useEffect(() => {
     setConfirmingDelete(false)
     setShowLog(false)
+    setArgsText('')
+    setEnvText('')
   }, [selectedId, mode])
 
   if (!draft) return null
@@ -80,6 +92,16 @@ export function McpEditor(): React.JSX.Element | null {
   // testable before Save, exactly as a provider's key is.
   const ref: McpServerRef = { draft }
   const canProbe = isStdio ? Boolean(draft.command?.trim()) : Boolean(draft.url?.trim())
+  const shownArgs = visibleText(argsText, argsToText(draft.args), canonicalArgs)
+  const shownEnv = visibleText(envText, envToText(draft.env), canonicalEnv)
+  const changeArgs = (text: string): void => {
+    setArgsText(text)
+    store().patchDraft({ args: textToArgs(text) })
+  }
+  const changeEnv = (text: string): void => {
+    setEnvText(text)
+    store().patchDraft({ env: textToEnv(text) })
+  }
 
   return (
     <div data-testid="mcp-editor" className="flex max-w-2xl flex-col gap-4.5">
@@ -129,9 +151,9 @@ export function McpEditor(): React.JSX.Element | null {
                 id="mcp-args"
                 data-testid="mcp-args-input"
                 className="h-full font-mono text-[12px]"
-                value={argsToText(draft.args)}
+                value={shownArgs}
                 placeholder={t('settings.mcp.argsPlaceholder')}
-                onChange={(event) => store().patchDraft({ args: textToArgs(event.target.value) })}
+                onChange={(event) => changeArgs(event.target.value)}
               />
             </div>
           </Field>
@@ -147,9 +169,9 @@ export function McpEditor(): React.JSX.Element | null {
                 id="mcp-env"
                 data-testid="mcp-env-input"
                 className="h-full font-mono text-[12px]"
-                value={envToText(draft.env)}
+                value={shownEnv}
                 placeholder={t('settings.mcp.envPlaceholder')}
-                onChange={(event) => store().patchDraft({ env: textToEnv(event.target.value) })}
+                onChange={(event) => changeEnv(event.target.value)}
               />
             </div>
           </Field>
@@ -178,9 +200,9 @@ export function McpEditor(): React.JSX.Element | null {
                 id="mcp-headers"
                 data-testid="mcp-headers-input"
                 className="h-full font-mono text-[12px]"
-                value={envToText(draft.env)}
+                value={shownEnv}
                 placeholder={t('settings.mcp.headersPlaceholder')}
-                onChange={(event) => store().patchDraft({ env: textToEnv(event.target.value) })}
+                onChange={(event) => changeEnv(event.target.value)}
               />
             </div>
           </Field>

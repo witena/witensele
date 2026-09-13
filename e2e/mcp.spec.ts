@@ -51,7 +51,9 @@ const WINDOW_SIZE = { width: 1440, height: 900 }
 /** The reference server from PLAN.md's milestone list. */
 const SERVER_NAME = 'everything'
 const SERVER_COMMAND = 'npx'
-const SERVER_ARGS = ['-y', '@modelcontextprotocol/server-everything'].join('\n')
+const SERVER_ARG_FLAG = '-y'
+const SERVER_ARG_PACKAGE = '@modelcontextprotocol/server-everything'
+const SERVER_ARGS = [SERVER_ARG_FLAG, SERVER_ARG_PACKAGE].join('\n')
 
 /** The first probe may have to download the package before it can spawn it. */
 const FIRST_CONNECT_MS = 120_000
@@ -135,7 +137,16 @@ test('connects to server-everything and lists its tools before saving', async ()
 
   await window.getByTestId('mcp-name-input').fill(SERVER_NAME)
   await window.getByTestId('mcp-command-input').fill(SERVER_COMMAND)
-  await window.getByTestId('mcp-args-input').fill(SERVER_ARGS)
+  // Typed key by key, with a real Enter between the two arguments, rather than
+  // `fill`: the arguments box once erased a typed newline on the next render
+  // (the draft stores a normalised list, and rendering it back dropped the empty
+  // second line), and a single change event never exercised that path.
+  const args = window.getByTestId('mcp-args-input')
+  await args.click()
+  await args.pressSequentially(SERVER_ARG_FLAG)
+  await args.press('Enter')
+  await args.pressSequentially(SERVER_ARG_PACKAGE)
+  await expect(args).toHaveValue(SERVER_ARGS)
 
   // The probe runs against the draft: nothing has been stored yet.
   await expect(window.getByTestId('mcp-test')).toBeEnabled()
