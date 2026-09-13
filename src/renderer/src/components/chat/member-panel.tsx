@@ -21,16 +21,26 @@
  * first and would race with the `chat.updated` event that follows.
  *
  * The per-member token count is a placeholder until S4.1 lands usage accounting;
- * it prints an em dash rather than a zero, because zero would be a claim.
+ * it prints an em dash rather than a zero, because zero would be a claim — and an
+ * **offline** member gives the column up entirely to the "Retry" button, which is
+ * the manual half of S2.4's recovery loop.
+ *
+ * ## Presence
+ *
+ * The dot and the label under the name come from `stores/presence`, seeded by
+ * `presence.list` when the chat is opened and kept current by `presence.changed`.
+ * `away` additionally prints how long the agent has been silent; that number is
+ * computed here from `lastActivityAt` and ticked by a one-second timer that only
+ * exists while some member is actually `away`.
  */
 import clsx from 'clsx'
 import type { TFunction } from 'i18next'
 import { Plus, UserPlus, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { Agent, PresenceState, Provider } from '@shared/types'
+import type { Agent, AgentPresence, PresenceState, Provider } from '@shared/types'
 import { agentModelLabel } from '../agents/agent-display'
-import { useAgentPresence } from '../../stores/presence'
+import { useIsRetrying, usePresence, usePresenceStore } from '../../stores/presence'
 import { Avatar, Button, EmptyState, IconButton, SectionTitle } from '../ui'
 
 /** Literal `t()` calls, so `used-keys.test.ts` can verify all four labels. */
@@ -45,6 +55,42 @@ function presenceLabel(t: TFunction, state: PresenceState): string {
     case 'offline':
       return t('presence.offline')
   }
+}
+
+/**
+ * The label under a member's name: the state, plus how long an `away` agent has
+ * been silent.
+ *
+ * The seconds are computed in the renderer from `lastActivityAt` rather than sent
+ * with the event, because the number changes every second and the backend emits
+ * only on a *state change* — one event per transition instead of one per second
+ * per agent, which is the whole point of `PresenceDot` reading a store.
+ */
+function presenceText(t: TFunction, presence: AgentPresence | undefined, now: number): string {
+  if (presence?.state === 'away') {
+    return t('presence.awayFor', { seconds: Math.max(0, Math.round((now - presence.lastActivityAt) / 1000)) })
+  }
+  return presenceLabel(t, presence?.state ?? 'available')
+}
+
+/**
+ * A clock that ticks once a second, and only while it is needed.
+ *
+ * `active` is false for every member that is not `away`, so an idle chat runs no
+ * timers at all — a member panel that re-rendered every second forever would be
+ * the most expensive thing on an otherwise static screen.
+ */
+function useTickingNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!active) return undefined
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [active])
+
+  return now
 }
 
 export interface MemberPanelProps {
@@ -206,7 +252,11 @@ function MemberRow({
   onRemove
 }: MemberRowProps): React.JSX.Element {
   const { t } = useTranslation()
-  const presence = useAgentPresence(chatId, agent.id)
+  const record = usePresence(chatId, agent.id)
+  const presence: PresenceState = record?.state ?? 'available'
+  const retrying = useIsRetrying(chatId, agent.id)
+  const now = useTickingNow(presence === 'away')
+  const label = presenceText(t, record, now)
 
   return (
     <div
@@ -254,16 +304,34 @@ function MemberRow({
             picker rows, where there is room for it. */}
         <span
           data-testid="member-model"
+          data-presence={presence}
           title={agentModelLabel(agent, providers)}
           className="truncate text-[11px] text-fg-faint"
         >
-          {`${agent.modelId} · ${presenceLabel(t, presence)}`}
+          {`${agent.modelId} · ${label}`}
         </span>
       </div>
-      {/* Token usage lands in S4.1; until then the column holds its width. */}
-      <span data-testid="member-usage" className="shrink-0 font-mono text-[11px] text-fg-faint">
-        {t('chat.memberUsage')}
-      </span>
+      {/*
+        The manual half of the recovery loop. It replaces the usage column
+        instead of joining it, because a 288px row cannot carry both and an
+        offline member has no usage worth reading anyway.
+      */}
+      {presence === 'offline' && chatId ? (
+        <button
+          type="button"
+          data-testid="member-retry"
+          disabled={retrying}
+          onClick={() => void usePresenceStore.getState().retry(chatId, agent.id)}
+          className="shrink-0 rounded px-1 text-[11px] text-accent transition-colors hover:text-fg disabled:cursor-not-allowed disabled:text-fg-faint focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
+        >
+          {retrying ? t('presence.retrying') : t('presence.retry')}
+        </button>
+      ) : (
+        /* Token usage lands in S4.1; until then the column holds its width. */
+        <span data-testid="member-usage" className="shrink-0 font-mono text-[11px] text-fg-faint">
+          {t('chat.memberUsage')}
+        </span>
+      )}
       <IconButton
         size="sm"
         label={t('chat.removeMember')}

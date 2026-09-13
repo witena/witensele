@@ -14,10 +14,11 @@
 | `src/shared/index.ts` | Single import point for the three above plus `version.ts` |
 | `src/main/events/bus.ts` | `EventBus` + `createEventBus()`. Services emit here; a listener that throws is logged and skipped so one broken window cannot abort a run |
 | `src/main/secrets.ts` | `SecretStore` + `createInsecureSecretStore()`, the base64 `plain:` fallback used when the OS has no key storage |
-| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `close`) and `createAppContext({ databasePath, secrets, userId?, events? })` |
+| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `close`) and `createAppContext({ databasePath, secrets, userId?, events?, fetchImpl?, runner?, supervisor? })`. `close()` stops every run and the supervisor's loops before closing the database |
 | `src/main/handlers/types.ts` | `HandlerMap` — `BackendApi` with an `AppContext` threaded in front of each method's arguments — and `HandlerModule` (`Partial<HandlerMap>`) |
 | `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent` |
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
+| `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
 | `src/main/ipc-protocol.ts` | `IPC_INVOKE`, `IPC_EVENT`, `InvokeResponse`, `toBackendError`. Shared with preload, imports no electron |
 | `src/main/ipc/register.ts` | `registerIpc(ipcMain, ctx, handlers)` and `forwardEvents(events, getWindows)` |

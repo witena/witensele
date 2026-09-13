@@ -1,10 +1,10 @@
 /**
  * Settings: a 220px section nav on the left, the selected section on the right.
  *
- * Only two sections have content in S1.5 — Appearance & language (the setting the
- * backend already stores) and Developer (the smoke surface the end-to-end specs
- * drive). The other five are empty states that name the step which fills them in,
- * so the nav is complete and navigable now rather than growing item by item.
+ * Sections are filled in by the step that owns them: Appearance & language and
+ * Developer landed with S1.5, Providers with S1.6 and Timeouts & heartbeat with
+ * S2.4. The rest are empty states that name the step which fills them in, so the
+ * nav is complete and navigable now rather than growing item by item.
  *
  * The language quick toggle sits at the bottom of the nav, which is where
  * `PLAN.md` puts it: a user who cannot read the current UI language has to be
@@ -34,6 +34,7 @@ import { SETTINGS_SECTIONS, useUiStore, type SettingsSection } from '../stores/u
 import { AppearanceSection } from './settings/appearance-section'
 import { DeveloperSection } from './settings/developer-section'
 import { ProvidersSection } from './settings/providers-section'
+import { TimeoutsSection } from './settings/timeouts-section'
 import { applyLanguageSetting } from './settings/language'
 
 const SECTION_ICONS: Record<SettingsSection, LucideIcon> = {
@@ -71,6 +72,7 @@ function SectionBody({ section }: { section: SettingsSection }): React.JSX.Eleme
 
   if (section === 'appearance') return <AppearanceSection />
   if (section === 'developer') return <DeveloperSection />
+  if (section === 'timeouts') return <TimeoutsSection />
 
   return (
     <EmptyState

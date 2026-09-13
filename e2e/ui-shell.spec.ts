@@ -94,7 +94,24 @@ test('the settings nav switches sections', async () => {
   await expect(title).toHaveText(zhCN.settings.sections['appearanceLanguage'] as string)
   await expect(window.getByTestId('settings-language-select')).toBeVisible()
 
-  // The other one is Developer, which still answers from the real backend.
+  // Timeouts & heartbeat: the three budgets in seconds and the colour legend.
+  await window.getByTestId('settings-section-timeouts').click()
+  await expect(title).toHaveText(zhCN.settings.sections['timeouts'] as string)
+  await expect(window.getByTestId('settings-stall-timeout')).toHaveValue('30')
+  await expect(window.getByTestId('settings-hard-timeout')).toHaveValue('120')
+  await expect(window.getByTestId('settings-tool-timeout')).toHaveValue('60')
+  await expect(window.getByTestId('presence-legend-dot')).toHaveCount(4)
+
+  // Editing one field writes only that one; the other two keep their values.
+  await window.getByTestId('settings-stall-timeout').fill('45')
+  await window.getByTestId('settings-stall-timeout').press('Enter')
+  await window.getByTestId('settings-section-appearance').click()
+  await window.getByTestId('settings-section-timeouts').click()
+  await expect(window.getByTestId('settings-stall-timeout')).toHaveValue('45')
+  await expect(window.getByTestId('settings-hard-timeout')).toHaveValue('120')
+
+  // The other section with real content is Developer, which still answers from
+  // the real backend.
   await window.getByTestId('settings-section-developer').click()
   await expect(title).toHaveText(zhCN.settings.sections['developer'] as string)
   await expect(window.getByTestId('ping')).toHaveText('pong')

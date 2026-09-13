@@ -15,6 +15,8 @@
  *        members  = chat_members in position order            (re-read every round)
  *        plan     = pending user messages (mode) ∪ mentions of the previous round
  *        if plan is empty                  → finish `completed` (+ noMentions notice)
+ *        drop speakers the supervisor calls offline
+ *        if none are left                  → finish `completed` (+ allOffline notice)
  *        if no pending and round cap hit   → finish `max-rounds` (+ notice)
  *        emit run.round { round, speakers }
  *        sequential → one turn after another, each re-reading the transcript
@@ -48,10 +50,17 @@
  *   takes effect from the next round, and never mid-turn.
  * - **One `AbortController` per run**, handed to every turn of every round, so
  *   Stop interrupts the whole chain including the other speakers of a parallel
- *   round.
+ *   round. Each turn chains a controller of its own to it, which is what lets
+ *   `AgentSupervisor` abort a single stalled speaker without touching the rest.
  * - **An errored turn does not end the round or the run.** One provider being
  *   down must not silence the members that work. Only a round in which *every*
- *   speaker errored ends the run, with `reason: 'error'`.
+ *   speaker errored ends the run, with `reason: 'error'`. A turn the supervisor
+ *   *skipped* is not an error either: `Promise.allSettled` releases the barrier,
+ *   the members that answered are kept, and the run continues.
+ * - **Offline agents are not scheduled.** `AgentSupervisor.isOffline` is consulted
+ *   at every round boundary, so a provider that died mid-conversation stops being
+ *   asked instead of timing out once per round. A round that has nobody left to
+ *   ask finishes `completed` with the `allOffline` notice rather than in silence.
  *
  * No electron here (CLAUDE.md rule #5): the runner takes an `AppContext` and
  * reaches the outside world only through `ctx.repos` and `ctx.events`.
@@ -75,6 +84,7 @@ import {
 export const NOTICE_NO_MENTIONS = 'noMentions'
 export const NOTICE_MAX_ROUNDS = 'maxRoundsReached'
 export const NOTICE_RUN_FAILED = 'runFailed'
+export const NOTICE_ALL_OFFLINE = 'allOffline'
 
 /** One turn that is in flight right now. Read by the tests and by S2.4. */
 export interface ActiveTurn {
@@ -306,6 +316,19 @@ export class ChatRunner {
           if (pending.length > 0) this.#notice(chat, NOTICE_NO_MENTIONS)
           break
         }
+
+        // Agents the supervisor has taken offline are dropped from the round
+        // rather than asked and timed out again: the probe loop (and the Retry
+        // button) is what brings them back. They are filtered *after* the plan is
+        // computed so an `@mention` of an offline member still resolves — the
+        // reason nobody answered is then the notice below, not a silent nothing.
+        const speaking = plan.speakers.filter((id) => !this.#ctx.supervisor.isOffline(id))
+        if (speaking.length === 0) {
+          this.#notice(chat, NOTICE_ALL_OFFLINE)
+          break
+        }
+        plan = { ...plan, speakers: speaking }
+
         if (reachedRoundLimit(roundsSinceUser, chat.settings.maxAutoRounds)) {
           this.#notice(chat, NOTICE_MAX_ROUNDS, { max: chat.settings.maxAutoRounds })
           reason = 'max-rounds'

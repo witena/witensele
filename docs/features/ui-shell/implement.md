@@ -21,8 +21,8 @@ living under a hidden title bar).
 
 **Shell and pages.** `App.tsx` is a composition root and nothing else; it renders
 `AppShell`, which renders `NavRail` plus the page named by `stores/ui.ts`. The
-three pages sit in `pages/`, with the two settings sections that have content in
-`pages/settings/`.
+three pages sit in `pages/`, with every settings section that has content in
+`pages/settings/` (providers, appearance, timeouts, developer).
 
 Two conventions that are worth knowing before adding a screen:
 

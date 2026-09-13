@@ -21,7 +21,8 @@ does not throw, it just makes every answer slightly worse.
   `ModelMessage[]`.
 - **The streaming turn** (`agent-turn.ts`): `streamText`, `fullStream`, the
   `message.delta` events, the periodic flush to SQLite, the terminal status, the
-  usage, and the `presence.changed` pair around the turn.
+  usage, and the supervisor registration (`beginTurn` / `activity` / `endTurn`)
+  around the turn.
 - **Parsing the finished text for `@mentions`** (S2.3) and storing them on the
   message. *Who* that makes speak next is `orchestration`'s decision, not this
   one's.
@@ -36,7 +37,7 @@ does not throw, it just makes every answer slightly worse.
 | Deciding who the `@mentions` in a reply make speak next | `orchestration` |
 | The `@name` matching rule itself | `src/shared/mentions.ts`, shared with the composer |
 | Tools: MCP, `read_skill`, `memory_*`, and the `stopWhen` loop around them | `mcp` (S3.1), `skills` (S3.2), `memory` (S3.3) |
-| Heartbeat, stall / hard timeouts, `skipped`, the real presence state machine | `presence` (S2.4) |
+| Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
 | Context overflow and truncation | S4.2 |
 | Cost accounting on top of the stored `Usage` | S4.1 |
 
@@ -58,7 +59,8 @@ per speaker and reads the returned status to decide how the run ends.
 |---|---|---|
 | The message row is created **empty and `streaming`** before the request | Insert it when the first token arrives | A crash mid-stream then leaves a visible, explicable message instead of nothing, and the renderer has something to attach deltas to from the first event |
 | Partial text is flushed to SQLite every 500 ms or 40 deltas | Write only at the end; write on every delta | Every-delta is a write per token; end-only loses a long answer to a crash. Two cheap counters buy most of the durability |
-| An aborted turn is `status: 'error'` with `error: 'aborted'` | A new `MessageStatus`; `skipped` | `skipped` is reserved for the supervisor's hard timeout (S2.4), and the renderer has to tell "you stopped this" from "the model died". S2.3 may refine it |
+| A **user Stop** is `status: 'error'` with `error: 'aborted'`; a **hard timeout** is `status: 'skipped'` with `error: 'timeout'` | One status for both; a status of its own for Stop | Both arrive as an abort, and only `AbortSignal.reason` tells them apart (`presence/abort-reasons.ts`). The renderer has to distinguish "you stopped this" from "the group moved on without it", and the barrier has to read the second as a completed turn rather than as a stopped run — hence `aborted: false` in the result of a timeout |
+| The turn creates an `AbortController` **of its own**, chained to the run's signal | Hand the run's signal to the supervisor | The run's signal is how Stop reaches every speaker at once; the supervisor has to reach exactly one. Chaining costs one listener and keeps both meanings intact |
 | `runAgentTurn` never throws | Let the caller catch | Every failure has to end with a persisted terminal status and a `message.updated`, or the UI shows a cursor forever. Making that the function's own responsibility means no caller can forget |
 | Reasoning is **not** fed back into later prompts | Include it like text | It is the model's scratch pad, it is not what the group heard, and replaying it inflates every later prompt |
 | **Mentions are parsed here, scheduled elsewhere** | Let `ChatRunner` re-read the finished message and parse it | The finished text is already in hand at the terminal update, so parsing it there keeps **one** `message.updated` per turn instead of two, and a reply reaches the renderer with its mentions already on it. The rules that drop a self-mention, a non-member and a `[PASS]` are scheduling rules and live in `orchestration/scheduling.ts` |

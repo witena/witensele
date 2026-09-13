@@ -18,6 +18,7 @@ import type { BackendEvent, BackendEventType, EventOf } from './events'
 import type {
   Agent,
   AgentInput,
+  AgentPresence,
   AppSettings,
   AppSettingsPatch,
   Chat,
@@ -127,6 +128,24 @@ export interface BackendApi {
   /** Replaces the whole member list; array order becomes `ChatMember.position`. */
   'chats.members.set': (input: { chatId: string; agentIds: string[] }) => Promise<ChatMember[]>
 
+  /* -- presence ----------------------------------------------------------- */
+
+  /**
+   * Live presence of every member of a chat.
+   *
+   * Read once when a chat is opened, to seed the renderer's store; from then on
+   * `presence.changed` keeps it current. Presence is runtime-only state — it is
+   * never persisted — so this is the only way to learn it after a reload.
+   */
+  'presence.list': (input: { chatId: string }) => Promise<AgentPresence[]>
+  /**
+   * Probes the agent's provider once and returns the presence that resulted.
+   *
+   * The manual half of the recovery loop behind the "Retry" button on an offline
+   * member. The probe is a model-list request, never a generation.
+   */
+  'presence.retry': (input: { chatId: string; agentId: string }) => Promise<AgentPresence>
+
   /* -- messages ----------------------------------------------------------- */
 
   /** Newest first. `before` is a message id used as an exclusive cursor. */
@@ -205,6 +224,8 @@ export const BACKEND_METHODS = [
   'chats.delete',
   'chats.members.list',
   'chats.members.set',
+  'presence.list',
+  'presence.retry',
   'messages.list',
   'chat.send',
   'chat.stop'

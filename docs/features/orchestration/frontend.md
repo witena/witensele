@@ -38,7 +38,7 @@ takes a moment to unwind, and the button must not lie about it.
 |---|---|
 | `run.started` | The Stop button stays up (it appeared on send) |
 | `run.round` | The header's right-hand status: "Round 2 · Architect, Reviewer speaking" (`chat.runStatus`), with the ids resolved to names through the agents store |
-| `presence.changed` | The dot on the member row and on the message avatar turns red while that agent's turn runs. Presence is per agent, so the parallel speakers of one round do not flip each other back |
+| `presence.changed` | The dot on the member row and on the message avatar follows that agent through the four states. Presence is per (chat, agent), so the parallel speakers of one round do not flip each other back. The state machine behind it is [`presence`](../presence/frontend.md)'s |
 | `run.finished` | The status disappears and the button returns to Send, whatever the reason |
 | `message.created` with a `system-notice` | A dimmed line in the transcript, translated by `translateNotice` — `notices.noMentions`, `notices.maxRoundsReached`, `notices.runFailed` |
 
@@ -94,7 +94,9 @@ immediately and is answered from the next round. See the decision table in
 | `notices.noMentions` | The `mention-only` message that named nobody |
 | `notices.maxRoundsReached` | The automatic-round cap, with `{{max}}` |
 | `notices.runFailed` | An internal failure, with `{{message}}` |
-| `notices.agentSkipped`, `notices.runStopped` | Reserved for S2.4; nothing emits them yet |
+| `notices.agentSkipped` | Written by `agent-turn` when the hard timeout skipped a member; see [`presence`](../presence/frontend.md) |
+| `notices.allOffline` | Written by the runner when every speaker of a round is offline |
+| `notices.runStopped` | Reserved; Stop writes no notice, because the interrupted row already says so |
 
 ## Accessibility and keyboard
 

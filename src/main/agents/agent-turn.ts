@@ -13,30 +13,42 @@
  * 1. Persist an **empty message with `status: 'streaming'`** and emit
  *    `message.created`. The row exists before the first token, so a crash mid
  *    stream leaves a visible, explicable message rather than nothing.
- * 2. Emit `presence.changed` → `working` for this (chat, agent).
- * 3. Call `streamText` and iterate `fullStream`, appending `text-delta` and
- *    `reasoning-delta` to in-memory parts and emitting one `message.delta` each.
+ * 2. Register the turn with `ctx.supervisor` (`beginTurn`), which turns the agent
+ *    `working` and starts watching it for the stall and hard timeouts.
+ * 3. Call `streamText` and iterate `fullStream`, reporting every part to the
+ *    supervisor as activity, appending `text-delta` and `reasoning-delta` to
+ *    in-memory parts and emitting one `message.delta` each.
  * 4. Persist the accumulated parts every `FLUSH_INTERVAL_MS` or `FLUSH_EVERY_DELTAS`,
  *    whichever comes first, so a crash keeps most of the answer.
- * 5. Persist the final parts, usage and status, emit `message.updated`, and emit
- *    `presence.changed` → `available`.
+ * 5. Persist the final parts, usage and status, emit `message.updated`, and tell
+ *    the supervisor how it ended (`endTurn`).
  *
  * Step 5 runs on **every** path, including abort and provider failure: a message
  * left in `streaming` would show a cursor forever.
  *
  * ## Terminal statuses
  *
- * | Status | When |
- * |---|---|
- * | `done` | The stream finished normally |
- * | `passed` | …and the whole text is exactly `[PASS]` (PLAN: a deliberate abstention) |
- * | `error` | The provider failed, or the run was stopped — `error` is `'aborted'` then |
+ * | Status | When | `Message.error` |
+ * |---|---|---|
+ * | `done` | The stream finished normally | — |
+ * | `passed` | …and the whole text is exactly `[PASS]` (PLAN: a deliberate abstention) | — |
+ * | `skipped` | The supervisor's hard timeout aborted a silent turn | `'timeout'` |
+ * | `error` | The provider failed, or the user pressed Stop | `'aborted'` when stopped |
  *
- * An aborted turn is recorded as `error` with the detail `'aborted'` rather than
- * as its own status, because `MessageStatus` reserves `skipped` for the
- * supervisor's hard timeout (S2.4) and the renderer needs to tell "you stopped
- * this" from "the model died". S2.3 may refine it once `run.finished` reasons and
- * message statuses are reconciled across a multi-agent round.
+ * A user Stop is recorded as `error` / `'aborted'` rather than as its own status,
+ * because the renderer has to tell "you stopped this" from "the model died". The
+ * hard timeout is the one interruption that gets `skipped`, because the group —
+ * not the user — decided to move on without this agent; it also inserts an
+ * `agentSkipped` system notice and reports `aborted: false`, so the round barrier
+ * treats it as a completed turn rather than as the run being stopped.
+ *
+ * ## Two signals, one turn
+ *
+ * `options.signal` belongs to the **run**: Stop aborts every speaker of the round
+ * at once. The turn creates a second `AbortController` chained to it and hands
+ * *that* one to `streamText` and to the supervisor, so the hard timeout can abort
+ * one silent agent without touching its siblings. `AbortSignal.reason` carries
+ * which of the two happened (see `presence/abort-reasons.ts`).
  *
  * ## AI SDK v7 names used here
  *
@@ -52,17 +64,17 @@ import type { BackendEvent } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
 import type {
   Agent,
-  AgentPresence,
   Chat,
   Message,
   MessagePart,
   MessageStatus,
-  PresenceState,
   ReasoningPart,
   TextPart,
   Usage
 } from '@shared/types'
 import type { AppContext } from '../app-context'
+import { isTimeoutAbort, TIMEOUT_ERROR } from '../presence/abort-reasons'
+import type { TurnOutcome } from '../presence/supervisor'
 import { createLanguageModel } from '../providers/registry'
 import { resolveProvider } from '../providers/resolve'
 import { buildGroupBriefing, PASS_TOKEN, resolveMainLanguage, toBriefingMember } from './briefing'
@@ -76,6 +88,17 @@ export const FLUSH_EVERY_DELTAS = 40
 
 /** Detail stored in `Message.error` when the user pressed Stop. */
 export const ABORTED_ERROR = 'aborted'
+
+/** Notice inserted when the supervisor's hard timeout skipped an agent's turn. */
+export const NOTICE_AGENT_SKIPPED = 'agentSkipped'
+
+/** The terminal status a turn ends in, mapped to what the supervisor is told. */
+function outcomeOf(status: MessageStatus, aborted: boolean): TurnOutcome {
+  if (status === 'skipped') return 'skipped'
+  if (status === 'passed') return 'passed'
+  if (status === 'done') return 'done'
+  return aborted ? 'aborted' : 'error'
+}
 
 /** Builds the model client for an agent. Injected by tests; defaults to the registry. */
 export type CreateModel = (ctx: AppContext, agent: Agent) => LanguageModel
@@ -189,17 +212,18 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   const { ctx, chat, agent, members, round, signal } = options
   const emit = options.onEvent ?? ((event: BackendEvent) => ctx.events.emit(event))
 
-  const presence = (state: PresenceState): void => {
-    const now = Date.now()
-    const value: AgentPresence = {
-      chatId: chat.id,
-      agentId: agent.id,
-      state,
-      since: now,
-      lastActivityAt: now
-    }
-    emit({ type: 'presence.changed', presence: value })
-  }
+  // A controller of this turn's own, chained to the run's signal.
+  //
+  // The runner hands every speaker of a round the *same* signal, because Stop
+  // interrupts the whole chain. The supervisor's hard timeout is the opposite:
+  // it must abort exactly one silent agent and leave the others streaming. So
+  // the turn owns a controller, forwards the run's abort into it, and hands only
+  // this one to the supervisor and to `streamText`.
+  const controller = new AbortController()
+  const turnSignal = controller.signal
+  const forwardAbort = (): void => controller.abort(signal.reason)
+  if (signal.aborted) forwardAbort()
+  else signal.addEventListener('abort', forwardAbort, { once: true })
 
   const created = ctx.repos.messages.create(
     {
@@ -218,9 +242,14 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     ctx.userId
   )
   emit({ type: 'message.created', message: created })
-  // A plain emit, not a supervisor: S2.4 introduces `AgentSupervisor`, which owns
-  // the session, the heartbeat and the away / offline transitions.
-  presence('working')
+  // From here on presence is the supervisor's: it owns the session, the
+  // heartbeat, the away / offline transitions and the abort above.
+  ctx.supervisor.beginTurn({
+    chatId: chat.id,
+    agentId: agent.id,
+    messageId: created.id,
+    controller
+  })
 
   const parts: MessagePart[] = []
   let usage: Usage | undefined
@@ -250,7 +279,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   try {
     // Stopped before the first request: nothing to stream, and `streamText`
     // would reject with a provider-shaped error for what is a user action.
-    if (signal.aborted) throw new TurnAborted()
+    if (turnSignal.aborted) throw new TurnAborted()
 
     const model = options.model ?? (options.createModel ?? createModelFromRegistry)(ctx, agent)
     const agentsById = Object.fromEntries(members.map((member) => [member.id, member]))
@@ -263,7 +292,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
         agentsById,
         messages: options.history ?? ctx.repos.messages.listForContext(chat.id, ctx.userId)
       }),
-      abortSignal: signal,
+      abortSignal: turnSignal,
       ...(agent.params.maxTokens ? { maxOutputTokens: agent.params.maxTokens } : {}),
       ...(agent.params.temperature !== undefined ? { temperature: agent.params.temperature } : {}),
       // The SDK's default handler logs the error itself; the `error` part below
@@ -272,6 +301,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     })
 
     for await (const part of result.fullStream) {
+      // Every part is a heartbeat, not only the ones that carry text: a model
+      // that streams nothing but reasoning, or (from S3.1) tool events, is
+      // working, and the stall timeout must not fire underneath it.
+      ctx.supervisor.activity(chat.id, agent.id)
+
       switch (part.type) {
         case 'text-delta':
           onDelta('text', part.text)
@@ -295,15 +329,27 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   } catch (error) {
     // An abort reaches us as a rejection from some providers and as an `abort`
     // part from others; both have to end in the same state.
-    if (signal.aborted) aborted = true
+    if (turnSignal.aborted) aborted = true
     else failure = describe(error)
+  } finally {
+    signal.removeEventListener('abort', forwardAbort)
   }
 
-  if (signal.aborted) aborted = true
+  if (turnSignal.aborted) aborted = true
+
+  // The supervisor's hard timeout and the user's Stop both arrive as an abort;
+  // only the reason tells them apart, and they end in different statuses.
+  const timedOut = isTimeoutAbort(turnSignal.reason)
 
   const text = textOf(parts).trim()
-  const status: MessageStatus = aborted || failure ? 'error' : text === PASS_TOKEN ? 'passed' : 'done'
-  const error = aborted ? ABORTED_ERROR : failure
+  const status: MessageStatus = timedOut
+    ? 'skipped'
+    : aborted || failure
+      ? 'error'
+      : text === PASS_TOKEN
+        ? 'passed'
+        : 'done'
+  const error = timedOut ? TIMEOUT_ERROR : aborted ? ABORTED_ERROR : failure
 
   // Parsed here rather than in the runner: this is where the finished text is,
   // and one update keeps a single `message.updated` per turn. Deciding *who*
@@ -311,24 +357,57 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   // also where a self-mention is dropped — the stored set is what the agent
   // actually wrote.
   const mentions =
-    status === 'passed'
+    status === 'passed' || status === 'skipped'
       ? []
       : parseMentions(text, members.map((member) => ({ agentId: member.id, name: member.name })))
 
-  const message = ctx.repos.messages.update(
-    created.id,
-    {
-      parts: structuredClone(parts),
-      status,
-      mentions,
-      ...(usage ? { usage } : {}),
-      ...(error ? { error } : {})
-    },
-    ctx.userId
-  )
+  // `finally`, so the session is closed even when the terminal write fails —
+  // a chat deleted mid-turn makes the update throw, and a leaked session would
+  // keep the heartbeat poking at a row that is gone.
+  try {
+    const message = ctx.repos.messages.update(
+      created.id,
+      {
+        parts: structuredClone(parts),
+        status,
+        mentions,
+        ...(usage ? { usage } : {}),
+        ...(error ? { error } : {})
+      },
+      ctx.userId
+    )
+    emit({ type: 'message.updated', message })
 
-  emit({ type: 'message.updated', message })
-  presence('available')
+    // "X did not respond and was skipped this round" — a separate system message
+    // rather than a part of the agent's own, so the transcript reads as the group
+    // noticing the silence. A key plus parameters, never a sentence (rule #4).
+    if (timedOut) {
+      const notice = ctx.repos.messages.create(
+        {
+          chatId: chat.id,
+          senderType: 'system',
+          senderId: 'system',
+          parts: [
+            { type: 'system-notice', key: NOTICE_AGENT_SKIPPED, params: { agent: agent.name } }
+          ],
+          status: 'done',
+          round,
+          mentions: []
+        },
+        ctx.userId
+      )
+      emit({ type: 'message.created', message: notice })
+    }
 
-  return { message, status, aborted }
+    // A timeout is *not* reported as an abort: the round barrier reads this flag
+    // to decide whether the user stopped the run, and one skipped agent must
+    // leave the others' answers and the next round alone.
+    return { message, status, aborted: aborted && !timedOut }
+  } finally {
+    ctx.supervisor.endTurn({
+      chatId: chat.id,
+      agentId: agent.id,
+      outcome: outcomeOf(status, aborted)
+    })
+  }
 }

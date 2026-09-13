@@ -202,6 +202,8 @@ Naming conventions the whole app follows:
 | `system.emitTestEvent` | `{ payload }` | `void` | Implemented in S1.3; makes the backend push one `system.test` event |
 | `settings.get` | — | `AppSettings` | Implemented in S1.3 |
 | `settings.update` | `{ patch }` | `AppSettings` | Implemented in S1.3; shallow merge, `timeouts` merges per field, unknown keys rejected |
+| `presence.list` | `{ chatId }` | `AgentPresence[]` | S2.4; every member of the chat, in member order |
+| `presence.retry` | `{ chatId, agentId }` | `AgentPresence` | S2.4; probes the agent's provider once. A failed probe resolves, it does not reject |
 | `providers.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Provider[]` / `Provider` / `Provider` / `Provider` / `void` | Omitting `apiKey` in a patch keeps the stored key; `''` clears it |
 | `providers.fetchModels` | `{ provider: ProviderRef }` | `string[]` | `ProviderRef` is `{ id }` or `{ draft }`, so an unsaved form can fetch |
 | `providers.testConnection` | `{ provider: ProviderRef }` | `ConnectionTestResult` | Result object, not a rejection: a failed test is a normal outcome |
@@ -227,7 +229,7 @@ Everything not marked "Implemented in S1.3" rejects with
 | `message.updated` | `{ message }` | The message reaches its final status / usage / error |
 | `chat.updated` | `{ chat }` | A chat is created or its title or settings change |
 | `chat.deleted` | `{ chatId }` | A chat is removed |
-| `presence.changed` | `{ presence }` | `AgentSupervisor` moves an agent between the four states |
+| `presence.changed` | `{ presence }` | `AgentSupervisor` moves an agent between the four states (S2.4) |
 | `run.started` | `{ chatId, round }` | A user message starts a run |
 | `run.round` | `{ chatId, round, speakers }` | A round begins, with its speaker ids in order |
 | `run.finished` | `{ chatId, reason }` | The run ends: `completed` / `stopped` / `max-rounds` / `error` |

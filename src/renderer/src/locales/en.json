@@ -133,13 +133,29 @@
       "providers": "Providers",
       "mcp": "MCP servers",
       "skills": "Skills",
-      "timeouts": "Timeouts",
+      "timeouts": "Timeouts & heartbeat",
       "appearanceLanguage": "Appearance & language",
       "dataBackup": "Data & backup",
       "developer": "Developer"
     },
     "comingSoonTitle": "Not built yet",
     "comingSoonDescription": "This section arrives with the step that owns it.",
+    "timeouts": {
+      "intro": "The supervisor checks every speaking agent once a second and colours it by how long it has been silent.",
+      "stall": "Stall timeout",
+      "stallHint": "Silence for this long turns an agent orange. Informational only — nothing is interrupted.",
+      "hard": "Hard timeout",
+      "hardHint": "Silence for this long aborts the turn, marks the message skipped and lets the round continue without it.",
+      "tool": "Tool timeout",
+      "toolHint": "Budget for a single MCP tool call. Used from the step that adds tools.",
+      "unit": "seconds",
+      "perChat": "A chat can override the hard timeout in its own group settings; these values apply everywhere else.",
+      "legend": "Presence colours",
+      "legendAvailable": "Idle and reachable",
+      "legendWorking": "Requesting, streaming or running a tool",
+      "legendAway": "Working, but silent for longer than the stall timeout",
+      "legendOffline": "Timed out, failing repeatedly, or its provider does not answer"
+    },
     "providers": {
       "add": "Add provider",
       "addTitle": "Add provider",
@@ -201,7 +217,10 @@
     "available": "Available",
     "working": "Working",
     "away": "Away",
-    "offline": "Offline"
+    "awayFor": "Away · {{seconds}}s",
+    "offline": "Offline",
+    "retry": "Retry",
+    "retrying": "Checking…"
   },
   "errors": {
     "not_found": "That item no longer exists.",
@@ -214,6 +233,7 @@
   },
   "notices": {
     "agentSkipped": "{{agent}} did not respond and was skipped this round",
+    "allOffline": "Every member of this chat is offline, so nobody answered. Retry one from the member list.",
     "noMentions": "Nobody was mentioned, so no agent answered. Mention a member with @ to get a reply.",
     "runStopped": "The run was stopped",
     "maxRoundsReached": "Reached the limit of {{max}} automatic rounds. Send a message to continue.",

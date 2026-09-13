@@ -148,9 +148,10 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 
 ## Known limitations and TODOs
 
-- **`stallTimeoutMs` / `hardTimeoutMs` are stored but unread.** S2.4's supervisor
-  is what uses them; `mode`, `speaking` and `maxAutoRounds` have been acted on by
-  `ChatRunner` since S2.3.
+- **`stallTimeoutMs` / `hardTimeoutMs` are read by `AgentSupervisor`**
+  ([`presence`](../presence/implement.md)), merged over `AppSettings.timeouts` at
+  every heartbeat. Only the hard budget has a control in the group settings block;
+  the stall override is honoured by the backend but has no UI of its own.
 - **Reordering is mouse-only**, and the per-member token count is an em dash
   until S4.1.
 - **The search field is disabled** (S4.3), and titles are always the default

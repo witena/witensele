@@ -40,7 +40,7 @@ can hold a real conversation and still holds it after a restart.
 | Who speaks, in which order, and for how many rounds | [`orchestration`](../orchestration/context.md) |
 | What one agent does during its turn | `agent-turn` |
 | Creating and editing agents | [`agents`](../agents/context.md) (S2.1) |
-| Presence beyond `working` / `available` around a turn | `presence` (S2.4) |
+| The presence state machine, the heartbeat, the two timeouts and the Retry button | [`presence`](../presence/context.md). This feature owns the `ChatSettings` fields that override the budgets, and the rows the dots are drawn on |
 | Search in the chat list, generated titles | S4.3 |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
 | Virtualized message list, upward paging | S2.5 |

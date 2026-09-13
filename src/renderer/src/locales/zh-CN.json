@@ -140,6 +140,22 @@
     },
     "comingSoonTitle": "尚未实现",
     "comingSoonDescription": "该分区会随对应的开发步骤一起提供。",
+    "timeouts": {
+      "intro": "监督器每秒检查一次正在发言的智能体，并按沉默时长为其着色。",
+      "stall": "停顿超时",
+      "stallHint": "沉默超过该时长会变为橙色。仅作提示，不会中断任何事情。",
+      "hard": "硬性超时",
+      "hardHint": "沉默超过该时长会中止本次发言，消息标记为已跳过，本轮继续进行。",
+      "tool": "工具超时",
+      "toolHint": "单次 MCP 工具调用的时间预算，将在引入工具的步骤中启用。",
+      "unit": "秒",
+      "perChat": "单个群聊可在其群设置中覆盖硬性超时；此处的值适用于其余场合。",
+      "legend": "状态颜色",
+      "legendAvailable": "空闲且可达",
+      "legendWorking": "正在请求、输出或调用工具",
+      "legendAway": "仍在工作，但沉默时间已超过停顿超时",
+      "legendOffline": "已超时、连续失败，或其服务商没有响应"
+    },
     "providers": {
       "add": "添加 provider",
       "addTitle": "添加 provider",
@@ -201,7 +217,10 @@
     "available": "空闲",
     "working": "工作中",
     "away": "离开",
-    "offline": "离线"
+    "awayFor": "离开 · {{seconds}} 秒",
+    "offline": "离线",
+    "retry": "重试",
+    "retrying": "检查中…"
   },
   "errors": {
     "not_found": "该内容已不存在。",
@@ -214,6 +233,7 @@
   },
   "notices": {
     "agentSkipped": "{{agent}} 本轮没有响应，已被跳过",
+    "allOffline": "本群所有成员都已离线，因此无人作答。可在成员列表中点击重试。",
     "noMentions": "本次没有 @ 任何成员，因此无人作答。用 @ 提及某位成员即可获得回复。",
     "runStopped": "本次运行已停止",
     "maxRoundsReached": "已达到 {{max}} 轮自动讨论的上限，发送消息可继续。",

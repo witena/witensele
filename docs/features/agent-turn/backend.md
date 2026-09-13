@@ -4,7 +4,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, `streamText`, the deltas, the flush, the terminal status, the usage, the presence pair |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]` |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
 | `src/main/agents/briefing.en.ts` | The English wording |
@@ -43,7 +43,8 @@ None. This feature is called by `ChatRunner`, never by the transport.
 | `message.created` | `{ message }` | The empty `streaming` row is inserted, before the request goes out |
 | `message.delta` | `{ chatId, messageId, delta: { kind, text } }` | Once per `text-delta` / `reasoning-delta` |
 | `message.updated` | `{ message }` | The terminal status is persisted — on every path |
-| `presence.changed` | `{ presence }` | `working` at the start, `available` at the end |
+| `presence.changed` | `{ presence }` | Emitted by `AgentSupervisor`, which the turn drives: `beginTurn` → `working`, `endTurn` → `available` (or `offline`). Every stream part is reported as `activity`, which emits only when it clears `away` |
+| `message.created` | the `agentSkipped` notice | The turn ended on the supervisor's hard timeout |
 
 ## External dependencies
 
