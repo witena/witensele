@@ -6,15 +6,34 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { APP_NAME } from '@shared/version'
-import { createAppContext, type AppContext } from './app-context'
+import { createAppContext, skillsDir, type AppContext } from './app-context'
 import { buildHandlers } from './handlers'
 import { createElectronSecretStore } from './ipc/secret-store'
 import { forwardEvents, registerIpc } from './ipc/register'
+import { seedSkills } from './skills/loader'
 
 const isDev = !app.isPackaged
 
 /** File name of the SQLite database inside the userData directory. */
 const DATABASE_FILE = 'witena.db'
+
+/** Folder of the skills shipped with the application, inside `resources/`. */
+const BUNDLED_SKILLS = 'skills'
+
+/**
+ * Where the skills bundled with the build live.
+ *
+ * Two answers, because electron moves them: in development and in the
+ * end-to-end harness the app runs from the repository, so they are under
+ * `resources/`; a packaged build copies that folder into
+ * `process.resourcesPath`. Resolved here rather than in the loader, because this
+ * file is the only one allowed to ask electron where anything is.
+ */
+function bundledSkillsDir(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, BUNDLED_SKILLS)
+    : join(app.getAppPath(), 'resources', BUNDLED_SKILLS)
+}
 
 /**
  * Test hook: redirects the whole userData directory, database included.
@@ -110,9 +129,17 @@ applyUserDataOverride()
 
 void app.whenReady().then(() => {
   const secrets = createElectronSecretStore()
-  const databasePath = join(app.getPath('userData'), DATABASE_FILE)
-  context = createAppContext({ databasePath, secrets })
+  const userDataDir = app.getPath('userData')
+  const databasePath = join(userDataDir, DATABASE_FILE)
+  context = createAppContext({ databasePath, userDataDir, secrets })
   console.log(`[witena] database: ${databasePath}`)
+
+  // First launch only: an empty library is filled with the skills shipped with
+  // the build, so a new installation has something real to look at under
+  // Settings -> Skills. A user who deleted or edited one keeps their decision —
+  // see `seedSkills`.
+  const seeded = seedSkills(bundledSkillsDir(), skillsDir(context))
+  if (seeded.length > 0) console.log(`[witena] seeded skills: ${seeded.join(', ')}`)
 
   // The transport is up before the first window exists, so a renderer that calls
   // `invoke` in its first effect can never race the registration.

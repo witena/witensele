@@ -33,8 +33,8 @@ turn call them and show what came back.
 | The executor agent itself | Post-MVP. This feature only **enforces** the rule that reserves side-effecting tools for it |
 | MCP **resources** and **prompts** | Not in the MVP. Only `tools/list` and `tools/call` are used |
 | A connector gallery (preset servers, one-click add) | Post-MVP (PLAN, "Future extension", point 1) |
-| `read_skill` / `read_skill_file` | [`skills`](../skills/context.md), S3.2 — different tools, same `ToolSet` |
-| `memory_save` / `memory_search` | [`memory`](../memory/context.md), S3.3 |
+| `read_skill` / `read_skill_file` | [`skills`](../skills/context.md), S3.2 `[x]` — different tools, same `ToolSet`, and **not** subject to the side-effects rule: they are read-only and confined to `userData/skills/` |
+| `memory_save` / `memory_search` | [`memory`](../memory/context.md), S3.3 `[x]` — likewise outside the rule: the only thing they can write is the agent's own notes folder |
 | OAuth against an HTTP MCP server | Not in the MVP; the SDK's `authProvider` hook is where it would go |
 | Sampling, roots, elicitation (server → client requests) | Not advertised; the client declares no capabilities |
 
@@ -50,7 +50,8 @@ turn call them and show what came back.
 | `BackendClient`, the `mcp.*` methods | [`backend-client`](../backend-client/context.md) |
 
 Depending on this feature in return: `agent-turn` (it calls `ctx.mcp`), and
-S3.2 / S3.3, which add their own tools to the same `ToolSet`.
+[`skills`](../skills/context.md) and [`memory`](../memory/context.md), which add
+their own tools to the same `ToolSet` through the same `collectAgentTools`.
 
 ## Decisions and trade-offs
 

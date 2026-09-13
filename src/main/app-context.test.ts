@@ -23,6 +23,7 @@ describe('app-context', () => {
   it('opens the database, builds the repositories and defaults to the local user', () => {
     const ctx = createAppContext({
       databasePath: join(dir, 'witena.db'),
+      userDataDir: dir,
       secrets: createInsecureSecretStore()
     })
 
@@ -35,6 +36,7 @@ describe('app-context', () => {
   it('binds the repositories to the injected secret store', () => {
     const ctx = createAppContext({
       databasePath: join(dir, 'witena.db'),
+      userDataDir: dir,
       secrets: createInsecureSecretStore()
     })
 
@@ -55,6 +57,7 @@ describe('app-context', () => {
   it('close() is idempotent', () => {
     const ctx = createAppContext({
       databasePath: join(dir, 'witena.db'),
+      userDataDir: dir,
       secrets: createInsecureSecretStore()
     })
 

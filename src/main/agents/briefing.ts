@@ -35,10 +35,28 @@ export interface GroupBriefingInput {
   self: BriefingMember
   /** Everyone in the chat, `self` included, in speaking order. */
   members: BriefingMember[]
+  /**
+   * True when this turn has the memory tools attached (S3.3).
+   *
+   * It adds **one sentence** to the rules, in both languages: remember durable
+   * facts with `memory_save`. It belongs in the briefing rather than in the
+   * `Memory` section of the prompt because it is a rule of how to behave in the
+   * group, and because the rules are the part of the prompt a model actually
+   * follows — a habit stated once among the other habits is followed far more
+   * often than one appended after a data dump.
+   */
+  memoryEnabled?: boolean
+}
+
+/** What a language module is given: the briefing input minus the language. */
+export interface BriefingInput {
+  self: BriefingMember
+  members: BriefingMember[]
+  memoryEnabled: boolean
 }
 
 /** The shape both language modules implement. */
-export type BriefingBuilder = (input: Omit<GroupBriefingInput, 'language'>) => string
+export type BriefingBuilder = (input: BriefingInput) => string
 
 /** Token an agent replies with to abstain from a round. Identical in both languages. */
 export const PASS_TOKEN = '[PASS]'
@@ -59,7 +77,7 @@ export function buildGroupBriefing(input: GroupBriefingInput): string {
   const { language, self, members } = input
   const roster = members.length > 0 ? members : [self]
   const build: BriefingBuilder = language === 'zh-CN' ? buildChineseBriefing : buildEnglishBriefing
-  return build({ self, members: roster })
+  return build({ self, members: roster, memoryEnabled: input.memoryEnabled === true })
 }
 
 /**

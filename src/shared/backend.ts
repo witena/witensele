@@ -31,10 +31,13 @@ import type {
   McpServerInput,
   McpToolInfo,
   MemoryEntry,
+  MemorySearchHit,
   Message,
   Provider,
   ProviderInput,
-  SkillMeta
+  SkillDetail,
+  SkillMeta,
+  SkillWarning
 } from './types'
 
 /**
@@ -68,6 +71,21 @@ export interface BackendApi {
   'system.ping': () => Promise<'pong'>
   /** Asks the backend to push one `system.test` event back. S1.3 test hook only. */
   'system.emitTestEvent': (input: { payload: string }) => Promise<void>
+  /**
+   * Opens the platform's folder picker and resolves with the chosen absolute
+   * path, or `null` when the user cancelled.
+   *
+   * **The one method whose implementation must import electron.** Everything
+   * else in this contract is a pure function of storage and the filesystem, but
+   * a native modal belongs to the window system: there is no Electron-free way
+   * to ask for one, and a text field the user pastes a path into would be a
+   * worse product for the sake of an architectural rule. So the exception is
+   * made deliberately and confined — the handler lives in `src/main/ipc/`,
+   * which is already allowed to import electron (CLAUDE.md rule #5), and
+   * `registerIpc` layers it over a stub that rejects everywhere else. A server
+   * build implements it by rejecting, or by an upload dialog in the browser.
+   */
+  'system.pickFolder': () => Promise<string | null>
 
   /* -- settings ----------------------------------------------------------- */
 
@@ -137,9 +155,19 @@ export interface BackendApi {
 
   /* -- skills ------------------------------------------------------------- */
 
-  'skills.list': () => Promise<SkillMeta[]>
-  /** Copies a skill folder into `userData/skills/` and returns its parsed header. */
-  'skills.import': (input: { sourcePath: string }) => Promise<SkillMeta>
+  /** Every readable skill under `userData/skills/`, plus the folders that were skipped. */
+  'skills.list': () => Promise<{ skills: SkillMeta[]; warnings: SkillWarning[] }>
+  /**
+   * Copies a skill folder into `userData/skills/` and returns its parsed header.
+   *
+   * `sourcePath` must be a folder containing `SKILL.md`. Refuses a name that is
+   * already taken unless `overwrite` is set.
+   */
+  'skills.import': (input: { sourcePath: string; overwrite?: boolean }) => Promise<SkillMeta>
+  /** The skill's frontmatter, body and bundled file list, for the detail pane. */
+  'skills.read': (input: { name: string }) => Promise<SkillDetail>
+  /** Removes the skill folder. The name stays on any agent that listed it. */
+  'skills.delete': (input: { name: string }) => Promise<void>
 
   /* -- memory (one markdown directory per agent) -------------------------- */
 
@@ -147,6 +175,10 @@ export interface BackendApi {
   /** `path` is relative to the agent's memory directory; `MEMORY.md` is the index. */
   'memory.read': (input: { agentId: string; path: string }) => Promise<{ path: string; content: string }>
   'memory.write': (input: { agentId: string; path: string; content: string }) => Promise<MemoryEntry>
+  /** Removes one note, or empties the index when `path` is `MEMORY.md`. */
+  'memory.delete': (input: { agentId: string; path: string }) => Promise<void>
+  /** Case-insensitive substring search over the index and every note body. */
+  'memory.search': (input: { agentId: string; query: string }) => Promise<MemorySearchHit[]>
 
   /* -- chats -------------------------------------------------------------- */
 
@@ -227,6 +259,7 @@ export interface BackendClient {
 export const BACKEND_METHODS = [
   'system.ping',
   'system.emitTestEvent',
+  'system.pickFolder',
   'settings.get',
   'settings.update',
   'providers.list',
@@ -250,9 +283,13 @@ export const BACKEND_METHODS = [
   'mcp.log',
   'skills.list',
   'skills.import',
+  'skills.read',
+  'skills.delete',
   'memory.list',
   'memory.read',
   'memory.write',
+  'memory.delete',
+  'memory.search',
   'chats.list',
   'chats.get',
   'chats.create',

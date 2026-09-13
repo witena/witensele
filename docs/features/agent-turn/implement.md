@@ -23,7 +23,10 @@ ChatRunner picks a speaker
   ├─ messages.create({ parts: [], status: 'streaming', round })   → message.created
   ├─ supervisor.beginTurn → presence.changed { working }
   │
-  ├─ system  = agent.systemPrompt + "\n\n" + buildGroupBriefing(...)
+  ├─ system  = agent.systemPrompt
+  │            + buildGroupBriefing(...)                      (+ the memory rule, S3.3)
+  │            + buildSkillsSection(enabledSkills(ctx, agent)) (S3.2, when any)
+  │            + buildMemorySection(ctx.memory.readIndex(id))  (S3.3, when enabled)
   ├─ messages = toModelMessages({ self, agentsById,
   │               messages: options.history ?? listForContext(chat) })
   ├─ streamText({ model, system, messages, abortSignal, maxOutputTokens?, temperature? })
@@ -87,6 +90,24 @@ agent is, that other members arrive as `[name]:` prefixed user messages, `@name`
 to call on someone, and `[PASS]` to abstain. Both language files say the same
 things in the same order, so they can be diffed side by side.
 
+Since **S3.3** they take a `memoryEnabled` flag and add one more rule when it is
+set: save durable facts about the user or the project with `memory_save`. It is
+conditional because a prompt that asks for a tool the model was not given is how
+a model starts describing tool calls in prose.
+
+### Tools attached to one turn
+
+`collectAgentTools` is the single place every tool passes through:
+
+| Source | When | Rule |
+|---|---|---|
+| The agent's MCP servers | The record exists and is enabled | A `sideEffects` server goes to an `executor` only (S3.1) |
+| `read_skill`, `read_skill_file` | The agent has at least one skill that still exists on disk (S3.2) | Attached regardless of the side-effects rule: read-only, and confined to `userData/skills/` |
+| `memory_save`, `memory_search` | `agent.memoryEnabled` (S3.3) | Likewise: the only thing they can write is this agent's own notes folder |
+
+The built-in tools have no `origins` entry, so their `tool-call` parts carry no
+`serverId` and the transcript draws the card with the bare tool name.
+
 ## Key types and contracts
 
 ```ts
@@ -130,21 +151,21 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | `src/main/agents/history.test.ts` | Every rule in the table above, one case each: prefixes, roles, the unknown-agent fallback, merging in both directions, dropping `passed` / `skipped` / empty / streaming, reasoning excluded, notices rendered and unknown keys skipped, and the same transcript producing a different view per agent |
 | `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage` |
 | `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call, `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
+| `src/main/agents/agent-turn.test.ts` (S3.2 / S3.3 blocks) | The built-in tools end to end against a real skills folder and a real memory directory: the prompt carrying a skill's description but not its body, `read_skill` and `read_skill_file` answering, a traversal refused as an errored tool result, a missing skill skipped, `memory_save` writing the note **and** the index line, the index reaching the next prompt, the briefing's memory sentence appearing only when memory is on, and one agent unable to search another's notes |
 | `src/main/agents/default-agent.test.ts` | Creating exactly one agent on the first usable provider, reusing it, preferring a user-created agent, and the `validation` refusal |
 
 ## Known limitations and TODOs
 
-- **No tools.** `streamText` runs with no `tools` and no `stopWhen`, so a model
-  that wants to call one simply answers in prose.
-
-Since **S3.1** that is no longer true when the agent has MCP servers bound:
-`collectAgentTools` builds the `ToolSet`, `stopWhen: stepCountIs(MAX_TOOL_STEPS)`
-runs the loop, and each `tool-call` / `tool-result` is appended as a whole
-message part (`MessageDelta`'s `part` kind). See
-[`../mcp/implement.md`](../mcp/implement.md) for the full path of one call, and
-`collectAgentTools` for the side-effects rule it enforces.
-- **No skills or memory in the system prompt.** PLAN's assembly order ends with
-  the skill headers and the memory index; S3.2 and S3.3 append them.
+- **A turn with no tools at all is still the common case.** An agent with no MCP
+  server, no skill and no memory gets no `tools` and no `stopWhen`, so a model
+  that wants to call one simply answers in prose. Where the tools come from when
+  there are some is the table above; see
+  [`../mcp/implement.md`](../mcp/implement.md) for the full path of one call,
+  [`../skills/implement.md`](../skills/implement.md) and
+  [`../memory/implement.md`](../memory/implement.md) for the built-in ones.
+- **`MAX_TOOL_STEPS = 8` covers every tool family together.** A turn that reads
+  two skills and searches memory has spent three of its eight steps before it
+  answers.
 - **No context truncation.** A long chat eventually exceeds the model's window and
   the provider errors; S4.2 drops oldest-first while keeping the system prompt.
 - **The user's display name is a constant** (`'User'`). There is no user profile

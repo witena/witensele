@@ -51,8 +51,14 @@ agent may keep its name):
 - `params.temperature`: finite and within `[0, 2]`; `params.maxTokens`: a positive
   integer. Absent means "the provider's default" and is always valid.
 - `role`: `participant` or `executor`. The UI writes only the first.
-- `skillNames` / `mcpServerIds`: arrays of strings. `skillNames` stays empty
-  until S3.2; `mcpServerIds` is written by the agent form from S3.1, and
+- `memoryEnabled`: a boolean. From S3.3 it is what `agent-turn` reads to decide
+  whether to attach `memory_save` / `memory_search` and inject the `MEMORY.md`
+  index; turning it off leaves every file in place.
+- `skillNames` / `mcpServerIds`: arrays of strings. `skillNames` is written by
+  the agent form from S3.2 and holds skill **names**, which is why nothing
+  cascades when a skill folder is deleted — see
+  [`../skills/backend.md`](../skills/backend.md). `mcpServerIds` is written from
+  S3.1, and
   `mcp.delete` removes a deleted server's id from every agent through
   `repos.agents.removeMcpServer` — the column is JSON, not a foreign key, so
   nothing cascades on its own.

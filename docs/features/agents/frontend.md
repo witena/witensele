@@ -61,15 +61,22 @@ different types, and "clear the temperature box" has to be spellable.
 `agent-delete`, `agent-save`, `agent-name`, `agent-name-error`,
 `agent-avatar-swatch`, `agent-description`, `agent-provider`, `agent-model`,
 `agent-model-input`, `agent-temperature`, `agent-max-tokens`,
-`agent-system-prompt`, `agents-error`.
+`agent-system-prompt`, `agents-error`, `agent-skill-item` (with `data-skill` and
+`data-missing`), `agent-skill-checkbox`, `agent-memory-toggle`, `memory-index`,
+`memory-entry`, `memory-content`, `memory-save`, `memory-delete`.
 
 ## Deviations from the artboard
 
 - The avatar control is a row of eight colour swatches next to a live preview,
   where the artboard draws a single field reading "letter · warm brown". The
   artboard's version has no way to actually pick anything.
-- Skills and the memory body are `EmptyState`s naming S3.2 and S3.3 instead of
-  the artboard's checkbox list and memory excerpt. The memory **toggle** is real.
+- The Skills block *is* the artboard's checkbox list from S3.2
+  (`components/agents/skill-checklist.tsx`), bound to `skillNames`, with an extra
+  row per bound name the library can no longer resolve — tagged "missing" rather
+  than dropped, because skills are referenced by name.
+- The memory block is the toggle plus `components/agents/memory-panel.tsx` from
+  S3.3: the entry list, an editable `MEMORY.md` and note, and per-note delete,
+  where the artboard drew a static excerpt.
 - The MCP block *is* the artboard's checkbox list from S3.1
   (`components/agents/mcp-checklist.tsx`): one row per registered server with its
   transport, its tool count and its side-effects tag, bound to `mcpServerIds`. A

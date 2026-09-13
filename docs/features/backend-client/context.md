@@ -34,13 +34,17 @@ only in the type system.
 - `src/main/events/bus.ts` — the Electron-free `EventBus` every service emits on.
 - `src/main/secrets.ts` — the `SecretStore` interface and the insecure
   development fallback.
-- `src/main/app-context.ts` — `AppContext`, the single object a handler receives.
+- `src/main/app-context.ts` — `AppContext`, the single object a handler receives,
+  including the injected `userDataDir` every filesystem-backed feature derives
+  its directory from (S3.2).
 - `src/main/handlers/` — one module per namespace plus `buildHandlers()`, which
   returns a **total** map over `BACKEND_METHODS`.
 - `src/main/ipc-protocol.ts` — the channel names, the response envelope and
   `toBackendError`, shared by main and preload and free of electron.
 - `src/main/ipc/` — the only Electron-aware backend code: `register.ts`
-  (`ipcMain.handle` plus event forwarding) and `secret-store.ts` (`safeStorage`).
+  (`ipcMain.handle` plus event forwarding), `secret-store.ts` (`safeStorage`) and,
+  from S3.2, `dialogs.ts` (`system.pickFolder`, the one method that needs a
+  window — see [`backend.md`](./backend.md)).
 - `src/preload/index.ts` / `index.d.ts` — the `window.witena` bridge.
 - `src/renderer/src/lib/backend.ts` — `createElectronBackendClient` and the
   `backend` singleton, the only renderer file that knows a transport exists.
@@ -50,7 +54,7 @@ only in the type system.
 
 | Not here | Owned by |
 |---|---|
-| Implementing any method beyond `system.*` and `settings.*` | The step that owns each domain (S1.6 providers, S1.7 chats, S2.1 agents, …) |
+| Implementing any method beyond `system.*` and `settings.*` | The step that owns each domain (S1.6 providers, S1.7 chats, S2.1 agents, …). As of S3.3 they have all landed; `system.pickFolder` is the one whose implementation lives in `src/main/ipc/` rather than in a handler module |
 | A React context that injects a fake client into pages | Deferred to S1.5 / S1.7, when the first store and page exist; until then the `backend` singleton is imported directly and tests use `createElectronBackendClient(fakeBridge)` |
 | Database schema and persistence | `../database/`, S1.2 |
 | Provider presets (`shared/presets.ts`) and real key encryption on a live provider | `../providers/`, S1.6 |

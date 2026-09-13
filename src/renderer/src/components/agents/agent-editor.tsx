@@ -7,14 +7,20 @@
  * reaches the backend until Save, which is disabled until the draft is both
  * `dirty` and valid.
  *
- * ## Why two of the blocks are still empty states
+ * ## Skills (S3.2)
  *
- * Skills (S3.2) and the memory viewer (S3.3) are later steps. They are drawn as
- * `EmptyState`s that *name the step* rather than being left out, because the
- * artboard's proportions depend on them: dropping them would make the right
- * column collapse and the form stop looking like the design. The memory
- * **toggle** is real — `memoryEnabled` is a stored field the agent turn will read
- * — only its contents are pending.
+ * A checklist bound to `skillNames`, backed by `stores/skills.ts`. Skills are
+ * referenced **by name**, not by id, so the block also has to show a name the
+ * library can no longer resolve — `SkillChecklist` draws those rows with a
+ * "missing" tag rather than dropping them, which is what keeps a renamed folder
+ * from silently unconfiguring an agent.
+ *
+ * ## Memory (S3.3)
+ *
+ * The toggle writes `memoryEnabled`; `MemoryPanel` below it reads the agent's
+ * own `MEMORY.md` and notes and lets the user edit or delete them. The panel is
+ * shown only for a **saved** agent: an unsaved draft has no id, so there is no
+ * memory folder to read.
  *
  * ## MCP servers (S3.1)
  *
@@ -38,7 +44,7 @@
  * editor uses for its own model list.
  */
 import type { TFunction } from 'i18next'
-import { Puzzle, Server } from 'lucide-react'
+import { Sparkles, Server } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Agent, Provider } from '@shared/types'
@@ -55,9 +61,12 @@ import {
 } from '../ui'
 import { AGENT_AVATAR_COLORS, avatarInitial } from './agent-display'
 import { McpChecklist } from './mcp-checklist'
+import { MemoryPanel } from './memory-panel'
+import { SkillChecklist } from './skill-checklist'
 import type { AgentDraftErrors } from '../../stores/agents'
 import { useAgentsStore, validateDraft } from '../../stores/agents'
 import { useMcpStore } from '../../stores/mcp'
+import { missingSkillNames, useSkillsStore } from '../../stores/skills'
 
 /** Literal `t()` calls so `used-keys.test.ts` can verify every message. */
 function nameError(t: TFunction, code: AgentDraftErrors['name']): string | undefined {
@@ -113,10 +122,21 @@ export function AgentEditor({
   const mcpTools = useMcpStore((state) => state.tools)
   const boundServerIds = draft?.mcpServerIds
 
+  // The library is one directory scan, so it is always loaded — the checklist
+  // needs it to tell a resolvable name from a missing one.
+  const skills = useSkillsStore((state) => state.skills)
+  const selectedSkillNames = draft?.skillNames
+
   // The registry itself is cheap — one table read — so it is always loaded.
   useEffect(() => {
     void useMcpStore.getState().load()
+    void useSkillsStore.getState().load()
   }, [])
+
+  const missingSkills = useMemo(
+    () => missingSkillNames(selectedSkillNames ?? [], skills),
+    [selectedSkillNames, skills]
+  )
 
   // Tool counts are not: each one opens a connection, so only the servers this
   // agent actually uses are asked, and only once per id.
@@ -399,13 +419,32 @@ export function AgentEditor({
         <div className="flex min-w-0 flex-col gap-5">
           <section className="flex flex-col gap-2.5">
             <SectionTitle level={3}>{t('agents.skills')}</SectionTitle>
-            <div className="rounded-lg border border-border-strong bg-bg-elevated">
-              <EmptyState
-                size="sm"
-                icon={Puzzle}
-                title={t('agents.skillsEmptyTitle')}
-                description={t('agents.skillsEmptyDescription')}
-              />
+            <div className="overflow-hidden rounded-lg border border-border-strong bg-bg-elevated">
+              {skills.length > 0 || missingSkills.length > 0 ? (
+                <SkillChecklist
+                  skills={skills}
+                  value={draft.skillNames}
+                  missing={missingSkills}
+                  missingLabel={t('agents.skillMissing')}
+                  filesLabel={(files) => t('agents.skillFileCount', { files })}
+                  onToggle={(name, checked) =>
+                    store().patchDraft({
+                      skillNames: checked
+                        ? [...draft.skillNames, name]
+                        : draft.skillNames.filter(
+                            (entry) => entry.trim().toLowerCase() !== name.trim().toLowerCase()
+                          )
+                    })
+                  }
+                />
+              ) : (
+                <EmptyState
+                  size="sm"
+                  icon={Sparkles}
+                  title={t('agents.skillsEmptyTitle')}
+                  description={t('agents.skillsEmptyDescription')}
+                />
+              )}
             </div>
           </section>
 
@@ -444,16 +483,17 @@ export function AgentEditor({
           <section className="flex min-h-0 flex-1 flex-col gap-2.5">
             <div className="flex items-center justify-between">
               <SectionTitle level={3}>{t('agents.memoryAcrossChats')}</SectionTitle>
-              <Toggle
-                label={t('agents.memoryToggle')}
-                checked={draft.memoryEnabled}
-                onChange={(memoryEnabled) => store().patchDraft({ memoryEnabled })}
-              />
+              {/* `Toggle` takes no test id of its own, so the wrapper carries one. */}
+              <span data-testid="agent-memory-toggle">
+                <Toggle
+                  label={t('agents.memoryToggle')}
+                  checked={draft.memoryEnabled}
+                  onChange={(memoryEnabled) => store().patchDraft({ memoryEnabled })}
+                />
+              </span>
             </div>
-            <div className="flex flex-1 items-center justify-center rounded-lg border border-border-strong bg-bg-elevated p-3">
-              <p className="text-center text-[11px] leading-relaxed text-fg-faint">
-                {t('agents.memoryComingSoon')}
-              </p>
+            <div className="flex min-h-[160px] flex-1 flex-col overflow-hidden rounded-lg border border-border-strong bg-bg-elevated p-2">
+              <MemoryPanel agentId={agent?.id} />
             </div>
           </section>
         </div>

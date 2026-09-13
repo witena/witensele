@@ -63,6 +63,15 @@
  * The side-effects rule lives in `collectAgentTools`: a server flagged
  * `sideEffects` is attached only to an `executor` agent. See its doc comment.
  *
+ * ## Skills and memory (S3.2, S3.3)
+ *
+ * The same function also attaches the built-in tools. `read_skill` and
+ * `read_skill_file` appear when the agent has at least one skill that still
+ * exists on disk, `memory_save` and `memory_search` when `agent.memoryEnabled`.
+ * The system prompt carries their counterpart: one `name — description` line per
+ * enabled skill (progressive disclosure — never a body), and the whole
+ * `MEMORY.md` index capped at `MEMORY_PROMPT_MAX_BYTES`.
+ *
  * ## AI SDK v7 names used here
  *
  * Verified against `node_modules/ai/dist/index.d.ts` (ai 7.0.99); the full table
@@ -85,13 +94,18 @@ import type {
   MessagePart,
   MessageStatus,
   ReasoningPart,
+  SkillMeta,
   TextPart,
   ToolCallPart,
   ToolResultPart,
   Usage
 } from '@shared/types'
 import type { AppContext } from '../app-context'
+import { skillsDir } from '../app-context'
 import { toAiTools, type AgentTools, type ToolOrigin } from '../mcp/tools'
+import { buildMemorySection, buildMemoryTools } from '../memory/tools'
+import { scanSkills } from '../skills/loader'
+import { buildSkillsSection, buildSkillTools } from '../skills/tools'
 import { isTimeoutAbort, TIMEOUT_ERROR } from '../presence/abort-reasons'
 import type { TurnOutcome } from '../presence/supervisor'
 import { createLanguageModel } from '../providers/registry'
@@ -228,16 +242,55 @@ function appendDelta(parts: MessagePart[], kind: 'text' | 'reasoning', text: str
   parts.push(kind === 'text' ? { type: 'text', text } : { type: 'reasoning', text })
 }
 
-/** The system prompt: the agent's own instructions, then the group briefing. */
+/**
+ * The skills this agent has enabled **and** that still exist on disk.
+ *
+ * Matched on the skill's `name` first and its folder second, both
+ * case-insensitively, in the order the agent lists them. A name that no longer
+ * resolves is skipped silently here — the agent editor is where a missing skill
+ * is reported, because that is where it can be fixed; a turn that failed because
+ * a folder was moved would be a worse answer than one given without it.
+ */
+export function enabledSkills(ctx: AppContext, agent: Agent): SkillMeta[] {
+  if (agent.skillNames.length === 0) return []
+  const available = scanSkills(skillsDir(ctx))
+  const found: SkillMeta[] = []
+  for (const wanted of agent.skillNames) {
+    const key = wanted.trim().toLowerCase()
+    const skill =
+      available.find((candidate) => candidate.name.toLowerCase() === key) ??
+      available.find((candidate) => candidate.folder.toLowerCase() === key)
+    if (skill && !found.includes(skill)) found.push(skill)
+  }
+  return found
+}
+
+/**
+ * The system prompt, in the order `docs/PLAN.md` ("One agent turn") fixes: the
+ * agent's own instructions, the group briefing, the enabled skills' names and
+ * descriptions, then the whole memory index.
+ *
+ * Skills and memory come **after** the briefing because they are data the agent
+ * may reach for, while the briefing is how it must behave; a model that runs out
+ * of attention should lose the reference material first, not the protocol.
+ */
 export function buildSystemPrompt(ctx: AppContext, agent: Agent, members: Agent[]): string {
   const language = resolveMainLanguage(ctx.repos.settings.get(ctx.userId).language)
   const briefing = buildGroupBriefing({
     language,
     self: toBriefingMember(agent),
-    members: members.map(toBriefingMember)
+    members: members.map(toBriefingMember),
+    memoryEnabled: agent.memoryEnabled
   })
-  const own = agent.systemPrompt.trim()
-  return own.length > 0 ? `${own}\n\n${briefing}` : briefing
+
+  const sections = [agent.systemPrompt.trim(), briefing]
+
+  const skills = buildSkillsSection(enabledSkills(ctx, agent))
+  if (skills.length > 0) sections.push(skills)
+
+  if (agent.memoryEnabled) sections.push(buildMemorySection(ctx.memory.readIndex(agent.id)))
+
+  return sections.filter((section) => section.length > 0).join('\n\n')
 }
 
 /* -------------------------------------------------------------------------- */
@@ -269,6 +322,11 @@ export interface CollectToolsOptions {
  * A server that cannot be reached is skipped with a log line rather than failing
  * the turn: one broken tool server must not silence an agent that could still
  * answer from what it knows.
+ *
+ * On top of those, the **built-in** tools: `read_skill` / `read_skill_file` when
+ * the agent has at least one skill that still exists (S3.2), and `memory_save` /
+ * `memory_search` when its memory is on (S3.3). See the end of the function for
+ * why the side-effects rule does not reach them.
  */
 export async function collectAgentTools(
   ctx: AppContext,
@@ -313,6 +371,22 @@ export async function collectAgentTools(
     } catch (error) {
       console.warn(`[witena] MCP server "${server.name}" is unavailable: ${describe(error)}`)
     }
+  }
+
+  // The built-in tools, which have no server behind them and therefore no
+  // `origins` entry: the transcript shows them by their own name.
+  //
+  // They are attached **after** the MCP loop and are not subject to the
+  // side-effects rule above, for the reasons written out in `skills/tools.ts`
+  // and `memory/tools.ts`: reading a skill is read-only, and the only thing
+  // `memory_save` can write is this agent's own notes folder. Neither can reach
+  // a file the user is working on, which is what the rule protects.
+  const skills = enabledSkills(ctx, agent)
+  if (skills.length > 0) {
+    Object.assign(tools, buildSkillTools(skillsDir(ctx), skills))
+  }
+  if (agent.memoryEnabled) {
+    Object.assign(tools, buildMemoryTools(ctx.memory, agent.id))
   }
 
   return { tools, origins }

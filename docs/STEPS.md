@@ -217,13 +217,55 @@ over `InMemoryTransport`; `e2e/mcp.spec.ts` spawns the real
 Ollama, watches an agent call `echo` and a tool card appear. Docs in
 `docs/features/mcp/`.
 
-### S3.2 Skills `[ ]`
+### S3.2 Skills `[x] (2026-09-13)`
 What: scan `userData/skills`; import a folder; agents select skills; system prompt injects name / description; `read_skill` and `read_skill_file` tools.
 Acceptance: drop in a sample SKILL.md; the agent reads the full text when needed; unit test for frontmatter parsing.
+Done: `src/main/skills/loader.ts` — `scanSkills` / `scanSkillsWithWarnings` over
+`<skillsDir>/<folder>/SKILL.md` with `gray-matter`, `name` falling back to the
+folder and a missing `description` skipping the folder into a warning list;
+`listSkillFiles` (hidden files and symlinks excluded, capped at
+`MAX_SKILL_FILES`), `readSkill`, `readSkillFile` (200 KB and a binary sniff),
+`importSkill` (validated before a byte is copied, `overwrite` refused by
+default), `deleteSkill`, `seedSkills` and a per-directory cache the writes
+invalidate. `resolveInside` is the one path gate — absolute, `..` and symlink
+escapes all refused against the folder's real path — and `memory/store.ts`
+reuses it. `skills/tools.ts` builds the prompt's `Skills` section and the two
+read-only tools, which `collectAgentTools` attaches **regardless of the
+side-effects rule** (documented there and in `docs/features/skills/`).
+`AppContext` gained the injected **`userDataDir`** plus `skillsDir()` /
+`memoryDir()`, wired from `src/main/index.ts`, which also seeds
+`resources/skills/architecture-review/` into an empty library on first launch.
+`skills.read` / `skills.delete` and **`system.pickFolder`** were added to
+`BackendApi` / `BACKEND_METHODS` / `contracts.test.ts`; `system.pickFolder` is
+the documented electron exception — a stub in `handlers/system.ts` that
+`registerIpc` layers `ipc/dialogs.ts` over. Settings → Skills is the card list
+plus a reader (markdown body, bundled files, two-click Delete, "Import folder"),
+and the agent form's Skills block is a real checklist that tags a name the
+library can no longer resolve as missing. Docs in `docs/features/skills/`.
 
-### S3.3 Memory `[ ]`
+### S3.3 Memory `[x] (2026-09-13)`
 What: `userData/memory/<agentId>/MEMORY.md` and notes; `memory_save` and `memory_search` tools; viewer and editor on the configuration page.
 Acceptance: a fact remembered in chat A is recalled in chat B; unit tests for index read/write.
+Done: `src/main/memory/store.ts` — `createMemoryStore(dir)` on `ctx.memory`:
+`readIndex`, `listEntries` (parsing `- [Title](notes/x.md) — hook`), `saveNote`
+(a `<slug>-<shortid>.md` note with `{ title, createdAt }` frontmatter plus one
+**appended** index line, so hand-written prose survives), `search`
+(case-insensitive, title ranked above body, snippets, capped at
+`MAX_SEARCH_HITS`), `readNote`, `writeFile`, `deleteNote`, all confined per agent
+by `resolveInside`. `memory/tools.ts` adds `memory_save` / `memory_search` and
+the prompt's `Memory` section, which carries the whole index up to
+`MEMORY_PROMPT_MAX_BYTES` (8 KB) and truncates on a line boundary with a marker;
+both tools bypass the side-effects rule because the only thing they can write is
+the agent's own notes folder, which `docs/features/memory/` writes out in full.
+The briefing gained **one conditional sentence in both languages** asking the
+agent to save durable facts. `memory.list/read/write` were implemented and
+`memory.delete` / `memory.search` added to the contract. The agent form's
+"Memory across chats" block is the toggle plus `memory-panel.tsx`: the entry
+list with `MEMORY.md` first, an editable textarea with Save, and per-note delete.
+`e2e/skills-memory.spec.ts` drives both steps against real `qwen2.5:3b` — the
+seeded skill, its detail pane, the binding, a real `read_skill` call, a real
+`memory_save`, and the note still being there after a relaunch — capturing
+`test-results/shots/{skills,memory}.png`. Docs in `docs/features/memory/`.
 
 ---
 

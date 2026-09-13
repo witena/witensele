@@ -435,14 +435,45 @@ export interface AppSettingsPatch {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The progressive-disclosure header of a skill: only these fields go into the
- * system prompt; the body is fetched on demand with the `read_skill` tool.
+ * The progressive-disclosure header of a skill: only `name` and `description`
+ * go into the system prompt; the body is fetched on demand with the `read_skill`
+ * tool. The other fields exist for the settings cards, which have to say enough
+ * about a skill for the user to recognize it without opening it.
  */
 export interface SkillMeta {
   name: string
   description: string
   /** Absolute path of the skill directory under `userData/skills/`. */
   path: string
+  /** The folder the skill lives in, which may differ from the frontmatter name. */
+  folder: string
+  /** Free-form version string from the frontmatter, when the author wrote one. */
+  version?: string
+  /** Frontmatter tags, normalized to a string array. */
+  tags?: string[]
+  /** Bundled resource files beside `SKILL.md`, counted up to `MAX_SKILL_FILES`. */
+  fileCount: number
+}
+
+/**
+ * A skill with its body, for the settings detail pane and the `read_skill` tool.
+ * `files` lists the bundled resources `read_skill_file` may be asked for.
+ */
+export interface SkillDetail {
+  meta: SkillMeta
+  /** The markdown below the frontmatter. */
+  body: string
+  /** Paths relative to the skill folder, `SKILL.md` and hidden files excluded. */
+  files: string[]
+}
+
+/**
+ * A skill folder that was found but could not be used, so the settings page can
+ * say why instead of silently listing one folder fewer.
+ */
+export interface SkillWarning {
+  folder: string
+  reason: 'missing-description' | 'unreadable'
 }
 
 /** One entry in an agent's `MEMORY.md` index, backed by a file under `notes/`. */
@@ -452,6 +483,15 @@ export interface MemoryEntry {
   /** Path relative to the agent's memory directory, e.g. `notes/2026-09-13-api.md`. */
   path: string
   createdAt: number
+}
+
+/** One hit of `memory_search`, over the index and every note body. */
+export interface MemorySearchHit {
+  /** Path relative to the agent's memory directory. */
+  path: string
+  title: string
+  /** A window of the matching text, for the model and for the UI. */
+  snippet: string
 }
 
 /* -------------------------------------------------------------------------- */

@@ -8,8 +8,11 @@
  * context from its own configuration and reuses every handler unchanged.
  *
  * This module is transport-agnostic on purpose: the caller passes the database
- * path in, because only `src/main/index.ts` may ask electron for `userData`.
+ * path and the data directory in, because only `src/main/index.ts` may ask
+ * electron for `userData`. Everything filesystem-backed — the skills library and
+ * the per-agent memory folders — is derived from that one injected directory.
  */
+import { join } from 'node:path'
 import type { AppTimeouts, UserId } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import type { DatabaseHandle } from './db/database'
@@ -20,6 +23,7 @@ import type { EventBus } from './events/bus'
 import { createEventBus } from './events/bus'
 import { McpManager } from './mcp/manager'
 import type { McpManagerOptions } from './mcp/manager'
+import { createMemoryStore, type MemoryStore } from './memory/store'
 import { ChatRunnerRegistry } from './orchestration/chat-runner'
 import type { ChatRunnerOptions } from './orchestration/chat-runner'
 import { AgentSupervisor } from './presence/supervisor'
@@ -80,9 +84,39 @@ export async function probeAgentProvider(ctx: AppContext, agentId: string): Prom
   }
 }
 
+/** Directory name of the skills library inside `userDataDir`. */
+export const SKILLS_DIR = 'skills'
+
+/** Directory name of the per-agent memory folders inside `userDataDir`. */
+export const MEMORY_DIR = 'memory'
+
+/**
+ * Where the skills library lives.
+ *
+ * Derived from the injected `userDataDir` rather than asked of electron, so the
+ * whole skills feature can be driven from a unit test against a temporary
+ * directory and lifted into a server later (CLAUDE.md rule #5).
+ */
+export function skillsDir(ctx: AppContext): string {
+  return join(ctx.userDataDir, SKILLS_DIR)
+}
+
+/** Where the per-agent memory folders live. */
+export function memoryDir(ctx: AppContext): string {
+  return join(ctx.userDataDir, MEMORY_DIR)
+}
+
 export interface AppContext {
   /** The open database, including the raw driver and `close()`. */
   db: DatabaseHandle
+  /**
+   * The application's data directory: the database, `skills/` and `memory/`.
+   *
+   * Injected, because only `src/main/index.ts` may ask electron for
+   * `app.getPath('userData')`. Read through `skillsDir()` / `memoryDir()` rather
+   * than joined by hand, so the layout is stated in one place.
+   */
+  userDataDir: string
   /** Typed persistence, already bound to `secrets.encrypt`. */
   repos: Repositories
   /** The push channel to the renderer. */
@@ -117,6 +151,14 @@ export interface AppContext {
    */
   mcp: McpManager
   /**
+   * Per-agent markdown memory, bound to `memoryDir(ctx)`.
+   *
+   * On the context for the same reason the repositories are: it is the one
+   * object that knows where an agent's notes live, and a handler that rebuilt it
+   * from a path would be one more place to keep the layout in sync.
+   */
+  memory: MemoryStore
+  /**
    * Outbound HTTP for handlers that talk to a provider's REST endpoint
    * (`providers.fetchModels`). Absent means the platform `fetch`; a test injects
    * its own so the suite never opens a socket, and a future server build can put
@@ -130,6 +172,8 @@ export interface AppContext {
 export interface AppContextOptions {
   /** Absolute path of the SQLite file, or `':memory:'`. */
   databasePath: string
+  /** Absolute path of the data directory holding `skills/` and `memory/`. */
+  userDataDir: string
   secrets: SecretStore
   /** Defaults to `LOCAL_USER_ID`; present so a server build can pass a real user. */
   userId?: UserId
@@ -178,7 +222,7 @@ export function createSupervisor(
 }
 
 export function createAppContext(options: AppContextOptions): AppContext {
-  const { databasePath, secrets } = options
+  const { databasePath, userDataDir, secrets } = options
   const db = openDatabase(databasePath)
   // Wrapped rather than passed by reference so an implementation that relies on
   // `this` keeps working.
@@ -188,6 +232,7 @@ export function createAppContext(options: AppContextOptions): AppContext {
 
   const ctx: AppContext = {
     db,
+    userDataDir,
     repos,
     events: options.events ?? createEventBus(),
     secrets,
@@ -198,6 +243,7 @@ export function createAppContext(options: AppContextOptions): AppContext {
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
+    memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),

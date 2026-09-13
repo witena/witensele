@@ -82,9 +82,14 @@ of the name, uppercased, when the user did not type one.
 
 ## Known limitations and TODOs
 
-- Skills and the memory viewer are still empty states naming S3.2 and S3.3. The
-  MCP block became a real checklist in S3.1, bound to `mcpServerIds`; see
-  [`../mcp/frontend.md`](../mcp/frontend.md).
+- The editor's three capability blocks are all real now: MCP from S3.1
+  ([`../mcp/frontend.md`](../mcp/frontend.md)), Skills from S3.2
+  ([`../skills/frontend.md`](../skills/frontend.md)) and Memory from S3.3
+  ([`../memory/frontend.md`](../memory/frontend.md)).
+- A bound `skillName` whose folder is gone stays on the record on purpose, tagged
+  "missing" in the editor: the name is what the user would re-import it under, so
+  dropping it would silently unconfigure the agent. `mcpServerIds`, which are
+  ids, *are* unbound by `mcp.delete` — the two differ because the identifiers do.
 - An agent takes **all** of a bound server's tools or none; there is no per-tool
   selection.
 - The reasoning toggle writes `params.reasoning`; nothing reads it yet —

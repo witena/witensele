@@ -13,8 +13,9 @@ does not throw, it just makes every answer slightly worse.
 
 ## Scope
 
-- **System prompt assembly**: the agent's own `systemPrompt`, then the group
-  briefing.
+- **System prompt assembly**, in PLAN's order: the agent's own `systemPrompt`,
+  the group briefing, the enabled skills' `name — description` lines (S3.2) and
+  the whole `MEMORY.md` index (S3.3).
 - **The group briefing** in both languages (`briefing.ts` + `briefing.en.ts` +
   `briefing.zh-CN.ts`), following the UI language setting.
 - **History transform** (`history.ts`): the shared transcript → this agent's
@@ -36,7 +37,8 @@ does not throw, it just makes every answer slightly worse.
 | Who speaks and when | `orchestration` |
 | Deciding who the `@mentions` in a reply make speak next | `orchestration` |
 | The `@name` matching rule itself | `src/shared/mentions.ts`, shared with the composer |
-| Tool **definitions**: the MCP pool, `read_skill`, `memory_*` | `mcp` (S3.1 `[x]` — the turn calls `ctx.mcp`), `skills` (S3.2), `memory` (S3.3). The `stopWhen` loop and the tool message parts are **here**, from S3.1 |
+| Tool **definitions**: the MCP pool, `read_skill` / `read_skill_file`, `memory_save` / `memory_search` | [`mcp`](../mcp/context.md) (S3.1), [`skills`](../skills/context.md) (S3.2), [`memory`](../memory/context.md) (S3.3). The turn calls `ctx.mcp`, `buildSkillTools` and `buildMemoryTools`; the `stopWhen` loop, the tool message parts and **which of them an agent gets** are here |
+| The content of the skills and memory prompt sections | `skills` and `memory` build the text; the turn decides the order and whether to include them |
 | Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
 | Context overflow and truncation | S4.2 |
 | Cost accounting on top of the stored `Usage` | S4.1 |
@@ -68,6 +70,9 @@ per speaker and reads the returned status to decide how the run ends.
 | `passed` and `skipped` messages are dropped from history | Keep them with a marker | Replaying abstentions teaches the next speaker that abstaining is normal. The round bookkeeping that needs them lives in `ChatRunner` |
 | The briefing exists in Chinese and English as **`.ts` files** | Locale files; one English briefing for everyone | It never reaches the renderer, so it has no i18n key; a Chinese-first model follows a Chinese prompt far more reliably. `briefing.zh-CN.ts` is the documented exception to the English-only rule |
 | The briefing's `[name]:` and `@name` examples use a **real member of this chat** | A placeholder like `@name` | A model copies the example it is given |
+| The briefing's **memory sentence is conditional** on the tools being attached (S3.3) | Always include it | A prompt that asks for a tool the model was not given is how a model starts describing tool calls in prose |
+| Skills and memory come **after** the briefing in the prompt | Before it; interleaved | The briefing is how to behave, the other two are material to reach for. A model that runs out of attention should lose the reference material first, not the protocol |
+| A `skillName` that no longer resolves is **skipped silently** during a turn | Fail the turn; insert a notice | A moved folder must not silence an agent that could still answer. The agent editor is where it is reported, because that is where it can be fixed |
 | `'system'` is resolved from `Intl.DateTimeFormat().resolvedOptions().locale` | Ask the renderer | The prompt is assembled before any window is involved; a round trip inside a turn would be a needless dependency |
 
 ## Open questions
