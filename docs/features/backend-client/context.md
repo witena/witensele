@@ -10,7 +10,13 @@ a single `BackendClient` interface and never see `ipcRenderer`, `window.witena`
 or a channel name. Swapping Electron IPC for HTTP + WebSocket has to be a change
 in one file, not a change in every page.
 
+S1.1 defined the contract. S1.3 implemented the transport underneath it and the
+first handlers on top of it, so the same boundary now exists at runtime and not
+only in the type system.
+
 ## Scope
+
+**The contract (S1.1)**
 
 - `src/shared/types.ts` — the domain types every layer agrees on: providers,
   agents, MCP servers, chats, members, messages and their parts, presence,
@@ -23,27 +29,46 @@ in one file, not a change in every page.
 - `src/shared/index.ts` — one import point for all of the above.
 - `src/shared/contracts.test.ts` — runtime and type-level tests over the contract.
 
-S1.1 defines the contract only. The single runtime helper it ships is
-`isBackendMethod`, plus the two default-settings constants.
+**The transport (S1.3)**
+
+- `src/main/events/bus.ts` — the Electron-free `EventBus` every service emits on.
+- `src/main/secrets.ts` — the `SecretStore` interface and the insecure
+  development fallback.
+- `src/main/app-context.ts` — `AppContext`, the single object a handler receives.
+- `src/main/handlers/` — one module per namespace plus `buildHandlers()`, which
+  returns a **total** map over `BACKEND_METHODS`.
+- `src/main/ipc-protocol.ts` — the channel names, the response envelope and
+  `toBackendError`, shared by main and preload and free of electron.
+- `src/main/ipc/` — the only Electron-aware backend code: `register.ts`
+  (`ipcMain.handle` plus event forwarding) and `secret-store.ts` (`safeStorage`).
+- `src/preload/index.ts` / `index.d.ts` — the `window.witena` bridge.
+- `src/renderer/src/lib/backend.ts` — `createElectronBackendClient` and the
+  `backend` singleton, the only renderer file that knows a transport exists.
+- `e2e/smoke.spec.ts` — the Playwright harness that drives the real stack.
 
 ## Out of scope
 
 | Not here | Owned by |
 |---|---|
-| The preload bridge, the main-process handler registry, the renderer's `lib/backend.ts` | S1.3, documented in `frontend.md` / `backend.md` of this feature |
-| Actually implementing any method beyond `system.ping` / `system.emitTestEvent` | The step that owns each domain (S1.6 providers, S1.7 chats, S2.1 agents, …) |
-| Database schema and persistence | `../chats/`, S1.2 |
-| Provider presets (`shared/presets.ts`) | `../providers/`, S1.6 |
-| Validation of inputs at runtime (zod schemas) | The handler that owns the method; the contract is type-level only |
+| Implementing any method beyond `system.*` and `settings.*` | The step that owns each domain (S1.6 providers, S1.7 chats, S2.1 agents, …) |
+| A React context that injects a fake client into pages | Deferred to S1.5 / S1.7, when the first store and page exist; until then the `backend` singleton is imported directly and tests use `createElectronBackendClient(fakeBridge)` |
+| Database schema and persistence | `../database/`, S1.2 |
+| Provider presets (`shared/presets.ts`) and real key encryption on a live provider | `../providers/`, S1.6 |
+| Runtime validation beyond what the implemented handlers need | The handler that owns the method; the contract itself is type-level only |
+| Translating `BackendError.code` into UI copy | `../i18n`, S1.4 |
 
 ## Dependencies
 
-This feature depends on nothing — it is the bottom of the stack and imports no
-electron, no node built-in and no renderer code. Everything else depends on it:
-`../providers/`, `../agents/`, `../chats/`, `../orchestration/`,
-`../presence/`, `../mcp/`, `../skills/`, `../memory/` all take their types from
-here, and every renderer feature reaches the backend only through
-`BackendClient`.
+The shared half depends on nothing — it is the bottom of the stack and imports no
+electron, no node built-in and no renderer code. The transport half depends on
+`../database/` (the repositories an `AppContext` carries) and on electron, but
+only inside `src/main/ipc/`, `src/main/index.ts` and `src/preload/`.
+
+Everything else depends on this feature: `../providers/`, `../agents/`,
+`../chats/`, `../orchestration/`, `../presence/`, `../mcp/`, `../skills/`,
+`../memory/` all take their types from here and their storage, events and secrets
+from the `AppContext`, and every renderer feature reaches the backend only
+through `BackendClient`.
 
 ## Decisions and trade-offs
 
@@ -57,17 +82,28 @@ here, and every renderer feature reaches the backend only through
 | System copy travels as an i18n key plus params (`SystemNoticePart`) | Localized sentences from the backend | The backend does not know the UI language, and stored messages outlive a language change |
 | Declare the whole MVP method surface in S1.1 | Add methods step by step | The renderer can be written against the finished contract, and `BACKEND_METHODS` gives S1.3 a complete channel list; unimplemented methods simply reject |
 | `BACKEND_METHODS` kept in sync by a compile-time exhaustiveness check | Deriving the array from the type (impossible) or trusting review | `satisfies` rejects an unknown name and the `Assert<…>` type rejects a method missing from the array, so the two cannot drift |
-| Reserved-but-unused members carried now (`AgentRole.executor`, `diff` / `file-ref` parts, `permission.requested`, `Chat.workdir`, `McpServer.sideEffects`) | Adding them when the features land | PLAN.md commits to them; reserving them now keeps the stored message and chat shapes stable, so no migration is needed later |
+| **Every `invoke` resolves with an `{ ok, value }` / `{ ok, error }` envelope** | Rejecting the `ipcMain.handle` promise | Electron flattens a rejected handler promise to its message string; `code` and `details` would be lost and the renderer could not switch on them. The envelope carries the whole `BackendError` and the client throws it again on its own side |
+| **`buildHandlers()` returns a total map, filling gaps with a rejecting stub** | A partial map plus a presence check in the transport | The transport stays free of "is it implemented yet" logic, a missing method fails with a message naming the step instead of `undefined is not a function`, and a unit test can assert completeness against `BACKEND_METHODS` |
+| **Handlers are `(ctx, input)` functions, not methods on a class** | A service object holding the database; module-level singletons | Nothing to construct, nothing to mock, no import cycle, and the same functions serve a Node server that builds its own `AppContext` |
+| **The preload bridge does not decode the envelope** | Unwrapping in preload and rejecting there | Preload is the layer a different transport does not have. Keeping the decode in `lib/backend.ts` means an HTTP client reuses the error-rebuilding code instead of reimplementing it |
+| **Two channel constants (`witena:invoke`, `witena:event`)** | One channel per method name from `BACKEND_METHODS` | 35 registrations buy nothing: the method name is already the first argument and is validated with `isBackendMethod` before dispatch |
+| **`SecretStore` falls back to base64 with a `plain:` marker** | Refusing to start when `safeStorage` is unavailable | The app must still run on a machine with no keyring (CI, a fresh Linux session). The prefix makes the downgrade visible in the database and the store warns on first use |
+| **`WITENA_USER_DATA` overrides `app.getPath('userData')`** | Pointing the e2e test at the real database; injecting a database path only | The whole userData directory moves, so skills and memory land in the temporary directory too when they arrive, and no test run can touch a developer's real data |
+| **End-to-end coverage with Playwright's Electron driver** | Only unit tests with a fake bridge; spectron | The acceptance criterion is a round trip through preload, `contextBridge` and structured clone — exactly the parts a fake bridge cannot exercise. Playwright drives the real binary and needs no browser download |
 
 ## Open questions
 
-- ~~`messages.list` pages with `before: string` (an exclusive message id cursor).
-  If a chat ever has two messages with an identical `createdAt` and ordering must
-  be stable across devices, this may need to become a composite cursor.~~
+- ~~`messages.list` pages with `before: string` (an exclusive message id cursor).~~
   Settled in S1.2: the message table carries a per-chat monotonic `seq` assigned
-  at insert, and the repository resolves the cursor id to its `seq`. The contract
-  keeps the bare message id and the order is total, so no composite cursor is
-  needed. See [`../database/context.md`](../database/context.md).
+  at insert, and the repository resolves the cursor id to its `seq`. See
+  [`../database/context.md`](../database/context.md).
 - `providers.fetchModels` / `providers.testConnection` accept either a saved id
   or an unsaved draft (`ProviderRef`). If the settings form ends up always
   saving first, the `draft` half can be dropped.
+- `InvokeResponse` is written twice: once in `src/main/ipc-protocol.ts` for main
+  and preload, once in `src/preload/index.d.ts` for the renderer, because the
+  renderer's TypeScript project may not pull files out of `src/main/`. If a third
+  copy is ever needed, move the envelope into `src/shared/`.
+- Events are broadcast to every window. With a single window that is exactly
+  right; a multi-window build would want per-window filtering, most likely by
+  chat id.

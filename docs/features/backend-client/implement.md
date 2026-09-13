@@ -2,9 +2,11 @@
 
 ## Approach
 
-Four files in `src/shared/`, none of which imports anything outside that
-directory. They are pure types plus three constants, so they compile into every
-process without pulling a runtime along.
+Two halves. The **contract** is four files in `src/shared/` that import nothing
+outside that directory — pure types plus three constants, so they compile into
+every process without pulling a runtime along. The **transport** is the thin
+layer that makes the contract real, split so that exactly two directories know
+Electron exists.
 
 | File | Owns |
 |---|---|
@@ -12,6 +14,15 @@ process without pulling a runtime along.
 | `src/shared/events.ts` | `BackendEvent` and the streaming `MessageDelta` |
 | `src/shared/backend.ts` | `BackendApi`, `BackendClient`, `BACKEND_METHODS`, `isBackendMethod` |
 | `src/shared/index.ts` | Re-exports the three above plus `version.ts` |
+| `src/main/events/bus.ts` | `EventBus` and the in-process implementation |
+| `src/main/secrets.ts` | `SecretStore` and the insecure fallback |
+| `src/main/app-context.ts` | `AppContext` and `createAppContext` |
+| `src/main/handlers/*` | One module per namespace, merged by `buildHandlers()` |
+| `src/main/ipc-protocol.ts` | Channel names, `InvokeResponse`, `toBackendError` |
+| `src/main/ipc/register.ts` | `registerIpc` and `forwardEvents` — the only transport code |
+| `src/main/ipc/secret-store.ts` | `safeStorage` behind `SecretStore` |
+| `src/preload/index.ts` | The `window.witena` bridge |
+| `src/renderer/src/lib/backend.ts` | `createElectronBackendClient` and the `backend` singleton |
 
 The abstraction is deliberately two-shaped. `invoke` is request/response;
 `subscribe` is push. Anything a page needs must be expressible as one of the two,
@@ -52,24 +63,81 @@ be iterated. Drift is prevented at compile time from both sides:
 
 Verified by removing an entry and observing `tsc` fail, not only by reading.
 
+### The transport
+
+Two channels, both declared in `src/main/ipc-protocol.ts`, which imports no
+electron so preload can share it:
+
+| Constant | Value | Direction | Arguments |
+|---|---|---|---|
+| `IPC_INVOKE` | `witena:invoke` | renderer → main, with a reply | `(method, input)` |
+| `IPC_EVENT` | `witena:event` | main → renderer | one `BackendEvent` |
+
+A channel per method was considered and rejected: the method name is already the
+first argument and `isBackendMethod` validates it before dispatch, so 35
+registrations would buy nothing.
+
+**The envelope.** `ipcMain.handle` never rejects. It resolves with
+
+```ts
+type InvokeResponse = { ok: true; value: unknown } | { ok: false; error: BackendError }
+```
+
+because Electron flattens a rejected handler promise into an `Error` whose
+message is the original message and whose other fields are gone — `code` and
+`details` would not survive, and the renderer switches on `code`. So the failure
+is data on the way across and becomes an exception again in
+`lib/backend.ts`, which throws a `BackendClientError` carrying `code` and
+`details`.
+
+**The context.** Every handler is a plain function of `(ctx, input)` where `ctx`
+is an `AppContext`:
+
+```ts
+interface AppContext {
+  db: DatabaseHandle
+  repos: Repositories
+  events: EventBus
+  secrets: SecretStore
+  userId: UserId
+  close(): void
+}
+```
+
+`createAppContext({ databasePath, secrets })` opens the database, builds the
+repositories with `encrypt: secrets.encrypt` and creates the bus. It takes the
+path rather than asking electron for it, which is what keeps everything except
+`src/main/index.ts` and `src/main/ipc/` free of electron (CLAUDE.md rule #5) and
+lets a unit test build the same context over a temporary file.
+
+**Totality.** `buildHandlers()` walks `BACKEND_METHODS` and returns an entry for
+every name: the implementation when a namespace module provides one, otherwise a
+stub that rejects with
+`BackendFailure('internal', 'Not implemented yet: <method> (see docs/STEPS.md)')`.
+The transport therefore never checks whether a method exists, and a renderer
+written against the finished contract gets an explicit message instead of
+`undefined is not a function`.
+
 ## Data flow
 
-Request/response, as it will run from S1.3 onward:
+Request/response, as it actually runs:
 
 ```
-component → zustand store action → BackendClient.invoke('chats.create', { input })
-  → preload bridge (ipcRenderer.invoke on the channel named by the method)
-  → main handler registry → domain service → SQLite
-  → result → store → re-render
+component → BackendClient.invoke('settings.update', { patch })
+  → window.witena.invoke  (preload, contextBridge)
+  → ipcRenderer.invoke('witena:invoke', method, input)
+  → ipcMain.handle → isBackendMethod(method) → handlers[method](ctx, input)
+  → repositories → SQLite
+  → { ok: true, value } → client unwraps → the caller's promise resolves
 ```
 
-Streaming output (the reason `subscribe` exists):
+Push:
 
 ```
-AgentTurn streamText chunk → event bus
-  → main forwards BackendEvent over one push channel
-  → preload listener → BackendClient.subscribe → messages store
-  → the streaming message re-renders
+handler (or ChatRunner, AgentTurn, AgentSupervisor) → ctx.events.emit(event)
+  → forwardEvents → every BrowserWindow → webContents.send('witena:event', event)
+  → preload ipcRenderer.on → BackendClient.subscribe / subscribeTo
+  → the store (S1.7 onwards) → re-render
 ```
 
 `message.created` arrives first with an empty, `streaming` message; then a run of
@@ -86,9 +154,33 @@ Deltas are increments, never a resend of the full message. Because
 `message.updated` always follows with the authoritative content, a renderer that
 misses deltas still converges.
 
-Error path: `invoke` rejects with a `BackendError` (`code`, `message`,
-`details?`). The renderer switches on `code` to choose an i18n key; `message` is
-developer-facing detail for logs, never shown as UI copy.
+Error path, end to end:
+
+| Stage | Shape |
+|---|---|
+| Handler throws | `BackendFailure` (an `Error` with `code` / `details`) or any other value |
+| `registerIpc` catches | `toBackendError(err)` — a `BackendFailure` keeps its fields, everything else becomes `internal` with its message |
+| Wire | `{ ok: false, error: BackendError }` — plain data, survives structured clone |
+| `lib/backend.ts` | Throws `BackendClientError`, an `Error` implementing `BackendError` |
+| Caller | Switches on `code` to pick an i18n key; `message` is developer-facing detail and is never rendered |
+
+## Adding a handler
+
+1. Pick or create the namespace module under `src/main/handlers/` and export a
+   `HandlerModule` (`Partial<HandlerMap>`). The method's input and result types
+   come from `BackendApi`, so the compiler checks the signature.
+2. Add the module to `MODULES` in `src/main/handlers/index.ts` if it is new.
+   Nothing else registers anything — the method name is already in
+   `BACKEND_METHODS` and its stub disappears the moment the real entry exists.
+3. Validate the payload inside the handler and throw a `BackendFailure` with the
+   right `code`; the renderer is untrusted input like any other client.
+4. Emit on `ctx.events` for anything the renderer should learn about without
+   asking.
+5. Add unit tests against a context built from the `src/main/db/testing.ts`
+   fixture, and extend `e2e/` only when the round trip itself is what changed.
+
+A method that is *declared but not implemented* needs no code at all: it already
+rejects with `internal` and a pointer to `docs/STEPS.md`.
 
 ## Key types and contracts
 
@@ -106,10 +198,10 @@ Naming conventions the whole app follows:
 
 | Method | Request | Response | Notes |
 |---|---|---|---|
-| `system.ping` | — | `'pong'` | S1.3 acceptance |
-| `system.emitTestEvent` | `{ payload }` | `void` | Makes the backend push one `system.test` event |
-| `settings.get` | — | `AppSettings` | |
-| `settings.update` | `{ patch }` | `AppSettings` | Shallow merge; `timeouts` merges per field |
+| `system.ping` | — | `'pong'` | Implemented in S1.3 |
+| `system.emitTestEvent` | `{ payload }` | `void` | Implemented in S1.3; makes the backend push one `system.test` event |
+| `settings.get` | — | `AppSettings` | Implemented in S1.3 |
+| `settings.update` | `{ patch }` | `AppSettings` | Implemented in S1.3; shallow merge, `timeouts` merges per field, unknown keys rejected |
 | `providers.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Provider[]` / `Provider` / `Provider` / `Provider` / `void` | Omitting `apiKey` in a patch keeps the stored key; `''` clears it |
 | `providers.fetchModels` | `{ provider: ProviderRef }` | `string[]` | `ProviderRef` is `{ id }` or `{ draft }`, so an unsaved form can fetch |
 | `providers.testConnection` | `{ provider: ProviderRef }` | `ConnectionTestResult` | Result object, not a rejection: a failed test is a normal outcome |
@@ -124,6 +216,9 @@ Naming conventions the whole app follows:
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | Resolves with the stored user message; agent output arrives as events |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent when nothing is running |
 
+Everything not marked "Implemented in S1.3" rejects with
+`{ code: 'internal', message: 'Not implemented yet: <method> (see docs/STEPS.md)' }`.
+
 | Event | Payload | Emitted when |
 |---|---|---|
 | `message.created` | `{ message }` | A message row is inserted, usually empty and `streaming` |
@@ -136,31 +231,41 @@ Naming conventions the whole app follows:
 | `run.round` | `{ chatId, round, speakers }` | A round begins, with its speaker ids in order |
 | `run.finished` | `{ chatId, reason }` | The run ends: `completed` / `stopped` / `max-rounds` / `error` |
 | `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | Reserved for the executor's confirmation prompt; nothing emits it yet |
-| `system.test` | `{ payload }` | `system.emitTestEvent` was called (S1.3 acceptance) |
+| `system.test` | `{ payload }` | `system.emitTestEvent` was called — the only event emitted as of S1.3 |
 
 ## Tests
 
 | File | Covers |
 |---|---|
-| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list, has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod` accepts and rejects correctly; `DEFAULT_CHAT_SETTINGS` and `DEFAULT_APP_SETTINGS` hold the documented values; `LOCAL_USER_ID` is `'local'`; `expectTypeOf` assertions for `EventOf<…>` narrowing, single-object method inputs, `system.ping` returning `Promise<'pong'>`, `Provider` having no `apiKey`, `Message` timestamps being numbers, `system-notice` carrying a key rather than text, and `subscribe` returning an unsubscribe function |
+| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list, has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
+| `src/main/events/bus.test.ts` | Delivery order, payload identity, unsubscribe (twice is harmless), a throwing listener being logged without stopping the others, a listener added during delivery not receiving the in-flight event |
+| `src/main/secrets.test.ts` | Insecure store round trip including empty, long and non-ASCII values; the `plain:` marker; `isAvailable()` false; exactly one warning |
+| `src/main/app-context.test.ts` | The context opens a real temporary database, defaults to `LOCAL_USER_ID`, binds the repositories to the injected secret store, and `close()` is idempotent |
+| `src/main/ipc-protocol.test.ts` | Channel names; `toBackendError` for a `BackendFailure` with and without details, an ordinary `Error`, and a non-`Error` throw |
+| `src/main/handlers/handlers.test.ts` | Every `BACKEND_METHODS` entry has a handler and the map has no extras; unimplemented methods reject with `internal` and the STEPS.md message; `system.ping`; `system.emitTestEvent` emitting exactly one event and rejecting a non-string payload; `settings.get` / `settings.update` against the temporary-database fixture, including the `timeouts` field-by-field merge, unknown-key rejection and per-user scoping |
+| `src/renderer/src/lib/backend.test.ts` | `createElectronBackendClient` against a fake bridge: resolving the envelope value, forwarding the single object argument, `undefined` for an argument-free method, rejecting with a `BackendClientError` that carries `code` and `details`, a malformed envelope becoming `internal`, `subscribe` / unsubscribe, `subscribeTo` filtering, independent subscribers |
+| `e2e/smoke.spec.ts` | The real Electron app: `system.ping` renders `backend: pong`, `settings.get` renders `language: system`, clicking the button round-trips a `system.test` event into `last-event`, and the database is created inside the `WITENA_USER_DATA` directory |
 
-The expected method list is written by hand on purpose: a list derived from
-`BackendApi` would follow a rename instead of failing on it.
+The expected method list in `contracts.test.ts` is written by hand on purpose: a
+list derived from `BackendApi` would follow a rename instead of failing on it.
 
 ## Known limitations and TODOs
 
-- **Type-level only.** No runtime validation of inputs. Each handler in S1.3 and
-  later validates its own payload, most likely with zod, and rejects with
-  `code: 'validation'`.
-- **Most methods are declared but unimplemented.** S1.3 wires
-  `system.ping` and `system.emitTestEvent`; every other method rejects until its
-  own step lands.
-- **`subscribeTo` is optional** on `BackendClient`. The Electron implementation
-  will provide it; a future transport may not, so callers must tolerate it being
-  absent or use `subscribe` directly.
-- **No backpressure or replay.** Events are fire-and-forget. A renderer that was
-  not listening during a run recovers by calling `messages.list`, not by
-  replaying events.
-- **`messages.list` cursor** is a bare message id. S1.2 made that safe by giving
-  every message a per-chat `seq`, which the repository resolves the id to; the
-  order is total even for messages written in the same millisecond.
+- **Runtime validation is per handler.** The contract is type-level only. The
+  implemented handlers check their own payload and reject with
+  `code: 'validation'`; zod arrives with the first domain that needs a real
+  schema.
+- **Most methods are still stubs.** S1.3 implements `system.*` and `settings.*`;
+  every other method rejects with `internal` until its own step lands.
+- **No backpressure or replay.** Events are fire-and-forget and go to every open
+  window. A renderer that was not listening during a run recovers by calling
+  `messages.list`, not by replaying events.
+- **`InvokeResponse` is declared twice** — in `src/main/ipc-protocol.ts` for main
+  and preload, and in `src/preload/index.d.ts` for the renderer, whose TypeScript
+  project may not include files from `src/main/`. The two must be edited
+  together; a mismatch surfaces as a type error in `lib/backend.ts`.
+- **The `backend` singleton is imported directly.** A React context that injects a
+  fake client is deferred to the step that introduces the first store (S1.5 /
+  S1.7); until then tests use `createElectronBackendClient(fakeBridge)`.
+- **The smoke UI in `App.tsx` is throwaway.** It carries plain English literals
+  and a `TODO(S1.4): i18n`; S1.5 replaces the file entirely.

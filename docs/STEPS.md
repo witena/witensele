@@ -40,9 +40,12 @@ Acceptance:
 - Unit tests run CRUD on every table against a temporary database file
 - After `npm run dev`, witena.db appears under the userData directory
 
-### S1.3 IPC and the Electron BackendClient implementation `[ ]`
-What: preload exposes `invoke` and `subscribe`; renderer `lib/backend.ts` implements BackendClient; main-process handler registry.
-Acceptance: the renderer calls `system.ping` and receives pong; the main process emits a test event and the renderer receives it.
+### S1.3 IPC and the Electron BackendClient implementation `[x]` (2026-09-13)
+What: preload exposes `invoke` and `onEvent`; renderer `lib/backend.ts` implements BackendClient; main-process handler registry, event bus, secret store and application context; `settings.get` / `settings.update` as the first real handlers; a Playwright Electron harness in `e2e/`.
+Acceptance:
+- The renderer calls `system.ping` and receives pong; the main process emits a test event and the renderer receives it — both asserted end to end by `npm run e2e`
+- `npm run typecheck`, `npm test`, `npm run build` and `npm run e2e` pass
+- Nothing outside `src/main/index.ts` and `src/main/ipc/` imports electron
 
 ### S1.4 i18n `[ ]`
 What: i18next + react-i18next, `locales/zh-CN.json` and `en.json`, language persisted in the settings table, follows the system language on first launch.

@@ -20,7 +20,7 @@ to every change.
 | Storage | better-sqlite3 + drizzle-orm, database at `app.getPath('userData')/witena.db` |
 | Secrets | Electron `safeStorage`, behind a `SecretStore` interface |
 | i18n | i18next + react-i18next (`zh-CN`, `en`) |
-| Tests | vitest |
+| Tests | vitest (unit), `@playwright/test` driving Electron (end to end) |
 
 ## Directory layout
 
@@ -98,6 +98,7 @@ These are not style preferences. A change that breaks one of them is not done.
 | `npm run typecheck` | Type-check both projects (`tsconfig.node.json`, `tsconfig.web.json`) |
 | `npm test` | Run the vitest suite once |
 | `npm run test:watch` | Run vitest in watch mode |
+| `npm run e2e` | Build, then run the Playwright Electron end-to-end harness in `e2e/` (no browser download needed) |
 | `npm install` | Install dependencies; `postinstall` rebuilds better-sqlite3 for Electron |
 
 If Electron fails to start with `Error: Electron uninstall`, its binary was never
