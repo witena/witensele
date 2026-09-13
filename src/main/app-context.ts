@@ -18,6 +18,7 @@ import type { Repositories } from './db/repositories'
 import { createRepositories } from './db/repositories'
 import type { EventBus } from './events/bus'
 import { createEventBus } from './events/bus'
+import type { FetchImpl } from './providers/discovery'
 import type { SecretStore } from './secrets'
 
 export interface AppContext {
@@ -31,6 +32,13 @@ export interface AppContext {
   secrets: SecretStore
   /** The implicit single user of the desktop build. */
   userId: UserId
+  /**
+   * Outbound HTTP for handlers that talk to a provider's REST endpoint
+   * (`providers.fetchModels`). Absent means the platform `fetch`; a test injects
+   * its own so the suite never opens a socket, and a future server build can put
+   * a proxy-aware implementation here without touching a handler.
+   */
+  fetchImpl?: FetchImpl
   /** Releases the database. Safe to call more than once. */
   close(): void
 }
@@ -43,6 +51,8 @@ export interface AppContextOptions {
   userId?: UserId
   /** Injectable so a test can watch events without reaching into the context. */
   events?: EventBus
+  /** Injectable outbound HTTP; omitted, handlers use the platform `fetch`. */
+  fetchImpl?: FetchImpl
 }
 
 export function createAppContext(options: AppContextOptions): AppContext {
@@ -60,6 +70,9 @@ export function createAppContext(options: AppContextOptions): AppContext {
     events: options.events ?? createEventBus(),
     secrets,
     userId: options.userId ?? LOCAL_USER_ID,
+    // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
+    // absent, not present and undefined.
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close() {
       if (closed) return
       closed = true

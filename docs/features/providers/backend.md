@@ -1,0 +1,147 @@
+# providers — Backend
+
+## Modules
+
+| File | Responsibility |
+|---|---|
+| `src/shared/presets.ts` | The preset table and the three questions asked of it. Shared, not main-only: the renderer imports it directly |
+| `src/main/providers/resolve.ts` | `ProviderRef` → `ResolvedProvider`. The **only** place a stored key is decrypted |
+| `src/main/providers/registry.ts` | `ResolvedProvider` + model id → an AI SDK `LanguageModel` |
+| `src/main/providers/discovery.ts` | `fetchModels` (raw `/models`) and `testConnection` (`generateText`) |
+| `src/main/handlers/providers.ts` | The seven `providers.*` methods; validation lives here and nowhere else |
+| `src/main/app-context.ts` | Gained an optional `fetchImpl` so a test can inject HTTP |
+
+None of them imports electron (CLAUDE.md rule #5). `resolve.ts` takes an
+`AppContext` by type only; the secret store arrives through it as an interface.
+
+## Database
+
+No migration. S1.2 created the table this step finally uses:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | text PK | UUID from the repository |
+| `user_id` | text | Every query is scoped by it; a foreign row reads as `not_found` |
+| `type` | text enum | `anthropic \| openai \| google \| openai-compatible` |
+| `name` | text | Display name; may be renamed freely |
+| `base_url` | text null | Null means "the adapter's default endpoint" |
+| `preset_id` | text null | Which `PROVIDER_PRESETS` entry it came from; drives the logo, the key requirement and the local-server placeholder |
+| `models` | json | `string[]`, preset seed or `/models` answer |
+| `api_key_encrypted` | text null | **Ciphertext only.** Mapped to `Provider.hasApiKey`, never to a value |
+| `created_at` / `updated_at` | integer | Epoch milliseconds |
+
+Key handling is split on purpose: `ProviderRepository` takes an injected
+`encrypt(plain)` and writes ciphertext, and the *only* way a key comes back out is
+`getApiKeyCiphertext(id, userId)`, which `resolve.ts` pairs with
+`ctx.secrets.decrypt`. Patch semantics, unchanged from S1.2: an absent `apiKey`
+keeps the stored key, `''` clears it, any other string replaces it.
+
+## IPC handlers
+
+| Method | Input | Result | Validation |
+|---|---|---|---|
+| `providers.list` | — | `Provider[]`, oldest first | — |
+| `providers.get` | `{ id }` | `Provider` | non-empty id; `not_found` otherwise |
+| `providers.create` | `{ input: ProviderInput }` | `Provider` | name non-empty; known `type`; `models` an array of strings; `openai-compatible` needs `baseUrl`; a key is required when `providerRequiresApiKey` says so |
+| `providers.update` | `{ id, patch }` | `Provider` | the same checks, applied only to the fields present. The key requirement is **not** re-checked: clearing a key is a deliberate operation |
+| `providers.delete` | `{ id }` | `void` | non-empty id |
+| `providers.fetchModels` | `{ provider: ProviderRef }` | `string[]` | the ref must be `{ id }` or `{ draft }`; rejects `provider_error` with `details.status` |
+| `providers.testConnection` | `{ provider: ProviderRef, modelId? }` | `ConnectionTestResult` | never rejects; a failed probe is a value |
+
+No event is emitted. Provider changes are the answer to the call that made them,
+and the store updates from that answer; nothing else in the app is watching.
+
+## External dependencies
+
+### AI SDK v7 — the exact option names used
+
+Verified against the installed type definitions
+(`node_modules/<pkg>/dist/index.d.ts`), not from memory:
+
+| Factory | Package | Version | Options passed |
+|---|---|---|---|
+| `createAnthropic` | `@ai-sdk/anthropic` | 4.0.53 | `apiKey`, `baseURL` |
+| `createOpenAI` | `@ai-sdk/openai` | 4.0.66 | `apiKey`, `baseURL` |
+| `createGoogleGenerativeAI` | `@ai-sdk/google` | 4.0.69 | `apiKey`, `baseURL` (exported as an alias of `createGoogle`) |
+| `createOpenAICompatible` | `@ai-sdk/openai-compatible` | 3.0.48 | `name` (**required**), `baseURL` (**required**), `apiKey` |
+| `generateText` | `ai` | 7.0.99 | `model`, `prompt`, `maxOutputTokens`, `abortSignal`; the result's `text` is read |
+| `MockLanguageModelV4` | `ai/test` | 7.0.99 | `provider`, `modelId`, `doGenerate` |
+
+Each provider object is callable *and* exposes `languageModel(modelId)`; this code
+uses the method, because a bare call expression hides which kind of model is being
+asked for. All four return a `LanguageModelV4`.
+
+Pitfalls, every one of them hit while writing this step:
+
+- **`baseURL`, not `baseUrl`.** The SDK capitalises URL; the stored column does
+  not. They sit one line apart in `registry.ts`.
+- **`createOpenAICompatible` requires `name`**, and that name becomes
+  `model.provider` (`deepseek.chat`, not `openai-compatible.chat`). An empty name
+  produces a provider string of `.chat`. It is the preset id, or a slug of the
+  display name.
+- **`createOpenAICompatible` has four type parameters and no defaults.** Call it
+  as `createOpenAICompatible<string, string, string, string>({…})` or inference
+  fails against the `extends string` constraints.
+- **`LanguageModel` is a union that includes `string`.** Code that reads
+  `model.modelId` must narrow first; the registry test does.
+- **V4 result shapes are structured.** `finishReason` is
+  `{ unified, raw }` and `usage` is `{ inputTokens: {…}, outputTokens: {…} }` —
+  not the bare string and three numbers of earlier specification versions. A mock
+  written from memory of V2/V3 will not type-check.
+- **`openai.languageModel(id)` is the Responses API** (`openai.responses`), while
+  `.chat(id)` is Chat Completions. The default is deliberate; a provider that only
+  speaks Chat Completions belongs behind `openai-compatible` anyway.
+- **The SDK has no "list models" call.** `/models` is spoken by hand in
+  `discovery.ts`.
+
+### The `/models` endpoints
+
+| Type | Request | Ids from |
+|---|---|---|
+| `anthropic` | `GET {base}/v1/models`, headers `x-api-key` and `anthropic-version: 2023-06-01` | `data[].id` |
+| `openai`, `openai-compatible` | `GET {base}/models`, `Authorization: Bearer <key>` (omitted when there is no key) | `data[].id` |
+| `google` | `GET {base}/models?key=<key>` | `models[].name`, minus the `models/` prefix |
+
+Defaults when the record stores no `baseUrl`: `https://api.anthropic.com`,
+`https://api.openai.com/v1`,
+`https://generativelanguage.googleapis.com/v1beta`. `openai-compatible` has none —
+a missing base URL is a `validation` failure, not a guess.
+
+Details that matter:
+
+- A trailing slash on a stored base URL is trimmed, and an Anthropic base URL that
+  already ends in `/v1` does not get a second one — the Anthropic adapter's own
+  default `baseURL` ends in `/v1`, so users paste that value.
+- Ids are de-duplicated and sorted with `localeCompare`, because the list is a
+  picker.
+- 10 s timeout via `AbortController`; the abort is distinguished from a network
+  error so the message can say which happened.
+- Every HTTP failure becomes `BackendFailure('provider_error', …)` with
+  `details.status`, so the renderer can tell 401 (wrong key) from 404 (wrong URL)
+  without parsing prose.
+- Google authenticates the listing endpoint with a **query parameter**, which is
+  its documented REST form. The key therefore appears in a URL string inside the
+  main process; it is never logged.
+
+### The connection probe
+
+`generateText` against the real model client, `prompt: 'Reply with OK'`,
+`maxOutputTokens: 8`, 20 s `AbortController`. It answers
+`{ ok: true, latencyMs, model }` or `{ ok: false, error }` and **never throws** —
+a failed probe is the ordinary outcome of pressing the button.
+
+A thrown `BackendFailure` keeps its code; anything the AI SDK throws is re-coded
+to `provider_error`, because the renderer's copy for that path has to be about the
+provider rather than "something went wrong inside the app".
+
+`options.createModel` and `options.generate` are the test seams: the unit tests
+inject a `MockLanguageModelV4` and let the **real** `generateText` run, so the
+option names above are proven by the suite rather than by review.
+
+### `SecretStore`
+
+`safeStorage` in the app (`src/main/ipc/secret-store.ts`), the base64
+`plain:` fallback in tests and on a machine with no OS key storage. The fallback
+logs once, loudly. Note for anyone writing a handler test: the repository's
+`encrypt` and the context's `secrets.decrypt` must come from the *same* store, or
+nothing round-trips — `handlers.test.ts` builds its repositories for that reason.

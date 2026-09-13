@@ -87,3 +87,13 @@ export async function openDeveloperSettings(window: Page): Promise<void> {
   await window.getByTestId('nav-settings').click()
   await window.getByTestId('settings-section-developer').click()
 }
+
+/**
+ * Opens Settings → Providers, which is the first section and therefore the one
+ * Settings opens on — but only on a fresh launch. A spec that has navigated
+ * elsewhere needs the explicit click, so the helper always makes both.
+ */
+export async function openProviderSettings(window: Page): Promise<void> {
+  await window.getByTestId('nav-settings').click()
+  await window.getByTestId('settings-section-providers').click()
+}

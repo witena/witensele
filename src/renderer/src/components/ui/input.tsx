@@ -6,13 +6,20 @@
  * the text colour and can be any lucide component.
  */
 import clsx from 'clsx'
-import type { InputHTMLAttributes, ReactNode } from 'react'
+import type { InputHTMLAttributes, ReactNode, Ref } from 'react'
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   /** Rendered to the left of the field, inside the border. */
   icon?: ReactNode | undefined
   /** Applied to the bordered wrapper, not to the `<input>` itself. */
   wrapperClassName?: string | undefined
+  /**
+   * Forwarded to the inner `<input>` so a caller can focus it (the provider
+   * editor focuses the inline "add a model" field the moment it appears).
+   * Declared explicitly because React 19 passes `ref` as an ordinary prop, which
+   * `InputHTMLAttributes` does not describe — there is no `forwardRef` here.
+   */
+  ref?: Ref<HTMLInputElement> | undefined
 }
 
 const FIELD_CLASS =

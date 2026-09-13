@@ -33,6 +33,7 @@ import { useSettingsStore, type LanguageSetting } from '../stores/settings'
 import { SETTINGS_SECTIONS, useUiStore, type SettingsSection } from '../stores/ui'
 import { AppearanceSection } from './settings/appearance-section'
 import { DeveloperSection } from './settings/developer-section'
+import { ProvidersSection } from './settings/providers-section'
 import { applyLanguageSetting } from './settings/language'
 
 const SECTION_ICONS: Record<SettingsSection, LucideIcon> = {
@@ -149,12 +150,22 @@ export function SettingsPage(): React.JSX.Element {
         </div>
       </Column>
 
-      <Column border="none" className="bg-bg-panel">
-        <PageHeader testId="settings-section-title" title={sectionLabel(t, section)} />
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <SectionBody section={section} />
-        </div>
-      </Column>
+      {/*
+        Providers is the one section with a layout of its own — a 520px card list
+        plus an editor, straight from the artboard — so it supplies both of its
+        columns, including the header that carries `settings-section-title`.
+        Every other section is a single pane under a shared header.
+      */}
+      {section === 'providers' ? (
+        <ProvidersSection />
+      ) : (
+        <Column border="none" className="bg-bg-panel">
+          <PageHeader testId="settings-section-title" title={sectionLabel(t, section)} />
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            <SectionBody section={section} />
+          </div>
+        </Column>
+      )}
     </>
   )
 }

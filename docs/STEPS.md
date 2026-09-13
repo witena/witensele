@@ -57,12 +57,13 @@ Acceptance:
 What: navigation rail, three page shells (Chats / Agents / Settings), three-column layout, dark theme with the mockup colours, plus the reusable primitives (`components/ui/`) and layout helpers (`components/layout/`) every later screen is built from. The S1.3 smoke widgets moved to Settings -> Developer.
 Acceptance: a screenshot matches the mockup in layout and colours; docs under `docs/features/ui-shell/`.
 
-### S1.6 Providers `[ ]`
+### S1.6 Providers `[x]` (2026-09-13)
 What: `shared/presets.ts`; settings page to add / edit / delete providers; SecretStore (safeStorage) encrypting keys; fetch `/models`; test connection; `providers/registry.ts` creating model instances.
 Acceptance:
 - Add Ollama (local) and one OpenAI-compatible preset, fetch their model lists, test connection reports success
 - Keys are stored encrypted in the DB
 - Unit tests: the preset table is complete; the registry constructs an instance for all four provider types
+Done: 14 presets in `src/shared/presets.ts`; `src/main/providers/{registry,discovery,resolve}.ts`; the seven `providers.*` handlers; the Settings -> Providers list and editor; `stores/providers.ts`; `e2e/providers.spec.ts` drives the Ollama flow against the real local server (its two network assertions are annotated as skipped when Ollama is not running). Docs in `docs/features/providers/`.
 
 ### S1.7 Single-agent chat end to end `[ ]`
 What: chats CRUD and the left column list; minimal ChatRunner (one agent); AgentTurn streaming via streamText; messages persisted; composer and Stop button.

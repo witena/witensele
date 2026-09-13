@@ -1,33 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BACKEND_METHODS, type BackendMethod } from '@shared/backend'
 import type { BackendEvent } from '@shared/events'
-import { DEFAULT_APP_SETTINGS, LOCAL_USER_ID } from '@shared/types'
+import { DEFAULT_APP_SETTINGS, LOCAL_USER_ID, type ProviderInput } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { createEventBus } from '../events/bus'
-import { createInsecureSecretStore } from '../secrets'
+import { createInsecureSecretStore, type SecretStore } from '../secrets'
+import { createRepositories } from '../db/repositories'
 import { createTestDatabase, type TestDatabase } from '../db/testing'
+import type { FetchImpl } from '../providers/discovery'
 import { buildHandlers } from './index'
 
 /**
  * An `AppContext` backed by the S1.2 test fixture: a real temporary database
  * file, an in-process bus and the insecure secret store. Handlers take the
  * context as their first argument precisely so this is possible without electron.
+ *
+ * The repositories are rebuilt here rather than reused from the fixture so that
+ * `encrypt` and `decrypt` are two halves of the *same* store: `providers.*` write
+ * ciphertext through the repository and read it back through `ctx.secrets`, and a
+ * fixture whose `encrypt` came from somewhere else would never round-trip.
  */
-function createTestContext(database: TestDatabase): { ctx: AppContext; events: BackendEvent[] } {
+function createTestContext(
+  database: TestDatabase,
+  fetchImpl?: FetchImpl
+): { ctx: AppContext; events: BackendEvent[]; secrets: SecretStore } {
   const bus = createEventBus()
   const events: BackendEvent[] = []
   bus.subscribe((event) => events.push(event))
+  const secrets = createInsecureSecretStore()
 
   return {
     ctx: {
       db: database.handle,
-      repos: database.repos,
+      repos: createRepositories(database.handle.db, { encrypt: (plain) => secrets.encrypt(plain) }),
       events: bus,
-      secrets: createInsecureSecretStore(),
+      secrets,
       userId: LOCAL_USER_ID,
+      ...(fetchImpl ? { fetchImpl } : {}),
       close: () => database.cleanup()
     },
-    events
+    events,
+    secrets
   }
 }
 
@@ -127,6 +140,191 @@ describe('handlers/buildHandlers', () => {
       await expect(handlers['settings.get'](other)).resolves.toEqual(DEFAULT_APP_SETTINGS)
     })
   })
+
+  describe('providers.*', () => {
+    const deepseek: ProviderInput = {
+      type: 'openai-compatible',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      presetId: 'deepseek',
+      models: ['deepseek-chat'],
+      apiKey: 'sk-secret'
+    }
+
+    it('creates a provider, stores the key as ciphertext and reports only its presence', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+
+      expect(created).toMatchObject({ name: 'DeepSeek', hasApiKey: true })
+      // The plaintext key must not appear in anything that crosses IPC.
+      expect(JSON.stringify(created)).not.toContain('sk-secret')
+
+      const stored = ctx.repos.providers.getApiKeyCiphertext(created.id, ctx.userId)
+      expect(stored).not.toBeNull()
+      expect(stored).not.toBe('sk-secret')
+      expect(ctx.secrets.decrypt(stored as string)).toBe('sk-secret')
+
+      await expect(handlers['providers.list'](ctx)).resolves.toEqual([created])
+      await expect(handlers['providers.get'](ctx, { id: created.id })).resolves.toEqual(created)
+    })
+
+    it('rejects a provider with no name', async () => {
+      await expect(
+        handlers['providers.create'](ctx, { input: { ...deepseek, name: '  ' } })
+      ).rejects.toMatchObject({ code: 'validation' })
+      await expect(handlers['providers.list'](ctx)).resolves.toEqual([])
+    })
+
+    it('rejects an unknown provider type', async () => {
+      await expect(
+        handlers['providers.create'](ctx, {
+          input: { ...deepseek, type: 'llama.cpp' as never }
+        })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('rejects an OpenAI-compatible provider with no base URL', async () => {
+      await expect(
+        handlers['providers.create'](ctx, { input: { ...deepseek, baseUrl: '' } })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('rejects a preset that requires a key when none is given', async () => {
+      await expect(
+        handlers['providers.create'](ctx, { input: { ...deepseek, apiKey: '' } })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('accepts a local preset with no key at all', async () => {
+      const created = await handlers['providers.create'](ctx, {
+        input: {
+          type: 'openai-compatible',
+          name: 'Ollama',
+          baseUrl: 'http://localhost:11434/v1',
+          presetId: 'ollama',
+          models: []
+        }
+      })
+
+      expect(created).toMatchObject({ hasApiKey: false, presetId: 'ollama' })
+    })
+
+    it('keeps the stored key when the patch omits apiKey, and clears it on an empty string', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+
+      const renamed = await handlers['providers.update'](ctx, {
+        id: created.id,
+        patch: { name: 'DeepSeek (work)' }
+      })
+      expect(renamed).toMatchObject({ name: 'DeepSeek (work)', hasApiKey: true })
+
+      const cleared = await handlers['providers.update'](ctx, {
+        id: created.id,
+        patch: { apiKey: '' }
+      })
+      expect(cleared.hasApiKey).toBe(false)
+      expect(ctx.repos.providers.getApiKeyCiphertext(created.id, ctx.userId)).toBeNull()
+    })
+
+    it('replaces the model list on update', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+
+      const updated = await handlers['providers.update'](ctx, {
+        id: created.id,
+        patch: { models: ['deepseek-chat', 'deepseek-reasoner'] }
+      })
+
+      expect(updated.models).toEqual(['deepseek-chat', 'deepseek-reasoner'])
+    })
+
+    it('rejects a malformed patch rather than storing it', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+
+      await expect(
+        handlers['providers.update'](ctx, { id: created.id, patch: { models: 'nope' as never } })
+      ).rejects.toMatchObject({ code: 'validation' })
+      await expect(
+        handlers['providers.update'](ctx, { id: created.id, patch: { name: '' } })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('deletes a provider and then reports it as not found', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+
+      await handlers['providers.delete'](ctx, { id: created.id })
+
+      await expect(handlers['providers.list'](ctx)).resolves.toEqual([])
+      await expect(handlers['providers.get'](ctx, { id: created.id })).rejects.toMatchObject({
+        code: 'not_found'
+      })
+    })
+
+    it('scopes every read to the context user', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+      const other: AppContext = { ...ctx, userId: 'someone-else' }
+
+      await expect(handlers['providers.list'](other)).resolves.toEqual([])
+      await expect(handlers['providers.get'](other, { id: created.id })).rejects.toMatchObject({
+        code: 'not_found'
+      })
+    })
+
+    it('fetches models for an unsaved draft, before the provider exists', async () => {
+      const requests: string[] = []
+      const fetchImpl: FetchImpl = (input, init) => {
+        requests.push(String((init?.headers as Record<string, string>)?.['Authorization'] ?? ''))
+        expect(String(input)).toBe('https://api.deepseek.com/v1/models')
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: 'deepseek-chat' }] }), { status: 200 })
+        )
+      }
+      const drafting = createTestContext(database, fetchImpl)
+
+      await expect(
+        handlers['providers.fetchModels'](drafting.ctx, { provider: { draft: deepseek } })
+      ).resolves.toEqual(['deepseek-chat'])
+
+      // The draft's plaintext key is used directly: nothing was stored to decrypt.
+      expect(requests).toEqual(['Bearer sk-secret'])
+      await expect(handlers['providers.list'](drafting.ctx)).resolves.toEqual([])
+    })
+
+    it('fetches models for a saved provider by decrypting the stored key', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+      const seen: string[] = []
+      const fetchImpl: FetchImpl = (_input, init) => {
+        seen.push(String((init?.headers as Record<string, string>)?.['Authorization'] ?? ''))
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: 'deepseek-reasoner' }] }), { status: 200 })
+        )
+      }
+
+      await expect(
+        handlers['providers.fetchModels'](
+          { ...ctx, fetchImpl },
+          { provider: { id: created.id } }
+        )
+      ).resolves.toEqual(['deepseek-reasoner'])
+
+      expect(seen).toEqual(['Bearer sk-secret'])
+    })
+
+    it('surfaces a provider HTTP failure as provider_error with its status', async () => {
+      const fetchImpl: FetchImpl = () => Promise.resolve(new Response('nope', { status: 401 }))
+
+      await expect(
+        handlers['providers.fetchModels'](
+          { ...ctx, fetchImpl },
+          { provider: { draft: deepseek } }
+        )
+      ).rejects.toMatchObject({ code: 'provider_error', details: { status: 401 } })
+    })
+
+    it('rejects a malformed provider reference', async () => {
+      await expect(
+        handlers['providers.fetchModels'](ctx, { provider: {} as never })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+  })
 })
 
 describe('handlers/stubs', () => {
@@ -136,7 +334,14 @@ describe('handlers/stubs', () => {
       'system.ping',
       'system.emitTestEvent',
       'settings.get',
-      'settings.update'
+      'settings.update',
+      'providers.list',
+      'providers.get',
+      'providers.create',
+      'providers.update',
+      'providers.delete',
+      'providers.fetchModels',
+      'providers.testConnection'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 
