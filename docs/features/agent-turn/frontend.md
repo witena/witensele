@@ -22,6 +22,16 @@ every one of these is a contract the message list has to honour:
 | A turn that has gone quiet because a `permission.requested` is open (S5.4) | Keep the agent `working` — it is, and its hard timeout is still counting. The card that unblocks it is [`executor`](../executor/frontend.md)'s (S5.5) |
 | `message.delta { kind: 'part' }` carrying a `diff` (S5.5) | Draw one collapsed block per file, headed by the path, through the shared code block in the `diff` language. They arrive **after** the tool results and the text, once the stream has ended, and the final `message.updated` carries them too |
 
+S5.11 is the same shape once more, with one visible consequence: the workspace
+briefing and the materials only lengthen the system prompt, but a **participant**
+can now produce a `tool-call` part for `read_file`, `list_dir`, `search_files` or
+`git_diff`, which the message list draws as the same built-in tool card an
+executor's call produces — and, since those four never ask, with no permission
+card in front of it. The one new user-visible string is
+`notices.materialsTruncated`, stored by the runner
+([`orchestration`](../orchestration/frontend.md)) and rendered like every other
+notice.
+
 Since S5.6 one more option reaches the turn and **nothing** of it reaches the
 renderer: `handoff` only lengthens the system prompt, so a handed-over turn
 streams, fails, is stopped and is rendered exactly like any other. S5.10's goal

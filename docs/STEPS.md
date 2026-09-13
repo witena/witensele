@@ -1499,7 +1499,7 @@ gap, the polled delivery check and the exact path comparison are in the Phase 6
 backlog. Docs: `docs/features/{chats,agent-turn,database,backend-client}/` (all
 four each) plus `docs/features/{executor,editor,i18n,ui-shell}/`.
 
-### S5.11 Read-only workspace tools and the materials briefing `[ ]`
+### S5.11 Read-only workspace tools and the materials briefing `[x] (2026-09-13)`
 What: every member can read the folder, and the materials the user marked are
 already in front of them when the first round starts.
 - `collectAgentTools` attaches `read_file`, `list_dir`, `search_files` and
@@ -1535,6 +1535,107 @@ Acceptance: a participant reads but cannot write; a marked material is in the
 first reply's context; large materials degrade to a list rather than blowing
 the budget. Docs: `docs/features/executor/`, `docs/features/agent-turn/`,
 `docs/features/chats/` (all four each).
+Done: the step is two rules and two prompt sections, and the rules are what the
+code is organised around. `collectAgentTools` now asks **two** questions instead
+of one: `executorWorkdir(chat, agent, members)` (S5.4's, unchanged) decides who
+may write, and the new `workspaceWorkdir(chat)` — one condition, the chat has a
+folder — decides who may read, which since this step is everybody in the room.
+The read-only set is `READ_ONLY_EXECUTOR_TOOLS`, **derived** as the complement of
+`GATED_EXECUTOR_TOOLS` rather than written out a second time, so a tool that
+becomes gated stops reaching participants in the same edit; and a participant's
+`read_file` is literally the executor's, picked by key out of the same
+`buildExecutorTools` set, so the confinement, the caps and the refusals cannot
+drift into two behaviours. `agent-turn.test.ts`'s old "a participant gets no
+executor tools at all" case became "the four that read and none of the three that
+write", the three asserted **one by one** so a regression names what it let
+through, with a sibling that sets a `codebase` goal and proves the goal cannot
+buy a participant a writing tool.
+
+`executor/workspace.ts` is the briefing: `walkTree` (sorted, directories first,
+capped at 200 entries and depth 3, files over 1 MB and `SKIPPED_TREE_DIRS` left
+out), `formatTree`, a hand-written `.gitignore` parser, `gitInfo`, and
+`buildWorkspaceSection`. The `ignore` package was the alternative and was
+rejected on a narrow argument rather than on principle: nothing in this module
+decides what may be **read** — `paths.ts` is the boundary — so a pattern parsed
+wrongly costs one extra line in a listing, which is not worth a dependency. The
+parser covers what a root `.gitignore` contains (comments, blanks, `!`, a
+trailing `/`, a leading `/`, `*`, `?`, `**`, last match wins) and only the
+folder's own file is read; nested ones are in the backlog. Two decisions in the
+section itself: the git half is added for a **`codebase` goal only**, because
+`git status --short` in a working repository is dozens of lines nobody in a
+`document` chat asked for; and the read-only sentence is left out for the
+**executor**, whose own section already lists all seven tools — the same
+instruction in two wordings is followed less reliably than one. `gitInfo` is
+`spawnSync` with a 2 s timeout and every failure mapped to `null`, so a folder on
+a stalled mount costs the briefing its git half rather than costing the chat its
+turn.
+
+`agents/materials.ts` is the other half, and its two rules are the ones worth
+arguing about. The budget is a **fixed 25 % of the context window**, not what the
+history leaves over: the materials are assembled once per turn while the history
+grows all chat long, so a leftover rule would inline a document in round one and
+silently drop it in round six — a group that was quoting it would stop being able
+to, for no reason it could see. And once one item does not fit, **the rest are
+listed** rather than skipped over in favour of whatever still fits: a contiguous
+prefix is something a user can predict from the order they wrote, and each item
+is capped at 64 KB first, so one enormous file cannot starve a list on its own.
+A folder expands into its listing plus its files, so the cut falls between files;
+a binary file is listed and never inlined (extension first, then the same
+null-byte probe `read_file` uses, now exported so "binary" means one thing in the
+product); a material deleted since it was saved is dropped **silently** rather
+than listed, because listing it would tell the model to `read_file` something
+that will answer "no such file".
+
+The prompt order is unchanged where it matters and extended at both ends of the
+reference material: `Workspace` sits with the executor section (protocol — which
+folder, what is in it, what you may do to it) and `Materials` goes **last**,
+after skills and memory, because it is the bulkiest and purest reference material
+in the prompt and the same argument that puts skills after the briefing puts the
+document after skills — last is also immediately before the history it grounds.
+`buildSystemPrompt` split into `buildTurnPrompt` (returning `{ text,
+materialsOmitted }`) and a one-line wrapper, so the count reaches
+`AgentTurnResult` without every test that asserts on a prompt having to unwrap an
+object; the prompt is memoised **inside** `runAgentTurn` rather than hoisted out
+of `consume`, because `consume` runs twice for a model whose provider rejects
+tools and because a failure while assembling it has to stay on the turn's own
+error path — `runAgentTurn` promises never to throw.
+
+The notice is the one place this step deliberately differs from the thing it was
+told to mirror. `contextTruncated` is once per run per agent; `materialsTruncated`
+is once per **chat**, because the materials are a property of the goal and are
+identical in every round of every run until the user edits the list, so a second
+sentence would say exactly what the first said. The dedupe is therefore a scan of
+the transcript for an existing notice with that key behind a boolean field
+`#loop` does not clear — which also means a relaunch does not repeat it. Only the
+first agent that trimmed is named: different members have different windows and
+therefore different budgets, and naming each would be one complaint written four
+ways.
+
+Tests: `executor/workspace.test.ts` (22) covers the walker against real temporary
+folders — order, depth, the entry cap and its marker, the always-skipped folders,
+the size cap, and a `.gitignore` with a comment, a bare name, a `dir/`, a `*.tmp`
+and a `!keep.tmp` — the parser's anchoring, `?`, `**` and negation rules and that
+an uncompilable pattern throws nothing, `gitInfo` in and out of a repository, and
+the section's five shapes; `agents/materials.test.ts` (14) drives the budget with
+a deliberately tiny `contextWindow` rather than megabyte fixtures: list order, a
+folder expanded, nothing fitting, a prefix inlined with "the rest" listed
+(including the small file behind the large one that is *not* rescued), the share
+respected across twenty files, a binary file listed without spending budget, a
+missing and an escaping material dropped, and the per-file cut; `agent-turn.test.ts`
+gained a six-case S5.11 block — the four tools and the three absences, the folder
+and its listing in a participant's prompt, a marked material present while an
+unmarked file's contents are not, a real `read_file` call coming back with the
+file, `materialsOmitted` reported, and a folderless chat getting neither tools nor
+section; `chat-runner.test.ts` gained the notice once per chat and none when the
+materials fit. `npm test`: 85 files, 1337 tests, all passing; `npm run typecheck`
+clean. `e2e/executor.spec.ts` ran after `npm run build` with `qwen2.5:3b`
+present, so nothing was skipped: **13 passed**, including the new case — two
+participants, one marked file, a first reply that quotes its codeword with
+`tool-card` count 0, and a follow-up that produces a `read_file` card on the file
+nobody marked, with no permission card anywhere. The per-turn tree walk, the root
+`.gitignore` limitation and the panel's silence about what will fit are in the
+Phase 6 backlog. Docs: `docs/features/{executor,agent-turn,chats}/` (all four
+each) plus `docs/features/{orchestration,i18n}/`.
 
 ### S5.12 Goal-aware delivery `[ ]`
 What: the goal changes what "done" means, and the app shows it.
@@ -1688,9 +1789,38 @@ adds a line here in the same commit.
   (a goal *is* its description, so the way out is the way in) but it is not
   discoverable, and a user who wants to keep the text while turning the goal off
   has to delete it and paste it back.
-- **A `discussion` goal may carry materials** as long as the chat has a folder,
-  even though S5.11 is what reads them. Whether that combination should exist at
-  all is an open question in `docs/features/chats/context.md`.
+- **A `discussion` goal may carry materials** as long as the chat has a folder.
+  Since S5.11 reads them that is a useful combination rather than an inert one,
+  but whether it should exist at all is still an open question in
+  `docs/features/chats/context.md`.
+
+### Workspace briefing and materials (S5.11)
+
+- **The folder is walked once per turn, not once per round.** The tree is
+  memoised inside a turn, so a tool-rejection retry does not walk twice, but four
+  members in one round walk the same folder four times and read the same
+  materials four times. A per-run cache keyed on the folder is the obvious shape
+  and needs an invalidation rule an executor's own writes would trip.
+- **Only the folder's own `.gitignore` is read.** Nested ignore files,
+  `.git/info/exclude` and the user's global excludes are not, so a monorepo that
+  ignores per package lists a few files it would not have. The always-skipped set
+  covers the folders that matter, and nothing here decides what may be *read*.
+- **The materials panel says nothing about what will fit.** How much of a list
+  reaches a model is decided per turn, per model, and the only feedback the user
+  gets is the `materialsTruncated` notice after the fact. A size hint next to
+  each row would be honest but is a guess until a member is chosen — and two
+  members with different context windows genuinely inline different amounts.
+- **A material deleted after it was saved is dropped silently.** The panel still
+  lists it, the prompt does not mention it, and nothing tells the user which of
+  the two is right. The same filesystem watcher the goal chip wants would fix
+  both.
+- **The tree is a listing, not a map.** It carries no file sizes, no line counts
+  and no symbol index, so a model picking what to `read_file` is choosing by
+  name. A `search_files` call is the current answer and is a round trip.
+- **`git_diff` is attached to every member of a chat with a folder**, including
+  in a `document` or `discussion` chat where the git state is deliberately kept
+  out of the briefing. It is read-only and harmless, but the set of four is not
+  currently narrowed by the goal's kind; whether it should be is open.
 
 ### Editor integration (S5.7)
 

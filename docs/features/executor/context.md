@@ -10,8 +10,10 @@ several models never write over each other and every change stays reviewable.
 
 This feature is the acting half of that: the tools the executor has, the folder
 they are confined to, the prompt that appears before anything with side effects
-happens, the record of what changed (S5.5), and the briefing it is given when the
-user hands it the discussion (S5.6). The user must never
+happens, the record of what changed (S5.5), the briefing it is given when the
+user hands it the discussion (S5.6), and — since S5.11 — the **reading** half the
+whole group shares: the four read-only tools every member gets and the workspace
+briefing that tells them what is in the folder. The user must never
 discover a file was rewritten; they must be asked, see what is about to change,
 be able to say no, and afterwards read the diff of what they said yes to.
 
@@ -33,13 +35,21 @@ be able to say no, and afterwards read the diff of what they said yes to.
   | `edit_file` | **yes** | Replace one exact string; returns the unified diff |
   | `run_command` | **yes** | `/bin/sh -c` in the folder, timed out, output capped, killed on Stop |
 
+- `executor/workspace.ts` (S5.11) — the `Workspace` section of **every**
+  member's system prompt: the folder's basename, a tree capped at
+  `MAX_TREE_ENTRIES` (200) and `MAX_TREE_DEPTH` (3) that honours the folder's own
+  `.gitignore` and always skips `.git`, `node_modules`, the usual build outputs
+  and files over 1 MB, and — for a `codebase` goal only — the branch and
+  `git status --short`. Pure functions of a folder on disk, built once per turn.
 - `executor/permissions.ts` — the `PermissionGate`: `ask()` suspends the tool
   call and emits `permission.requested`; `permission.reply` releases it with
   `allow`, `deny` or `allowAlways`; `permission.resolved` closes the card
   however it ended.
-- The rule in `collectAgentTools`: executor tools are attached only to **the**
-  executor of a chat that has a `workdir`, and every tool of a `sideEffects` MCP
-  server goes through the same gate.
+- The rule in `collectAgentTools`, which since S5.11 has two rows rather than
+  one: **all seven** tools go to *the* executor of a chat with a `workdir`, the
+  **four read-only ones** (`READ_ONLY_EXECUTOR_TOOLS`, the complement of the
+  gated set) go to every other member of that chat, and every tool of a
+  `sideEffects` MCP server goes through the same gate.
 - The `permission.reply` backend method and its handler.
 - The renderer half (S5.5): `stores/permissions.ts`, the `PermissionCard` above
   the composer, the readable rendering of a call's input, the `DiffPart` block
@@ -60,6 +70,11 @@ be able to say no, and afterwards read the diff of what they said yes to.
   that turn and of the review round after it belongs to
   [`orchestration`](../orchestration/context.md); this feature only owns what the
   executor is told.
+
+- **The materials briefing's reader** (S5.11) is `agents/materials.ts` and
+  belongs to [`agent-turn`](../agent-turn/context.md); it reuses this feature's
+  `resolveInWorkdir`, its binary probe and its tree walker, and the paths it
+  reads come from the goal, which is [`chats`](../chats/context.md)'.
 
 ## Out of scope
 
@@ -115,6 +130,12 @@ return.
 | An executor in a chat with **no** `workdir` gets no tools, silently | Refuse to add the member; insert a notice | S5.2 chose to allow the member, so this is the other half of that choice. The agent is still a useful discussion partner |
 | The hand-off paragraph is a **suffix** of the same executor section, added only for that one turn | A separate section; always present | The folder and the tool list must be described once, in one order, in both situations. And the instruction is wrong outside a hand-off: an executor re-`@`-ed by a reviewer is being asked something specific, not being handed the whole discussion again |
 | It is **model-facing English**, not a `notices.*` key | An i18n key rendered into the prompt | Prompt text is in the same class as the group briefing and the skills section: the model reads it, the user never does. CLAUDE.md rule #4 governs UI copy |
+| **Every** member of a chat with a folder gets the four read-only tools (S5.11) | Only the executor; a read-only filesystem MCP server the user attaches by hand | PLAN.md's "Future extension" point 2 says it outright: participants may be given read-only tools so they can ground the discussion in the real code. A group arguing about a file none of them can open is the failure this removes, and the read-only four cannot write, so the one-writer rule is untouched |
+| The read-only set is **derived** from `GATED_EXECUTOR_TOOLS` | A second hand-written list | A tool that becomes gated must stop reaching participants in the *same* edit. A second list is a second place to forget |
+| The workspace tree is in the **prompt**, not left to `list_dir` | Let the model call `list_dir` when it wants to | The first round is the one that matters, and a group that spends it calling `list_dir` answers generically. A 200-entry tree is a few hundred tokens once per turn |
+| The `.gitignore` parser is **hand-written** | Add the `ignore` package | Getting a rare pattern wrong costs one extra line in a listing — nothing here decides what may be *read*; `paths.ts` is the boundary. That is not worth a dependency, and the forms that occur in a root `.gitignore` are few |
+| The git half is added for **`codebase` goals only** | Always, when the folder is a repository | `git status --short` in a working repository is dozens of lines about something nobody in a `document` chat asked about |
+| The read-only sentence is **left out of the executor's** workspace section | Print it for everyone | The executor's own section already lists all seven tools and says which ask first. The same instruction in two wordings is followed less reliably than one |
 
 ## Open questions
 
@@ -137,3 +158,11 @@ return.
   the chat-list row is the obvious shape.
 - `allowAlways` is still neither visible nor revocable (S5.4's note): the card
   offers it, and nothing lists what has been granted.
+- **Only the folder's own `.gitignore` is read** (S5.11). Nested ignore files,
+  `.git/info/exclude` and the user's global excludes are not, so a monorepo that
+  ignores per package lists a few files it would not have. The always-skipped set
+  covers the folders that matter.
+- **The tree is rebuilt every turn.** It is one bounded walk per turn and it is
+  memoised *within* a turn, but four members in a round walk the same folder four
+  times. A per-run cache keyed on the folder is the obvious shape, and needs an
+  invalidation rule the executor's own writes would have to trip.

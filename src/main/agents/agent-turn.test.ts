@@ -1317,14 +1317,51 @@ describe('runAgentTurn with executor tools', () => {
     stop()
   })
 
-  it('gives a participant in the same chat no executor tools at all', async () => {
+  /**
+   * S5.11 changed this case rather than removed it: a participant in a chat with
+   * a folder now gets the four tools that read and — the half that matters —
+   * still none of the three that change anything.
+   */
+  it('gives a participant in the same chat the read-only tools and nothing else', async () => {
     agent = ctx.repos.agents.update(agent.id, { role: 'participant' }, ctx.userId)
     const model = writeCall()
 
     await turn(model)
 
-    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
-    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain(workdir)
+    const offered = (model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)
+    expect(offered).toEqual(['read_file', 'list_dir', 'search_files', 'git_diff'])
+    // Asserted one by one, so a regression names the tool it let through.
+    expect(offered).not.toContain('write_file')
+    expect(offered).not.toContain('edit_file')
+    expect(offered).not.toContain('run_command')
+    // …and the folder is in its prompt, because it can now read it (S5.11).
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain(workdir)
+  })
+
+  it('withholds the writing tools from a participant whatever the goal says', async () => {
+    agent = ctx.repos.agents.update(agent.id, { role: 'participant' }, ctx.userId)
+    chat = ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: {
+          kind: 'codebase',
+          description: 'Rewrite the parser',
+          materials: []
+        }
+      },
+      ctx.userId
+    )
+    const model = writeCall()
+
+    await turn(model)
+
+    const offered = (model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)
+    for (const forbidden of ['write_file', 'edit_file', 'run_command']) {
+      expect(offered).not.toContain(forbidden)
+    }
+    // The model asked for `write_file` anyway; it was simply not there.
+    expect(existsSync(join(workdir, 'NOTES.md'))).toBe(false)
+    expect(events.filter((event) => event.type === 'permission.requested')).toEqual([])
   })
 
   it('gives an executor in a chat without a folder no executor tools', async () => {
@@ -1366,7 +1403,14 @@ describe('runAgentTurn with executor tools', () => {
       signal: new AbortController().signal,
       model
     })
-    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+    // The second executor is disarmed down to what every member of a chat with a
+    // folder now has (S5.11): it reads, it does not write.
+    expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
+      'read_file',
+      'list_dir',
+      'search_files',
+      'git_diff'
+    ])
     stop()
   })
 
@@ -1447,6 +1491,185 @@ describe('runAgentTurn with executor tools', () => {
 
     expect(result.message.parts.some((part) => part.type === 'diff')).toBe(false)
     stop()
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.11: the workspace briefing and the materials                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A **participant** in a chat with a folder, which is what S5.11 changed.
+ *
+ * Three things have to be true at once and only a whole turn proves them
+ * together: the four read-only tools are really offered to an agent that is not
+ * the executor, the prompt really describes the folder it can read, and a
+ * material the user marked is really in the prompt before anybody asks for it.
+ * The last case is the acceptance sentence — the model calls `read_file` on a
+ * file nobody marked and gets its contents back.
+ */
+describe('runAgentTurn in a chat with a workspace', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let agent: Agent
+  let chat: Chat
+  let workdir: string
+
+  /** A model that calls `toolName` once and then answers. */
+  function callThenAnswer(toolName: string, input: Record<string, unknown>): MockLanguageModelV4 {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                { type: 'tool-call', toolCallId: 'call-1', toolName, input: JSON.stringify(input) },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks(['Read it.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    const created = createTestAppContext(database)
+    ctx = created.ctx
+
+    workdir = mkdtempSync(join(tmpdir(), 'witena-turn-workspace-'))
+    writeFileSync(join(workdir, 'BRIEF.md'), 'The brief says: build a kite.\n', 'utf8')
+    writeFileSync(join(workdir, 'OTHER.md'), 'The other file says: buy string.\n', 'utf8')
+    mkdirSync(join(workdir, 'src'), { recursive: true })
+    writeFileSync(join(workdir, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Kite', workdir }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'What does the brief say?' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    created.events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const turn = (model: MockLanguageModelV4) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent],
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+
+  /** Everything the model was sent as its system prompt. */
+  const systemOf = (model: MockLanguageModelV4): string =>
+    JSON.stringify(model.doStreamCalls[0]?.prompt ?? '')
+
+  it('briefs a participant with the folder and lists it', async () => {
+    const model = mockModel(textChunks(['Reading.']))
+
+    await turn(model)
+
+    const prompt = systemOf(model)
+    expect(prompt).toContain('Workspace')
+    expect(prompt).toContain('BRIEF.md')
+    expect(prompt).toContain('app.ts')
+    expect(prompt).toContain('you cannot change anything in it')
+  })
+
+  it('puts a marked material in the prompt before anyone asks for it', async () => {
+    chat = ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: { kind: 'discussion', description: 'Decide the design', materials: ['BRIEF.md'] }
+      },
+      ctx.userId
+    )
+    const model = mockModel(textChunks(['Understood.']))
+
+    const result = await turn(model)
+
+    const prompt = systemOf(model)
+    expect(prompt).toContain('Materials')
+    expect(prompt).toContain('build a kite')
+    // The unmarked file is listed in the tree but its contents are not in the
+    // prompt: that is what `read_file` is for.
+    expect(prompt).not.toContain('buy string')
+    expect(result.materialsOmitted).toBe(0)
+  })
+
+  it('lets a participant read an unmarked file with read_file', async () => {
+    const model = callThenAnswer('read_file', { path: 'OTHER.md' })
+
+    const result = await turn(model)
+
+    expect(result.status).toBe('done')
+    expect(result.message.parts[0]).toMatchObject({ type: 'tool-call', toolName: 'read_file' })
+    expect(result.message.parts[1]).toMatchObject({
+      type: 'tool-result',
+      output: { path: 'OTHER.md', content: 'The other file says: buy string.\n' }
+    })
+  })
+
+  it('reports the materials it had to list rather than inline', async () => {
+    writeFileSync(join(workdir, 'HUGE.md'), 'w'.repeat(200_000), 'utf8')
+    chat = ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: {
+          kind: 'discussion',
+          description: 'Decide the design',
+          materials: ['HUGE.md', 'BRIEF.md']
+        }
+      },
+      ctx.userId
+    )
+    const model = mockModel(textChunks(['Noted.']))
+
+    const result = await turn(model)
+
+    expect(result.materialsOmitted).toBe(2)
+    const prompt = systemOf(model)
+    expect(prompt).toContain('HUGE.md')
+    expect(prompt).not.toContain('wwwwwwwwww')
+  })
+
+  it('gives a chat with no folder no workspace section and no tools', async () => {
+    chat = ctx.repos.chats.update(chat.id, { workdir: null }, ctx.userId)
+    const model = mockModel(textChunks(['Nothing to read.']))
+
+    await turn(model)
+
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+    expect(systemOf(model)).not.toContain('Workspace')
   })
 })
 

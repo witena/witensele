@@ -265,7 +265,9 @@ function assertGoal(value: unknown, workdir: string | null): asserts value is Ch
       'a material'
     )
     // Unlike the deliverable, a material is something the group reads, so it has
-    // to be there. S5.11 is what actually reads it.
+    // to be there. `agents/materials.ts` (S5.11) is what reads it, through the
+    // same `resolveInWorkdir` this check uses — and re-stats it at that moment,
+    // because a file can be deleted between being marked and being read.
     if (!existsSync(absolute)) {
       throw validation(`a material does not exist: ${material}`, {
         reason: 'goal_material_missing'

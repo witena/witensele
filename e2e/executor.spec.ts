@@ -1,7 +1,8 @@
 /**
  * The executor: the role and the chat's working directory (S5.2), the permission
  * prompt and the diff block (S5.5), the hand-off with its review round (S5.6),
- * and the chat goal that briefs all of them (S5.10).
+ * the chat goal that briefs all of them (S5.10), and the read-only tools plus the
+ * materials briefing every member now gets (S5.11).
  *
  * Everything up to the hand-off button's disabled states is **offline** — it is
  * all configuration, and no message is ever sent — and always runs. The three
@@ -9,7 +10,9 @@
  * to a temporary folder is asked to create a file, the prompt card appears,
  * Allow is clicked, the file is on disk and its diff is in the transcript; and
  * then two participants plus an executor discuss, the work is handed over, a
- * file appears and a participant reviews it. Those need a local model that can
+ * file appears and a participant reviews it. S5.11 adds a fourth: a participant
+ * answers from a marked material with no tool call at all, and then reads an
+ * unmarked file with `read_file`. Those need a local model that can
  * emit a tool call, so they are skipped — explicitly, in the report — when
  * `qwen2.5:3b` is not pulled, exactly as `mcp.spec.ts` does. Without it the file
  * still asserts that a chat with no executor shows no card, and that the
@@ -57,6 +60,12 @@ const TOOL_MODEL = 'qwen2.5:3b'
 /** Ollama's OpenAI-compatible endpoint, the same URL the `ollama` preset stores. */
 const OLLAMA_MODELS_URL = 'http://localhost:11434/v1/models'
 
+/** The token the marked material carries, which a grounded first reply repeats. */
+const BRIEF_CODEWORD = 'WITENA-KITE-7'
+
+/** …and the one only in the file nobody marked, which takes a `read_file` call. */
+const SECRET_CODEWORD = 'WITENA-STRING-9'
+
 /** How many times the model is given a chance to reach for `write_file`. */
 const TOOL_ATTEMPTS = 3
 
@@ -75,6 +84,8 @@ let execdir: string
 let handoffdir: string
 /** And one for the S5.10 goal, holding the file its materials name. */
 let goaldir: string
+/** The S5.11 folder: one marked file and one the group has to go and read. */
+let materialsdir: string
 let toolModelAvailable = false
 
 /** The preload bridge's envelope, restated here: `e2e/` may not import preload. */
@@ -152,6 +163,15 @@ test.beforeAll(async () => {
   handoffdir = mkdtempSync(join(tmpdir(), 'witena-handoff-'))
   goaldir = mkdtempSync(join(tmpdir(), 'witena-goaldir-'))
   writeFileSync(join(goaldir, 'notes.md'), '# material\n')
+  materialsdir = mkdtempSync(join(tmpdir(), 'witena-materials-'))
+  writeFileSync(
+    join(materialsdir, 'BRIEF.md'),
+    `# Brief\n\nThe codeword for this project is ${BRIEF_CODEWORD}.\n`
+  )
+  writeFileSync(
+    join(materialsdir, 'SECRET.md'),
+    `# Secret\n\nThe codeword in this file is ${SECRET_CODEWORD}.\n`
+  )
   notAFolder = join(workdir, 'notes.md')
   writeFileSync(notAFolder, '# not a folder\n')
   toolModelAvailable = await probeOllamaModel(TOOL_MODEL)
@@ -174,6 +194,7 @@ test.afterAll(async () => {
   if (execdir) rmSync(execdir, { recursive: true, force: true })
   if (handoffdir) rmSync(handoffdir, { recursive: true, force: true })
   if (goaldir) rmSync(goaldir, { recursive: true, force: true })
+  if (materialsdir) rmSync(materialsdir, { recursive: true, force: true })
 })
 
 test('the agent list tags the executors and only the executors', async () => {
@@ -618,4 +639,125 @@ test('hands the discussion to the executor, and a participant reviews what it di
     .poll(() => reviews.count(), { timeout: TOOL_CALL_MS })
     .toBeGreaterThan(reviewsBefore)
   await expect(stop).toHaveCount(0, { timeout: TOOL_CALL_MS })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.11: read-only tools for every member, and the materials briefing         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The step's acceptance sentence, end to end: a participant answers **from** a
+ * marked material without fetching anything, and fetches an unmarked file when
+ * it is asked about one.
+ *
+ * Both halves need a real model, so the whole case is behind the same
+ * `qwen2.5:3b` guard as the two above — the first half needs a model that can
+ * repeat a codeword it was given, and the second one needs a model that will
+ * call a tool. What is being measured is that the material is *in the context*
+ * (the first answer quotes it with no tool card anywhere in the transcript) and
+ * that the read-only tools are really attached to an agent that is **not** the
+ * executor (the second answer produces a `read_file` card).
+ *
+ * `mention-only` with one speaker, rather than a round of two: a second small
+ * model answering the same question doubles the runtime and proves nothing the
+ * first one does not. Both participants are members, which is what the chat is
+ * meant to be.
+ */
+test('a participant answers from the materials, and reads an unmarked file when asked', async () => {
+  test.skip(
+    !toolModelAvailable,
+    `${TOOL_MODEL} is not available on ${OLLAMA_MODELS_URL}; the materials test needs a local model that can call tools.`
+  )
+  test.setTimeout(2 * TOOL_ATTEMPTS * TOOL_CALL_MS + 120_000)
+
+  await openAgents(window)
+  await window.getByTestId('agents-new').click()
+  await window.getByTestId('agent-name').fill('Scout')
+  await window.getByTestId('agent-provider').selectOption({ index: 1 })
+  await window.getByTestId('agent-model').selectOption(TOOL_MODEL)
+  await window
+    .getByTestId('agent-system-prompt')
+    .fill(
+      'Answer from the Materials section of your context when it is there. When you are asked about a file that is not in your context, call the read_file tool with its path and answer from what it returns. Keep every answer to one sentence.'
+    )
+  await window.getByTestId('agent-save').click()
+  await expect(window.getByTestId('agent-save')).toBeDisabled()
+  await createAgent('Watcher', 'participant')
+
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chats-new').click()
+  await addMember('Scout')
+  await addMember('Watcher')
+  await window.getByTestId('chat-max-rounds').selectOption('1')
+  await window.getByTestId('chat-mode').selectOption('mention-only')
+
+  const chatId = await selectedChatId()
+  expect((await call('chats.update', { id: chatId, patch: { workdir: materialsdir } })).ok).toBe(
+    true
+  )
+  expect(
+    (
+      await call('chats.update', {
+        id: chatId,
+        patch: {
+          goal: {
+            kind: 'discussion',
+            description: 'Agree on what the brief asks for',
+            materials: ['BRIEF.md']
+          }
+        }
+      })
+    ).ok
+  ).toBe(true)
+  await expect(window.getByTestId('chat-goal-chip')).toBeVisible()
+
+  const stop = window.getByTestId('composer-stop')
+  const agentMessages = window.locator('[data-testid="message-item"][data-sender="agent"]')
+  const cards = window.getByTestId('tool-card')
+
+  // Half one: the marked file is already in the prompt, so the answer quotes it
+  // and nothing was fetched.
+  let quoted = false
+  for (let attempt = 0; attempt < TOOL_ATTEMPTS && !quoted; attempt += 1) {
+    await window
+      .getByTestId('composer-input')
+      .fill('@Scout what codeword does the brief give? Answer with the codeword itself.')
+    await window.getByTestId('composer-input').press('Enter')
+    await expect(stop).toHaveCount(0, { timeout: TOOL_CALL_MS })
+    quoted = (await agentMessages.last().textContent())?.includes(BRIEF_CODEWORD) === true
+  }
+
+  expect(
+    quoted,
+    `${TOOL_MODEL} did not repeat the material's codeword in ${TOOL_ATTEMPTS} attempts. That the material is in the prompt is covered by the unit suite; this case measures a small local model reading it.`
+  ).toBe(true)
+  // The whole point: it answered from its context, not by going to the disk.
+  await expect(cards).toHaveCount(0)
+
+  // Half two: a file nobody marked. It is in the workspace tree, so the model
+  // knows it exists, and `read_file` is attached even though this agent is a
+  // participant.
+  let called = false
+  for (let attempt = 0; attempt < TOOL_ATTEMPTS && !called; attempt += 1) {
+    await window
+      .getByTestId('composer-input')
+      .fill('@Scout use the read_file tool to read SECRET.md, then tell me the codeword in it.')
+    await window.getByTestId('composer-input').press('Enter')
+    try {
+      await expect(cards.first()).toBeVisible({ timeout: TOOL_CALL_MS })
+      called = true
+    } catch {
+      await expect(stop).toHaveCount(0, { timeout: TOOL_CALL_MS })
+    }
+  }
+
+  expect(
+    called,
+    `${TOOL_MODEL} did not reach for read_file in ${TOOL_ATTEMPTS} attempts. The attachment rule is covered by the unit suite; this case measures a small local model's willingness to call a tool.`
+  ).toBe(true)
+
+  await expect(cards.first()).toHaveAttribute('data-tool', 'read_file')
+  await expect(cards.first()).toHaveAttribute('data-state', 'done', { timeout: TOOL_CALL_MS })
+  // A participant was never offered anything that writes: no prompt was raised.
+  await expect(window.getByTestId('permission-card')).toHaveCount(0)
 })

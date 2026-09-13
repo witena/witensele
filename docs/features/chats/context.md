@@ -68,7 +68,7 @@ can hold a real conversation and still holds it after a restart.
 | The `executor` **role** itself — the control, the badge's copy, what the role means | [`agents`](../agents/context.md). This feature owns the *membership* rule and the surfaces that draw the badge |
 | The executor's file, shell and git tools, the permission **gate** and the `DiffPart`s the backend appends | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md). This feature owns the folder they are confined to and the three surfaces that draw their results — not what they may do |
 | The wording of the goal in a system prompt, in either language, and the hand-off line that names the deliverable | [`agent-turn`](../agent-turn/context.md) and [`executor`](../executor/context.md), S5.10. This feature owns the goal as **data** and as a **control**; they own what a model is told about it |
-| Placing a goal's `materials` in every member's context, and the read-only workspace tools | S5.11. S5.10 records the materials, validates that they exist, and lists them in the panel; nothing reads their contents yet |
+| Placing a goal's `materials` in every member's context, the workspace briefing, and the read-only tools every member now gets | [`agent-turn`](../agent-turn/context.md) and [`executor`](../executor/context.md), S5.11 `[x]`. This feature records the materials, validates that they exist inside `workdir`, and lists them in the panel; what a model is shown of them, and in what order, is theirs |
 | Flipping the chip and appending a `FileRefPart` when an executor turn produces the deliverable | S5.12. S5.10's chip is refreshed when the chat changes, which is enough for a file created by hand or by any other means |
 | Opening a `file-ref` chip, a path in the body text, a diff header or a file tool card in the editor | [`editor`](../editor/context.md), S5.7 `[x]`. It adds behaviour to components this feature owns; the rules it follows — the path detector, the confinement, the `AppSettings.editor` choice — are written up there |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
@@ -147,5 +147,12 @@ the next round boundary rather than mid-turn.
   written by something that is not this app is noticed only at the next such
   moment. S5.12 makes an executor turn one of them; a filesystem watcher would
   make it immediate and is deliberately not in S5.10.
-- Whether a `discussion` goal should be allowed to carry materials at all, given
-  that S5.11 is what reads them. Today it may, as long as the chat has a folder.
+- Whether a `discussion` goal should be allowed to carry materials at all. It
+  may, as long as the chat has a folder, and since S5.11 that is a useful
+  combination rather than an inert one: a discussion grounded in three documents
+  needs no deliverable.
+- Whether the **materials list should say what it will cost**. The panel lists
+  the paths the user picked; how much of them fits in a given member's context is
+  decided per turn, per model, by `agents/materials.ts`, and the only feedback
+  the user gets is the `materialsTruncated` notice after the fact. A size hint
+  next to each row would be honest but is a guess until a model is chosen.

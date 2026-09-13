@@ -86,6 +86,7 @@ Keys reserved for the features that will emit them:
 | `notices.runStopped` | — | `orchestration` (S2.3), when the Stop button cancels a chain |
 | `notices.maxRoundsReached` | `max` | `orchestration` (S2.3), when the automatic round cap is hit |
 | `notices.providerError` | `message` | `agent-turn` (S1.7) / `providers` (S1.6) |
+| `notices.materialsTruncated` | `agent`, `omitted` | `orchestration` (S5.11), once per chat when a member could not fit the goal's materials. The only notice deduped against the **transcript** rather than against a per-run set, which is what makes "once per chat" survive a relaunch |
 | `notices.handoff` | `agent` | `orchestration` (S5.6), on the **user** message "Hand to executor" stores. The only notice that is a request rather than a report, and the only one carried by a message the user is the sender of |
 
 The same principle covers failures: `BackendError.code` is the machine-readable

@@ -160,6 +160,14 @@ Two asymmetries worth keeping:
   `resolveInWorkdir`, which follows symlinks, which is why a goal can never name
   a file the executor would be refused at the moment of use.
 
+Since S5.11 the material check earns its keep twice over: a path that exists and
+resolves inside the folder is exactly a path `agents/materials.ts` can read and
+`read_file` can fetch, so the validation at save time and the reader at turn time
+apply the same rule through the same function (`resolveInWorkdir`). The reader
+still re-resolves and re-stats every path — a material can be deleted between the
+two moments, and one that has been is dropped from the prompt silently rather
+than named as something the group cannot open.
+
 A goal stores **relative** paths for the reason the workdir is absolute: the
 folder is a machine-local binding, while the goal describes the project and
 survives it being moved, cloned or restored from a backup. Converting the

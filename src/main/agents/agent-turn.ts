@@ -137,8 +137,10 @@ import {
   buildExecutorTools,
   EDIT_FILE_TOOL,
   PermissionDeniedError,
+  READ_ONLY_EXECUTOR_TOOLS,
   WRITE_FILE_TOOL
 } from '../executor/tools'
+import { buildWorkspaceSection } from '../executor/workspace'
 import { toAiTools, type AgentTools, type ToolOrigin } from '../mcp/tools'
 import { buildMemorySection, buildMemoryTools } from '../memory/tools'
 import { scanSkills } from '../skills/loader'
@@ -150,6 +152,7 @@ import { createLanguageModel } from '../providers/registry'
 import { resolveProvider } from '../providers/resolve'
 import { buildGroupBriefing, resolveMainLanguage, toBriefingMember } from './briefing'
 import { DEFAULT_OUTPUT_RESERVE, fitHistory } from './context-budget'
+import { buildMaterialsSection } from './materials'
 import { toModelMessages } from './history'
 
 /** Partial text is written to the database at least this often, in milliseconds. */
@@ -264,6 +267,17 @@ export interface AgentTurnResult {
    * run per agent rather than once per round.
    */
   droppedMessages: number
+  /**
+   * How many of the chat's materials were listed by path instead of being
+   * inlined in this turn's prompt (S5.11). `0` when they all fitted, and in
+   * every chat that has none.
+   *
+   * Reported rather than announced here, exactly like `droppedMessages`: the
+   * `materialsTruncated` notice belongs to the run, and `ChatRunner` is what
+   * stores it — once per chat, because the materials do not change between
+   * rounds and a line per round would be noise.
+   */
+  materialsOmitted: number
 }
 
 /** `LanguageModelUsage` (numbers or `undefined`) → the stored `Usage`. */
@@ -421,14 +435,35 @@ export function enabledSkills(ctx: AppContext, agent: Agent): SkillMeta[] {
  * that promises a tool the model was not given is how a model starts describing
  * tool calls in prose.
  */
-export function buildSystemPrompt(
+export interface TurnPrompt {
+  /** The assembled system prompt. */
+  text: string
+  /**
+   * How many materials had to be listed by path instead of inlined (S5.11).
+   *
+   * Reported for the same reason `droppedMessages` is: the user-visible notice
+   * belongs to the **run**, and `ChatRunner` is the only object that can say it
+   * once rather than once per round.
+   */
+  materialsOmitted: number
+}
+
+/**
+ * The prompt, plus the one number the turn has to report about it.
+ *
+ * `buildSystemPrompt` is this function's text and is what every caller that only
+ * wants the prompt uses; the two exist separately so the materials count reaches
+ * `AgentTurnResult` without every test that asserts on the prompt having to
+ * unwrap an object.
+ */
+export function buildTurnPrompt(
   ctx: AppContext,
   chat: Chat,
   agent: Agent,
   members: Agent[],
   /** True for the executor's turn in a hand-off run (S5.6). */
   handoff = false
-): string {
+): TurnPrompt {
   const language = resolveMainLanguage(ctx.repos.settings.get(ctx.userId).language)
   const briefing = buildGroupBriefing({
     language,
@@ -442,8 +477,24 @@ export function buildSystemPrompt(
 
   const sections = [agent.systemPrompt.trim(), briefing]
 
-  if (executorWorkdir(chat, agent, members)) {
-    sections.push(buildExecutorSection(chat.workdir as string, handoff, chat.goal))
+  const executing = executorWorkdir(chat, agent, members)
+  if (executing) {
+    sections.push(buildExecutorSection(executing, handoff, chat.goal))
+  }
+
+  // S5.11: every member of a chat with a folder is shown the folder, executor or
+  // not. The section is built once per turn, here, because `walkTree` touches
+  // the disk and a turn that assembled it twice would be reading the same
+  // hundreds of directory entries for the same prompt.
+  const workspace = workspaceWorkdir(chat)
+  if (workspace) {
+    sections.push(
+      buildWorkspaceSection({
+        workdir: workspace,
+        goal: chat.goal,
+        executor: executing !== null
+      })
+    )
   }
 
   const skills = buildSkillsSection(enabledSkills(ctx, agent))
@@ -451,7 +502,53 @@ export function buildSystemPrompt(
 
   if (agent.memoryEnabled) sections.push(buildMemorySection(ctx.memory.readIndex(agent.id)))
 
-  return sections.filter((section) => section.length > 0).join('\n\n')
+  // The materials go **last**, immediately before the history they ground. They
+  // are the bulkiest thing in the prompt and the one part of it that is pure
+  // reference material, so a model that runs out of attention loses them before
+  // it loses the protocol — the same argument that puts skills and memory after
+  // the briefing.
+  const materials =
+    workspace && chat.goal
+      ? buildMaterialsSection({
+          workdir: workspace,
+          materials: chat.goal.materials,
+          contextWindow: contextWindowFor(agent.modelId)
+        })
+      : null
+  if (materials && materials.text.length > 0) sections.push(materials.text)
+
+  return {
+    text: sections.filter((section) => section.length > 0).join('\n\n'),
+    materialsOmitted: materials?.omitted ?? 0
+  }
+}
+
+/** The prompt on its own. See `buildTurnPrompt` for why both exist. */
+export function buildSystemPrompt(
+  ctx: AppContext,
+  chat: Chat,
+  agent: Agent,
+  members: Agent[],
+  handoff = false
+): string {
+  return buildTurnPrompt(ctx, chat, agent, members, handoff).text
+}
+
+/**
+ * The folder **every** member of this chat may read, or `null` (S5.11).
+ *
+ * One condition, not `executorWorkdir`'s three: the chat has a `workdir`. PLAN's
+ * read-only rule is what this expresses — participants get the four read-only
+ * tools and the workspace briefing so they can ground the discussion in the real
+ * code, and they get nothing that writes, whatever the goal says.
+ *
+ * It is a function rather than an inline check for the same reason
+ * `executorWorkdir` is: `collectAgentTools` and `buildTurnPrompt` must answer it
+ * identically, or the prompt describes tools the model was not given.
+ */
+export function workspaceWorkdir(chat: Chat): string | null {
+  if (typeof chat.workdir !== 'string' || chat.workdir.trim().length === 0) return null
+  return chat.workdir
 }
 
 /**
@@ -615,23 +712,42 @@ export async function collectAgentTools(
     Object.assign(tools, buildMemoryTools(ctx.memory, agent.id))
   }
 
-  // The executor's own file, search, shell and git tools (S5.4). Unlike the two
+  // The built-in file, search, shell and git tools (S5.4, S5.11). Unlike the two
   // families above, these *are* the side-effects rule rather than an exception
-  // to it: three of the seven go through `ctx.permissions` before they run, and
-  // all seven are confined to the chat's folder.
-  const workdir = executorWorkdir(chat, agent, options.members)
+  // to it: three of the seven go through `ctx.permissions` before they run, all
+  // of them are confined to the chat's folder, and which of them an agent gets
+  // is decided by its role.
+  //
+  // | Agent | Tools |
+  // |---|---|
+  // | The chat's executor, chat has a `workdir` | All seven |
+  // | Any other member, chat has a `workdir` | The four that only read |
+  // | Any member, chat has no `workdir` | None |
+  //
+  // The second row is S5.11 and PLAN.md's read-only rule: a participant may
+  // ground its argument in the real code, and may not change a byte of it. The
+  // set it gets is `READ_ONLY_EXECUTOR_TOOLS`, which is the complement of the
+  // gated set rather than a second hand-written list, so a tool that becomes
+  // gated stops reaching participants in the same edit.
+  const executing = executorWorkdir(chat, agent, options.members)
+  const workdir = executing ?? workspaceWorkdir(chat)
   if (workdir) {
-    Object.assign(
-      tools,
-      buildExecutorTools({
-        workdir,
-        chatId: chat.id,
-        agentId: agent.id,
-        signal: options.signal,
-        timeoutMs: options.toolTimeoutMs,
-        permissions: ctx.permissions
-      })
-    )
+    const built = buildExecutorTools({
+      workdir,
+      chatId: chat.id,
+      agentId: agent.id,
+      signal: options.signal,
+      timeoutMs: options.toolTimeoutMs,
+      permissions: ctx.permissions
+    })
+    if (executing) {
+      Object.assign(tools, built)
+    } else {
+      for (const name of READ_ONLY_EXECUTOR_TOOLS) {
+        const definition = built[name]
+        if (definition) tools[name] = definition
+      }
+    }
   }
 
   return { tools, origins }
@@ -719,6 +835,19 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   let toolsUnsupported = false
   /** How many history messages the context budget removed; reported to the runner. */
   let droppedMessages = 0
+  /**
+   * The system prompt, built at most **once** per turn (S5.11).
+   *
+   * `consume` can run twice — a model whose provider rejects tools gets a second,
+   * tool-free attempt — and the prompt now reads the folder: a tree walk and the
+   * materials, which must not happen twice for one turn. Memoised here rather
+   * than hoisted out of `consume` so a failure while assembling it is still the
+   * turn's own error path rather than a throw out of `runAgentTurn`, which
+   * promises never to throw.
+   */
+  let prompt: TurnPrompt | null = null
+  /** How many materials that prompt had to list rather than inline (S5.11). */
+  let materialsOmitted = 0
 
   let lastFlushAt = Date.now()
   let deltasSinceFlush = 0
@@ -762,7 +891,9 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const agentsById = Object.fromEntries(members.map((member) => [member.id, member]))
     const origins = attached?.origins ?? {}
 
-    const system = buildSystemPrompt(ctx, chat, agent, members, options.handoff === true)
+    prompt ??= buildTurnPrompt(ctx, chat, agent, members, options.handoff === true)
+    const system = prompt.text
+    materialsOmitted = prompt.materialsOmitted
     // Both history paths go through the budget: the sequential turn's fresh read
     // and the snapshot the runner took once for a parallel round. A long chat
     // overflows every speaker at the same moment, so exempting either one would
@@ -1004,7 +1135,13 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     // A timeout is *not* reported as an abort: the round barrier reads this flag
     // to decide whether the user stopped the run, and one skipped agent must
     // leave the others' answers and the next round alone.
-    return { message, status, aborted: aborted && !timedOut, droppedMessages }
+    return {
+      message,
+      status,
+      aborted: aborted && !timedOut,
+      droppedMessages,
+      materialsOmitted
+    }
   } finally {
     ctx.supervisor.endTurn({
       chatId: chat.id,

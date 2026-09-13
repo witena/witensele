@@ -4,9 +4,10 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends; and from S5.11 `workspaceWorkdir` (the read-only rule), `buildTurnPrompt` (the prompt plus `materialsOmitted`) and the read-only branch of `collectAgentTools` |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]`. From S4.2 it also caps each replayed `tool-result` at `MAX_TOOL_RESULT_CHARS` (4 KB) and strips a trailing `[PASS]` from a reply that had real content |
 | `src/main/agents/context-budget.ts` | `estimateTokens` and `fitHistory`: the character-count estimate and the drop-oldest-first budget (S4.2). Pure; no database, no `AppContext` |
+| `src/main/agents/materials.ts` | `buildMaterialsSection`: the goal's materials as a prompt section, inside a quarter of the model's window, with the rest named by path (S5.11). Reads the files it is pointed at through `executor/paths.ts`; no database, no `AppContext` |
 | `src/main/agents/title.ts` | `sanitizeTitle`, `fallbackTitle` and `generateChatTitle` — the automatic chat title (S4.3). `ChatRunner` is what calls it; see [`orchestration`](../orchestration/backend.md) |
 | `src/shared/pass.ts` | `PASS_TOKEN`, `isPassOnly` and `stripTrailingPass`: shared, because the status decision here and the rendering in the transcript have to read the identical rule |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
@@ -26,8 +27,10 @@ The prompt sections and the built-in tools themselves live with their features:
 `executor/tools.ts` ([`../executor/backend.md`](../executor/backend.md)). This
 file decides the **order** of the sections and **which** tools an agent gets.
 
-`buildSystemPrompt(ctx, chat, agent, members, handoff?)` takes the chat since
-S5.4, because the executor section names the folder — and since S5.10 for a
+`buildTurnPrompt(ctx, chat, agent, members, handoff?)` is the assembler since
+S5.11 and returns `{ text, materialsOmitted }`; `buildSystemPrompt` is its
+`text`, which is what every caller that only wants the prompt uses. It takes the
+chat since S5.4, because the executor section names the folder — and since S5.10 for a
 second reason: `chat.goal` reaches `buildGroupBriefing`, so **every** member is
 briefed with what the chat is for, executor or not. It takes the `handoff` flag
 since S5.6, because the one turn a hand-off schedules is briefed to implement the
@@ -37,6 +40,14 @@ signal, toolTimeoutMs, members })` takes it for the same reason plus the
 member list, which is how the chat's executor is picked deterministically. Since
 S5.10 `buildExecutorSection` takes the goal as well, and appends `goalHandoffLine`
 to the hand-off suffix — the deliverable to write, or the change to make.
+
+S5.11 adds the second attachment rule, `workspaceWorkdir(chat)`, which asks only
+whether the chat has a folder: an agent that is not the chat's executor gets the
+four tools in `READ_ONLY_EXECUTOR_TOOLS` and the `Workspace` section, and never
+anything that writes. Both sections it adds — `Workspace` between the executor
+section and the skills, `Materials` last — are built inside `buildTurnPrompt`, so
+the prompt and the tool set are decided by the same two functions and cannot
+disagree.
 
 ## Database
 

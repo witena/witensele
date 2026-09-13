@@ -72,12 +72,14 @@
  *   `@Hands` starts another executor round and `maxAutoRounds` caps the chain
  *   exactly as it does for a typed message.
  *
- * - **Two things are announced by the runner rather than by the turn** (S4.2,
- *   S4.3), because both are facts about a *run* and `AgentTurn` does not know one
- *   is happening: the `contextTruncated` notice, stored once per run per agent
- *   from the `droppedMessages` each turn reports, and the automatic title, which
- *   replaces `New chat` once the run has produced one finished agent reply. See
- *   `#noticeTruncation` and `#maybeTitle`.
+ * - **Three things are announced by the runner rather than by the turn** (S4.2,
+ *   S4.3, S5.11), because each is a fact about a *run* and `AgentTurn` does not
+ *   know one is happening: the `contextTruncated` notice, stored once per run per
+ *   agent from the `droppedMessages` each turn reports; the `materialsTruncated`
+ *   notice, stored once per **chat** from the `materialsOmitted` each turn
+ *   reports; and the automatic title, which replaces `New chat` once the run has
+ *   produced one finished agent reply. See `#noticeTruncation`,
+ *   `#noticeMaterials` and `#maybeTitle`.
  *
  * No electron here (CLAUDE.md rule #5): the runner takes an `AppContext` and
  * reaches the outside world only through `ctx.repos` and `ctx.events`.
@@ -118,6 +120,8 @@ export const NOTICE_RUN_FAILED = 'runFailed'
 export const NOTICE_ALL_OFFLINE = 'allOffline'
 /** Stored once per run per agent when `fitHistory` had to drop messages (S4.2). */
 export const NOTICE_CONTEXT_TRUNCATED = 'contextTruncated'
+/** Stored once per chat when the goal's materials did not fit a turn's prompt (S5.11). */
+export const NOTICE_MATERIALS_TRUNCATED = 'materialsTruncated'
 /**
  * The key on the **user** message "Hand to executor" writes (S5.6).
  *
@@ -206,6 +210,16 @@ export class ChatRunner {
    * beginning any more.
    */
   #truncationNoticed = new Set<string>()
+  /**
+   * Whether this chat has already been told that its materials did not all fit.
+   *
+   * Per **chat**, not per run: the materials are a property of the goal and they
+   * do not change between rounds or between runs, so the second sentence would
+   * say exactly what the first one said. The flag only short-circuits the
+   * database check below — the transcript itself is the durable record, which is
+   * what makes the rule survive a restart.
+   */
+  #materialsNoticed = false
   /**
    * The executor a `handoff()` call scheduled, until `#loop` picks it up.
    *
@@ -532,6 +546,7 @@ export class ChatRunner {
           implementing
         )
         this.#noticeTruncation(chat, members, outcomes)
+        this.#noticeMaterials(chat, members, outcomes)
 
         if (controller.signal.aborted || outcomes.some((outcome) => outcome.result.aborted)) {
           reason = 'stopped'
@@ -664,7 +679,8 @@ export class ChatRunner {
             message: { mentions: [] } as unknown as Message,
             status: 'error',
             aborted: signal.aborted,
-            droppedMessages: 0
+            droppedMessages: 0,
+            materialsOmitted: 0
           }
         })
       }
@@ -691,6 +707,44 @@ export class ChatRunner {
         dropped: outcome.result.droppedMessages
       })
     }
+  }
+
+  /**
+   * Tells the user, once per chat, that the goal's materials did not all fit
+   * (S5.11).
+   *
+   * The grain is the difference between this and `#noticeTruncation`. A truncated
+   * history is a fact about one long conversation and is worth repeating in a new
+   * run, because what the agent can no longer see keeps changing; materials that
+   * are too large are a fact about the *goal*, identical in every round of every
+   * run until the user changes the list. So the transcript is consulted rather
+   * than a per-run set: an existing notice anywhere in this chat is the end of it,
+   * which also means a relaunch does not repeat the sentence.
+   *
+   * The first agent that had to trim is the one named. Members can have different
+   * context windows and therefore different budgets, and naming each of them in
+   * turn would be the same complaint written four ways.
+   */
+  #noticeMaterials(chat: Chat, members: Agent[], outcomes: TurnOutcome[]): void {
+    if (this.#materialsNoticed) return
+    const trimmed = outcomes.find((outcome) => outcome.result.materialsOmitted > 0)
+    if (!trimmed) return
+    this.#materialsNoticed = true
+    if (this.#alreadyNoticed(NOTICE_MATERIALS_TRUNCATED)) return
+    const agent = members.find((member) => member.id === trimmed.agentId)
+    this.#notice(chat, NOTICE_MATERIALS_TRUNCATED, {
+      agent: agent?.name ?? trimmed.agentId,
+      omitted: trimmed.result.materialsOmitted
+    })
+  }
+
+  /** True when this chat's transcript already carries a notice with that key. */
+  #alreadyNoticed(key: string): boolean {
+    return this.#ctx.repos.messages
+      .listForContext(this.chatId, this.#ctx.userId)
+      .some((message) =>
+        message.parts.some((part) => part.type === 'system-notice' && part.key === key)
+      )
   }
 
   /**

@@ -295,8 +295,9 @@ export interface ChatGoal {
   /**
    * Files and folders under `workdir` the group starts from, relative paths.
    *
-   * Each one must exist when it is saved. S5.11 is what places their contents in
-   * every member's context; S5.10 only records them.
+   * Each one must exist when it is saved. S5.11 places their contents in every
+   * member's system prompt, in list order and inside a quarter of that model's
+   * context window; what does not fit is named by path for `read_file`.
    */
   materials: string[]
 }

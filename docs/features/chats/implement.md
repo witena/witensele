@@ -432,9 +432,13 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   card's `serverName · toolName` line reads.
 - **`chats.members.list` is one call per chat** on load. See the trade-off table
   in `context.md`.
-- **A goal's `materials` are recorded, validated and listed, and nothing reads
-  their contents.** Placing them in every member's context is S5.11; until then
-  they are a list the user curated and the briefing does not mention.
+- **A goal's `materials` are recorded, validated and listed here; what is done
+  with them is S5.11's** — they are inlined in every member's prompt up to a
+  quarter of that model's context window, and named by path beyond it
+  ([`agent-turn`](../agent-turn/implement.md)). Two consequences for this
+  feature: the panel gives no indication of how much of a list will fit, and a
+  material deleted after it was saved is dropped from the prompt silently, while
+  the panel still lists it.
 - **"Delivered" is polled, not watched.** `chats.goalStatus` runs when a chat is
   opened and on every `chat.updated` for it, so a deliverable written by
   something that is not this app is noticed at the next such moment rather than

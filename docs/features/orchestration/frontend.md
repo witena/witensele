@@ -109,6 +109,7 @@ immediately and is answered from the next round. See the decision table in
 | `notices.agentSkipped` | Written by `agent-turn` when the hard timeout skipped a member; see [`presence`](../presence/frontend.md) |
 | `notices.allOffline` | Written by the runner when every speaker of a round is offline |
 | `notices.contextTruncated` | Written once per run per agent when `fitHistory` had to drop messages, with `{{agent}}` and `{{dropped}}` (S4.2) |
+| `notices.materialsTruncated` | Written once per **chat** when a member could not fit the goal's materials, with `{{agent}}` and `{{omitted}}` (S5.11) |
 | `chat.handoff` | The button's label |
 | `chat.handoffTitle` | Its tooltip while it is enabled |
 | `errors.handoff_no_workdir`, `errors.handoff_no_executor`, `errors.handoff_run_active` | The tooltip while it is **disabled**, and the sentence under the composer if the call is refused anyway. One set of words for one rule |

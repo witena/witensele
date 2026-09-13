@@ -447,6 +447,7 @@
     "runFailed": "The run stopped after an internal error: {{message}}",
     "toolsUnsupported": "{{agent}}'s model cannot use tools, so this reply was written without them",
     "contextTruncated": "{{agent}} could not fit the whole conversation in its context window, so the {{dropped}} oldest messages were left out of its view",
+    "materialsTruncated": "{{agent}} could not fit every material in its context window, so {{omitted}} of them are listed by path instead; it can still read them with read_file",
     "handoff": "Handed to {{agent}}: implement what the group decided, then report what changed"
   }
 }

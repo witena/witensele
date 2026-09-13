@@ -15,8 +15,17 @@ does not throw, it just makes every answer slightly worse.
 
 - **System prompt assembly**, in PLAN's order: the agent's own `systemPrompt`,
   the group briefing, the executor's folder and tools when this agent is one
-  (S5.4), the enabled skills' `name — description` lines (S3.2) and the whole
-  `MEMORY.md` index (S3.3).
+  (S5.4), the **workspace briefing** when the chat has a folder at all (S5.11),
+  the enabled skills' `name — description` lines (S3.2), the whole `MEMORY.md`
+  index (S3.3) and, last, the **materials** the goal marked (S5.11).
+- **The materials** (`materials.ts`, S5.11): reading `goal.materials`, laying
+  each entry out as a block — a file as its text, a folder as its listing plus
+  its files — and stopping at a quarter of the model's context window, after
+  which the rest are named by path with the note that `read_file` fetches them.
+  Binary files are named, never inlined.
+- **Which tools each member gets** (S5.11): all seven for the chat's executor,
+  the four read-only ones for every other member of a chat with a folder, none
+  at all without one.
 - **The group briefing** in both languages (`briefing.ts` + `briefing.en.ts` +
   `briefing.zh-CN.ts`), following the UI language setting — including, since
   S5.10, the **chat's goal**: one sentence for its kind, the user's description
@@ -50,9 +59,10 @@ does not throw, it just makes every answer slightly worse.
 | Drawing the `DiffPart`s — the collapsed block, the code block, the card that answered the prompt | [`executor`](../executor/frontend.md) and [`chats`](../chats/frontend.md). The turn produces the parts; the transcript decides what they look like |
 | The content of the skills, memory and executor prompt sections | `skills`, `memory` and `executor` build the text; the turn decides the order and whether to include them |
 | The goal itself — the panel, the validation, the column, the header chip | [`chats`](../chats/context.md), S5.10. This feature owns only what the goal *says to a model*, and its wording in both languages |
-| Placing a goal's `materials` in the context | S5.11. S5.10 records them; nothing reads them yet |
+| The *contents* of the workspace briefing — the tree, the `.gitignore` rules, the git state | [`executor`](../executor/context.md), `executor/workspace.ts`. This feature decides **where in the prompt** it goes and **who** gets one |
+| Which paths are marked as materials, and validating them | [`chats`](../chats/context.md), S5.10. This feature only reads the list |
 | Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
-| Announcing that a context was truncated, and naming the chat | [`orchestration`](../orchestration/context.md). The turn *measures* (`fitHistory`, `droppedMessages`) and the runner *tells*, because both are facts about a run |
+| Announcing that a context was truncated **or that the materials did not fit**, and naming the chat | [`orchestration`](../orchestration/context.md). The turn *measures* (`fitHistory` → `droppedMessages`, `buildMaterialsSection` → `materialsOmitted`) and the runner *tells*, because both are facts about a run |
 | Displaying or pricing the stored `Usage` | [`chats`](../chats/context.md) and `src/shared/pricing.ts`. The turn records what the provider reported and nothing else |
 
 ## Dependencies
@@ -63,7 +73,7 @@ does not throw, it just makes every answer slightly worse.
 | [`database`](../database/context.md) | `MessageRepository.create` / `update` / `listForContext` |
 | [`backend-client`](../backend-client/context.md) | The event bus and the `message.*` / `presence.changed` payloads |
 | [`i18n`](../i18n/context.md) | The *setting* only. The briefing is model-facing text, not UI copy, and does not live in the locale files |
-| [`executor`](../executor/context.md) | `buildExecutorTools`, `buildExecutorSection` (including S5.6's hand-off paragraph) and `ctx.permissions`, plus `Chat.workdir` and `Agent.role` for the rule that decides whether any of them applies |
+| [`executor`](../executor/context.md) | `buildExecutorTools`, `READ_ONLY_EXECUTOR_TOOLS`, `buildExecutorSection` (including S5.6's hand-off paragraph), `buildWorkspaceSection`, `resolveInWorkdir`, `walkTree` and `looksBinary`, plus `ctx.permissions`, `Chat.workdir` and `Agent.role` for the rules that decide which of them applies |
 | [`orchestration`](../orchestration/context.md) | The caller. Since S5.6 it also passes `handoff: true` for the one turn a hand-off schedules — the only option that changes the prompt rather than the transcript |
 
 `orchestration` depends on this feature: `ChatRunner` calls `runAgentTurn` once
@@ -90,6 +100,11 @@ per speaker and reads the returned status to decide how the run ends.
 | The **hand-off briefing points at the goal rather than restating it** (S5.10) | Repeat the whole goal in the executor section | The goal is already in the group briefing the same prompt carries, and a model given one instruction twice in two wordings follows neither reliably |
 | **`handoff` is an option of the turn, not a fact about the agent or the chat** (S5.6) | A column on the chat; an executor that always reads the hand-off briefing | It is true of exactly one turn. An executor asked a follow-up question by a reviewer is not being handed the discussion again, and a prompt that said so would make it start over instead of answering |
 | The **executor section is conditional on the same rule that attaches the tools** (S5.4), and sits between the briefing and the skills | Always include it for an `executor`; put it with the skills | Same reason as the memory sentence, and the section is protocol rather than reference material: a model running out of attention should lose the reference first. `executorWorkdir` is the one function both the prompt and the tool set ask |
+| **Every** member of a chat with a folder is given the workspace briefing (S5.11) | Only the executor; nobody | It is the counterpart of the read-only tools: an agent told it can read a folder and not told what is in it opens the discussion with three `list_dir` calls. The section is built once per turn, memoised inside the turn, because it walks the disk |
+| The **materials go last**, after skills and memory (S5.11) | First, so they are certainly read; beside the briefing | They are the bulkiest part of the prompt and the purest reference material in it, and the same rule that puts skills after the briefing puts them after skills. Last is also immediately before the history they are meant to ground |
+| The materials budget is a **fixed 25 % of the window**, not what the history leaves over | Whatever is left after `fitHistory`; a fixed token count | The materials are assembled once per turn while the history grows all chat long, so a leftover rule would inline a document in round one and silently drop it in round six — and a group that was quoting it would stop being able to. A fixed count would be wrong for both a 8 k and a 1 M window |
+| Once one material does not fit, **the rest are listed** rather than skipped over | Keep inlining whatever still fits | A contiguous prefix is something the user can predict from the order they wrote. A set assembled by skipping is one nobody can explain, and each item is capped anyway |
+| `materialsOmitted` is **reported**, and the notice is the runner's (S5.11) | Store the notice here | Identical to `droppedMessages`: a turn does not know a run is happening, and the runner is the only object that can say it once |
 | Skills and memory come **after** the briefing in the prompt | Before it; interleaved | The briefing is how to behave, the other two are material to reach for. A model that runs out of attention should lose the reference material first, not the protocol |
 | A `skillName` that no longer resolves is **skipped silently** during a turn | Fail the turn; insert a notice | A moved folder must not silence an agent that could still answer. The agent editor is where it is reported, because that is where it can be fixed |
 | `'system'` is resolved from `Intl.DateTimeFormat().resolvedOptions().locale` | Ask the renderer | The prompt is assembled before any window is involved; a round trip inside a turn would be a needless dependency |

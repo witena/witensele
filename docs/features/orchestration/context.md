@@ -43,6 +43,11 @@ that owns the `AbortController` the Stop button reaches.
   when the chat has no folder, no executor, or a run in flight.
 - **The `contextTruncated` notice** (S4.2): the turn measures, the runner tells,
   once per run per agent.
+- **The `materialsTruncated` notice** (S5.11): the same shape with a different
+  grain — the turn reports `materialsOmitted`, the runner tells **once per
+  chat**, because the goal's materials are the same in every round of every run
+  until the user edits the list, while what a truncated history hides keeps
+  changing.
 - **The automatic chat title** (S4.3): after the first run that produced a
   finished reply, and only while the title is still the default.
 

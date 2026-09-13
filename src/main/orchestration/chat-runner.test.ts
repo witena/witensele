@@ -12,7 +12,7 @@
  * `[PASS]`, the round cap, and what happens when one speaker fails and the
  * others do not.
  */
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
@@ -35,6 +35,7 @@ import { WRITE_FILE_TOOL } from '../executor/tools'
 import {
   NOTICE_CONTEXT_TRUNCATED,
   NOTICE_HANDOFF,
+  NOTICE_MATERIALS_TRUNCATED,
   NOTICE_MAX_ROUNDS,
   type ChatRunnerOptions
 } from './chat-runner'
@@ -1117,6 +1118,72 @@ describe('ChatRunner (usage, truncation and titles)', () => {
     await settle()
 
     expect(noticeKeys(ctx, chat)).not.toContain(NOTICE_CONTEXT_TRUNCATED)
+  })
+
+  /* -- S5.11 -------------------------------------------------------------- */
+
+  /**
+   * The materials notice, which is the one notice in the product stored **once
+   * per chat** rather than once per run: the goal's materials are the same in
+   * every round of every run until the user edits them, so a second sentence
+   * would say exactly what the first one said.
+   */
+  it('says once per chat that the materials did not all fit', async () => {
+    await start({ generateTitle: async () => null })
+    const workdir = mkdtempSync(join(tmpdir(), 'witena-runner-materials-'))
+    try {
+      writeFileSync(join(workdir, 'HUGE.md'), 'w'.repeat(400_000), 'utf8')
+      writeFileSync(join(workdir, 'SMALL.md'), 'a line\n', 'utf8')
+      await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: {
+          workdir,
+          goal: {
+            kind: 'discussion',
+            description: 'Decide what to do about the brief',
+            materials: ['HUGE.md', 'SMALL.md']
+          }
+        }
+      })
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What does it say?' })
+      await settle()
+
+      const params = noticeParams(ctx, chat, NOTICE_MATERIALS_TRUNCATED)
+      expect(params?.['agent']).toBe('Ada')
+      expect(Number(params?.['omitted'])).toBeGreaterThan(0)
+
+      // A second run adds no second sentence.
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'And now?' })
+      await settle()
+      expect(
+        noticeKeys(ctx, chat).filter((key) => key === NOTICE_MATERIALS_TRUNCATED)
+      ).toHaveLength(1)
+    } finally {
+      rmSync(workdir, { recursive: true, force: true })
+    }
+  })
+
+  it('stores no materials notice when they all fit', async () => {
+    await start({ generateTitle: async () => null })
+    const workdir = mkdtempSync(join(tmpdir(), 'witena-runner-materials-'))
+    try {
+      writeFileSync(join(workdir, 'SMALL.md'), 'a line\n', 'utf8')
+      await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: {
+          workdir,
+          goal: { kind: 'discussion', description: 'Read the line', materials: ['SMALL.md'] }
+        }
+      })
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What does it say?' })
+      await settle()
+
+      expect(noticeKeys(ctx, chat)).not.toContain(NOTICE_MATERIALS_TRUNCATED)
+    } finally {
+      rmSync(workdir, { recursive: true, force: true })
+    }
   })
 
   /* -- S4.3 --------------------------------------------------------------- */

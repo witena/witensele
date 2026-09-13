@@ -80,6 +80,19 @@ export const GATED_EXECUTOR_TOOLS: ReadonlySet<string> = new Set([
   RUN_COMMAND_TOOL
 ])
 
+/**
+ * The four tools that only read, derived from the gate rather than listed again.
+ *
+ * S5.11 attaches exactly these to **every** member of a chat with a `workdir`
+ * (PLAN.md: "discussion agents are read-only"), so the list has to stay the
+ * complement of `GATED_EXECUTOR_TOOLS` by construction. A tool moved into the
+ * gated set stops being handed to participants in the same edit, which is the
+ * property a hand-written second list would not have.
+ */
+export const READ_ONLY_EXECUTOR_TOOLS: readonly string[] = EXECUTOR_TOOLS.filter(
+  (name) => !GATED_EXECUTOR_TOOLS.has(name)
+)
+
 /** Largest file `read_file` returns, in bytes. Past it the text is cut and marked. */
 export const MAX_READ_BYTES = 200 * 1024
 
@@ -258,8 +271,16 @@ function requireString(value: unknown, name: string): string {
   return value
 }
 
-/** True when the buffer looks like something a model should not be shown. */
-function looksBinary(buffer: Buffer): boolean {
+/**
+ * True when the buffer looks like something a model should not be shown.
+ *
+ * A null byte in the first few kilobytes, which is what `git` itself uses to
+ * decide that a file is binary. Exported since S5.11, where the materials
+ * briefing has to make the same decision for a different reason: this file
+ * refuses to *read* a binary file, and `agents/materials.ts` refuses to *inline*
+ * one — both from the one probe, so the two answers cannot drift apart.
+ */
+export function looksBinary(buffer: Buffer): boolean {
   const window = buffer.subarray(0, BINARY_SNIFF_BYTES)
   return window.includes(0)
 }

@@ -129,6 +129,21 @@ reason — they are data, not copy:
   `diff-block-toggle`, `diff-block-path`, `diff-block-stat`, `file-ref`
   (`data-path`, `data-line`), `message-file-refs`.
 
+S5.11 adds nothing to this feature's own UI either, and the reason is worth
+stating because the step is a large one. Everything it adds lives in a system
+prompt (the `Workspace` and `Materials` sections, which no user ever sees) or in
+the tool set an agent is handed — so the only visible consequence is that a
+**participant's** message can now carry a `tool-card` for `read_file`,
+`list_dir`, `search_files` or `git_diff`, drawn by the components above exactly
+as the executor's already was. Two smaller consequences follow from that:
+
+- **A participant's tool card never has a permission card in front of it.** The
+  four read-only tools do not ask, so a user sees the call in the transcript and
+  was never interrupted by it.
+- **One new notice can appear**, `notices.materialsTruncated`, written by
+  `ChatRunner` and rendered like every other notice by `translateNotice`
+  ([`orchestration`](../orchestration/frontend.md) owns the runner's notices).
+
 S5.10 adds nothing to this feature's own UI. The chat **goal** it now reads —
 the deliverable named in a hand-off briefing, the change a `codebase` chat
 describes — is edited in the Goal block of the group settings and drawn as a

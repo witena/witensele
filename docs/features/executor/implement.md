@@ -2,16 +2,17 @@
 
 ## Approach
 
-Three modules under `src/main/executor/`, none of which knows what a chat runner
-is, plus one rule in `agent-turn.ts` that decides whether any of them applies —
-and, since S5.5, one store and four renderer modules that make the whole thing
-answerable.
+Four modules under `src/main/executor/`, none of which knows what a chat runner
+is, plus two rules in `agent-turn.ts` that decide which of them applies to which
+member — and, since S5.5, one store and four renderer modules that make the whole
+thing answerable.
 
 | Module | Owns |
 |---|---|
 | `paths.ts` | `resolveInWorkdir(workdir, path)` → `{ absolute, relative }`, and nothing else. Every path an executor tool touches goes through it |
 | `tools.ts` | The seven AI SDK tools, the constants that cap them, and `buildExecutorSection(workdir, handoff, goal)` (the prompt, plus `HANDOFF_BRIEFING` and S5.10's `goalHandoffLine` for the turn a hand-off schedules) |
 | `permissions.ts` | `PermissionGate`: `ask` / `reply` / `pending` / `abortAll`, one promise per waiting prompt |
+| `workspace.ts` (S5.11) | `walkTree` / `formatTree`, the `.gitignore` parser (`parseGitignore`, `loadIgnoreRules`, `isIgnored`), `gitInfo`, and `buildWorkspaceSection` — the folder as a model reads it |
 
 | Renderer module (S5.5) | Owns |
 |---|---|
@@ -26,11 +27,25 @@ registry and the MCP pool do: a pending prompt outlives the IPC call that raised
 it — the tool call is suspended inside a turn while the card is on screen — and
 `permission.reply` has to reach the very gate holding that promise.
 
-`collectAgentTools` is the only place that knows all three: it asks
-`executorWorkdir(chat, agent, members)` whether this agent is the chat's
-executor and the chat has a folder, and if so it merges
-`buildExecutorTools({...})` into the `ToolSet`. The same function wraps the MCP
-`call` closure so a `sideEffects` server's tools ask first.
+`collectAgentTools` is the only place that knows all of them. It asks two
+questions, in this order:
+
+| Question | Answered by | Result |
+|---|---|---|
+| Is this agent *the* executor of a chat with a folder? | `executorWorkdir(chat, agent, members)` | All seven tools |
+| Failing that, does the chat have a folder at all? | `workspaceWorkdir(chat)` (S5.11) | The four in `READ_ONLY_EXECUTOR_TOOLS` |
+
+Both build the same `buildExecutorTools({...})` set and the second one picks
+four keys out of it, so a participant's `read_file` is *the* `read_file` — same
+confinement, same caps, same refusals — rather than a second implementation that
+would drift. The same function wraps the MCP `call` closure so a `sideEffects`
+server's tools ask first.
+
+**The workspace briefing (S5.11).** `buildTurnPrompt` asks `workspaceWorkdir` the
+same question and appends `buildWorkspaceSection({ workdir, goal, executor })`,
+so the prompt can no more describe a folder the agent cannot read than it can
+promise a tool it was not given. `executor: true` drops the read-only sentence,
+which the executor's own section already covers in its list of seven.
 
 **The hand-off briefing (S5.6).** `buildExecutorSection` takes a second
 argument, and `buildSystemPrompt` passes `AgentTurnOptions.handoff` straight
@@ -138,9 +153,12 @@ Renderer types: `PendingPermission`, `PermissionsState` (`stores/permissions.ts`
 
 Main-process types: `PermissionGate`, `PermissionRequest`, `PermissionOutcome`
 (`permissions.ts`); `ExecutorToolContext`, `PermissionDeniedError`,
-`EXECUTOR_TOOLS`, `GATED_EXECUTOR_TOOLS`, `HANDOFF_BRIEFING`, `goalHandoffLine` (`tools.ts`);
-`ResolvedPath` (`paths.ts`); `executorWorkdir` and `AgentTurnOptions.handoff`
-(`agents/agent-turn.ts`).
+`EXECUTOR_TOOLS`, `GATED_EXECUTOR_TOOLS`, `READ_ONLY_EXECUTOR_TOOLS`,
+`HANDOFF_BRIEFING`, `goalHandoffLine`, `looksBinary` (`tools.ts`); `ResolvedPath`
+(`paths.ts`); `IgnoreRule`, `TreeEntry`, `TreeResult`, `GitInfo`,
+`WorkspaceSectionInput`, `MAX_TREE_ENTRIES`, `MAX_TREE_DEPTH`,
+`MAX_TREE_FILE_BYTES`, `SKIPPED_TREE_DIRS` (`workspace.ts`); `executorWorkdir`,
+`workspaceWorkdir` and `AgentTurnOptions.handoff` (`agents/agent-turn.ts`).
 
 `chat.handoff` itself is [`orchestration`](../orchestration/implement.md)'s
 method; this feature contributes only the sentence the executor reads.
@@ -162,9 +180,11 @@ method; this feature contributes only the sentence the executor reads.
 | `src/renderer/src/components/chat/transcript-rows.test.ts` | `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines`, `formatFileRef` |
 | `e2e/executor.spec.ts` | Offline: a chat with no executor shows no card, and the hand-off button carries `data-blocked` naming the rule that disabled it. Behind the `qwen2.5:3b` guard: the card appears, nothing is on disk while it waits, Allow writes the file, the card goes away and the diff block appears and opens onto a `diff` code block — and (S5.6) two participants plus an executor discuss, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again without anybody typing |
 | `src/main/executor/tools.test.ts` (`goalHandoffLine`, S5.10) | The deliverable and its parent folders for a `document`, the change for a `codebase`, nothing for a discussion or a chat with no goal, and the line reaching `buildExecutorSection` only when `handoff` is set |
+| `src/main/executor/workspace.test.ts` (S5.11) | The walker against real temporary folders: the sort order, `maxDepth`, `maxEntries` and its marker, the always-skipped folders, the size cap, and a `.gitignore` with a comment, a bare name, a `dir/`, a `*.tmp` and a `!keep.tmp`; the parser's anchoring, `?`, `**` and un-ignoring rules and that an uncompilable pattern throws nothing; `gitInfo` answering `null` outside a repository and naming the branch inside one; and the section itself — the folder and its listing, the empty folder, the executor's missing sentence, and the git half appearing for `codebase` and for nothing else |
+| `src/main/agents/agent-turn.test.ts` (S5.11 block) | A whole participant turn in a chat with a folder: the four read-only tools offered and none of the three that write (asserted one by one), the folder and its listing in the prompt, a marked material in the prompt with the unmarked file's contents *not* in it, a real `read_file` call on that unmarked file coming back with its contents, `materialsOmitted` reported when a material was too large, and a chat with no folder getting neither tools nor section |
 | `src/main/orchestration/chat-runner.test.ts` (S5.6 block) | The briefing this feature contributes, asserted where it is used: the handed-over turn's prompt contains `HANDOFF_BRIEFING` and the folder, and the executor's next turn contains the folder but not the briefing. A Stop inside the handed-over turn leaves `ctx.permissions.pending()` empty and nothing on disk |
 
-`npm test`: 77 files, 1121 tests. `npm run typecheck` clean.
+`npm test`: 85 files, 1337 tests. `npm run typecheck` clean.
 
 ## Known limitations and TODOs
 
@@ -178,6 +198,9 @@ method; this feature contributes only the sentence the executor reads.
   producing them from agent text, and opening them, is S5.7.
 - **The shell is not sandboxed** (see `context.md`, "Open questions"): `cwd` is
   confined, the command is not.
+- **Only the root `.gitignore` is read** (S5.11), and the tree is walked once per
+  *turn* rather than once per round — four members walk the same folder four
+  times.
 - `search_files` is a substring scan with a hard-coded prune list, not a
   ripgrep. Once `run_command` exists, `rg` is available to the executor anyway.
 - `run_command` assumes `/bin/sh`, which is correct for the macOS-only build and

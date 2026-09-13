@@ -10,7 +10,7 @@
 |---|---|
 | `src/shared/mentions.ts` | `parseMentions` / `findMentions` / `splitMentions`: the `@Name` rule, shared with the renderer so the composer and the scheduler can never disagree |
 | `src/main/orchestration/scheduling.ts` | `planFromUserMessages`, `planFromReplies`, `planFromHandoff`, `planFromReview`, `mergePlans`, `reachedRoundLimit` — the pure "who speaks next" |
-| `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`, and from S4.2 / S4.3 the `contextTruncated` notice and the automatic title) and `ChatRunnerRegistry` (the map on `AppContext`) |
+| `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`, and from S4.2 / S4.3 / S5.11 the `contextTruncated` and `materialsTruncated` notices and the automatic title) and `ChatRunnerRegistry` (the map on `AppContext`) |
 | `src/main/agents/title.ts` | `generateChatTitle` and its two pure halves, injected into the runner as `ChatRunnerOptions.generateTitle` so a test can replace it |
 | `src/main/app-context.ts` | Creates the registry and stops every runner in `close()` |
 | `src/main/handlers/chats.ts` | `chat.send` / `chat.stop` / `chat.handoff` delegate to the registry; `chats.delete` calls `remove` first |
@@ -150,7 +150,7 @@ Everything else — Stop, the barrier, the cap, the offline filter, the truncati
 notice — applies unchanged, which is the reason the hand-off is two staged plans
 rather than a mode of its own.
 
-## Two things the runner announces, and why it is the runner (S4.2, S4.3)
+## Three things the runner announces, and why it is the runner (S4.2, S4.3, S5.11)
 
 Both are facts about a **run**, and `AgentTurn` does not know one is happening.
 
@@ -161,6 +161,20 @@ Both are facts about a **run**, and `AgentTurn` does not know one is happening.
 `droppedMessages` in its result. `#noticeTruncation` turns a non-zero count into
 one `system-notice` with `{ agent, dropped }` — **once per run per agent**, held
 in a `Set` that `#loop` clears when a run starts.
+
+### `materialsTruncated`
+
+`buildTurnPrompt` assembles the goal's materials inside a quarter of the model's
+context window and reports `materialsOmitted`
+([`../agent-turn/implement.md`](../agent-turn/implement.md)).
+`#noticeMaterials` turns the first non-zero count of a round into one
+`system-notice` with `{ agent, omitted }` — **once per chat**, which is the whole
+difference from the notice above. The dedupe is a boolean field that `#loop` does
+**not** clear, backed by a scan of the transcript for an existing notice with
+that key, so a relaunched app does not repeat the sentence either. Only the first
+agent that had to trim is named: members can have different context windows and
+therefore different budgets, and naming each of them would be one complaint
+written four ways.
 
 Per round would bury the discussion under the same sentence, because a chat long
 enough to overflow overflows again on every round for the rest of its life. Per
