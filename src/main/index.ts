@@ -43,6 +43,21 @@ function applyUserDataOverride(): void {
   console.log(`[witena] userData overridden by ${USER_DATA_ENV}: ${override}`)
 }
 
+/**
+ * True for the only two schemes the app will hand to the system browser.
+ *
+ * A malformed URL throws out of `new URL`, which is a "no" rather than an error:
+ * the caller denies the navigation either way.
+ */
+function isExternalUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url)
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
@@ -67,9 +82,16 @@ function createWindow(): BrowserWindow {
     window.show()
   })
 
-  // Open external links in the system browser instead of a new Electron window.
+  // Links in a message body carry `target="_blank"`, which in Electron would
+  // otherwise open a second BrowserWindow with no chrome and full renderer
+  // privileges. Every such request is denied; an http(s) one is handed to the
+  // system browser first.
+  //
+  // The scheme check is the security half: a model can write any URL it likes
+  // into a reply, and `shell.openExternal` on a `file:` or a custom scheme hands
+  // whatever the OS has registered for it a path chosen by a language model.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (isExternalUrl(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 

@@ -6,10 +6,18 @@
 |---|---|
 | `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, and the group-settings block, which now writes straight through to `chats.update` |
 | `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete |
-| `src/renderer/src/components/chat/message-list.tsx` | The scroller and the auto-scroll rule (follow the bottom only while already at the bottom) |
-| `src/renderer/src/components/chat/message-item.tsx` | One message row: avatar + presence dot, name, model badge, round, time, body, reasoning toggle, streaming cursor, status hint |
-| `src/renderer/src/components/chat/markdown.tsx` | `react-markdown` + `remark-gfm` with the mockup's prose rules as descendant utilities |
-| `src/renderer/src/components/chat/composer.tsx` | Textarea (Enter sends, Shift+Enter newline, IME-safe), mention hint, Send / Stop |
+| `src/renderer/src/components/chat/message-list.tsx` | The virtualized scroller (react-virtuoso): `followOutput` only while at the bottom, the "jump to latest" pill, and the day separators |
+| `src/renderer/src/components/chat/transcript-rows.ts` | `buildTranscriptRows` / `dayBucket`: `Message[]` → the flat row array the virtualizer renders. Pure and unit-tested |
+| `src/renderer/src/components/chat/message-item.tsx` | One message row: avatar + presence dot, header (name, model badge, round, "replying to @who", time), reasoning, tool cards, body, streaming cursor, status hint. A `system` message takes the short branch: one centred dimmed line, no avatar and no name |
+| `src/renderer/src/components/chat/markdown.tsx` | `react-markdown` + `remark-gfm` with the mockup's prose rules as descendant utilities; hands fenced blocks to `CodeBlock`, wraps tables in their own scroller and marks every link `target="_blank" rel="noreferrer"` |
+| `src/renderer/src/components/chat/code-block.tsx` | A fenced block: language header, Copy button ("Copied" for 1.5 s), shiki markup when a grammar exists and plain monospace otherwise |
+| `src/renderer/src/components/chat/code-language.ts` | `resolveCodeLanguage` / `codeLanguageLabel`: the fourteen highlighted languages, their aliases, and `null` for everything else. Pure and unit-tested |
+| `src/renderer/src/lib/highlighter.ts` | The memoised shiki core highlighter: the JavaScript regex engine, `vitesse-dark`, and one lazy import per grammar |
+| `src/renderer/src/components/chat/tool-card.tsx` | The mockup's one-line tool card, expandable to the pretty-printed input and output |
+| `src/renderer/src/components/chat/tool-call.ts` | `describeToolCall` / `collectToolCalls`: pairing a `tool-call` with its `tool-result` and summarising both. Pure and unit-tested |
+| `src/renderer/src/components/chat/composer.tsx` | Auto-growing textarea (Enter sends, Shift+Enter newline, IME-safe, up to 8 lines), the `@` autocomplete popover, the clickable mention chips plus `@all`, Send / Stop |
+| `src/renderer/src/components/chat/mention-query.ts` | `extractMentionQuery` / `filterMentionCandidates` / `insertMention` / `appendMention`: everything the autocomplete could get wrong. Pure and unit-tested |
+| `src/renderer/src/components/chat/actions-card.tsx` | The right column's Actions card: the summarise picker and the vote button, both sending an ordinary message |
 | `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover, the member rows (avatar with presence dot, name, `model · presence` — counting up as `away · Ns` — the usage placeholder or, while the member is offline, a Retry button, and remove on hover) and native HTML5 drag-and-drop reordering |
 | `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested |
 | `src/renderer/src/components/agents/agent-display.ts` | `agentModelLabel`, shared with the Agents page so both screens name a model the same way |
@@ -49,7 +57,7 @@ selector re-renders on every store write.
 | `invoke('chats.delete')` | The menu's second Delete click | Removes the chat and its transcript |
 | `invoke('messages.list')` | The page's `selectedId` effect, once per chat | The first (and for now only) page of the transcript |
 | `invoke('agents.list')` | `agents.load()` on mount and after a chat is created | Author name, avatar and model badge |
-| `invoke('chat.send')` | Composer, Enter or the Send button | Stores the message and schedules a run |
+| `invoke('chat.send')` | Composer, Enter or the Send button — and the Actions card, through the composer's `submitText` handle | Stores the message and schedules a run |
 | `invoke('chats.members.set')` | The picker, the row's "×", and a drop | Replaces the whole member list, order included |
 | `invoke('chats.update')` | Every group-settings control | Persists one `ChatSettings` field immediately; no Save button and no debounce |
 | `invoke('providers.list')` | `providers.load()` on mount | The provider name in the member picker |
@@ -75,8 +83,12 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | State | What the user sees |
 |---|---|
 | idle | Composer enabled with a Send button; no Stop |
-| loading | The list and the transcript are simply empty while the first call resolves; a skeleton is S2.5 |
-| streaming | The agent's row grows token by token with a blinking accent cursor, its presence dot is red, and Send is replaced by Stop |
+| loading | The list and the transcript are simply empty while the first call resolves |
+| streaming | The agent's row grows token by token with a blinking accent cursor, its presence dot is red, and Send is replaced by Stop. While *reasoning* is arriving and the text has not started, the reasoning block is auto-expanded and pulsing; it collapses again on the first text token, unless the user has toggled it by hand |
+| scrolled up | New messages no longer move the viewport; a floating "Jump to latest" pill appears and scrolls to the end |
+| autocomplete open | A popover above the composer lists the matching members (avatar, `@name`, model) plus `@all`. ↑/↓ move, Enter and Tab insert `@Name `, Escape closes, a click does what Enter does |
+| tool call | A one-line card — wrench, `toolName(argsPreview)`, and "running…" / "n results · expand" / "error" — which expands to the pretty-printed input and output. No tool exists until S3.1 |
+| system notice | A centred dimmed line across the column, with no avatar, no name and no timestamp. It keeps `data-notice-key` |
 | empty | "No chats yet" in the left column, "Nothing here yet" with no chat selected, "No messages yet" in a new chat, "No members yet" if a chat somehow has none |
 | error (call) | The left column shows the translated `BackendError.code` under the list — the first-run "no provider with models" path lands here |
 | error (message) | The row keeps whatever text arrived and adds a red hint: "Stopped" when `error === 'aborted'`, otherwise "The reply failed" |
@@ -104,6 +116,12 @@ New keys, all under the existing namespaces:
 | `chat.removeMember`, `chat.reorderMember` | The row's "×" and the drag tooltip |
 | `chat.noMembersHint` | The accent hint under the empty member list |
 | `chat.memberUsage` | The per-member token placeholder (an em dash until S4.1) |
+| `chat.jumpToLatest` | The pill that appears when a message arrives while the user is scrolled up |
+| `chat.mentionAllHint` | The subtitle of the popover's `@all` row |
+| `chat.copy`, `chat.copied`, `chat.copyCode` | The code block's Copy button, its confirmed state and its accessible name |
+| `chat.toolRunning`, `chat.toolDone`, `chat.toolError`, `chat.toolResults`, `chat.toolExpand`, `chat.toolCollapse`, `chat.toolInput`, `chat.toolOutput` | The tool card |
+| `chat.actions.title`, `.summarize`, `.vote` | The Actions card's heading and its two buttons (S2.5 nested what were three flat keys) |
+| `chat.actions.summarizePrompt`, `chat.actions.votePrompt` | The **message text** each action sends, after the `@mention`. A locale key rather than a constant, because an agent answers in the language it is addressed in |
 
 Already present and now actually used: `chat.today` / `yesterday` / `earlier`,
 `chat.round`, `chat.passed`, `chat.skipped`, `chat.send`, `chat.stop`,
@@ -129,7 +147,17 @@ is never translated.
 - Reordering is mouse-only for now. That is a known gap: it is the one control on
   this screen with no keyboard path, and since S2.3 reads `position` every round
   it decides the speaking order of every discussion.
+- The autocomplete is a `role="listbox"` of `role="option"` buttons with
+  `aria-selected` on the highlighted row, driven entirely from the textarea: the
+  focus never leaves the box, which is what lets Escape and Enter keep their
+  normal meanings the moment the popover closes.
+- The reasoning toggle, the tool card's toggle and the code block's Copy button
+  are all `button`s; the first two carry `aria-expanded` and Copy carries a
+  translated `aria-label` because its own text changes to "Copied".
 - Each message is an `<article>` carrying `data-sender`, `data-status`,
   `data-round` and `data-author` (and `data-notice-key` on a system notice),
   which is what the end-to-end specs assert on so they stay
-  language-independent.
+  language-independent. S2.5 added `data-testid="day-separator"` with
+  `data-bucket`, `code-block` with `data-language`, `tool-card` with `data-tool`
+  and `data-state`, `mention-popover` / `mention-option` with `data-name`, and
+  `mention-chip` / `mention-chip-all`; every existing attribute was kept.

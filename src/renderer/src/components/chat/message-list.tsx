@@ -1,25 +1,72 @@
 /**
- * The scrolling transcript.
+ * The scrolling transcript, virtualized with react-virtuoso.
  *
- * The only behaviour beyond `map` is the scroll rule, and it is the one everybody
- * gets wrong: **follow the bottom only while the user is already at the bottom.**
- * Scrolling up to re-read an earlier answer while a reply streams must not yank
- * the view back down every few tokens. "At the bottom" is within
- * `BOTTOM_THRESHOLD_PX`, because a streaming message grows between the scroll
- * event and the next render and an exact comparison would be false half the time.
+ * ## Why a virtualizer, and why this one
  *
- * Virtualization (react-virtuoso, per PLAN's tech table) is deliberately not here
- * yet: it interacts badly with growing rows, and S2.5 owns message rendering.
+ * A long discussion is hundreds of messages, each of them a markdown document
+ * with highlighted code in it. Mounting all of that to show twenty rows is what
+ * eventually makes a chat window feel slow, and the rows are exactly the kind of
+ * content — variable height, growing while it streams — that a hand-written
+ * windowing loop gets wrong. `react-virtuoso` measures rows itself and is the
+ * component PLAN's tech table already names.
+ *
+ * The one behaviour everybody gets wrong is the scroll rule: **follow the bottom
+ * only while the user is already at the bottom.** Scrolling up to re-read an
+ * earlier answer while a reply streams must not yank the view back down every
+ * few tokens. `followOutput` receives exactly that flag, so the rule is one line
+ * rather than a scroll listener and a threshold — and when the user *is* scrolled
+ * up, new messages raise a "jump to latest" pill instead of moving the viewport.
+ *
+ * `increaseViewportBy` is deliberately generous. It keeps a screen of rows
+ * mounted on either side, which hides the one artefact virtualization otherwise
+ * has here: a row whose height changes as it streams, being unmounted and
+ * remeasured the moment it leaves the viewport.
+ *
+ * ## Day separators
+ *
+ * The list renders a **flat array of rows** — a separator is a row of its own,
+ * not a wrapper — because that is the only shape a virtualizer can measure. The
+ * transform lives in `transcript-rows.ts` and is unit-tested there.
  */
-import { MessagesSquare } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { ArrowDown, MessagesSquare } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
+import type { TFunction } from 'i18next'
 import type { Agent, Message } from '@shared/types'
 import { EmptyState } from '../ui'
 import { MessageItem } from './message-item'
+import { buildTranscriptRows, type DayBucket, type TranscriptRow } from './transcript-rows'
 
-/** How close to the bottom still counts as "following the conversation". */
-export const BOTTOM_THRESHOLD_PX = 64
+/** How much is kept mounted above and below the viewport, in pixels. */
+const VIEWPORT_OVERSCAN_PX = 2_000
+
+/**
+ * The separator's text: two translated labels plus, for anything older, the
+ * date itself.
+ *
+ * The date is `Intl`, not a translation: a locale already knows how to write
+ * "3 May" and its Chinese equivalent, and a `{{month}} {{day}}` key would get one
+ * of them wrong. The year is added only when the message is not from this year,
+ * which is the rule every chat client follows.
+ */
+function dayLabel(t: TFunction, bucket: DayBucket, timestamp: number, language: string): string {
+  switch (bucket) {
+    case 'today':
+      return t('chat.today')
+    case 'yesterday':
+      return t('chat.yesterday')
+    case 'date': {
+      const date = new Date(timestamp)
+      const sameYear = date.getFullYear() === new Date().getFullYear()
+      return date.toLocaleDateString(language, {
+        month: 'short',
+        day: 'numeric',
+        ...(sameYear ? {} : { year: 'numeric' })
+      })
+    }
+  }
+}
 
 export interface MessageListProps {
   chatId: string
@@ -29,43 +76,41 @@ export interface MessageListProps {
 }
 
 export function MessageList({ chatId, messages, members }: MessageListProps): React.JSX.Element {
-  const { t } = useTranslation()
-  const scroller = useRef<HTMLDivElement>(null)
-  const following = useRef(true)
+  const { t, i18n } = useTranslation()
+  const virtuoso = useRef<VirtuosoHandle>(null)
+  const [atBottom, setAtBottom] = useState(true)
+  const [unread, setUnread] = useState(0)
+  const lastCount = useRef(messages.length)
 
-  // Recorded on scroll rather than computed at render time: by render time the
-  // content has already grown and the answer would always be "not at the bottom".
-  const onScroll = (): void => {
-    const element = scroller.current
-    if (!element) return
-    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
-    following.current = distance <= BOTTOM_THRESHOLD_PX
-  }
+  const rows = useMemo(() => buildTranscriptRows(messages), [messages])
 
-  // Layout effect, not effect: scrolling after the browser has painted the new
-  // row is a visible jump.
-  useLayoutEffect(() => {
-    const element = scroller.current
-    if (!element || !following.current) return
-    element.scrollTop = element.scrollHeight
-  }, [messages])
+  // Messages that arrived while the user was reading further up. Counting
+  // *messages* rather than deltas: a streaming reply must raise the pill once,
+  // not once per token.
+  useEffect(() => {
+    const grew = messages.length > lastCount.current
+    lastCount.current = messages.length
+    if (!grew) return
+    if (atBottom) setUnread(0)
+    else setUnread((count) => count + 1)
+  }, [messages.length, atBottom])
 
   // Switching chats always lands at the newest message, whatever the previous
   // chat's scroll position was.
   useEffect(() => {
-    following.current = true
-    const element = scroller.current
-    if (element) element.scrollTop = element.scrollHeight
+    setAtBottom(true)
+    setUnread(0)
+    lastCount.current = 0
   }, [chatId])
 
-  return (
-    <div
-      ref={scroller}
-      onScroll={onScroll}
-      data-testid="message-list"
-      className="flex flex-1 flex-col overflow-y-auto px-7 py-5"
-    >
-      {messages.length === 0 ? (
+  const jump = (): void => {
+    virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
+    setUnread(0)
+  }
+
+  if (messages.length === 0) {
+    return (
+      <div data-testid="message-list" className="flex flex-1 items-center overflow-y-auto px-7 py-5">
         <div className="m-auto">
           <EmptyState
             icon={MessagesSquare}
@@ -73,18 +118,69 @@ export function MessageList({ chatId, messages, members }: MessageListProps): Re
             description={t('chat.emptyMessagesDescription')}
           />
         </div>
-      ) : (
-        <div className="flex flex-col gap-[22px]">
-          {messages.map((message) => (
-            <MessageItem
-              key={message.id}
-              message={message}
-              chatId={chatId}
-              {...(members ? { members } : {})}
-            />
-          ))}
-        </div>
-      )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <Virtuoso<TranscriptRow>
+        ref={virtuoso}
+        data-testid="message-list"
+        data={rows}
+        // The transcript is oldest-first, so the interesting end is the bottom.
+        initialTopMostItemIndex={rows.length - 1}
+        followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
+        atBottomStateChange={(bottom) => {
+          setAtBottom(bottom)
+          if (bottom) setUnread(0)
+        }}
+        atBottomThreshold={64}
+        increaseViewportBy={VIEWPORT_OVERSCAN_PX}
+        computeItemKey={(_index, row) => row.key}
+        className="flex-1"
+        itemContent={(_index, row) =>
+          row.kind === 'day' ? (
+            <div className="flex items-center gap-3 px-7 py-2.5">
+              <span className="h-px grow bg-border" />
+              <span
+                data-testid="day-separator"
+                data-bucket={row.bucket}
+                className="text-[11px] tracking-wide text-fg-faint uppercase"
+              >
+                {dayLabel(t, row.bucket, row.timestamp, i18n.language)}
+              </span>
+              <span className="h-px grow bg-border" />
+            </div>
+          ) : (
+            // The 22px gap of the mockup, as padding on the row: a virtualized
+            // list has no parent flex container that could carry a `gap`.
+            <div className="px-7 pb-[22px]">
+              <MessageItem
+                message={row.message}
+                chatId={chatId}
+                {...(members ? { members } : {})}
+              />
+            </div>
+          )
+        }
+        components={{
+          Header: () => <div className="h-5" />,
+          Footer: () => <div className="h-1" />
+        }}
+      />
+
+      {!atBottom && unread > 0 ? (
+        <button
+          type="button"
+          data-testid="jump-to-latest"
+          onClick={jump}
+          className="absolute inset-x-0 bottom-3 mx-auto flex w-fit items-center gap-1.5 rounded-full border border-border-strong bg-bg-elevated px-3 py-1.5 text-[11px] text-fg-muted shadow-lg transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
+        >
+          <ArrowDown aria-hidden="true" className="h-3 w-3" />
+          {t('chat.jumpToLatest')}
+        </button>
+      ) : null}
     </div>
   )
 }

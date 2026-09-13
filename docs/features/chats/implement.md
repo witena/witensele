@@ -72,6 +72,54 @@ click a row
   → store reverses into oldest-first and renders
 ```
 
+### Rendering a message (S2.5)
+
+```
+Message.parts
+  → system-notice only, senderType 'system'
+        → one centred dimmed line, `data-notice-key`, translateNotice(t, part)
+  → reasoning parts
+        → collapsed toggle + one-line preview
+          auto-expanded and pulsing while reasoning streams and no text has begun
+  → tool-call / tool-result
+        → collectToolCalls() pairs them by toolCallId
+          describeToolCall() → { toolName, argsPreview, state, resultCount, JSON }
+          → ToolCard: one line collapsed, input + output expanded
+  → text parts, joined
+        → <Markdown>: react-markdown + remark-gfm
+             p / li      → @Name highlighted with splitMentions (shared/mentions)
+             a           → target=_blank rel=noreferrer → main's setWindowOpenHandler
+                           → shell.openExternal for http(s), denied otherwise
+             table       → wrapped in its own overflow-x container
+             code inline → mono on bg-bg-muted (the prose rules)
+             code fenced → <CodeBlock>: header (language + Copy) and, once
+                           highlightCode() resolves, shiki's escaped markup
+```
+
+The list itself is `Message[] → TranscriptRow[]` (`buildTranscriptRows`) and then
+one `react-virtuoso` row per entry. `followOutput` receives "are we at the
+bottom"; when the answer is no, an arriving message raises the "jump to latest"
+pill instead of moving the viewport.
+
+### Sending with the autocomplete (S2.5)
+
+```
+keystroke in the textarea
+  → extractMentionQuery(value, caret)      // the `@…` token under the caret
+  → filterMentionCandidates(members, query) // longest name first, + @all
+  → popover; ↑/↓ move, Esc closes
+  → Enter / Tab / click
+      → insertMention(text, span, name) → "@Name "
+      → the DOM value and the caret are written synchronously, then setText
+  → Enter with no popover
+      → parseMentions(text, members)  // the same parser the backend runs
+      → useRunStore.send(chatId, text, mentions)
+```
+
+The chip row is the same path through `appendMention`, and the Actions card is
+the same path again through the composer's `submitText` handle — one send, one
+parser, one store.
+
 ### A streaming reply (the path that matters)
 
 ```
@@ -145,6 +193,11 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
 | `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
+| `src/renderer/src/components/chat/tool-call.test.ts` | `previewToolArgs`, `countToolResults` over the shapes a tool actually returns, `describeToolCall`'s three states, and `collectToolCalls` pairing by id rather than by position |
+| `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp) and `buildTranscriptRows`' interleaving and key stability |
+| `src/renderer/src/components/chat/mention-query.test.ts` | `extractMentionQuery`'s boundary rules, `filterMentionCandidates`' longest-first order, and both insertion helpers' spacing |
+| `src/renderer/src/components/chat/code-language.test.ts` | Every id, every alias, the first-word rule, and `null` for an unknown language |
+| `e2e/composer.spec.ts` | Against a real local model: `@Arc` → the popover → Enter → `@Architect `; the `@all` and member chips; a reply rendering a list and a `code` element; a fenced block rendering with a language header and a Copy button. Captures `test-results/shots/chat-polish.png` |
 
 ## Known limitations and TODOs
 
@@ -156,7 +209,18 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   until S4.1.
 - **The search field is disabled** (S4.3), and titles are always the default
   `New chat` until the user renames one.
-- **The message list is not virtualized** and loads one page of 100 with no
-  upward paging; both are S2.5.
+- **The message list is virtualized** (S2.5) but still loads one page of 100 with
+  no upward paging: reaching the top of a long chat does not fetch the messages
+  before it. `increaseViewportBy` is set generously (2000px each way) so a row
+  that grows while it streams is not remeasured the moment it leaves the
+  viewport; the cost is that a short chat is effectively not virtualized at all,
+  which is the right trade for the length a chat usually has.
+- **Syntax highlighting covers fourteen languages** (`code-language.ts`).
+  Anything else renders as plain monospaced text rather than being guessed at.
+  Adding one is a row in `SHIKI_LANGUAGE` and a loader in `lib/highlighter.ts`.
+- **The Copy button does not report failure.** `navigator.clipboard` is either
+  available or it is not, and a red message on a copy button is noise.
+- **Tool cards are unexercised by a real tool.** The parts are rendered and
+  unit-tested against fixtures; S3.1 is the first step that produces one.
 - **`chats.members.list` is one call per chat** on load. See the trade-off table
   in `context.md`.
