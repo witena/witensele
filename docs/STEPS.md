@@ -11,7 +11,7 @@
 
 ## Phase 0: Preparation
 
-### S0.1 Project skeleton `[~]`
+### S0.1 Project skeleton `[x]` (2026-09-13)
 What: package.json, tsconfig, electron-vite config, Tailwind, vitest; an empty window.
 Acceptance:
 - `npm install` succeeds, better-sqlite3 is rebuilt against Electron
@@ -19,11 +19,11 @@ Acceptance:
 - `npm run typecheck` passes
 - `npm test` runs one smoke test
 
-### S0.2 Documentation skeleton and project conventions `[~]`
+### S0.2 Documentation skeleton and project conventions `[x]` (2026-09-13)
 What: `docs/README.md` index, `docs/features/` directory with the four-document template, root `CLAUDE.md` stating the conventions (four docs per feature, test gate, no hard-coded UI strings, English-only repository, `CLAUDE.local.md` as the gitignored Chinese copy).
 Acceptance: files exist; CLAUDE.md is picked up by later sessions.
 
-### S0.3 First commit and push `[ ]`
+### S0.3 First commit and push `[~]`
 Acceptance: `git log` has commits; the GitHub repository's main branch shows the code.
 
 ---
