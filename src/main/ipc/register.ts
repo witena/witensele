@@ -14,6 +14,7 @@ import type { EventBus } from '../events/bus'
 import type { HandlerMap } from '../handlers/types'
 import { BackendFailure } from '../errors'
 import { IPC_EVENT, IPC_INVOKE, toBackendError, type InvokeResponse } from '../ipc-protocol'
+import { dialogHandlers } from './dialogs'
 
 /** The erased call signature the transport works with; `HandlerMap` keeps the typing. */
 type ErasedHandler = (ctx: AppContext, input: unknown) => unknown
@@ -27,14 +28,20 @@ type ErasedHandler = (ctx: AppContext, input: unknown) => unknown
  *   `{ ok: false, error }` (see `ipc-protocol.ts`).
  * - **Never dispatches an unknown name.** `isBackendMethod` gates the lookup, so
  *   a compromised renderer cannot reach anything that is not a declared method.
+ * - **Electron-only handlers are layered here, not merged into `buildHandlers`.**
+ *   `dialogHandlers` overrides the `system.pickFolder` stub with the one method
+ *   that genuinely needs a window (see `./dialogs.ts`). It is spread *after* the
+ *   Electron-free map, so this transport is the only build in which it exists.
  */
 export function registerIpc(ipcMain: IpcMain, ctx: AppContext, handlers: HandlerMap): void {
+  const table: HandlerMap = { ...handlers, ...dialogHandlers }
+
   ipcMain.handle(IPC_INVOKE, async (_event, method: unknown, input: unknown): Promise<InvokeResponse> => {
     try {
       if (!isBackendMethod(method)) {
         throw new BackendFailure('validation', `Unknown backend method: ${String(method)}`)
       }
-      const handler = handlers[method] as ErasedHandler
+      const handler = table[method] as ErasedHandler
       const value = await handler(ctx, input)
       return { ok: true, value }
     } catch (error) {

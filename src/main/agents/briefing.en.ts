@@ -16,7 +16,7 @@ function line(name: string, description: string): string {
   return trimmed.length > 0 ? `- ${name} — ${trimmed}` : `- ${name}`
 }
 
-export const buildEnglishBriefing: BriefingBuilder = ({ self, members }) => {
+export const buildEnglishBriefing: BriefingBuilder = ({ self, members, memoryEnabled }) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat rather than a made-up
   // one: a model copies the example it is given, and a concrete name is the
@@ -40,6 +40,13 @@ export const buildEnglishBriefing: BriefingBuilder = ({ self, members }) => {
     '- Write to the whole group. Build on what others have already said instead of repeating it.',
     `- To call on another member by name, mention them with @ followed by their name, for example @${other.name}.`,
     `- If you have nothing to add this round, reply with exactly ${PASS_TOKEN} and nothing else.`,
-    '- Keep answers focused and concrete; the group reaches a better answer by disagreeing precisely, not by agreeing at length.'
+    '- Keep answers focused and concrete; the group reaches a better answer by disagreeing precisely, not by agreeing at length.',
+    // S3.3: only when the memory tools are actually attached this turn, so the
+    // briefing never asks for a tool the model has not been given.
+    ...(memoryEnabled
+      ? [
+          '- When you learn something durable about the user or the project — a name, a constraint, a decision the group settled — save it with the memory_save tool so you still know it in other chats.'
+        ]
+      : [])
   ].join('\n')
 }

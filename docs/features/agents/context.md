@@ -21,7 +21,8 @@ the name is an **identifier the models will type**, not a label.
   the header, "+" opens a draft) and the configuration editor beside it.
 - The editor: basic info (name, avatar monogram and an eight-colour palette,
   description), model (provider select, model select or free-text id, temperature,
-  max tokens, reasoning toggle), system prompt, and the memory toggle.
+  max tokens, reasoning toggle), system prompt, the skills checklist, the MCP
+  checklist, and the memory toggle with its panel.
 - Duplicate (under a free name) and a two-click Delete.
 - `stores/agents.ts`: the list plus the editor draft, `dirty`, and the validation
   that gates Save.
@@ -34,15 +35,16 @@ the name is an **identifier the models will type**, not a label.
 |---|---|
 | Which agents are in which chat, and in what order | [`chats`](../chats/context.md) (S2.2) |
 | What an agent does during its turn | [`agent-turn`](../agent-turn/context.md) |
-| Choosing skills for an agent | `skills` (S3.2) |
+| The skills library itself: scanning, importing, reading a skill | [`skills`](../skills/context.md) (S3.1+S3.2 `[x]`). The agent form's **checklist** is here; the library and the `read_skill` tools are there |
 | Registering and probing MCP servers | `mcp` (S3.1 `[x]`). The agent form's **checklist** is here; the registry, the connections and the side-effects rule are there |
-| Viewing and editing an agent's memory | `memory` (S3.3) |
+| The memory files, the tools and the prompt section | [`memory`](../memory/context.md) (S3.3 `[x]`). The **toggle and the panel** are here; the store, the tools and the format are there |
 | The `executor` role and its working directory | Post-MVP (see "Future extension" in `PLAN.md`) |
 | Searching or grouping the agent list | Not planned for the MVP |
 
-Three blocks of the editor are therefore **empty states that name their step**
-rather than missing sections: Skills, MCP servers and the memory viewer. They are
-drawn because the artboard's two-column proportions depend on them.
+As of S3.3 the editor's right column is complete: all three blocks — Skills, MCP
+servers and Memory — are real controls bound to stored fields. Each of them is
+only the *binding*; the capability behind it belongs to its own feature, which is
+why a skill is chosen here and scanned there.
 
 ## Dependencies
 

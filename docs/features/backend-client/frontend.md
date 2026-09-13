@@ -76,7 +76,8 @@ follows.
 | `subscribe(…)` | `startEventBridge()` in `main.tsx`, once at app start (S1.7) | Fans every `BackendEvent` out to the stores. It is deliberately never unsubscribed: the bridge lives as long as the window, so no event can be lost between the first `list` call and the first render |
 | `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test |
 | `invoke('agents.*')` | Agents page | CRUD for the configuration form |
-| `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, skill import, memory viewer |
+| `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, the skills library, the per-agent memory panel |
+| `invoke('system.pickFolder')` | `stores/skills.ts`, behind "Import folder" | The native folder dialog. Resolves `null` when the user cancels, which the store treats as a non-event rather than an error — the only method whose implementation is Electron-specific (S3.2) |
 | `invoke('chats.*')`, `invoke('chats.members.list')` | Chat list and member panel, since S1.7 | Chat CRUD and reading the membership. `chats.members.set` gets its UI in S2.2 |
 | `invoke('messages.list')` | Chat view on open and when scrolling up | Initial page and history paging |
 | `invoke('chat.send' / 'chat.stop')` | Composer and Stop button | Starts and aborts a run |

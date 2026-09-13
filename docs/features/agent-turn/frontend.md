@@ -17,10 +17,15 @@ every one of these is a contract the message list has to honour:
 | `status: 'error'`, any other detail | Show "The reply failed". `Message.error` is operator-facing detail and is **not** rendered |
 | `presence.changed` | Update the dot on that agent's avatars, everywhere. The dot shows the agent's *current* state, not its state when the message was sent |
 | `usage` | Stored per message; nothing displays it yet. S4.1 adds the per-member and per-chat totals |
+| `message.delta { kind: 'part' }` carrying a `tool-call` with no `serverId` | Draw the tool card with the bare tool name and no server prefix. That is what a built-in tool looks like: `read_skill`, `read_skill_file`, `memory_save`, `memory_search` (S3.2, S3.3) |
 
 Reasoning parts are rendered collapsed behind a "Reasoning" toggle
 (`chat.reasoning`) because they are long, low-signal and not what the group said.
 
 The group briefing and the system prompt never reach the renderer at all: they
 are model-facing text, which is exactly why `briefing.zh-CN.ts` is a `.ts` file
-rather than a locale entry (see [`backend.md`](./backend.md)).
+rather than a locale entry (see [`backend.md`](./backend.md)). Neither do the
+skills and memory sections, nor the contents of a `MEMORY.md`: what the user sees
+of those is Settings → Skills ([`../skills/frontend.md`](../skills/frontend.md))
+and the agent form's memory panel
+([`../memory/frontend.md`](../memory/frontend.md)).

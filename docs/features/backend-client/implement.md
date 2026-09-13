@@ -210,8 +210,12 @@ Naming conventions the whole app follows:
 | `agents.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Agent[]` / `Agent` / `Agent` / `Agent` / `void` | |
 | `mcp.list` / `create` / `update` / `delete` | — / `{ input }` / `{ id, patch }` / `{ id }` | `McpServer[]` / `McpServer` / `McpServer` / `void` | |
 | `mcp.testConnection` | `{ id }` | `McpConnectionTestResult` | Success also returns `toolNames` |
-| `skills.list` / `skills.import` | — / `{ sourcePath }` | `SkillMeta[]` / `SkillMeta` | |
-| `memory.list` / `read` / `write` | `{ agentId }` / `{ agentId, path }` / `{ agentId, path, content }` | `MemoryEntry[]` / `{ path, content }` / `MemoryEntry` | `path` is relative to the agent's memory directory; `MEMORY.md` is the index |
+| `system.pickFolder` | — | `string \| null` | **S3.2**; the one method implemented in `src/main/ipc/` because it needs a window. `null` means the user cancelled, which is not an error |
+| `skills.list` | — | `{ skills: SkillMeta[]; warnings: SkillWarning[] }` | S3.2. The warnings name folders that look like a skill and could not be used |
+| `skills.import` | `{ sourcePath, overwrite? }` | `SkillMeta` | S3.2; refuses an existing folder name unless `overwrite` |
+| `skills.read` / `skills.delete` | `{ name }` | `SkillDetail` / `void` | **Added in S3.2** |
+| `memory.list` / `read` / `write` | `{ agentId }` / `{ agentId, path }` / `{ agentId, path, content }` | `MemoryEntry[]` / `{ path, content }` / `MemoryEntry` | S3.3. `path` is relative to the agent's memory directory; `MEMORY.md` is the index |
+| `memory.delete` / `memory.search` | `{ agentId, path }` / `{ agentId, query }` | `void` / `MemorySearchHit[]` | **Added in S3.3** |
 | `chats.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Chat[]` / `Chat` / `Chat` / `Chat` / `void` | `chats.create` takes a partial input; defaults come from `DEFAULT_CHAT_SETTINGS` |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **Added in S1.7**: the contract had a setter but no getter, and both chat columns read the membership |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the whole list; array order becomes `position` |
@@ -219,8 +223,14 @@ Naming conventions the whole app follows:
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | Resolves with the stored user message; agent output arrives as events |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent when nothing is running |
 
-Everything not marked "Implemented in S1.3" rejects with
-`{ code: 'internal', message: 'Not implemented yet: <method> (see docs/STEPS.md)' }`.
+As of **S3.3 every declared method is implemented.** The stub mechanism stays —
+`buildHandlers()` still fills any gap with
+`{ code: 'internal', message: 'Not implemented yet: <method> (see docs/STEPS.md)' }`,
+and `handlers.test.ts` asserts the builder directly rather than through a method
+that happens to be missing — so the next method added to `BackendApi` before its
+step lands still rejects with a pointer instead of crashing. The one method that
+rejects in the Electron-free layer *by design* is `system.pickFolder`; see
+[`backend.md`](./backend.md).
 
 | Event | Payload | Emitted when |
 |---|---|---|
@@ -243,7 +253,7 @@ Everything not marked "Implemented in S1.3" rejects with
 | `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list, has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
 | `src/main/events/bus.test.ts` | Delivery order, payload identity, unsubscribe (twice is harmless), a throwing listener being logged without stopping the others, a listener added during delivery not receiving the in-flight event |
 | `src/main/secrets.test.ts` | Insecure store round trip including empty, long and non-ASCII values; the `plain:` marker; `isAvailable()` false; exactly one warning |
-| `src/main/app-context.test.ts` | The context opens a real temporary database, defaults to `LOCAL_USER_ID`, binds the repositories to the injected secret store, and `close()` is idempotent |
+| `src/main/app-context.test.ts` | The context opens a real temporary database, defaults to `LOCAL_USER_ID`, binds the repositories to the injected secret store, and `close()` is idempotent. From S3.2 it is also given `userDataDir`, from which `skillsDir()` / `memoryDir()` and `ctx.memory` are derived |
 | `src/main/ipc-protocol.test.ts` | Channel names; `toBackendError` for a `BackendFailure` with and without details, an ordinary `Error`, and a non-`Error` throw |
 | `src/main/handlers/handlers.test.ts` | Every `BACKEND_METHODS` entry has a handler and the map has no extras; unimplemented methods reject with `internal` and the STEPS.md message; `system.ping`; `system.emitTestEvent` emitting exactly one event and rejecting a non-string payload; `settings.get` / `settings.update` against the temporary-database fixture, including the `timeouts` field-by-field merge, unknown-key rejection and per-user scoping |
 | `src/renderer/src/lib/backend.test.ts` | `createElectronBackendClient` against a fake bridge: resolving the envelope value, forwarding the single object argument, `undefined` for an argument-free method, rejecting with a `BackendClientError` that carries `code` and `details`, a malformed envelope becoming `internal`, `subscribe` / unsubscribe, `subscribeTo` filtering, independent subscribers |
@@ -258,8 +268,10 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   implemented handlers check their own payload and reject with
   `code: 'validation'`; zod arrives with the first domain that needs a real
   schema.
-- **Most methods are still stubs.** S1.3 implements `system.*` and `settings.*`;
-  every other method rejects with `internal` until its own step lands.
+- **`system.pickFolder` is the one method that is not transport-agnostic.** It
+  is declared here, stubbed in the handler layer and implemented in
+  `src/main/ipc/dialogs.ts`; a server build has to answer it some other way (an
+  upload, or a path field). Everything else moves across untouched.
 - **No backpressure or replay.** Events are fire-and-forget and go to every open
   window. A renderer that was not listening during a run recovers by calling
   `messages.list`, not by replaying events.

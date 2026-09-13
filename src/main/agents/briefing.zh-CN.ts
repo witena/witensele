@@ -23,7 +23,7 @@ function line(name: string, description: string): string {
   return trimmed.length > 0 ? `- ${name} — ${trimmed}` : `- ${name}`
 }
 
-export const buildChineseBriefing: BriefingBuilder = ({ self, members }) => {
+export const buildChineseBriefing: BriefingBuilder = ({ self, members, memoryEnabled }) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat; see `briefing.en.ts`.
   const other = members.find((member) => member.name !== self.name) ?? self
@@ -45,6 +45,13 @@ export const buildChineseBriefing: BriefingBuilder = ({ self, members }) => {
     '- 面向整个群发言。在别人已经说过的内容上继续推进,不要重复。',
     `- 想点名某位成员时,用 @ 加上他的名字,例如 @${other.name}。`,
     `- 如果这一轮你没有新的补充,就只回复 ${PASS_TOKEN},不要写别的内容。`,
-    '- 回答要具体、聚焦。群体之所以能得出更好的答案,靠的是精确地提出分歧,而不是长篇附和。'
+    '- 回答要具体、聚焦。群体之所以能得出更好的答案,靠的是精确地提出分歧,而不是长篇附和。',
+    // S3.3: only when the memory tools are actually attached this turn, so the
+    // briefing never asks for a tool the model has not been given.
+    ...(memoryEnabled
+      ? [
+          '- 当你了解到关于用户或项目的长期有效的信息 —— 名字、约束条件、群里定下来的结论 —— 就用 memory_save 工具记下来,这样你在别的群聊里也还记得。'
+        ]
+      : [])
   ].join('\n')
 }

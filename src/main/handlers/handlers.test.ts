@@ -7,7 +7,7 @@ import { createTestDatabase, type TestDatabase } from '../db/testing'
 import { createInsecureSecretStore } from '../secrets'
 import type { FetchImpl } from '../providers/discovery'
 import { createTestAppContext, type TestAppContext } from '../testing'
-import { buildHandlers } from './index'
+import { buildHandlers, notImplemented } from './index'
 
 /**
  * An `AppContext` backed by the S1.2 test fixture: a real temporary database
@@ -49,13 +49,17 @@ describe('handlers/buildHandlers', () => {
     expect(Object.keys(handlers).sort()).toEqual([...BACKEND_METHODS].sort())
   })
 
-  it('rejects with internal and a pointer to STEPS.md for a method that is not implemented yet', async () => {
-    const unimplemented: BackendMethod = 'skills.list'
+  /**
+   * Every declared method has a real implementation as of S3.3, so the stub is
+   * asserted directly rather than through a method that happens to be missing.
+   * The mechanism has to keep working: the next method added to `BackendApi`
+   * before its step lands must reject with a pointer rather than crash.
+   */
+  it('builds a rejection that names the method and points at STEPS.md', async () => {
+    const failure = notImplemented('skills.list')
 
-    await expect(handlers[unimplemented](ctx)).rejects.toMatchObject({
-      code: 'internal',
-      message: 'Not implemented yet: skills.list (see docs/STEPS.md)'
-    })
+    expect(failure.code).toBe('internal')
+    expect(failure.message).toBe('Not implemented yet: skills.list (see docs/STEPS.md)')
   })
 
   describe('system.ping', () => {
@@ -309,7 +313,13 @@ describe('handlers/buildHandlers', () => {
 })
 
 describe('handlers/stubs', () => {
-  it('every unimplemented method rejects rather than resolving undefined', async () => {
+  /**
+   * What is left is `system.pickFolder`, which is declared here and implemented
+   * in `src/main/ipc/dialogs.ts` because it is the one method that needs a
+   * window. Outside the Electron transport it must reject rather than resolve
+   * `null`, which would look to the renderer like the user cancelling.
+   */
+  it('every method the Electron-free layer cannot implement rejects rather than resolving undefined', async () => {
     const handlers = buildHandlers()
     const implemented = new Set<BackendMethod>([
       'system.ping',
@@ -350,7 +360,18 @@ describe('handlers/stubs', () => {
       'mcp.delete',
       'mcp.testConnection',
       'mcp.tools',
-      'mcp.log'
+      'mcp.log',
+      // S3.2
+      'skills.list',
+      'skills.import',
+      'skills.read',
+      'skills.delete',
+      // S3.3
+      'memory.list',
+      'memory.read',
+      'memory.write',
+      'memory.delete',
+      'memory.search'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

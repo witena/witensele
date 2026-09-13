@@ -13,14 +13,16 @@
  * Not imported by any production module, exactly like `db/testing.ts`, so it
  * never reaches the bundle.
  */
+import { join } from 'node:path'
 import type { BackendEvent } from '@shared/events'
 import { LOCAL_USER_ID } from '@shared/types'
 import type { AppContext, SupervisorOverrides } from './app-context'
-import { createMcpManager, createSupervisor } from './app-context'
+import { createMcpManager, createSupervisor, MEMORY_DIR } from './app-context'
 import { createRepositories } from './db/repositories'
 import type { TestDatabase } from './db/testing'
 import { createEventBus } from './events/bus'
 import type { McpManager, McpManagerOptions } from './mcp/manager'
+import { createMemoryStore } from './memory/store'
 import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat-runner'
 import type { AgentSupervisor } from './presence/supervisor'
 import type { FetchImpl } from './providers/discovery'
@@ -69,6 +71,9 @@ export function createTestAppContext(
 
   const ctx: AppContext = {
     db: database.handle,
+    // The database fixture's own temporary directory doubles as `userData`, so
+    // `skills/` and `memory/` land beside `witena.db` and are removed with it.
+    userDataDir: database.dir,
     repos: createRepositories(database.handle.db, { encrypt: (plain) => secrets.encrypt(plain) }),
     events: bus,
     secrets,
@@ -77,6 +82,7 @@ export function createTestAppContext(
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
+    memory: createMemoryStore(join(database.dir, MEMORY_DIR)),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close: () => {
       ctx.supervisor.stop()

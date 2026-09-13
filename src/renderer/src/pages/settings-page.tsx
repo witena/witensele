@@ -35,6 +35,7 @@ import { AppearanceSection } from './settings/appearance-section'
 import { DeveloperSection } from './settings/developer-section'
 import { McpSection } from './settings/mcp-section'
 import { ProvidersSection } from './settings/providers-section'
+import { SkillsSection } from './settings/skills-section'
 import { TimeoutsSection } from './settings/timeouts-section'
 import { applyLanguageSetting } from './settings/language'
 
@@ -154,16 +155,18 @@ export function SettingsPage(): React.JSX.Element {
       </Column>
 
       {/*
-        Providers and MCP servers are the sections with a layout of their own — a
-        520px card list plus an editor, straight from the artboard — so each
-        supplies both of its columns, including the header that carries
-        `settings-section-title`. Every other section is a single pane under a
-        shared header.
+        Providers, MCP servers and Skills are the sections with a layout of
+        their own — a 520px card list plus an editor or a reader, straight from
+        the artboard — so each supplies both of its columns, including the header
+        that carries `settings-section-title`. Every other section is a single
+        pane under a shared header.
       */}
       {section === 'providers' ? (
         <ProvidersSection />
       ) : section === 'mcp' ? (
         <McpSection />
+      ) : section === 'skills' ? (
+        <SkillsSection />
       ) : (
         <Column border="none" className="bg-bg-panel">
           <PageHeader testId="settings-section-title" title={sectionLabel(t, section)} />

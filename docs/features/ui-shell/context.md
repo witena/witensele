@@ -37,7 +37,7 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
 | Member add / remove / reorder, persisting chat settings | S2.2 (`chats`) |
 | Message rendering, tool cards, `@` autocomplete | S2.5 |
 | Live presence dots | S2.4 (`presence`) — the `PresenceDot` component exists, nothing feeds it yet |
-| Skills and data settings sections | S3.2, S4.x — each renders an empty state naming the step. Providers (S1.6), MCP servers (S3.1), Appearance & language (S1.5), Timeouts & heartbeat (S2.4) and Developer have content |
+| The Data & backup settings section | S4.x — it renders an empty state naming the step. Providers (S1.6), MCP servers (S3.1), Skills (S3.2), Appearance & language (S1.5), Timeouts & heartbeat (S2.4) and Developer have content |
 | A light theme | Not planned. `AppSettings.theme` has one value; the tokens make it a swap if that changes |
 
 The group-settings controls in the member panel are the one grey area: they are

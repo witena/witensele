@@ -4,15 +4,22 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection` |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]` |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
-| `src/main/agents/briefing.en.ts` | The English wording |
-| `src/main/agents/briefing.zh-CN.ts` | The Chinese wording. **The only `.ts` file in the repository that may contain Chinese** — see below |
+| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3) |
+| `src/main/agents/briefing.zh-CN.ts` | The Chinese wording, same rules in the same order. **The only `.ts` file in the repository that may contain Chinese** — see below |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, documented under [`chats`](../chats/backend.md) |
 
 None of them imports electron. `agent-turn.ts` reaches the outside world only
-through `ctx.repos`, `ctx.events` and the injected model factory.
+through `ctx.repos`, `ctx.events`, `ctx.mcp`, `ctx.memory`, `ctx.userDataDir` and
+the injected model factory — all of them injected, which is what lets a turn with
+skills and memory be driven from vitest against a temporary directory.
+
+The prompt sections and the built-in tools themselves live with their features:
+`skills/tools.ts` ([`../skills/backend.md`](../skills/backend.md)) and
+`memory/tools.ts` ([`../memory/backend.md`](../memory/backend.md)). This file
+decides the **order** of the sections and **which** tools an agent gets.
 
 ## Database
 

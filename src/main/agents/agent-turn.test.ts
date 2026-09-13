@@ -9,11 +9,14 @@
  * usage — is exercised for real. A stub around `streamText` would prove none of
  * that, which is the whole reason this is an integration test.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendEvent, MessageDeltaEvent } from '@shared/events'
 import type { Agent, Chat, McpServer, Message } from '@shared/types'
 import type { AppContext } from '../app-context'
+import { skillsDir } from '../app-context'
 import {
   agentInput,
   createTestDatabase,
@@ -22,6 +25,7 @@ import {
   type TestDatabase
 } from '../db/testing'
 import { failingTransport, inMemoryTransport } from '../mcp/testing'
+import { invalidateSkillCache } from '../skills/loader'
 import { createTestAppContext } from '../testing'
 import {
   FLUSH_EVERY_DELTAS,
@@ -727,5 +731,307 @@ describe('looksLikeToolRejection', () => {
   it('does not match a tool that merely failed', () => {
     expect(looksLikeToolRejection('the echo tool threw ENOENT')).toBe(false)
     expect(looksLikeToolRejection('rate limit exceeded')).toBe(false)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Skills and memory (S3.2, S3.3)                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The built-in tools, end to end: a real `streamText`, a real skills folder and
+ * a real memory directory under the context's own temporary `userDataDir`, and a
+ * mock model that calls one built-in tool on its first step and answers on its
+ * second.
+ *
+ * Nothing about the path is stubbed — the prompt assembly, the tool schemas, the
+ * SDK's step loop, the traversal guards and the files on disk all run — which is
+ * what makes this an integration test rather than three unit tests in a trench
+ * coat.
+ */
+describe('runAgentTurn with skills and memory', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let agent: Agent
+  let chat: Chat
+
+  /** Writes a skill into the context's own library. */
+  function writeSkill(folder: string, frontmatter: string, body: string): string {
+    const dir = join(skillsDir(ctx), folder)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'SKILL.md'), `---\n${frontmatter}\n---\n\n${body}\n`, 'utf8')
+    invalidateSkillCache(skillsDir(ctx))
+    return dir
+  }
+
+  /** A model that calls `toolName` with `input` once, then answers. */
+  function callThenAnswer(
+    toolName: string,
+    input: Record<string, unknown>,
+    answer = 'Done.'
+  ): MockLanguageModelV4 {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                {
+                  type: 'tool-call',
+                  toolCallId: 'call-1',
+                  toolName,
+                  input: JSON.stringify(input)
+                },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks([answer])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    ctx = createTestAppContext(database).ctx
+    invalidateSkillCache()
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Capabilities' }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'Review this design.' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+  })
+
+  afterEach(() => {
+    invalidateSkillCache()
+    ctx.close()
+  })
+
+  const turn = (model: MockLanguageModelV4) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent],
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+
+  /** Gives the agent one skill and returns its folder. */
+  function giveSkill(): string {
+    const dir = writeSkill(
+      'architecture-review',
+      'name: architecture-review\ndescription: Review a design before it is built',
+      '# Architecture review\n\nStart by restating the design in three sentences.'
+    )
+    writeFileSync(join(dir, 'checklist.md'), '# Checklist\n\n1. Boundaries\n', 'utf8')
+    invalidateSkillCache(skillsDir(ctx))
+    agent = ctx.repos.agents.update(agent.id, { skillNames: ['architecture-review'] }, ctx.userId)
+    return dir
+  }
+
+  describe('skills', () => {
+    it('lists the enabled skill in the prompt and answers read_skill with its body', async () => {
+      giveSkill()
+      const model = callThenAnswer('read_skill', { name: 'architecture-review' })
+
+      const result = await turn(model)
+
+      // Progressive disclosure: the description is in the prompt, the body is not.
+      const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
+      expect(prompt).toContain('Skills available to you:')
+      expect(prompt).toContain('architecture-review — Review a design before it is built')
+      expect(prompt).not.toContain('restating the design in three sentences')
+
+      // Both tools were offered, and the call came back with the body.
+      expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
+        'read_skill',
+        'read_skill_file'
+      ])
+      const parts = result.message.parts
+      expect(parts[0]).toMatchObject({ type: 'tool-call', toolName: 'read_skill' })
+      expect(parts[1]).toMatchObject({ type: 'tool-result', toolCallId: 'call-1' })
+      expect(String((parts[1] as { output: unknown }).output)).toContain(
+        'restating the design in three sentences'
+      )
+      expect(parts[2]).toEqual({ type: 'text', text: 'Done.' })
+      expect(result.status).toBe('done')
+    })
+
+    it('has no server behind the built-in tools, so the card shows the bare name', async () => {
+      giveSkill()
+
+      const result = await turn(callThenAnswer('read_skill', { name: 'architecture-review' }))
+
+      expect(result.message.parts[0]).not.toHaveProperty('serverId')
+      expect(result.message.parts[0]).not.toHaveProperty('serverName')
+    })
+
+    it('reads a bundled file through read_skill_file', async () => {
+      giveSkill()
+
+      const result = await turn(
+        callThenAnswer('read_skill_file', { name: 'architecture-review', path: 'checklist.md' })
+      )
+
+      expect(String((result.message.parts[1] as { output: unknown }).output)).toContain('Boundaries')
+    })
+
+    it('refuses a path that climbs out of the skill folder', async () => {
+      giveSkill()
+      writeFileSync(join(database.dir, 'secret.txt'), 'sk-live-1234', 'utf8')
+
+      const result = await turn(
+        callThenAnswer('read_skill_file', {
+          name: 'architecture-review',
+          path: '../../secret.txt'
+        })
+      )
+
+      const failed = result.message.parts[1] as { isError?: boolean; output: unknown }
+      expect(failed.isError).toBe(true)
+      expect(String(failed.output)).not.toContain('sk-live-1234')
+    })
+
+    it('attaches nothing and says nothing when the agent has no skills', async () => {
+      const model = mockModel(textChunks(['Plain answer.']))
+
+      await turn(model)
+
+      expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+      expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain('Skills available')
+    })
+
+    it('skips a skill whose folder is gone rather than failing the turn', async () => {
+      agent = ctx.repos.agents.update(agent.id, { skillNames: ['deleted-skill'] }, ctx.userId)
+      const model = mockModel(textChunks(['Still answered.']))
+
+      const result = await turn(model)
+
+      expect(result.status).toBe('done')
+      expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+    })
+  })
+
+  describe('memory', () => {
+    /** Turns memory on for the agent. */
+    function enableMemory(): void {
+      agent = ctx.repos.agents.update(agent.id, { memoryEnabled: true }, ctx.userId)
+    }
+
+    it('writes the note and appends the index line when the model calls memory_save', async () => {
+      enableMemory()
+
+      const result = await turn(
+        callThenAnswer('memory_save', {
+          title: 'Project name',
+          content: 'The project is called Witena.'
+        })
+      )
+
+      expect(result.status).toBe('done')
+      const entries = ctx.memory.listEntries(agent.id)
+      expect(entries).toHaveLength(1)
+      expect(entries[0]?.title).toBe('Project name')
+
+      // The file is really on disk, under the agent's own folder.
+      const file = join(database.dir, 'memory', agent.id, entries[0]?.path as string)
+      expect(existsSync(file)).toBe(true)
+      expect(readFileSync(file, 'utf8')).toContain('The project is called Witena.')
+
+      // …and the index line links to it.
+      expect(ctx.memory.readIndex(agent.id)).toContain(`](${entries[0]?.path})`)
+    })
+
+    it('carries the index into the next turn and answers memory_search from it', async () => {
+      enableMemory()
+      ctx.memory.saveNote(agent.id, {
+        title: 'Project name',
+        content: 'The project is called Witena.'
+      })
+      const model = callThenAnswer('memory_search', { query: 'project' })
+
+      const result = await turn(model)
+
+      const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
+      expect(prompt).toContain('MEMORY.md')
+      expect(prompt).toContain('Project name')
+      expect(String((result.message.parts[1] as { output: unknown }).output)).toContain('Witena')
+    })
+
+    it('adds the memory rule to the briefing only while memory is on', async () => {
+      const without = mockModel(textChunks(['ok']))
+      await turn(without)
+      expect(JSON.stringify(without.doStreamCalls[0]?.prompt)).not.toContain('memory_save')
+
+      enableMemory()
+      const with_ = mockModel(textChunks(['ok']))
+      await turn(with_)
+      expect(JSON.stringify(with_.doStreamCalls[0]?.prompt)).toContain('memory_save')
+    })
+
+    it('attaches no memory tools and no memory section when memory is off', async () => {
+      const model = mockModel(textChunks(['Plain answer.']))
+
+      await turn(model)
+
+      expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+      const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
+      expect(prompt).not.toContain('MEMORY.md')
+      expect(prompt).not.toContain('memory_search')
+    })
+
+    it('offers both built-in families at once', async () => {
+      giveSkill()
+      enableMemory()
+      const model = mockModel(textChunks(['ok']))
+
+      await turn(model)
+
+      expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
+        'read_skill',
+        'read_skill_file',
+        'memory_save',
+        'memory_search'
+      ])
+    })
+
+    it('keeps one agent out of another agent’s memory', async () => {
+      enableMemory()
+      const other = ctx.repos.agents.create(
+        agentInput({ name: 'Bob', providerId: agent.providerId, modelId: 'deepseek-chat' }),
+        ctx.userId
+      )
+      ctx.memory.saveNote(other.id, { title: 'Theirs', content: 'A secret of Bob.' })
+
+      const result = await turn(callThenAnswer('memory_search', { query: 'secret' }))
+
+      expect(String((result.message.parts[1] as { output: unknown }).output)).not.toContain(
+        'A secret of Bob'
+      )
+    })
   })
 })
