@@ -1,30 +1,97 @@
 # orchestration — Implementation
 
-> S1.7 built the minimal runner; **S2.3 owns this feature**. See
-> "What S2.3 adds" in [`context.md`](./context.md) before changing anything here.
+> Implemented in S2.3. Read [`context.md`](./context.md) first: it holds the
+> decisions this file only executes.
 
 ## Approach
 
-Two classes in `src/main/orchestration/chat-runner.ts`:
+Three modules:
 
-- **`ChatRunner`** — one per chat. Holds the active `AbortController`, the
-  `RunState`, and the queue of user messages that arrived mid-run.
-- **`ChatRunnerRegistry`** — a `Map<chatId, ChatRunner>` on the `AppContext`,
-  created by `createAppContext` and stopped by `close()`.
+| File | Shape |
+|---|---|
+| `src/shared/mentions.ts` | Pure. `parseMentions(text, members) → agentId[]`, plus `findMentions` and `splitMentions` for the renderer. Shared with the composer so both sides resolve `@Name` identically |
+| `src/main/orchestration/scheduling.ts` | Pure. Member ids + already-parsed mentions → a `RoundPlan`. No database, no events, no clock |
+| `src/main/orchestration/chat-runner.ts` | Stateful. `ChatRunner` (one per chat) and `ChatRunnerRegistry` (the map on `AppContext`) |
 
 A runner is stateful because a run outlives the IPC call that started it: `send`
 resolves as soon as the message is stored and the run is *scheduled*, and the
 agent's output arrives later as events. `chat.stop` must therefore find the same
-controller, and the queue must survive between calls.
+controller, and the pending list must survive between calls.
 
-The split that makes S2.3 an extension rather than a rewrite:
+## The state machine
 
-| Method | Today | S2.3 |
-|---|---|---|
-| `#loop` | run once, then again if the queue is non-empty | unchanged |
-| `#runOnce` | one round, sequential speakers | a round loop with a barrier and `maxAutoRounds` |
-| `#speakersFor(round, members)` | `members.slice(0, 1)` | roundrobin / mention-only |
-| `#members(chat)` | membership in `position` order | unchanged |
+```
+                    ┌──────────────── send() while idle ────────────────┐
+                    ▼                                                   │
+  idle ──────► run.started ──► [round loop] ──► run.finished ──► idle ──┘
+                                   ▲   │
+                 send() while running   │ pending user messages, or mentions
+                    (appended to    └───┘ from the round that just ended
+                     #pending)
+```
+
+One iteration of the round loop:
+
+```ts
+chat    = chats.get(chatId)                       // settings, every round
+members = listMembers(chat).map(agents.get)       // position order, every round
+if (members.length === 0) break                   // emptied chat: not an error
+if (!started) emit run.started { round: 1 }
+if (signal.aborted) { reason = 'stopped'; break }
+
+pending = takePending()                           // Message[] stored by send()
+plan    = pending.length > 0
+  ? (roundsSinceUser = 0,
+     mergePlans(memberIds, planFromUserMessages(chat.settings.mode, memberIds, pending), carried))
+  : carried
+carried = EMPTY_PLAN
+
+if (plan.speakers.length === 0) {                 // nothing to schedule
+  if (pending.length > 0) notice('noMentions')    // mention-only, nobody named
+  break                                           // → completed
+}
+if (roundsSinceUser >= chat.settings.maxAutoRounds) {
+  notice('maxRoundsReached', { max })
+  reason = 'max-rounds'; break
+}
+
+round += 1; roundsSinceUser += 1
+emit run.round { round, speakers: plan.speakers }
+outcomes = await runRound(...)                    // the barrier; see below
+
+if (aborted)                        { reason = 'stopped'; break }
+if (outcomes.every(o => error))     { reason = 'error';   break }
+carried = planFromReplies(memberIds, outcomes)    // self / non-members / passed dropped
+```
+
+and then, once, outside the loop: `emit run.finished { reason }`.
+
+### The barrier
+
+```ts
+sequential: for (const speaker of speakers) { await turn(speaker); if (aborted) break }
+parallel:   const snapshot = messages.listForContext(chatId)     // once, before
+            await Promise.allSettled(speakers.map(turn))         // ← the barrier
+```
+
+`runAgentTurn` takes the snapshot as its optional `history`; without it a turn
+reads the transcript itself, which is exactly what makes the second sequential
+speaker see the first one's reply. `Promise.allSettled` rather than `all`: one
+rejection must not leave a sibling unawaited, streaming into a run that has
+already been declared over. `runAgentTurn` promises never to throw, so a rejected
+entry is recorded as an errored outcome and logged.
+
+### Scheduling rules
+
+| Input | Speakers |
+|---|---|
+| User message(s), `roundrobin` | every member, `position` order |
+| User message(s), `mention-only` | the mentioned members, `position` order |
+| The round that just ended | every member mentioned by its replies, minus self-mentions, minus non-members, minus `passed` repliers |
+
+Each plan also carries `inReplyTo`: speaker id → who pulled them in (agent ids,
+or the literal `'user'`). It is passed to `runAgentTurn` and stored on the
+message, which is what the UI's "replying to @x" reads.
 
 ## Data flow
 
@@ -33,48 +100,42 @@ The split that makes S2.3 an extension rather than a rewrite:
 ```
 chat.send
   → ChatRunner.send({ chatId, text, mentions })
-      chats.get(chatId)                         // not_found before anything is written
-      messages.create({ senderType: 'user', senderId: ctx.userId, round: 0 })
+      chats.get(chatId)                          // not_found before anything is written
+      members = listMembers → agents.get         // empty → validation('chat has no members')
+      mentions = parseMentions(text, members) ∪ (explicit ∩ members)
+      messages.create({ senderType: 'user', round: 0, mentions })
       emit message.created
-      no run active → #start()
+      push onto #pending; no run active → #start()
   ← resolves with the stored message
-
-#loop → #runOnce
-      members = listMembers → agents.get
-      members.length === 0 → return, emitting nothing
-      speakers = #speakersFor(1, members)
-      emit run.started { round: 1 }
-      emit run.round   { round: 1, speakers }
-      for each speaker: await runAgentTurn(...)      // see ../agent-turn/
-      emit run.finished { reason }
 ```
 
 ### A message that arrives during a run
 
 ```
 chat.send
-  → messages.create + emit message.created      // immediately, as always
-  → a run is active → push the id onto the queue
+  → messages.create + emit message.created       // immediately, as always
+  → push onto #pending                           // the run is already going
   ← resolves
 
-… the current run finishes, emits run.finished …
+… the current round finishes …
 
-#loop sees a non-empty queue
-  → clear it, then #runOnce again
-  → the new turn's history already contains both questions
+the loop takes the pending list
+  → roundsSinceUser = 0                          // the cap starts counting again
+  → speakers = (mode plan for those messages) ∪ (mentions of the round that ended)
+  → the next turn's history already contains every question
 ```
 
-The queue is cleared **before** the next run rather than after, so a message that
-lands during *that* run queues another one.
+The list is taken **before** the round runs, so a message that lands during that
+round schedules the round after it.
 
 ### Stop
 
 ```
 chat.stop → registry.stop(chatId) → runner.stop()
-  queue = []
+  #pending = []
   controller.abort()
-    → the in-flight streamText unwinds
-    → runAgentTurn returns { aborted: true }, having persisted status 'error' / 'aborted'
+    → every in-flight streamText unwinds, in every speaker of a parallel round
+    → runAgentTurn returns { aborted: true }, having persisted 'error' / 'aborted'
   → run.finished { reason: 'stopped' }
 ```
 
@@ -82,15 +143,24 @@ chat.stop → registry.stop(chatId) → runner.stop()
 
 | Reason | When |
 |---|---|
-| `completed` | Every speaker finished (`done` or `passed`) |
-| `stopped` | The signal was aborted — Stop, or `chats.delete` |
-| `error` | A turn ended in `error` without an abort, or the loop itself threw |
-| `max-rounds` | **Not emitted yet.** S2.3 emits it when `maxAutoRounds` is reached |
+| `completed` | No round scheduled another one — including `mention-only` with nothing mentioned, which also writes the `noMentions` notice |
+| `max-rounds` | `roundsSinceUser` reached `chat.settings.maxAutoRounds` while a round was still scheduled; writes `maxRoundsReached` |
+| `stopped` | The signal was aborted — Stop, `chats.delete`, or `AppContext.close()` |
+| `error` | Every speaker of a round errored, or the loop itself threw (which also writes `runFailed`) |
 
 ## Key types and contracts
 
 ```ts
-interface RunState { chatId: string; round: number; speakers: string[]; startedAt: number }
+interface ActiveTurn { agentId: string; messageId: string; startedAt: number }
+
+interface RunState {
+  chatId: string
+  round: number                    // 1-based, monotonic within the run
+  speakers: string[]               // the current round, in order
+  activeTurns: ActiveTurn[]        // not yet terminal
+  pendingUserMessageIds: string[]  // stored, not yet scheduled
+  startedAt: number
+}
 
 class ChatRunner {
   get state(): RunState | null
@@ -105,7 +175,8 @@ class ChatRunnerRegistry {
   send(input): Promise<Message>
   stop(chatId): void
   remove(chatId): void               // stop and forget; used by chats.delete
-  state(chatId): RunState | null
+  getState(chatId): RunState | null  // S2.4's supervisor reads this
+  state(chatId): RunState | null     // alias kept from S1.7
   stopAll(): void                    // called by AppContext.close()
 }
 ```
@@ -116,26 +187,36 @@ built.
 
 | Event | Payload | Emitted when |
 |---|---|---|
-| `message.created` | `{ message }` | The user's message is stored, before the run is scheduled |
-| `run.started` | `{ chatId, round }` | A run begins |
-| `run.round` | `{ chatId, round, speakers }` | A round begins, with its speakers in order |
-| `run.finished` | `{ chatId, reason }` | The run ends and control returns to the user |
+| `message.created` | `{ message }` | The user's message, and every system notice |
+| `run.started` | `{ chatId, round: 1 }` | Once per run, before the first round |
+| `run.round` | `{ chatId, round, speakers }` | Each round, with its speakers in order |
+| `run.finished` | `{ chatId, reason }` | Once per run |
+
+`message.delta`, `message.updated` and `presence.changed` come from
+[`agent-turn`](../agent-turn/backend.md); the runner forwards them through a
+wrapper that only reads the `message.created` of each turn to learn its
+`messageId`.
 
 ## Tests
 
 | File | Covers |
 |---|---|
-| `src/main/orchestration/chat-runner.test.ts` | The full event sequence of one send → stream → persist cycle, in order; the single member as the round's speaker; `RunState` while running and `null` afterwards; `[PASS]` → `passed` with `completed`; Stop → `stopped` plus `error` / `'aborted'` on the message; stopping an idle chat as a no-op; a provider failure → `error`; a queued second message running as a second run whose prompt contains both questions; the queue being dropped on Stop; the two validation rejections. Plus the `chats handlers` block: create, rename, `messages.list` paging, and delete stopping a live run |
-| `e2e/chat.spec.ts` | The same behaviours against a real local model, including Stop interrupting an actual HTTP stream |
+| `src/shared/mentions.test.ts` | ASCII names, names with spaces, CJK names, longest match (`Ann` vs `Ann Lee`), case-insensitivity, the `@Anna` boundary, `@all` / `@everyone`, a member named "all", an `@` inside an address, dedupe and order, and `splitMentions` for the renderer |
+| `src/main/orchestration/scheduling.test.ts` | Both modes' round 1, mentions → speakers, self-mention, non-member, `[PASS]`, merged sources, position order, the plan union and the round-limit predicate including the reset |
+| `src/main/orchestration/chat-runner.test.ts` | The S1.7 single-agent sequence, plus: every member in round 1; sequential sees the previous reply and parallel does not; a mention scheduling round 2 with only that member and the `inReplyTo` it stores; a self-mention scheduling nothing; `[PASS]`; the `maxAutoRounds` cap and its notice; `mention-only` with and without a mention; explicit composer mentions; a mid-run message joining the next round and resetting the counter; Stop aborting both turns of a parallel round; one failing speaker not blocking the other; every speaker failing → `error`; one `run.started` and one `run.finished` per multi-round run |
+| `src/main/agents/agent-turn.test.ts` | The stored `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored and absent, and the prebuilt `history` snapshot being used instead of the live transcript |
+| `src/renderer/src/stores/run.test.ts` | The composer's resolved mentions reaching `chat.send`, and an empty list being omitted |
+| `e2e/orchestration.spec.ts` | Two real models: round-robin in round 1, parallel streaming both rows at once, `mention-only` answering with one member, and the `noMentions` notice |
 
 ## Known limitations and TODOs
 
-Everything in "What S2.3 adds" in [`context.md`](./context.md), plus:
-
+- **No supervisor**, so a model that hangs hangs the round. S2.4.
 - **A failed turn does not retry**, and there is no "retry this agent" action.
-  PLAN mentions one for offline agents; it belongs with S2.4.
 - **`run.finished { reason: 'error' }` carries no detail.** The errored message
   holds it; the event is a signal, not a report.
 - **`whenIdle()` exists for the tests.** It is not part of the IPC surface, and a
   handler must not await it — `chat.send` promises to resolve as soon as the run
   is scheduled.
+- **A run does not summarise itself.** With `maxAutoRounds` reached, the user
+  gets a notice and has to read the rounds; PLAN's "ask an agent to summarise" is
+  a later action.

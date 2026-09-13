@@ -1,0 +1,1 @@
+ALTER TABLE `messages` ADD `in_reply_to` text;

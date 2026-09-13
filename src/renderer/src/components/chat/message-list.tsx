@@ -14,7 +14,7 @@
 import { MessagesSquare } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { Message } from '@shared/types'
+import type { Agent, Message } from '@shared/types'
 import { EmptyState } from '../ui'
 import { MessageItem } from './message-item'
 
@@ -24,9 +24,11 @@ export const BOTTOM_THRESHOLD_PX = 64
 export interface MessageListProps {
   chatId: string
   messages: Message[]
+  /** The chat's members, passed down so each row can highlight their names. */
+  members?: readonly Agent[]
 }
 
-export function MessageList({ chatId, messages }: MessageListProps): React.JSX.Element {
+export function MessageList({ chatId, messages, members }: MessageListProps): React.JSX.Element {
   const { t } = useTranslation()
   const scroller = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -74,7 +76,12 @@ export function MessageList({ chatId, messages }: MessageListProps): React.JSX.E
       ) : (
         <div className="flex flex-col gap-[22px]">
           {messages.map((message) => (
-            <MessageItem key={message.id} message={message} chatId={chatId} />
+            <MessageItem
+              key={message.id}
+              message={message}
+              chatId={chatId}
+              {...(members ? { members } : {})}
+            />
           ))}
         </div>
       )}

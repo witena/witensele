@@ -8,5 +8,6 @@
 export * from './types'
 export * from './events'
 export * from './backend'
+export * from './mentions'
 export * from './presets'
 export * from './version'

@@ -22,13 +22,19 @@ does not throw, it just makes every answer slightly worse.
 - **The streaming turn** (`agent-turn.ts`): `streamText`, `fullStream`, the
   `message.delta` events, the periodic flush to SQLite, the terminal status, the
   usage, and the `presence.changed` pair around the turn.
+- **Parsing the finished text for `@mentions`** (S2.3) and storing them on the
+  message. *Who* that makes speak next is `orchestration`'s decision, not this
+  one's.
+- Storing the `inReplyTo` the caller passed, and accepting a **prebuilt history
+  snapshot** so a parallel round can hand every speaker the same transcript.
 
 ## Out of scope
 
 | Not here | Owned by |
 |---|---|
 | Who speaks and when | `orchestration` |
-| Scanning a reply for `@name` to schedule the next round | `orchestration` (S2.3) |
+| Deciding who the `@mentions` in a reply make speak next | `orchestration` |
+| The `@name` matching rule itself | `src/shared/mentions.ts`, shared with the composer |
 | Tools: MCP, `read_skill`, `memory_*`, and the `stopWhen` loop around them | `mcp` (S3.1), `skills` (S3.2), `memory` (S3.3) |
 | Heartbeat, stall / hard timeouts, `skipped`, the real presence state machine | `presence` (S2.4) |
 | Context overflow and truncation | S4.2 |
@@ -55,6 +61,8 @@ per speaker and reads the returned status to decide how the run ends.
 | An aborted turn is `status: 'error'` with `error: 'aborted'` | A new `MessageStatus`; `skipped` | `skipped` is reserved for the supervisor's hard timeout (S2.4), and the renderer has to tell "you stopped this" from "the model died". S2.3 may refine it |
 | `runAgentTurn` never throws | Let the caller catch | Every failure has to end with a persisted terminal status and a `message.updated`, or the UI shows a cursor forever. Making that the function's own responsibility means no caller can forget |
 | Reasoning is **not** fed back into later prompts | Include it like text | It is the model's scratch pad, it is not what the group heard, and replaying it inflates every later prompt |
+| **Mentions are parsed here, scheduled elsewhere** | Let `ChatRunner` re-read the finished message and parse it | The finished text is already in hand at the terminal update, so parsing it there keeps **one** `message.updated` per turn instead of two, and a reply reaches the renderer with its mentions already on it. The rules that drop a self-mention, a non-member and a `[PASS]` are scheduling rules and live in `orchestration/scheduling.ts` |
+| **The history is an optional parameter, not a mode flag** | A `parallel: boolean`; a second function | The turn does not need to know what a round is: either it is given a transcript or it reads one. That is the whole difference between the two speaking modes, expressed once |
 | `passed` and `skipped` messages are dropped from history | Keep them with a marker | Replaying abstentions teaches the next speaker that abstaining is normal. The round bookkeeping that needs them lives in `ChatRunner` |
 | The briefing exists in Chinese and English as **`.ts` files** | Locale files; one English briefing for everyone | It never reaches the renderer, so it has no i18n key; a Chinese-first model follows a Chinese prompt far more reliably. `briefing.zh-CN.ts` is the documented exception to the English-only rule |
 | The briefing's `[name]:` and `@name` examples use a **real member of this chat** | A placeholder like `@name` | A model copies the example it is given |

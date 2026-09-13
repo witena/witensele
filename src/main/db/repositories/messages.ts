@@ -78,6 +78,7 @@ function toMessage(row: MessageRow): Message {
     status: row.status,
     round: row.round,
     mentions: row.mentions,
+    ...optional('inReplyTo', row.inReplyTo),
     ...optional('usage', row.usage),
     ...optional('error', row.error)
   }
@@ -128,6 +129,7 @@ export function createMessageRepository(db: DrizzleDb): MessageRepository {
           status: input.status,
           round: input.round,
           mentions: input.mentions,
+          inReplyTo: nullable(input.inReplyTo),
           usage: nullable(input.usage),
           error: nullable(input.error),
           createdAt: timestamp,

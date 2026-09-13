@@ -115,12 +115,27 @@ usage placeholder, and the group-settings block writes straight through to
 remove, the settings and the empty-membership refusal. Docs updated in
 `docs/features/chats/`.
 
-### S2.3 Orchestration engine `[ ]`
+### S2.3 Orchestration engine `[x]` (2026-09-13)
 What: full ChatRunner: roundrobin / mention-only, sequential / parallel, @parsing, PASS, maxAutoRounds, barrier, stop; history transform (name prefixes, role mapping, merging consecutive messages).
 Acceptance:
 - Unit tests: @parsing, next-round speakers, history transform, barrier completion
 - Mock-model integration tests: full multi-round runs in both modes
 - Real models: 3 agents; in sequential mode later agents cite earlier ones; parallel mode streams simultaneously; an @mention triggers round 2; the chain stops at the limit
+Done: `src/shared/mentions.ts` (longest-name-first `@` matching, `@all`, CJK,
+shared with the composer); `src/main/orchestration/scheduling.ts` (the pure
+"who speaks next", including `inReplyTo` and the round-limit predicate);
+`chat-runner.ts` rewritten as one run with a round loop — a user message sent
+mid-run now joins that run at the next boundary and resets the automatic-round
+counter instead of starting a second run. `runAgentTurn` gained an optional
+`history` snapshot (the parallel barrier hands every speaker the same one),
+`inReplyTo`, and the mentions it parses out of the finished reply. `Message`
+gained `inReplyTo` (migration `0001_spooky_odin.sql`). Notices `noMentions`,
+`maxRoundsReached` and `runFailed`; `ChatRunnerRegistry.getState` exposes the
+round, its speakers, the active turns and the pending messages for S2.4. The
+renderer prints `Round n · replying to @x`, highlights `@Name` in a reply and
+shows "Round n · X, Y speaking" in the header. `e2e/orchestration.spec.ts`
+drives two real Ollama models through both speaking modes, `mention-only` and
+the `noMentions` notice. Docs rewritten in `docs/features/orchestration/`.
 
 ### S2.4 Presence and heartbeat `[ ]`
 What: AgentSession, AgentSupervisor ticking every second, stall / hard timeouts, skip with a system message, provider probing; dots shown in the member panel and on message avatars.

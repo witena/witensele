@@ -15,7 +15,12 @@ None of them imports electron (CLAUDE.md rule #5).
 
 ## Database
 
-No migration: S1.2 created every table this step uses.
+S1.2 created every table this feature uses. S2.3 added one column to `messages`:
+`in_reply_to` (migration `0001_spooky_odin.sql`), the agent ids — plus the
+literal `user` — whose messages asked for that reply. It is nullable, so every
+row written before it stores nothing at all, and the UI's "replying to @x" label
+is the only thing that reads it. See
+[`../database/backend.md`](../database/backend.md).
 
 | Table | Column | Type | Notes |
 |---|---|---|---|
@@ -29,7 +34,9 @@ No migration: S1.2 created every table this step uses.
 | | `sender_type` / `sender_id` | text | `user` + `ctx.userId`, or `agent` + the agent id |
 | | `parts` | json | `MessagePart[]`; rewritten by the flush during streaming |
 | | `status` | text enum | `streaming` → `done` \| `passed` \| `error` |
-| | `round` | integer | 0 for a user message, 1-based for an agent's |
+| | `round` | integer | 0 for a user message, 1-based for an agent's, counted **within a run** |
+| | `mentions` | json | Agent ids this message @mentioned. On a user message, the effective set (parsed ∪ explicit, ∩ members); on a reply, what the model wrote |
+| | `in_reply_to` | json null | Agent ids (plus `user`) whose messages asked for this reply |
 | | `usage` | json null | Written once at the end of a turn |
 | | `error` | text null | `'aborted'` after Stop, otherwise the provider's message |
 

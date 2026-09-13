@@ -67,7 +67,8 @@
     "send": "发送",
     "stop": "停止",
     "round": "第 {{round}} 轮",
-    "replyingTo": "回复 @{{name}}",
+    "replyingTo": "回复 {{names}}",
+    "runStatus": "第 {{round}} 轮 · {{speakers}} 发言中",
     "passed": "已弃权",
     "skipped": "已跳过",
     "reasoning": "思考过程",
@@ -213,8 +214,10 @@
   },
   "notices": {
     "agentSkipped": "{{agent}} 本轮没有响应，已被跳过",
+    "noMentions": "本次没有 @ 任何成员，因此无人作答。用 @ 提及某位成员即可获得回复。",
     "runStopped": "本次运行已停止",
     "maxRoundsReached": "已达到 {{max}} 轮自动讨论的上限，发送消息可继续。",
-    "providerError": "服务商未能作答：{{message}}"
+    "providerError": "服务商未能作答：{{message}}",
+    "runFailed": "出现内部错误，本次运行已中止：{{message}}"
   }
 }

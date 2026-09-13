@@ -2,10 +2,10 @@
  * The run store: the state behind the Stop button.
  *
  * The rule worth a test is that the state comes from the **events**, not from the
- * local `send()` call — a message sent during an active run is queued by the
- * backend and starts no second run, so a store that flipped its own flag would
- * show a Stop button for a run that does not exist and leave it showing after the
- * real one finished.
+ * local `send()` call — a message sent during an active run joins that run at its
+ * next round boundary and starts no second one, so a store that flipped its own
+ * flag would show a Stop button for a run that does not exist and leave it
+ * showing after the real one finished.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod } from '@shared/backend'
@@ -110,6 +110,18 @@ describe('run store', () => {
     expect(calls).toEqual([{ method: 'chat.send', input: { chatId: CHAT, text: 'Hi' } }])
     // Nothing is active yet: only `run.started` may say that.
     expect(active()).toBeUndefined()
+  })
+
+  it('passes the composer’s resolved mentions through, and omits an empty list', async () => {
+    const calls = fakeBackend()
+
+    await useRunStore.getState().send(CHAT, '@Ada hello', ['agent-ada'])
+    await useRunStore.getState().send(CHAT, 'hello', [])
+
+    expect(calls).toEqual([
+      { method: 'chat.send', input: { chatId: CHAT, text: '@Ada hello', mentions: ['agent-ada'] } },
+      { method: 'chat.send', input: { chatId: CHAT, text: 'hello' } }
+    ])
   })
 
   it('refuses an empty message without calling the backend', async () => {

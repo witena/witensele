@@ -27,6 +27,8 @@ can hold a real conversation and still holds it after a restart.
   `agents`, `providers`) and the single event subscription that feeds them.
 - The right column (S2.2): the member picker, removing a member, drag-to-reorder
   the speaking order, and the group-settings block bound to `ChatSettings`.
+- The message row's labels fed by the run (S2.3): `Round n`,
+  `Replying to @x` from `Message.inReplyTo`, and `@Name` highlighted in the body.
 - `ensureDefaultAgent`: the bootstrap agent a chat is given **only** while the
   agent library is empty, so a fresh install can hold a conversation before
   anyone opens the Agents page.
@@ -35,7 +37,7 @@ can hold a real conversation and still holds it after a restart.
 
 | Not here | Owned by |
 |---|---|
-| Who speaks, in which order, and for how many rounds | `orchestration` (S2.3) |
+| Who speaks, in which order, and for how many rounds | [`orchestration`](../orchestration/context.md) |
 | What one agent does during its turn | `agent-turn` |
 | Creating and editing agents | [`agents`](../agents/context.md) (S2.1) |
 | Presence beyond `working` / `available` around a turn | `presence` (S2.4) |
@@ -78,8 +80,8 @@ the next round boundary rather than mid-turn.
 
 ## Open questions
 
-- Reordering is mouse-only. S2.3 also reads `position`, so a keyboard path for
-  the speaking order belongs there.
+- Reordering is mouse-only. `ChatRunner` reads `position` every round, so the
+  order matters more since S2.3 and a keyboard path for it is still missing.
 - Whether the member count belongs on `Chat` after all: membership is now
   mutable and the left column re-reads `chats.members.list` per chat to follow it.
 - Whether `messages.list` should return oldest-first for the first page, given

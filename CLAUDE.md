@@ -42,7 +42,7 @@ src/
   renderer/
     index.html
     src/            # pages/, components/, stores/, locales/, lib/
-  shared/           # types.ts, events.ts, backend.ts, presets.ts, version.ts
+  shared/           # types.ts, events.ts, backend.ts, mentions.ts, presets.ts, version.ts
 docs/               # PLAN.md, STEPS.md, README.md, features/<feature>/
 ```
 

@@ -3,8 +3,9 @@
  *
  * The state is **entirely derived from `run.*` events**, never from the local
  * `send()` call: the backend decides when a run starts (a message sent during an
- * active run is queued, and starts no second run), so a store that flipped a flag
- * on send would show a Stop button for a run that does not exist.
+ * active run joins that run at its next round boundary and starts no second one),
+ * so a store that flipped a flag on send would show a Stop button for a run that
+ * does not exist.
  *
  * `sending` is separate for that reason — it covers the round trip of `chat.send`
  * itself, which is what disables the composer for the fraction of a second before
@@ -17,6 +18,7 @@ import { getBackend } from '../lib/backend-provider'
 
 /** The live run of one chat, as the renderer knows it. */
 export interface ActiveRun {
+  /** 1-based and monotonic for the whole run; the backend never resets it. */
   round: number
   /** Agent ids speaking in the current round. Empty until `run.round` arrives. */
   speakers: string[]
@@ -38,8 +40,15 @@ export interface RunState {
   error?: string | undefined
   errorCode?: BackendErrorCode | undefined
 
-  /** Sends a message. Never rejects; a failure lands in `error`. */
-  send: (chatId: string, text: string) => Promise<boolean>
+  /**
+   * Sends a message. Never rejects; a failure lands in `error`.
+   *
+   * `mentions` are the agent ids the composer resolved from what was typed. The
+   * backend parses the text again with the same function (`@shared/mentions`),
+   * so they are a hint rather than the source of truth — but they are what lets
+   * a future autocomplete name a member the plain text does not spell out.
+   */
+  send: (chatId: string, text: string, mentions?: string[]) => Promise<boolean>
   /**
    * Forgets the last failure.
    *
@@ -66,7 +75,7 @@ export const useRunStore = create<RunState>()((set) => ({
     set({ error: undefined, errorCode: undefined })
   },
 
-  async send(chatId, text) {
+  async send(chatId, text, mentions) {
     const trimmed = text.trim()
     if (trimmed.length === 0) return false
 
@@ -78,7 +87,11 @@ export const useRunStore = create<RunState>()((set) => ({
     try {
       // The stored message arrives as `message.created` too, so nothing is done
       // with the return value: one path into the transcript, not two.
-      await getBackend().invoke('chat.send', { chatId, text: trimmed })
+      await getBackend().invoke('chat.send', {
+        chatId,
+        text: trimmed,
+        ...(mentions && mentions.length > 0 ? { mentions } : {})
+      })
       return true
     } catch (cause) {
       set({ error: describe(cause), errorCode: classify(cause) })

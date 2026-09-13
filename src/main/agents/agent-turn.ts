@@ -49,6 +49,7 @@
  */
 import { streamText, type LanguageModel, type LanguageModelUsage } from 'ai'
 import type { BackendEvent } from '@shared/events'
+import { parseMentions } from '@shared/mentions'
 import type {
   Agent,
   AgentPresence,
@@ -92,6 +93,22 @@ export interface AgentTurnOptions {
   members: Agent[]
   /** 1-based round this message belongs to. */
   round: number
+  /**
+   * Who asked for this reply: agent ids, plus the literal `'user'`. Stored on
+   * the message so the UI can print "replying to @x"; see `Message.inReplyTo`.
+   */
+  inReplyTo?: string[]
+  /**
+   * The transcript this turn should see, oldest first.
+   *
+   * Omitted — the sequential case — the turn reads the whole transcript from the
+   * database itself, so it sees the replies given earlier in the same round. In
+   * **parallel** speaking mode the runner reads it once at the start of the round
+   * and hands the same snapshot to every speaker, which is what makes "replies
+   * within a round are not visible to each other" (PLAN, "Orchestration") true
+   * rather than a race between concurrent turns.
+   */
+  history?: Message[]
   /** Aborting it stops the turn; the message ends as `error` / `'aborted'`. */
   signal: AbortSignal
   /** A model client built by the caller. Omitted, `createModel` builds one. */
@@ -192,9 +209,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
       parts: [],
       status: 'streaming',
       round,
-      // S2.3 scans the finished text for `@name` and fills this in; until then a
-      // reply never schedules another round.
-      mentions: []
+      // Filled in at the terminal update, once there is a finished text to scan.
+      mentions: [],
+      ...(options.inReplyTo && options.inReplyTo.length > 0
+        ? { inReplyTo: options.inReplyTo }
+        : {})
     },
     ctx.userId
   )
@@ -242,7 +261,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
       messages: toModelMessages({
         self: agent,
         agentsById,
-        messages: ctx.repos.messages.listForContext(chat.id, ctx.userId)
+        messages: options.history ?? ctx.repos.messages.listForContext(chat.id, ctx.userId)
       }),
       abortSignal: signal,
       ...(agent.params.maxTokens ? { maxOutputTokens: agent.params.maxTokens } : {}),
@@ -286,11 +305,22 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   const status: MessageStatus = aborted || failure ? 'error' : text === PASS_TOKEN ? 'passed' : 'done'
   const error = aborted ? ABORTED_ERROR : failure
 
+  // Parsed here rather than in the runner: this is where the finished text is,
+  // and one update keeps a single `message.updated` per turn. Deciding *who*
+  // speaks next from these ids is `orchestration/scheduling.ts`'s job, which is
+  // also where a self-mention is dropped — the stored set is what the agent
+  // actually wrote.
+  const mentions =
+    status === 'passed'
+      ? []
+      : parseMentions(text, members.map((member) => ({ agentId: member.id, name: member.name })))
+
   const message = ctx.repos.messages.update(
     created.id,
     {
       parts: structuredClone(parts),
       status,
+      mentions,
       ...(usage ? { usage } : {}),
       ...(error ? { error } : {})
     },
