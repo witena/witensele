@@ -25,6 +25,7 @@ import type {
   AppSettingsPatch,
   Chat,
   ChatCreateInput,
+  ChatGoalStatus,
   ChatMember,
   ChatPatch,
   ConnectionTestResult,
@@ -90,6 +91,31 @@ export interface BackendApi {
    * build implements it by rejecting, or by an upload dialog in the browser.
    */
   'system.pickFolder': () => Promise<string | null>
+  /**
+   * Opens the native **save** dialog and resolves with the chosen absolute path,
+   * or `null` when the user cancelled (S5.10).
+   *
+   * The fourth method whose implementation must import electron, and a sibling
+   * of `system.pickFolder` in every respect: it exists so the deliverable of a
+   * `document` goal can be picked in Finder instead of typed from memory. The
+   * file **need not exist** — that is the whole point of a save dialog — so
+   * nothing here checks the filesystem; the renderer converts the answer to a
+   * path relative to the chat's folder and `chats.update` validates it.
+   *
+   * `defaultDir` is where the dialog opens, normally the chat's `workdir`.
+   */
+  'system.pickSavePath': (input: { defaultDir?: string }) => Promise<string | null>
+  /**
+   * Opens the native open dialog for **files and folders, multi-select**, and
+   * resolves with the chosen absolute paths (S5.10).
+   *
+   * The fifth, and the last of the `pick*` family. `system.pickFolder` cannot
+   * serve here: a goal's materials are usually files, often several at once, and
+   * sometimes a folder. Cancelling resolves with an **empty array** rather than
+   * `null`, because "nothing was picked" and "the list is empty" are the same
+   * answer for a caller that is about to append.
+   */
+  'system.pickPaths': (input: { defaultDir?: string }) => Promise<string[]>
   /**
    * Tells the window system which appearance the app is showing (S5.8).
    *
@@ -268,6 +294,17 @@ export interface BackendApi {
    * "the user cleared the box".
    */
   'chats.search': (input: { query: string }) => Promise<string[]>
+  /**
+   * Whether this chat's `document` deliverable is on disk yet (S5.10).
+   *
+   * A query rather than a field on `Chat` because it is a fact about the
+   * **filesystem**: a stored column would be wrong the moment anything wrote,
+   * moved or deleted the file, and the renderer would be drawing a chip from a
+   * value nobody refreshed. A chat with no `document` goal answers
+   * `{ deliverable: null, delivered: false }` rather than rejecting — the header
+   * asks for every chat it shows.
+   */
+  'chats.goalStatus': (input: { chatId: string }) => Promise<ChatGoalStatus>
   /** The chat's members ordered by `position`. Read by the member panel. */
   'chats.members.list': (input: { chatId: string }) => Promise<ChatMember[]>
   /** Replaces the whole member list; array order becomes `ChatMember.position`. */
@@ -380,6 +417,8 @@ export const BACKEND_METHODS = [
   'system.ping',
   'system.emitTestEvent',
   'system.pickFolder',
+  'system.pickSavePath',
+  'system.pickPaths',
   'system.applyTheme',
   'system.openInEditor',
   'settings.get',
@@ -421,6 +460,7 @@ export const BACKEND_METHODS = [
   'chats.update',
   'chats.delete',
   'chats.search',
+  'chats.goalStatus',
   'chats.members.list',
   'chats.members.set',
   'presence.list',

@@ -258,6 +258,64 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   maxAutoRounds: 3
 }
 
+/** The three shapes a chat's goal can take (`docs/PLAN.md`, "Chat goal and workspace"). */
+export const GOAL_KINDS = ['discussion', 'document', 'codebase'] as const
+
+export type GoalKind = (typeof GOAL_KINDS)[number]
+
+/** Longest description `chats.update` accepts; a goal is a paragraph, not a document. */
+export const MAX_GOAL_DESCRIPTION_CHARS = 2_000
+
+/**
+ * What the group in this chat is working towards (S5.10).
+ *
+ * The kind decides what "done" means and who touches the folder:
+ * `discussion` reaches a conclusion in the transcript, `document` produces one
+ * file, `codebase` changes the code in the chat's `workdir`. The last two
+ * therefore require a `workdir` — there is nothing to write into otherwise —
+ * and `document` additionally requires a `deliverable`.
+ *
+ * Every path in here is **relative to `Chat.workdir`**, never absolute: the
+ * folder can be moved or restored from a backup, and a goal that named
+ * `/Users/ada/…` would then point at nothing. The renderer converts what the
+ * native dialogs return before it sends them (`lib/workdir.ts`).
+ */
+export interface ChatGoal {
+  kind: GoalKind
+  /** Prose the user wrote; placed verbatim in every member's briefing. */
+  description: string
+  /**
+   * The one file a `document` goal produces, relative to `workdir`.
+   *
+   * Required for `document` and meaningless for the other two. Its parent folder
+   * need not exist yet — the point of the goal is that the file does not exist
+   * at the start.
+   */
+  deliverable?: string
+  /**
+   * Files and folders under `workdir` the group starts from, relative paths.
+   *
+   * Each one must exist when it is saved. S5.11 is what places their contents in
+   * every member's context; S5.10 only records them.
+   */
+  materials: string[]
+}
+
+/**
+ * Whether a `document` goal's deliverable is on disk yet.
+ *
+ * A fact about the **filesystem**, not about the chat row, which is why it is a
+ * query of its own (`chats.goalStatus`) rather than a field on `Chat`: a derived
+ * column on the domain type would be stale the moment anything wrote the file,
+ * and the same reasoning already keeps the member count off `Chat`.
+ */
+export interface ChatGoalStatus {
+  /** Absolute path of the deliverable, or `null` when the goal has none. */
+  deliverable: string | null
+  /** True when that file exists right now. Always false without a deliverable. */
+  delivered: boolean
+}
+
 export interface Chat extends EntityBase {
   title: string
   /**
@@ -271,6 +329,14 @@ export interface Chat extends EntityBase {
    * executor tools.
    */
   workdir: string | null
+  /**
+   * What this chat is for (S5.10), or `null` while nobody has said.
+   *
+   * Stored as one nullable JSON column, so a chat written before S5.10 reads as
+   * `null` and behaves exactly as it did — a chat with no goal is a discussion
+   * nobody bothered to name.
+   */
+  goal: ChatGoal | null
   settings: ChatSettings
 }
 
@@ -716,7 +782,25 @@ export const VALIDATION_REASONS = [
   /** `system.openInEditor` was given a path that is not absolute (S5.7). */
   'editor_path_not_absolute',
   /** `system.openInEditor` was given a path outside the chat's folder (S5.7). */
-  'editor_path_outside_workdir'
+  'editor_path_outside_workdir',
+  /** A goal was saved with a blank description (S5.10). */
+  'goal_description_empty',
+  /** A goal description longer than `MAX_GOAL_DESCRIPTION_CHARS` (S5.10). */
+  'goal_description_too_long',
+  /** A `document` goal with no `deliverable` (S5.10). */
+  'goal_deliverable_required',
+  /** A deliverable that is absolute, blank, or climbs out with `..` (S5.10). */
+  'goal_deliverable_not_relative',
+  /** A deliverable that resolves outside the chat's folder (S5.10). */
+  'goal_deliverable_outside_workdir',
+  /** A material that is absolute, blank, or climbs out with `..` (S5.10). */
+  'goal_material_not_relative',
+  /** A material that resolves outside the chat's folder (S5.10). */
+  'goal_material_outside_workdir',
+  /** A material that is not on disk (S5.10). */
+  'goal_material_missing',
+  /** A `document` or `codebase` goal on a chat bound to no folder (S5.10). */
+  'goal_needs_workdir'
 ] as const
 
 export type ValidationReason = (typeof VALIDATION_REASONS)[number]

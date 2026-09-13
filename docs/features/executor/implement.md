@@ -10,7 +10,7 @@ answerable.
 | Module | Owns |
 |---|---|
 | `paths.ts` | `resolveInWorkdir(workdir, path)` → `{ absolute, relative }`, and nothing else. Every path an executor tool touches goes through it |
-| `tools.ts` | The seven AI SDK tools, the constants that cap them, and `buildExecutorSection(workdir, handoff)` (the prompt, plus `HANDOFF_BRIEFING` for the turn a hand-off schedules) |
+| `tools.ts` | The seven AI SDK tools, the constants that cap them, and `buildExecutorSection(workdir, handoff, goal)` (the prompt, plus `HANDOFF_BRIEFING` and S5.10's `goalHandoffLine` for the turn a hand-off schedules) |
 | `permissions.ts` | `PermissionGate`: `ask` / `reply` / `pending` / `abortAll`, one promise per waiting prompt |
 
 | Renderer module (S5.5) | Owns |
@@ -40,9 +40,18 @@ in the round `chat.handoff` scheduled — and reaches nothing else in the turn:
 ```
 ChatRunner.handoff → #loop (stage 'executor') → #runRound(… implementing = executorId)
   → runAgentTurn({ …, handoff: agent.id === implementing })
-    → buildSystemPrompt(…, handoff) → buildExecutorSection(workdir, handoff)
-      → […the standing section…, HANDOFF_BRIEFING]
+    → buildSystemPrompt(…, handoff) → buildExecutorSection(workdir, handoff, goal)
+      → […the standing section…, HANDOFF_BRIEFING + goalHandoffLine(goal)]
 ```
+
+**The goal's sentence (S5.10).** `goalHandoffLine(goal)` appends one more
+sentence to that paragraph: for a `document`, the deliverable to write (creating
+its parent folders) and to report the path; for a `codebase`, the change the
+user described. A `discussion` goal, and a chat with none, add nothing —
+`HANDOFF_BRIEFING` already says to implement the conclusion, and there is
+nothing more concrete to point at. It is a **pointer, not a restatement**: the
+goal is in the group briefing of the same prompt, and a model given one
+instruction twice in two wordings follows neither reliably.
 
 `HANDOFF_BRIEFING` is exported so a test can assert the prompt contains it, and
 so the *absence* of it can be asserted on the executor's **second** turn — the
@@ -129,7 +138,7 @@ Renderer types: `PendingPermission`, `PermissionsState` (`stores/permissions.ts`
 
 Main-process types: `PermissionGate`, `PermissionRequest`, `PermissionOutcome`
 (`permissions.ts`); `ExecutorToolContext`, `PermissionDeniedError`,
-`EXECUTOR_TOOLS`, `GATED_EXECUTOR_TOOLS`, `HANDOFF_BRIEFING` (`tools.ts`);
+`EXECUTOR_TOOLS`, `GATED_EXECUTOR_TOOLS`, `HANDOFF_BRIEFING`, `goalHandoffLine` (`tools.ts`);
 `ResolvedPath` (`paths.ts`); `executorWorkdir` and `AgentTurnOptions.handoff`
 (`agents/agent-turn.ts`).
 
@@ -152,6 +161,7 @@ method; this feature contributes only the sentence the executor reads.
 | `src/renderer/src/components/chat/tool-call.test.ts` (S5.5 block) | `write_file(path)`, `run_command(command)` flattened and capped, `search_files(query)`, an MCP tool of the same name keeping the generic preview, and a missing argument falling back |
 | `src/renderer/src/components/chat/transcript-rows.test.ts` | `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines`, `formatFileRef` |
 | `e2e/executor.spec.ts` | Offline: a chat with no executor shows no card, and the hand-off button carries `data-blocked` naming the rule that disabled it. Behind the `qwen2.5:3b` guard: the card appears, nothing is on disk while it waits, Allow writes the file, the card goes away and the diff block appears and opens onto a `diff` code block — and (S5.6) two participants plus an executor discuss, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again without anybody typing |
+| `src/main/executor/tools.test.ts` (`goalHandoffLine`, S5.10) | The deliverable and its parent folders for a `document`, the change for a `codebase`, nothing for a discussion or a chat with no goal, and the line reaching `buildExecutorSection` only when `handoff` is set |
 | `src/main/orchestration/chat-runner.test.ts` (S5.6 block) | The briefing this feature contributes, asserted where it is used: the handed-over turn's prompt contains `HANDOFF_BRIEFING` and the folder, and the executor's next turn contains the folder but not the briefing. A Stop inside the handed-over turn leaves `ctx.permissions.pending()` empty and nothing on disk |
 
 `npm test`: 77 files, 1121 tests. `npm run typecheck` clean.

@@ -6,7 +6,7 @@ Four modules, each a pure function except the last:
 
 | Module | Shape |
 |---|---|
-| `briefing.ts` | `(language, self, members) → string`, delegating to `briefing.en.ts` / `briefing.zh-CN.ts`. Also `resolveMainLanguage(setting)` |
+| `briefing.ts` | `(language, self, members, memoryEnabled?, goal?) → string`, delegating to `briefing.en.ts` / `briefing.zh-CN.ts`. Also `resolveMainLanguage(setting)` |
 | `history.ts` | `(self, agentsById, userName, messages) → ModelMessage[]` |
 | `context-budget.ts` | `estimateTokens(text) → number` and `fitHistory({ system, messages, contextWindow, reserveForOutput }) → { messages, droppedCount, estimatedTokens }` |
 | `title.ts` | `sanitizeTitle` / `fallbackTitle`, and `generateChatTitle({ model, question, reply, signal }) → string \| null` |
@@ -97,6 +97,30 @@ set: save durable facts about the user or the project with `memory_save`. It is
 conditional because a prompt that asks for a tool the model was not given is how
 a model starts describing tool calls in prose.
 
+### The goal section (S5.10)
+
+Since **S5.10** they also take the chat's `ChatGoal`, and append a final
+`Goal of this chat` section when there is one — for **every** member, because
+what the group is for is not a fact about one role:
+
+| Line | Present for |
+|---|---|
+| One sentence naming what the kind means | Always |
+| `What the user asked for: <description>` — **verbatim** | Always |
+| The deliverable's relative path, and that answers are judged by whether they improve it | `document` |
+| That the member changes no file itself: the executor makes the change after the discussion, from the conclusion | `codebase` |
+
+Verbatim is the load-bearing word: the description is the one part of the whole
+prompt the user wrote, and paraphrasing it would be the app rewriting the brief.
+The section is **last** for the reason skills and memory come after the
+briefing, inverted — it is protocol of the strongest kind, and the end of a long
+prompt is the part a model is still following.
+
+A chat with **no** goal gets no section at all, not a paragraph saying so: a
+chat with no goal is a discussion nobody bothered to name, and explaining that
+would be prompt spent on nothing. A test asserts the two briefings are byte for
+byte identical in that case.
+
 ### The executor section (S5.4)
 
 `buildSystemPrompt` gained the chat, and inserts `buildExecutorSection(workdir)`
@@ -107,9 +131,14 @@ with the instruction that makes PLAN.md's review loop work: finish with a summar
 of every file changed and ask the others to review it.
 
 **S5.6** adds one optional flag on top: `AgentTurnOptions.handoff`, passed
-straight into `buildExecutorSection(workdir, handoff)`, which appends
+straight into `buildExecutorSection(workdir, handoff, goal)`, which appends
 `HANDOFF_BRIEFING` — implement the conclusion above, do not re-open the debate,
-report the paths. `ChatRunner` sets it for exactly one turn, the executor's in
+report the paths — plus, since **S5.10**, `goalHandoffLine(goal)`: the file to
+write (with its parent folders) for a `document`, or the change to make for a
+`codebase`, and nothing at all for a discussion, where `HANDOFF_BRIEFING`
+already says everything there is to say. It points at the goal rather than
+restating it, because the goal is already in the group briefing of the same
+prompt. `ChatRunner` sets it for exactly one turn, the executor's in
 the round "Hand to executor" scheduled ([`orchestration`](../orchestration/implement.md)),
 and it reaches nothing else in the turn: not the history, not the tools, not the
 result. A reviewer, and an executor re-`@`-ed later, are being asked something
@@ -177,7 +206,8 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | File | Covers |
 |---|---|
 | `src/main/agents/history.test.ts` | Every rule in the table above, one case each: prefixes, roles, the unknown-agent fallback, merging in both directions, dropping `passed` / `skipped` / empty / streaming, reasoning excluded, notices rendered and unknown keys skipped, and the same transcript producing a different view per agent |
-| `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage` |
+| `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage`. S5.10 adds the goal section in both languages — nothing at all without a goal, the description verbatim for all three kinds, the deliverable named for a `document`, the executor rule present for a `codebase` and absent otherwise |
+| `src/main/executor/tools.test.ts` (`goalHandoffLine`) | S5.10: the deliverable and its parent folders for a `document`, the change for a `codebase`, nothing for a discussion or a chat with no goal, and the line reaching `buildExecutorSection` **only** on the hand-off turn |
 | `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call and **neither** being set for an agent with empty `params` (the S5.9 shape), `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
 | `src/main/agents/agent-turn.test.ts` (S3.2 / S3.3 blocks) | The built-in tools end to end against a real skills folder and a real memory directory: the prompt carrying a skill's description but not its body, `read_skill` and `read_skill_file` answering, a traversal refused as an errored tool result, a missing skill skipped, `memory_save` writing the note **and** the index line, the index reaching the next prompt, the briefing's memory sentence appearing only when memory is on, and one agent unable to search another's notes |
 | `src/main/agents/agent-turn.test.ts` (S5.5 block) | `diffPartsFrom` as a pure function — one block per file, several writes to one file concatenated at its first position, a missing trailing newline separated, and a denial / an unchanged edit / a `git_diff` / a malformed output each producing nothing — plus three whole turns through `streamText`: two files giving two blocks and two `part` deltas, a write then an edit of the same file giving one, and a denied write giving none |

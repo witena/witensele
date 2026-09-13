@@ -26,7 +26,8 @@ offsets and their absolute paths; `absoluteInWorkdir(workdir, token)` is the
 resolver on its own, which the diff header and the tool card use because they
 already know they are holding a path.
 
-Four surfaces call one helper, `src/renderer/src/lib/editor.ts`, which is the
+Four surfaces in the transcript — and, since S5.10, the chat header's goal chip —
+call one helper, `src/renderer/src/lib/editor.ts`, which is the
 `BackendClient` call and nothing else.
 
 ## Data flow

@@ -24,6 +24,10 @@ is themed the day it is written. The rule this creates: **a token added to
 `PresenceDot`, `EmptyState`, `SectionTitle`, `Field`. They are presentational and
 stateless — every one takes already-translated strings, so no primitive imports
 `react-i18next` and none of them can leak an untranslated literal.
+`SegmentedControl`'s options carry an optional per-option `disabled` since S5.10,
+on top of the control's own: the chat Goal block needs two of its three segments
+disabled while the chat has no folder, and a segment that disappeared would
+teach nobody that the kind exists.
 `components/layout/` holds `Column` (fixed width, one border, its own scroll
 context), `PageHeader` (the 52px bar) and `window-chrome.ts` (the constants for
 living under a hidden title bar).

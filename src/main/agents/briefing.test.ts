@@ -12,7 +12,7 @@
  * Chinese — CLAUDE.md rule #1 exempts only `briefing.zh-CN.ts`.
  */
 import { describe, expect, it } from 'vitest'
-import type { Language } from '@shared/types'
+import type { ChatGoal, Language } from '@shared/types'
 import {
   buildGroupBriefing,
   PASS_TOKEN,
@@ -76,6 +76,71 @@ describe('buildGroupBriefing', () => {
 
     expect(briefing).toContain(architect.name)
     expect(briefing).toContain(PASS_TOKEN)
+  })
+})
+
+/**
+ * The goal section (S5.10).
+ *
+ * Content, not wording, like the rest of this file — with one exception that is
+ * the whole point of the feature: the user's **description** has to appear
+ * verbatim in every language, because it is the one part of the prompt they
+ * wrote themselves.
+ */
+describe('buildGroupBriefing (goal)', () => {
+  const goal = (patch: Partial<ChatGoal> = {}): ChatGoal => ({
+    kind: 'discussion',
+    description: 'Decide whether to split the runner',
+    materials: [],
+    ...patch
+  })
+
+  const brief = (language: Language, value: ChatGoal | null): string =>
+    buildGroupBriefing({ language, self: architect, members: [architect, reviewer], goal: value })
+
+  for (const language of LANGUAGES) {
+    describe(language, () => {
+      it('says nothing about a goal when the chat has none', () => {
+        // A chat with no goal is a discussion nobody bothered to name, and a
+        // paragraph explaining that would be prompt spent on nothing.
+        expect(brief(language, null)).toBe(
+          buildGroupBriefing({ language, self: architect, members: [architect, reviewer] })
+        )
+      })
+
+      it('carries the description verbatim for every kind', () => {
+        expect(brief(language, goal())).toContain(goal().description)
+        expect(brief(language, goal({ kind: 'codebase' }))).toContain(goal().description)
+        expect(
+          brief(language, goal({ kind: 'document', deliverable: 'docs/plan.md' }))
+        ).toContain(goal().description)
+      })
+
+      it('names the deliverable of a document goal', () => {
+        expect(brief(language, goal({ kind: 'document', deliverable: 'docs/plan.md' }))).toContain(
+          'docs/plan.md'
+        )
+      })
+
+      it('tells a codebase chat that the executor makes the change, not them', () => {
+        // PLAN.md's one-writer rule is invisible to a participant otherwise, and
+        // a model told to change a codebase will write the change out in prose
+        // as if it had.
+        const codebase = brief(language, goal({ kind: 'codebase' }))
+        expect(codebase).toContain('executor')
+        expect(brief(language, goal())).not.toContain('executor')
+      })
+
+      it('does not name a deliverable a discussion has no business having', () => {
+        expect(brief(language, goal())).not.toContain('docs/plan.md')
+      })
+    })
+  }
+
+  it('says it in a different language in each, as the rest of the briefing does', () => {
+    expect(brief('en', goal({ kind: 'codebase' }))).not.toBe(
+      brief('zh-CN', goal({ kind: 'codebase' }))
+    )
   })
 })
 

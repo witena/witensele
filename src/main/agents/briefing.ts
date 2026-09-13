@@ -6,7 +6,8 @@
  * who is in the room (name plus description), which of them *you* are, that the
  * other members' turns arrive as `[name]:` prefixed user messages rather than as
  * assistant turns, and the two protocol tokens — `@name` to call on someone and
- * `[PASS]` to abstain.
+ * `[PASS]` to abstain. Since S5.10 a fifth, when the chat has one: the **goal**
+ * — what the group is working towards, in the user's own words.
  *
  * It exists in **both languages** and follows the UI language (PLAN, "Bilingual
  * UI"): a Chinese-first model reads a Chinese briefing far more reliably than a
@@ -18,7 +19,7 @@
  * it is not an i18n key and `briefing.zh-CN.ts` is the one `.ts` file in the
  * repository allowed to contain Chinese (see `docs/features/agent-turn/`).
  */
-import type { Agent, Language } from '@shared/types'
+import type { Agent, ChatGoal, Language } from '@shared/types'
 import { buildEnglishBriefing } from './briefing.en'
 import { buildChineseBriefing } from './briefing.zh-CN'
 
@@ -46,6 +47,22 @@ export interface GroupBriefingInput {
    * often than one appended after a data dump.
    */
   memoryEnabled?: boolean
+  /**
+   * What this chat is working towards (S5.10), or nothing.
+   *
+   * It goes in the **briefing** rather than in a section of its own because it
+   * is the same class of thing as the roster and the protocol: a rule of the
+   * room, which every member is held to, not reference material one of them may
+   * reach for. A model that runs out of attention has to lose the skills index
+   * before it loses what it is here to do.
+   *
+   * A `codebase` goal also carries a rule the group cannot see from the goal
+   * itself — that the executor makes the change afterwards — because PLAN.md's
+   * one-writer decision is invisible to a participant otherwise, and a model
+   * told to change a codebase will otherwise write the change out in prose as
+   * if it had.
+   */
+  goal?: ChatGoal | null
 }
 
 /** What a language module is given: the briefing input minus the language. */
@@ -53,6 +70,7 @@ export interface BriefingInput {
   self: BriefingMember
   members: BriefingMember[]
   memoryEnabled: boolean
+  goal: ChatGoal | null
 }
 
 /** The shape both language modules implement. */
@@ -87,7 +105,12 @@ export function buildGroupBriefing(input: GroupBriefingInput): string {
   const { language, self, members } = input
   const roster = members.length > 0 ? members : [self]
   const build: BriefingBuilder = language === 'zh-CN' ? buildChineseBriefing : buildEnglishBriefing
-  return build({ self, members: roster, memoryEnabled: input.memoryEnabled === true })
+  return build({
+    self,
+    members: roster,
+    memoryEnabled: input.memoryEnabled === true,
+    goal: input.goal ?? null
+  })
 }
 
 /**

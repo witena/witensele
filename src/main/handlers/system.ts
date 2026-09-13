@@ -24,7 +24,22 @@ export const PICK_FOLDER_UNAVAILABLE =
   'system.pickFolder needs a window: it is implemented in src/main/ipc/dialogs.ts and registered by registerIpc'
 
 /**
- * The same arrangement for the second window-system method (S5.8).
+ * The same arrangement for the save dialog (S5.10).
+ *
+ * A `document` goal's deliverable can be typed into the field beside it, so this
+ * one is a convenience rather than the only way in — but the convenience is what
+ * keeps a user from having to remember a path, and only the window system can
+ * offer it.
+ */
+export const PICK_SAVE_PATH_UNAVAILABLE =
+  'system.pickSavePath needs a window: it is implemented in src/main/ipc/dialogs.ts and registered by registerIpc'
+
+/** The same again for the multi-select open dialog behind a goal's materials (S5.10). */
+export const PICK_PATHS_UNAVAILABLE =
+  'system.pickPaths needs a window: it is implemented in src/main/ipc/dialogs.ts and registered by registerIpc'
+
+/**
+ * The same arrangement for the theme (S5.8).
  *
  * `system.applyTheme` tints what the renderer cannot paint — the traffic lights
  * of `titleBarStyle: 'hiddenInset'` and the native dialogs — which is
@@ -36,8 +51,7 @@ export const APPLY_THEME_UNAVAILABLE =
   'system.applyTheme needs a window: it is implemented in src/main/ipc/theme.ts and registered by registerIpc'
 
 /**
- * The third method that may need a window, and the first whose need depends on a
- * setting (S5.7).
+ * The one method whose need for a window depends on a **setting** (S5.7).
  *
  * `AppSettings.editor` decides. `kind: 'custom'` is a command line and runs right
  * here — `node:child_process` is ordinary Node and is allowed in this layer — so
@@ -66,6 +80,14 @@ export const systemHandlers: HandlerModule = {
 
   'system.pickFolder': async () => {
     throw new BackendFailure('internal', PICK_FOLDER_UNAVAILABLE)
+  },
+
+  'system.pickSavePath': async () => {
+    throw new BackendFailure('internal', PICK_SAVE_PATH_UNAVAILABLE)
+  },
+
+  'system.pickPaths': async () => {
+    throw new BackendFailure('internal', PICK_PATHS_UNAVAILABLE)
   },
 
   'system.applyTheme': async () => {

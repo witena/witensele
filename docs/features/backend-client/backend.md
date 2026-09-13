@@ -16,7 +16,7 @@
 | `src/main/secrets.ts` | `SecretStore` + `createInsecureSecretStore()`, the base64 `plain:` fallback used when the OS has no key storage |
 | `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `mcp`, `memory`, `permissions`, `anthropicCli`, `close`) and `createAppContext({ databasePath, userDataDir, secrets, userId?, events?, fetchImpl?, anthropicCli?, runner?, supervisor?, mcp? })`. `close()` stops every run, the supervisor's loops and every pending permission prompt before closing the database |
 | `src/main/handlers/types.ts` | `HandlerMap` — `BackendApi` with an `AppContext` threaded in front of each method's arguments — and `HandlerModule` (`Partial<HandlerMap>`) |
-| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, the `system.pickFolder` / `system.applyTheme` **stubs**, and `system.openInEditor`, which is half implemented here (see "The electron exceptions") |
+| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, the `system.pickFolder` / `system.pickSavePath` / `system.pickPaths` / `system.applyTheme` **stubs**, and `system.openInEditor`, which is half implemented here (see "The electron exceptions") |
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
 | `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
@@ -24,7 +24,7 @@
 | `src/main/ipc-protocol.ts` | `IPC_INVOKE`, `IPC_EVENT`, `InvokeResponse`, `toBackendError`. Shared with preload, imports no electron |
 | `src/main/ipc/register.ts` | `registerIpc(ipcMain, ctx, handlers)` and `forwardEvents(events, getWindows)` |
 | `src/main/ipc/secret-store.ts` | `createElectronSecretStore()` over `safeStorage` |
-| `src/main/ipc/dialogs.ts` | `system.pickFolder` over `dialog.showOpenDialog`, layered over the stub inside `registerIpc` (S3.2) |
+| `src/main/ipc/dialogs.ts` | The three native dialogs, layered over their stubs inside `registerIpc`: `system.pickFolder` over `dialog.showOpenDialog` (S3.2), and S5.10's `system.pickSavePath` over `dialog.showSaveDialog` and `system.pickPaths` over a multi-select `showOpenDialog` |
 | `src/main/ipc/theme.ts` | `system.applyTheme` over `nativeTheme.themeSource`, layered the same way (S5.8) |
 | `src/main/ipc/editor.ts` | `system.openInEditor`'s URL branch over `shell.openExternal`, layered the same way (S5.7). Owned by [`editor`](../editor/backend.md) |
 | `src/main/index.ts` | Applies `WITENA_USER_DATA`, builds the secret store and the context on ready, registers IPC and event forwarding **before** the first window, closes the context on `before-quit` |
@@ -42,7 +42,7 @@ which must print nothing. Moving the backend to a Node server means replacing
 `src/main/ipc/`, `src/main/index.ts` and the preload bridge — the handlers, the
 context, the bus and the repositories go across untouched.
 
-### The electron exceptions: `system.pickFolder`, `system.applyTheme` and half of `system.openInEditor`
+### The electron exceptions: the three `pick*` dialogs, `system.applyTheme` and half of `system.openInEditor`
 
 Every other `BackendApi` method is a pure function of storage, the filesystem and
 the network, so every other handler lives in `src/main/handlers/`. A **native
@@ -66,8 +66,25 @@ So the exception is made deliberately and kept honest rather than waived:
 | `ipc/dialogs.ts`, `ipc/theme.ts` | The real ones, in the directory that may already import electron |
 | `ipc/register.ts` | `const table = { ...handlers, ...dialogHandlers, ...themeHandlers }` — the overrides exist only in this transport |
 
-S5.7 added the third, and it is the first that is only **conditionally**
-window-system. `system.openInEditor` opens a `vscode://` or `cursor://` URL —
+S5.10 added two more of the **same** shape as the first, which is the cheapest
+kind of exception to add and the reason the shape was worth keeping honest:
+`system.pickSavePath` (`dialog.showSaveDialog`, for the deliverable of a
+`document` goal — the file need not exist, which is what a save dialog is for)
+and `system.pickPaths` (files **and** folders, multi-select, for a goal's
+materials). Neither widens `pickFolder` with a mode flag, because a caller would
+then have to read the flag to know whether it gets a string, a `null` or an
+array. Cancelling resolves `null` for the save dialog and an **empty array** for
+the multi-select, because a caller appending to a list treats "cancelled" and
+"picked nothing" identically.
+
+Every one of the three returns **absolute** paths — the platform knows no other
+kind — and none of them can be confined to a directory on any platform this runs
+on. So converting to the relative paths a `ChatGoal` stores, and refusing a pick
+that fell outside the chat's folder, is the **renderer's** job
+(`lib/workdir.ts`'s `relativeToWorkdir`); see
+[`chats`](../chats/frontend.md).
+
+S5.7 added the conditionally window-system one. `system.openInEditor` opens a `vscode://` or `cursor://` URL —
 `shell.openExternal`, electron — *or* runs a command line — `node:child_process`,
 not electron — and which of the two is a stored setting. So the shape had to bend
 one notch: the whole decision lives in an Electron-free module
@@ -222,7 +239,8 @@ temporary directory. `SkillMeta.path` and `MemoryEntry.path` are declared in
 | electron `ipcMain.handle` | The request/response channel | A rejected handler promise reaches the renderer as an `Error` with only the message. Hence the `InvokeResponse` envelope — never reject out of the handler |
 | electron `webContents.send` | The push channel | Throws on a destroyed window; `forwardEvents` checks `isDestroyed()` first |
 | electron `safeStorage` | Encrypting provider API keys | `isEncryptionAvailable()` can be false on a machine with no keyring, and returns a `Buffer` that must be base64-encoded for a `text` column |
-| electron `dialog.showOpenDialog` | `system.pickFolder` (S3.2) | Resolves `{ canceled, filePaths }` rather than rejecting when the user cancels, so the handler answers `null`. `properties: ['openDirectory']` only — no multi-select, no file creation |
+| electron `dialog.showOpenDialog` | `system.pickFolder` (S3.2) and `system.pickPaths` (S5.10) | Resolves `{ canceled, filePaths }` rather than rejecting when the user cancels, so the handlers answer `null` / `[]`. `pickFolder` passes `['openDirectory']` only; `pickPaths` passes `['openFile', 'openDirectory', 'multiSelections']`, which on macOS is one panel that accepts either |
+| electron `dialog.showSaveDialog` | `system.pickSavePath` (S5.10) | Resolves `{ canceled, filePath }` — singular, and a **string**, not an array. `properties: ['createDirectory', 'showOverwriteConfirmation']`: a deliverable is routinely the first file in a folder that does not exist yet, which is also why nothing about the answer is checked against the filesystem |
 | electron `shell.openExternal` | `system.openInEditor`'s URL branch (S5.7) | It resolves when the platform *accepted* the URL, and on macOS rejects when nothing is registered for the scheme — which is a real answer ("VS Code is not installed") and is why the renderer paints a failed chip from it |
 | electron `nativeTheme` | `system.applyTheme` (S5.8), and `backgroundColor` in `src/main/index.ts` | `themeSource` accepts `'system'` verbatim and is process-wide, so it also covers windows opened later and needs no listener of ours. `shouldUseDarkColors` is the *resolved* answer and is only read where a colour is needed now |
 | electron structured clone | Payload serialization | It preserves `undefined` and does **not** preserve prototypes. Do not rely on either — a future HTTP transport goes through `JSON.stringify`, which drops `undefined` keys, so treat an absent optional field and an explicit `undefined` as the same thing |

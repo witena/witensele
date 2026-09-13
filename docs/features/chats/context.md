@@ -35,6 +35,11 @@ can hold a real conversation and still holds it after a restart.
 - The chat's **working directory** (S5.2): `ChatPatch.workdir`, the handler's
   filesystem check, the "Working directory" row in the group settings with
   "Choose…" and "Clear", and the folder chip in the header.
+- The chat's **goal** (S5.10): `Chat.goal`, its column and migration, the whole
+  validation table behind `ChatPatch.goal`, `chats.goalStatus`, the **Goal**
+  block under the Working directory row, and the goal chip beside the folder
+  chip — including the "delivered" state and the click that opens the file. What
+  the goal *says to a model* is [`agent-turn`](../agent-turn/context.md)'s.
 - The **one executor per chat** rule (S5.2): refused by `chats.members.set`, and
   explained in advance by the member picker, which greys a second executor out.
   The executor badge on member rows and message headers is here too.
@@ -62,6 +67,9 @@ can hold a real conversation and still holds it after a restart.
 | Generating the title itself | [`orchestration`](../orchestration/context.md) — `ChatRunner` writes it after the first run (S4.3); this feature owns the field, the rename and the list row |
 | The `executor` **role** itself — the control, the badge's copy, what the role means | [`agents`](../agents/context.md). This feature owns the *membership* rule and the surfaces that draw the badge |
 | The executor's file, shell and git tools, the permission **gate** and the `DiffPart`s the backend appends | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md). This feature owns the folder they are confined to and the three surfaces that draw their results — not what they may do |
+| The wording of the goal in a system prompt, in either language, and the hand-off line that names the deliverable | [`agent-turn`](../agent-turn/context.md) and [`executor`](../executor/context.md), S5.10. This feature owns the goal as **data** and as a **control**; they own what a model is told about it |
+| Placing a goal's `materials` in every member's context, and the read-only workspace tools | S5.11. S5.10 records the materials, validates that they exist, and lists them in the panel; nothing reads their contents yet |
+| Flipping the chip and appending a `FileRefPart` when an executor turn produces the deliverable | S5.12. S5.10's chip is refreshed when the chat changes, which is enough for a file created by hand or by any other means |
 | Opening a `file-ref` chip, a path in the body text, a diff header or a file tool card in the editor | [`editor`](../editor/context.md), S5.7 `[x]`. It adds behaviour to components this feature owns; the rules it follows — the path detector, the confinement, the `AppSettings.editor` choice — are written up there |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
 | Virtualized message list, upward paging | S2.5 |
@@ -96,6 +104,11 @@ the next round boundary rather than mid-turn.
 | `ChatCreateInput` carries `memberAgentIds` rather than `Chat` carrying members | Put a member list on `Chat`; save the chat and then its members | Membership is a separate table and not a property of the chat row, but a chat created from the picker must be born with its members rather than saved twice |
 | `chat.send` rejects with `validation('chat has no members')`, and the composer stays enabled | Disable the composer; run with nobody and finish silently | A disabled composer does not say *why*. The rejection prints one line under the box and the member panel prints the fix |
 | `ChatPatch.settings` is a partial that the backend merges | Send the whole `ChatSettings` from every control | Two controls changed quickly would otherwise overwrite each other, and the caller would have to hold a copy of the stored object |
+| The goal is **one JSON field replaced whole**, not four patchable ones (S5.10) | A field patch per control, like `ChatSettings` | `materials` is a list the user removes from, and a merge has no spelling for "this list is now empty". The cost is that the Goal block has to hold a draft and send the whole object, which it does |
+| A goal's paths are **relative to `workdir`**; the folder itself is absolute (S5.10) | Store absolute paths, as the dialogs return them | The folder is a machine-local binding; the goal describes the project and has to survive the folder being moved, cloned or restored. That makes the conversion — and the "you picked something outside this folder" refusal — the **renderer's** job, because no native dialog can be confined to a directory |
+| "Delivered" is a **query** (`chats.goalStatus`), not a column on `Chat` (S5.10) | A boolean the backend writes when it notices; a field filled in on `chats.get` / `chats.list` | It is a fact about the filesystem, so a stored value is wrong the moment anything creates, moves or deletes the file — including something that is not this app. A derived field on the domain type is the same mistake this table already refused for the member count. The renderer asks when a chat is opened and whenever that chat changes |
+| A goal **is** its description: blank means no goal (S5.10) | Allow an empty description; add a "Clear goal" button | A kind on its own says nothing a model can act on, so an empty description is not a goal that is merely unfinished — it is no goal. That gives the block its way back out for free, through the same box that created it, instead of a second control that exists only to undo the first |
+| Document and Codebase are **disabled** without a folder, with the reason under them (S5.10) | Hide them; bind a folder automatically when one is picked | The same rule as the hand-off button: a control that vanishes teaches nothing, and "choose a working directory to write a document" is the answer to the question the user is about to ask |
 | Every group-settings control persists on change, with no Save button | A Save button; a debounce | Each control is one field of one row. A select the user changed and then closed the app on must not quietly have been forgotten |
 | Reordering uses the native HTML5 drag events | A drag-and-drop library | A handful of rows in a window that is always Chromium. The library would add a package, a provider component and its own keyboard model; the only part that can silently be wrong is the index arithmetic, which lives in `lib/reorder.ts` and is unit-tested |
 | Add / remove / reorder all end in one `chats.members.set` with the whole array | Narrower add / remove / move methods | The array index *is* `position`. Three narrower calls would each have to read the current order first, and would race the `chat.updated` that follows |
@@ -129,3 +142,10 @@ the next round boundary rather than mid-turn.
   in `backend.md`.
 - Whether the chat should offer to bind the folder when an executor joins a chat
   that has none. Today the two are independent and the user does both by hand.
+- Whether `chats.goalStatus` should be pushed rather than polled. Today the
+  renderer re-asks when the chat is opened and on every `chat.updated`, so a file
+  written by something that is not this app is noticed only at the next such
+  moment. S5.12 makes an executor turn one of them; a filesystem watcher would
+  make it immediate and is deliberately not in S5.10.
+- Whether a `discussion` goal should be allowed to carry materials at all, given
+  that S5.11 is what reads them. Today it may, as long as the chat has a folder.

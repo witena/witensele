@@ -28,13 +28,27 @@
  * - **A chat holds at most one executor member.** PLAN.md's rule is that all
  *   writes go through a single agent, so the refusal lives where membership is
  *   written rather than where tools are attached.
+ * - **A goal's paths are checked against the chat's folder** (S5.10), which is
+ *   the *patch's* folder when it carries one and the stored one otherwise — so
+ *   binding a folder and setting a goal in a single call is legal, and setting a
+ *   goal on a chat that already has a folder costs one read.
  */
-import { statSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
-import type { ChatCreateInput, ChatMode, ChatPatch, ChatSettings, SpeakingMode } from '@shared/types'
-import { MAX_AUTO_ROUNDS, MIN_AUTO_ROUNDS } from '@shared/types'
+import { existsSync, statSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
+import type {
+  ChatCreateInput,
+  ChatGoal,
+  ChatGoalStatus,
+  ChatMode,
+  ChatPatch,
+  ChatSettings,
+  SpeakingMode,
+  ValidationReason
+} from '@shared/types'
+import { GOAL_KINDS, MAX_AUTO_ROUNDS, MAX_GOAL_DESCRIPTION_CHARS, MIN_AUTO_ROUNDS } from '@shared/types'
 import { summarizeUsage, type ChatUsageSummary } from '@shared/usage'
 import { ensureDefaultAgent } from '../agents/default-agent'
+import { resolveInWorkdir } from '../executor/paths'
 import { validation } from '../errors'
 import type { AppContext } from '../app-context'
 import type { HandlerModule } from './types'
@@ -50,8 +64,18 @@ function assertId(input: unknown, what: string): asserts input is { id: string }
   if (typeof id !== 'string' || id.length === 0) throw validation(`A ${what} id is required`)
 }
 
-/** Only the fields `ChatPatch` declares, and only when present. */
-function assertChatPatch(patch: unknown): asserts patch is ChatPatch {
+/**
+ * Only the fields `ChatPatch` declares, and only when present.
+ *
+ * `storedWorkdir` is a **thunk** rather than a value because it is only needed
+ * by a patch that carries a goal: reading the chat row to validate a rename
+ * would be a database round trip bought for nothing, and `chats.create` has no
+ * row to read at all.
+ */
+function assertChatPatch(
+  patch: unknown,
+  storedWorkdir: () => string | null
+): asserts patch is ChatPatch {
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
     throw validation('A chat patch object is required')
   }
@@ -62,6 +86,12 @@ function assertChatPatch(patch: unknown): asserts patch is ChatPatch {
     }
   }
   if (candidate.workdir !== undefined) assertWorkdir(candidate.workdir)
+  if (candidate.goal !== undefined) {
+    // The folder the goal lives in: the one this patch is binding, when it binds
+    // one, and otherwise the one the chat already has.
+    const workdir = candidate.workdir !== undefined ? candidate.workdir : storedWorkdir()
+    assertGoal(candidate.goal, workdir)
+  }
   if (candidate.settings !== undefined) assertChatSettings(candidate.settings)
 }
 
@@ -103,6 +133,166 @@ function assertWorkdir(value: unknown): asserts value is string | null {
   if (!stats.isDirectory()) {
     throw validation(`workdir is not a directory: ${value}`, { reason: 'workdir_not_directory' })
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The chat goal (S5.10)                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One path out of a goal, resolved inside the chat's folder.
+ *
+ * Two rules, in this order, because they fail for different reasons and the
+ * user fixes them differently:
+ *
+ * 1. **It has to be relative.** A goal outlives the folder it was written
+ *    against — the project is moved, restored from a backup, cloned onto another
+ *    machine — and an absolute path would then name something else or nothing at
+ *    all. `..` is refused here rather than at the boundary below so the message
+ *    says "relative" instead of "outside", which is the thing to correct.
+ * 2. **It has to stay inside the folder.** `resolveInWorkdir` is the executor's
+ *    own confinement check (`src/main/executor/paths.ts`), symlinks included, so
+ *    a goal can never name a file the executor would be refused. Its refusals
+ *    carry no `ValidationReason`, so they are re-thrown with this caller's.
+ *
+ * Returns the absolute path, which the material check then stats. Existence is
+ * **not** checked here: a deliverable is by definition a file that is not there
+ * yet.
+ */
+function resolveGoalPath(
+  value: unknown,
+  workdir: string,
+  reasons: { notRelative: ValidationReason; outside: ValidationReason },
+  what: string
+): string {
+  if (typeof value !== 'string' || value.trim().length === 0 || isAbsolute(value)) {
+    throw validation(`${what} must be a non-empty path relative to the working directory`, {
+      reason: reasons.notRelative
+    })
+  }
+  const wanted = value.trim()
+  // Split on both separators: the string may have been typed by hand on a
+  // machine whose `path` module is not the one that will read it back.
+  if (wanted.split(/[/\\]/).includes('..')) {
+    throw validation(`${what} may not climb out of the working directory: ${wanted}`, {
+      reason: reasons.notRelative
+    })
+  }
+
+  try {
+    return resolveInWorkdir(workdir, wanted).absolute
+  } catch {
+    throw validation(`${what} is outside the working directory: ${wanted}`, {
+      reason: reasons.outside
+    })
+  }
+}
+
+/**
+ * The chat's goal: `null`, or a description plus whatever its kind requires.
+ *
+ * `workdir` is the folder the goal's paths are resolved in — the patch's own
+ * when it carries one, the stored one otherwise — and `null` means the chat is
+ * bound to nothing, which is a legal state for a `discussion` with no materials
+ * and for nothing else.
+ *
+ * Every refusal a control can actually produce carries a `ValidationReason`, so
+ * the panel can say which field is wrong rather than "the request was rejected
+ * as invalid". The malformed-object refusals below (a bad `kind`, `materials`
+ * that is not an array) carry none on purpose: no control can send them, and a
+ * reason is a sentence a user is meant to act on.
+ */
+function assertGoal(value: unknown, workdir: string | null): asserts value is ChatGoal | null {
+  // `null` is how the panel removes a goal, and is always valid.
+  if (value === null) return
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw validation('A chat goal must be an object, or null')
+  }
+  const goal = value as ChatGoal
+
+  if (!GOAL_KINDS.includes(goal.kind)) throw validation('unknown chat goal kind')
+  if (!Array.isArray(goal.materials) || goal.materials.some((entry) => typeof entry !== 'string')) {
+    throw validation('goal materials must be an array of relative paths')
+  }
+
+  if (typeof goal.description !== 'string' || goal.description.trim().length === 0) {
+    throw validation('a chat goal needs a description', { reason: 'goal_description_empty' })
+  }
+  if (goal.description.length > MAX_GOAL_DESCRIPTION_CHARS) {
+    throw validation(
+      `a chat goal description is at most ${MAX_GOAL_DESCRIPTION_CHARS} characters`,
+      { reason: 'goal_description_too_long' }
+    )
+  }
+
+  // A goal that names files needs a folder for them to be in. `document` and
+  // `codebase` always do; a `discussion` only does once it lists materials.
+  const needsWorkdir =
+    goal.kind === 'document' || goal.kind === 'codebase' || goal.materials.length > 0
+  if (needsWorkdir && workdir === null) {
+    throw validation('this goal needs the chat to be bound to a folder', {
+      reason: 'goal_needs_workdir'
+    })
+  }
+  // The folder was validated when it was bound, which says nothing about now: a
+  // goal resolved against a folder that has been deleted would fail as "outside"
+  // and send the user looking for the wrong mistake.
+  if (needsWorkdir) assertWorkdir(workdir)
+
+  if (goal.kind === 'document') {
+    if (goal.deliverable === undefined) {
+      throw validation('a document goal needs a deliverable', {
+        reason: 'goal_deliverable_required'
+      })
+    }
+    resolveGoalPath(
+      goal.deliverable,
+      workdir as string,
+      { notRelative: 'goal_deliverable_not_relative', outside: 'goal_deliverable_outside_workdir' },
+      'a deliverable'
+    )
+  } else if (goal.deliverable !== undefined) {
+    // Not a `ValidationReason`: the panel drops the field when the kind changes,
+    // so only a hand-written call can reach this.
+    throw validation('only a document goal may carry a deliverable')
+  }
+
+  for (const material of goal.materials) {
+    const absolute = resolveGoalPath(
+      material,
+      workdir as string,
+      { notRelative: 'goal_material_not_relative', outside: 'goal_material_outside_workdir' },
+      'a material'
+    )
+    // Unlike the deliverable, a material is something the group reads, so it has
+    // to be there. S5.11 is what actually reads it.
+    if (!existsSync(absolute)) {
+      throw validation(`a material does not exist: ${material}`, {
+        reason: 'goal_material_missing'
+      })
+    }
+  }
+}
+
+/**
+ * Where a `document` goal's deliverable is, and whether it is there yet.
+ *
+ * A **query** rather than a field on `Chat` because it is a fact about the
+ * filesystem: a column would be written once and then be wrong the moment
+ * anything created, moved or deleted the file, and the same reasoning already
+ * keeps the member count off the domain type. The renderer asks when it opens a
+ * chat and whenever that chat changes; S5.12 is what makes an executor turn ask.
+ *
+ * `join` rather than `resolveInWorkdir`: the path was confined when the goal was
+ * saved, and a folder that has since gone simply answers "not delivered" instead
+ * of throwing at a chip that only wants to know whether to say so.
+ */
+function goalStatus(goal: ChatGoal | null, workdir: string | null): ChatGoalStatus {
+  if (!goal || goal.kind !== 'document' || !goal.deliverable || workdir === null) {
+    return { deliverable: null, delivered: false }
+  }
+  const deliverable = join(workdir, goal.deliverable)
+  return { deliverable, delivered: existsSync(deliverable) }
 }
 
 /**
@@ -233,7 +423,9 @@ export const chatHandlers: HandlerModule = {
   'chats.create': async (ctx, input) => {
     const create: ChatCreateInput = input?.input ?? {}
     const { memberAgentIds, ...patch } = create
-    assertChatPatch(patch)
+    // No row yet, so a goal can only be validated against the folder this same
+    // call is binding.
+    assertChatPatch(patch, () => null)
     if (memberAgentIds !== undefined) assertAgentIds(memberAgentIds)
 
     const members = await initialMembers(ctx, memberAgentIds)
@@ -252,7 +444,10 @@ export const chatHandlers: HandlerModule = {
 
   'chats.update': async (ctx, input) => {
     assertId(input, 'chat')
-    assertChatPatch(input.patch)
+    // The stored folder is read only when the patch carries a goal and no
+    // `workdir` of its own; `assertChatPatch` calls the thunk in exactly that
+    // case, so a rename still costs one write and no read.
+    assertChatPatch(input.patch, () => ctx.repos.chats.get(input.id, ctx.userId).workdir)
     // The repository always bumps `updatedAt`, so a rename floats the chat to the
     // top of the list exactly like a new message does.
     const chat = ctx.repos.chats.update(input.id, input.patch, ctx.userId)
@@ -273,6 +468,13 @@ export const chatHandlers: HandlerModule = {
     // A blank query is "no filter" by contract, not an error: the renderer calls
     // this on every keystroke and the last keystroke is often a deletion.
     return ctx.repos.chats.search(query, ctx.userId)
+  },
+
+  'chats.goalStatus': async (ctx, input) => {
+    const chatId = (input as { chatId?: unknown })?.chatId
+    if (typeof chatId !== 'string' || chatId.length === 0) throw validation('A chat id is required')
+    const chat = ctx.repos.chats.get(chatId, ctx.userId)
+    return goalStatus(chat.goal, chat.workdir)
   },
 
   'chats.members.list': async (ctx, input) => {

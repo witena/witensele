@@ -211,15 +211,18 @@ Naming conventions the whole app follows:
 | `agents.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Agent[]` / `Agent` / `Agent` / `Agent` / `void` | |
 | `mcp.list` / `create` / `update` / `delete` | — / `{ input }` / `{ id, patch }` / `{ id }` | `McpServer[]` / `McpServer` / `McpServer` / `void` | |
 | `mcp.testConnection` | `{ id }` | `McpConnectionTestResult` | Success also returns `toolNames` |
-| `system.pickFolder` | — | `string \| null` | **S3.2**; one of the two methods implemented in `src/main/ipc/` because they need a window. `null` means the user cancelled, which is not an error |
-| `system.applyTheme` | `{ theme }` | `void` | **S5.8**; the second. A notification, not a write — the setting is stored by `settings.update` — so it carries no state and its caller ignores a rejection. `validation` for a theme outside `THEME_SETTINGS` |
-| `system.openInEditor` | `{ path, line?, chatId? }` | `void` | **S5.7**; the third, and the first that needs a window only for *some* settings — a `vscode://` URL does, a custom command line does not. `validation` with `editor_path_not_absolute` / `editor_path_outside_workdir`; owned by [`editor`](../editor/implement.md) |
+| `system.pickFolder` | — | `string \| null` | **S3.2**; the first of the methods implemented in `src/main/ipc/` because they need a window. `null` means the user cancelled, which is not an error |
+| `system.pickSavePath` | `{ defaultDir? }` | `string \| null` | **S5.10**; the native **save** dialog, for a `document` goal's deliverable. The file need not exist, so nothing is checked here; `null` is a cancelled dialog |
+| `system.pickPaths` | `{ defaultDir? }` | `string[]` | **S5.10**; files and folders, multi-select, for a goal's materials. Cancelling resolves `[]`, because a caller appending to a list treats that and "picked nothing" the same |
+| `system.applyTheme` | `{ theme }` | `void` | **S5.8**. A notification, not a write — the setting is stored by `settings.update` — so it carries no state and its caller ignores a rejection. `validation` for a theme outside `THEME_SETTINGS` |
+| `system.openInEditor` | `{ path, line?, chatId? }` | `void` | **S5.7**; the one that needs a window only for *some* settings — a `vscode://` URL does, a custom command line does not. `validation` with `editor_path_not_absolute` / `editor_path_outside_workdir`; owned by [`editor`](../editor/implement.md) |
 | `skills.list` | — | `{ skills: SkillMeta[]; warnings: SkillWarning[] }` | S3.2. The warnings name folders that look like a skill and could not be used |
 | `skills.import` | `{ sourcePath, overwrite? }` | `SkillMeta` | S3.2; refuses an existing folder name unless `overwrite` |
 | `skills.read` / `skills.delete` | `{ name }` | `SkillDetail` / `void` | **Added in S3.2** |
 | `memory.list` / `read` / `write` | `{ agentId }` / `{ agentId, path }` / `{ agentId, path, content }` | `MemoryEntry[]` / `{ path, content }` / `MemoryEntry` | S3.3. `path` is relative to the agent's memory directory; `MEMORY.md` is the index |
 | `memory.delete` / `memory.search` | `{ agentId, path }` / `{ agentId, query }` | `void` / `MemorySearchHit[]` | **Added in S3.3** |
 | `chats.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Chat[]` / `Chat` / `Chat` / `Chat` / `void` | `chats.create` takes a partial input; defaults come from `DEFAULT_CHAT_SETTINGS` |
+| `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | **S5.10**. Whether the `document` goal's deliverable is on disk, and where. A query rather than a field on `Chat`, because it is a fact about the filesystem; a chat with no document goal answers `{ deliverable: null, delivered: false }` rather than rejecting |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **Added in S1.7**: the contract had a setter but no getter, and both chat columns read the membership |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the whole list; array order becomes `position` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is an exclusive message-id cursor |
@@ -233,7 +236,7 @@ As of **S3.3 every declared method is implemented.** The stub mechanism stays �
 and `handlers.test.ts` asserts the builder directly rather than through a method
 that happens to be missing — so the next method added to `BackendApi` before its
 step lands still rejects with a pointer instead of crashing. The two methods that
-reject in the Electron-free layer *by design* are `system.pickFolder` and
+reject in the Electron-free layer *by design* are the three `pick*` dialogs and
 `system.applyTheme`, and `system.openInEditor` joins them for two of its three
 editor settings; see [`backend.md`](./backend.md).
 
@@ -256,7 +259,7 @@ editor settings; see [`backend.md`](./backend.md).
 
 | File | Covers |
 |---|---|
-| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list, has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
+| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus` to it), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
 | `src/main/events/bus.test.ts` | Delivery order, payload identity, unsubscribe (twice is harmless), a throwing listener being logged without stopping the others, a listener added during delivery not receiving the in-flight event |
 | `src/main/secrets.test.ts` | Insecure store round trip including empty, long and non-ASCII values; the `plain:` marker; `isAvailable()` false; exactly one warning |
 | `src/main/app-context.test.ts` | The context opens a real temporary database, defaults to `LOCAL_USER_ID`, binds the repositories to the injected secret store, and `close()` is idempotent. From S3.2 it is also given `userDataDir`, from which `skillsDir()` / `memoryDir()` and `ctx.memory` are derived |

@@ -14,9 +14,17 @@
  * column still reads Today / Yesterday / Earlier.
  */
 import { create } from 'zustand'
-import type { BackendErrorCode, Chat, ChatSettings } from '@shared/types'
+import type {
+  BackendErrorCode,
+  Chat,
+  ChatGoal,
+  ChatGoalStatus,
+  ChatSettings,
+  ValidationReason
+} from '@shared/types'
 import { BackendClientError } from '../lib/backend'
 import { getBackend } from '../lib/backend-provider'
+import { relativeToWorkdir } from '../lib/workdir'
 import { useAgentsStore } from './agents'
 
 export type ChatsStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -86,6 +94,32 @@ export function groupChats(chats: Chat[], now: number = Date.now()): ChatGroup[]
   )
 }
 
+/**
+ * One dialog result as a relative path, or `null` with the refusal recorded.
+ *
+ * The dialogs cannot be confined to a directory, so "you picked something
+ * outside this chat's folder" is a **renderer-side** refusal — there is no
+ * backend call to reject it. It is nevertheless reported exactly like one: the
+ * same three store fields, carrying a `ValidationReason` the same
+ * `translateFailure` turns into the same kind of sentence, in the same
+ * `chats-error` line. One failure surface, whoever noticed the failure.
+ */
+function relativeOrRefuse(
+  set: (partial: Partial<ChatsState>) => void,
+  workdir: string,
+  absolute: string,
+  reason: ValidationReason
+): string | null {
+  const relative = relativeToWorkdir(workdir, absolute)
+  if (relative !== null) return relative
+  set({
+    error: `picked outside the working directory: ${absolute}`,
+    errorCode: 'validation',
+    errorDetails: { reason }
+  })
+  return null
+}
+
 /** Newest `updatedAt` first, which is the order the backend list arrives in. */
 function sortChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt)
@@ -103,6 +137,15 @@ export interface ChatsState {
    * changes it, and it writes through the backend first.
    */
   membersByChat: Record<string, string[]>
+  /**
+   * Whether each chat's `document` deliverable is on disk, keyed by chat id.
+   *
+   * Backend-owned and deliberately **not** part of `Chat`: it is a fact about the
+   * filesystem, so it is asked for (`chats.goalStatus`) rather than stored, and a
+   * chat that has not been asked about simply has no entry — the chip then draws
+   * its "not delivered yet" state, which is what it is far more often.
+   */
+  goalStatusByChat: Record<string, ChatGoalStatus>
   status: ChatsStatus
   /** Developer-facing detail of the last failure; the UI shows translated copy. */
   error?: string | undefined
@@ -148,6 +191,32 @@ export interface ChatsState {
    */
   setWorkdir: (chatId: string, workdir: string | null) => Promise<void>
   /**
+   * Replaces the chat's goal, or removes it with `null`.
+   *
+   * The whole object every time, not a field patch: `materials` is a list the
+   * user removes from, and a merge could never delete its last entry. The panel
+   * therefore composes the new goal from its draft and sends it here.
+   */
+  setGoal: (chatId: string, goal: ChatGoal | null) => Promise<void>
+  /**
+   * Opens the native save dialog and returns the picked file **relative to
+   * `workdir`**, or `null`.
+   *
+   * `null` covers both a cancelled dialog and a file the user saved outside the
+   * chat's folder; the second also leaves a translated reason in `error`, the
+   * first leaves nothing at all. Returning the path rather than writing it is
+   * what lets the panel put it in the field the user can still edit before it
+   * is saved.
+   */
+  pickDeliverable: (workdir: string) => Promise<string | null>
+  /**
+   * Opens the native multi-select dialog and returns the picks relative to
+   * `workdir`, dropping — and reporting — any that fell outside it.
+   */
+  pickMaterials: (workdir: string) => Promise<string[]>
+  /** Reads `chats.goalStatus` for one chat. Never rejects. */
+  loadGoalStatus: (chatId: string) => Promise<void>
+  /**
    * Opens the native folder picker and binds the chat to what came back.
    *
    * Two calls rather than one backend method, for the same reason
@@ -176,6 +245,7 @@ export interface ChatsState {
 export const useChatsStore = create<ChatsState>()((set, get) => ({
   chats: [],
   membersByChat: {},
+  goalStatusByChat: {},
   status: 'idle',
   error: undefined,
   errorCode: undefined,
@@ -287,6 +357,58 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
     }
   },
 
+  async setGoal(chatId, goal) {
+    try {
+      get().applyUpdated(await getBackend().invoke('chats.update', { id: chatId, patch: { goal } }))
+      set({ error: undefined, errorCode: undefined, errorDetails: undefined })
+      // The deliverable may have changed, or the goal may have stopped being a
+      // document; either way the chip's answer is now stale.
+      await get().loadGoalStatus(chatId)
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
+    }
+  },
+
+  async pickDeliverable(workdir) {
+    try {
+      const picked = await getBackend().invoke('system.pickSavePath', { defaultDir: workdir })
+      // Cancelling is an answer, not a failure, and must leave no error behind.
+      if (!picked) return null
+      return relativeOrRefuse(set, workdir, picked, 'goal_deliverable_outside_workdir')
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
+      return null
+    }
+  },
+
+  async pickMaterials(workdir) {
+    try {
+      const picked = await getBackend().invoke('system.pickPaths', { defaultDir: workdir })
+      const inside: string[] = []
+      for (const absolute of picked) {
+        const relative = relativeOrRefuse(set, workdir, absolute, 'goal_material_outside_workdir')
+        if (relative !== null) inside.push(relative)
+      }
+      // The ones that were inside are kept rather than the whole pick being
+      // thrown away: a user who selected six files and one of them from another
+      // folder meant the six.
+      return inside
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
+      return []
+    }
+  },
+
+  async loadGoalStatus(chatId) {
+    try {
+      const status = await getBackend().invoke('chats.goalStatus', { chatId })
+      set((state) => ({ goalStatusByChat: { ...state.goalStatusByChat, [chatId]: status } }))
+    } catch {
+      // A chat that has just been deleted is the usual case here, and the chip
+      // it would have fed is already gone. Nothing to tell the user.
+    }
+  },
+
   async chooseWorkdir(chatId) {
     try {
       const picked = await getBackend().invoke('system.pickFolder')
@@ -357,9 +479,11 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
   applyDeleted(chatId) {
     set((state) => {
       const { [chatId]: _members, ...membersByChat } = state.membersByChat
+      const { [chatId]: _goalStatus, ...goalStatusByChat } = state.goalStatusByChat
       return {
         chats: state.chats.filter((chat) => chat.id !== chatId),
         membersByChat,
+        goalStatusByChat,
         ...(state.selectedId === chatId ? { selectedId: null } : {})
       }
     })
@@ -387,4 +511,14 @@ export function useChatWorkdir(chatId: string | null): string | null {
   return useChatsStore(
     (state) => (chatId ? (state.chats.find((chat) => chat.id === chatId)?.workdir ?? null) : null)
   )
+}
+
+/**
+ * Whether one chat's deliverable is on disk, as the header chip needs it.
+ *
+ * `undefined` until `chats.goalStatus` has answered, which the chip reads as
+ * "not delivered" rather than as a third state to draw.
+ */
+export function useChatGoalStatus(chatId: string | null): ChatGoalStatus | undefined {
+  return useChatsStore((state) => (chatId ? state.goalStatusByChat[chatId] : undefined))
 }

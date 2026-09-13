@@ -42,6 +42,7 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, type Dir
 import { dirname, join, relative } from 'node:path'
 import { createPatch } from 'diff'
 import { jsonSchema, tool, type ToolSet } from 'ai'
+import type { ChatGoal } from '@shared/types'
 import { isBackendFailure, validation } from '../errors'
 import { resolveInWorkdir, realWorkdir, type ResolvedPath } from './paths'
 import type { PermissionGate, PermissionOutcome } from './permissions'
@@ -180,9 +181,42 @@ export const HANDOFF_BRIEFING = [
  *
  * `handoff` appends `HANDOFF_BRIEFING` for the one turn "Hand to executor"
  * schedules. It is a *suffix* rather than a different section so the folder and
- * the tool list are described once, in one order, in both situations.
+ * the tool list are described once, in one order, in both situations. Since
+ * S5.10 that suffix also names the chat's deliverable or its change
+ * (`goalHandoffLine`), which is the difference between "implement the
+ * conclusion" and "write `docs/report.md`".
  */
-export function buildExecutorSection(workdir: string, handoff = false): string {
+/**
+ * The one sentence the hand-off briefing gains from the chat's goal (S5.10).
+ *
+ * `HANDOFF_BRIEFING` says "implement the conclusion the group reached", which is
+ * exactly right for a discussion and one sentence short of useful when the chat
+ * has a goal: a `document` chat has a file it is supposed to end with, and a
+ * `codebase` chat has a change the user described before anyone spoke. Naming
+ * the deliverable is what stops an executor from writing its summary into the
+ * transcript and calling it done.
+ *
+ * What it must *not* do is restate the goal in full — the goal is already in the
+ * group briefing this same prompt carries, and a model given the same
+ * instruction twice in two wordings follows neither reliably. So this is the
+ * pointer, not the brief.
+ */
+export function goalHandoffLine(goal: ChatGoal | null | undefined): string | null {
+  if (!goal) return null
+  if (goal.kind === 'document' && goal.deliverable) {
+    return `The goal of this chat is the file ${goal.deliverable}: write it, creating its parent folders if they do not exist, and report the path when you are done.`
+  }
+  if (goal.kind === 'codebase') {
+    return `The goal of this chat is a change to the code in this working directory: ${goal.description.trim()} Make that change now.`
+  }
+  return null
+}
+
+export function buildExecutorSection(
+  workdir: string,
+  handoff = false,
+  goal: ChatGoal | null = null
+): string {
   return [
     'You are the executor of this chat: the one member allowed to change anything. Your working directory is:',
     '',
@@ -202,7 +236,7 @@ export function buildExecutorSection(workdir: string, handoff = false): string {
     `${WRITE_FILE_TOOL}, ${EDIT_FILE_TOOL} and ${RUN_COMMAND_TOOL} pause until the user allows or declines the call. A declined call is an answer, not a failure: do not retry it, say what you wanted to do and why.`,
     '',
     `Read a file before you edit it, prefer ${EDIT_FILE_TOOL} over rewriting a whole file, and make the smallest change that does the job. When you are finished, end your message with a short summary of every file you changed and what it now does, and ask the others to review it.`,
-    ...(handoff ? ['', HANDOFF_BRIEFING] : [])
+    ...(handoff ? ['', [HANDOFF_BRIEFING, goalHandoffLine(goal)].filter(Boolean).join(' ')] : [])
   ].join('\n')
 }
 

@@ -93,6 +93,7 @@ function toChat(row: ChatRow): Chat {
     updatedAt: row.updatedAt,
     title: row.title,
     workdir: row.workdir,
+    goal: row.goal,
     settings: row.settings
   }
 }
@@ -139,6 +140,7 @@ export function createChatRepository(db: DrizzleDb): ChatRepository {
         userId,
         title: input.title ?? DEFAULT_CHAT_TITLE,
         workdir: input.workdir ?? null,
+        goal: input.goal ?? null,
         settings: { ...DEFAULT_CHAT_SETTINGS, ...input.settings },
         createdAt: timestamp,
         updatedAt: timestamp
@@ -152,6 +154,9 @@ export function createChatRepository(db: DrizzleDb): ChatRepository {
       const next: Partial<ChatRow> = { updatedAt: now() }
       if (patch.title !== undefined) next.title = patch.title
       if (patch.workdir !== undefined) next.workdir = patch.workdir
+      // A whole-object replace, not a merge: a goal's `materials` is a list the
+      // user removes from, and a merge could never delete its last entry.
+      if (patch.goal !== undefined) next.goal = patch.goal
       if (patch.settings !== undefined) next.settings = { ...current.settings, ...patch.settings }
       db.update(chats).set(next).where(eq(chats.id, current.id)).run()
       return toChat(row(id, userId))

@@ -54,9 +54,10 @@ To add a migration: edit `schema.ts`, run `npm run db:generate`, and commit the
 new `migrations/*.sql` together with the updated `migrations/meta/`. Never edit a
 migration that has already shipped — write a new one.
 
-Both migrations after the initial schema are the same shape and it is the shape
-to copy: **one nullable column, no default, no rewrite**
-(`0001` added `messages.in_reply_to`, `0002` added `providers.auth` in S5.3).
+All three migrations after the initial schema are the same shape and it is the
+shape to copy: **one nullable column, no default, no rewrite**
+(`0001` added `messages.in_reply_to`, `0002` added `providers.auth` in S5.3,
+`0003` added `chats.goal` in S5.10).
 SQLite can add a nullable column in place, so an existing database is upgraded
 in microseconds and a row written by an older build stays readable — `NULL` maps
 through `optional()` to an absent field, and the shared type's documented
@@ -162,6 +163,7 @@ Patch semantics, identical in every repository:
 | a nullable **union** column (`providers.auth`, S5.3) | absent keeps it; there is no `''` spelling, because `''` is not a member of the union — the way back is the other value (`auth: 'apiKey'`) |
 | `settings.update` | shallow merge, with `timeouts` merged field by field |
 | `chats.update({ settings })` | merged over the stored settings, so a partial object is safe |
+| `chats.update({ goal })` | **replaced**, not merged (S5.10). `null` removes the goal; there is no `''` spelling, because `''` is not a `ChatGoal`. The one patch field in the layer that is deliberately not a merge — see `context.md` |
 
 ## Tests
 
@@ -171,7 +173,7 @@ Patch semantics, identical in every repository:
 | `src/main/db/providers.test.ts` | CRUD; absent optional columns come back absent; a key is reported only as `hasApiKey` and is stored as ciphertext; the three `apiKey` patch semantics (absent keeps, `''` clears, string replaces); `''` clears `baseUrl` / `presetId`; `auth` round-trips, is absent when it was never set, survives a patch that does not mention it and is switched back with `'apiKey'` rather than `''` (S5.3); `userId` scoping; `not_found` on every method, including the exact `BackendError` shape |
 | `src/main/db/agents.test.ts` | CRUD; JSON columns round-trip across a reopen; deleting an agent removes it from every chat through the cascade; scoping and `not_found` |
 | `src/main/db/mcpServers.test.ts` | CRUD for a stdio server; an http server stores no stdio half; scoping and `not_found` |
-| `src/main/db/chats.test.ts` | Defaults on create (title, `DEFAULT_CHAT_SETTINGS`, `workdir: null`); partial settings merge; list ordered by `updatedAt` descending; delete cascades to members and messages while leaving the agents and other chats alone; `setMembers` replaces the list and numbers positions by array index; duplicate or unknown agent ids are rejected without changing the stored membership; scoping and `not_found` |
+| `src/main/db/chats.test.ts` | Defaults on create (title, `DEFAULT_CHAT_SETTINGS`, `workdir: null`, `goal: null`); the goal replaced wholesale rather than merged, surviving a reopen, cleared with `null`, and left alone by a patch that does not mention it (S5.10); partial settings merge; list ordered by `updatedAt` descending; delete cascades to members and messages while leaving the agents and other chats alone; `setMembers` replaces the list and numbers positions by array index; duplicate or unknown agent ids are rejected without changing the stored membership; scoping and `not_found` |
 | `src/main/db/messages.test.ts` | Create and read back across a reopen; `seq` monotonic per chat and restarting per chat; ordering holds for messages written in the same millisecond; `list` newest first with `before` as an exclusive cursor over three pages; `listForContext` oldest first; patching parts / status / usage / mentions / error and clearing an error with `''`; the parent chat's `updatedAt` is bumped on create; `not_found` for an unknown chat, message or cursor; scoping |
 | `src/main/db/settings.test.ts` | Defaults when nothing is stored; shallow merge persisted across a reopen; `timeouts` merged field by field; a stored row missing newer fields is filled in from the defaults; one row per user |
 

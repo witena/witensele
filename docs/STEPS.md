@@ -1338,7 +1338,7 @@ records this step promised not to touch. `e2e/agents.spec.ts` asserts the two
 test ids have count 0 while the editor is open; it never filled them, so there
 was nothing to remove.
 
-### S5.10 Chat goal `[ ]`
+### S5.10 Chat goal `[x]` (2026-09-13)
 What: the right-hand panel lets the user say what the chat is for, and every
 agent is briefed with it.
 - `Chat.goal: ChatGoal | null` where `ChatGoal = { kind: 'discussion' |
@@ -1384,6 +1384,120 @@ Acceptance: a goal round-trips through the panel and survives a restart;
 every agent's system prompt carries it; invalid paths are refused with a
 translated reason. Docs: `docs/features/chats/`, `docs/features/agent-turn/`,
 `docs/features/database/`, `docs/features/backend-client/` (all four each).
+Done: `Chat.goal` is one nullable JSON column (migration
+`0003_acoustic_vermin.sql`, the third of exactly the shape `0001` and `0002`
+established) holding the whole `ChatGoal`. One column rather than four, because
+the four fields are only ever read and written together and a `deliverable`
+means nothing without its `kind`; and **replaced** rather than merged, because
+`materials` is a list the user removes from and a merge has no spelling for
+"this list is now empty". That is the one patch field in the storage layer that
+is deliberately not a merge, and it is what makes the Goal block hold a draft.
+
+The step's real design work was the **path rule**, and it has two halves that
+land in different processes. A goal stores paths **relative to `workdir`**,
+because the folder is a machine-local binding while the goal describes a project
+that outlives it being moved, cloned or restored from a backup — so
+`assertGoal` refuses an absolute path and a `..` with one reason
+(`*_not_relative`: they share a fix, "write it relative to the folder") and a
+path that leaves the folder with another (`*_outside_workdir`: a different
+mistake, discovered by a different check). That second check is S5.4's own
+`resolveInWorkdir`, reused verbatim, which is what guarantees a goal can never
+name a file the executor would be refused at the moment of use — symlinks
+included, which each of the two has a test for. The other half is that **no
+native dialog on any platform this runs on can be confined to a directory**, so
+the conversion from the absolute path a dialog returns is the renderer's
+(`relativeToWorkdir` in `lib/workdir.ts`, hand-written like `folderName` because
+the renderer project has no Node types) and so is noticing that a pick fell
+outside the folder. That refusal is reported through the *same* three store
+fields, the same `ValidationReason` and the same `translateFailure` as a backend
+rejection, so the user cannot tell — and does not need to — which side noticed.
+A materials pick keeps what was inside and reports what was not: six files with
+one stray among them meant the six.
+
+The validation table is nine `ValidationReason`s and two refusals that carry
+**none**, and that line is the point rather than an omission: a reason is a
+sentence a user is meant to act on, so it exists for every refusal a control can
+produce and for none that only a hand-written call can (a `deliverable` on a
+`codebase` goal — the panel drops the field when the kind changes — and a
+malformed object). Two asymmetries are deliberate: a **deliverable is never
+checked for existence** and its parent folder need not exist, because not
+existing yet is the whole point of one, while a **material must exist**, because
+it is something the group reads. And `document` / `codebase` — or any material —
+require a `workdir`, which is why those two segments are **disabled with the
+reason under them** rather than hidden: the same argument as S5.6's hand-off
+button, and it needed a per-option `disabled` on `SegmentedControl`, the only
+shared primitive this step touched.
+
+"Delivered" is a **query** (`chats.goalStatus`), not a field on `Chat` or a
+column. Whether a file exists is a fact about the filesystem, so a stored boolean
+is wrong the moment anything creates, moves or deletes it — including something
+that is not this app — and `docs/features/chats/context.md` had already refused
+exactly this shape once, for the member count. The renderer asks when a chat is
+opened and again on every `chat.updated` for it (a primitive `updatedAt`
+selector, so the effect does not re-run on every store write), which covers
+every edit the panel makes; S5.12 adds the executor turn as one more moment, and
+a filesystem watcher is in the Phase 6 backlog. `goalStatus` uses `join` rather
+than `resolveInWorkdir` on purpose: the path was confined when it was saved, and
+a folder that has since gone should answer "not delivered" to a chip that only
+wants to know whether to say so.
+
+The Goal block is the **only** control in the group settings that holds a draft,
+and the column is why: there is no per-field patch to send, and persisting free
+text on every keystroke would be a write per character. So it writes on blur,
+which is what the chat title already does. Two edges fall out of
+`chats.update` refusing a blank description — a goal *is* its description, since
+a kind alone says nothing a model can act on — and both are deliberate rather
+than discovered: picking a kind while the box is empty changes the draft only,
+and **emptying** the description of a chat that has a goal removes the goal. The
+way out is the same gesture as the way in, instead of a second control that
+exists only to undo the first; that it is not discoverable is in the backlog.
+
+The briefing carries the goal for **every** member, executor or not — what the
+group is for is not a fact about one role — and it goes in the group briefing,
+**last**, rather than in a section of its own beside skills and memory: it is the
+same class of thing as the roster and the protocol, a rule of the room, so it
+must survive a prompt being cut before the reference material does, and the end
+of a long prompt is the part a model is still following. The description is
+placed **verbatim** in both languages, because it is the one part of the whole
+prompt the user wrote. A `codebase` goal adds the sentence that makes PLAN.md's
+one-writer rule visible to a participant — you change no file, the executor does
+it afterwards — without which a model told to change a codebase writes the change
+out in prose as if it had; a test asserts the word `executor` is absent from the
+other two kinds. A chat with no goal gets **no section at all**, asserted byte
+for byte, rather than a paragraph explaining that it has none. The hand-off
+briefing gains one sentence (`goalHandoffLine`) naming the deliverable or the
+change, and it **points at** the goal rather than restating it, because the goal
+is already in the group briefing of the same prompt and a model given one
+instruction twice in two wordings follows neither reliably.
+
+The chip is a button **only when it is openable**. Three of its four states are
+plain chips, because a delivered document is the only one with a file to open and
+a control whose click can only fail is worse than text; both branches carry the
+same `data-kind` / `data-delivered`, so the spec reads one place. It opens
+through S5.7's `openInEditor` and paints red for the same 2.5 s on a refusal,
+which makes it that feature's fifth caller and the first outside the transcript.
+
+Tests: `handlers/chats.test.ts` gained a 20-case `chats.update goal` block
+against a real temporary folder (one per reason, a symlink out for each of the
+two `outside_workdir` ones, the shapes that must stay legal, and `goalStatus`
+before and after the file appears), `briefing.test.ts` eleven across both
+languages, `executor/tools.test.ts` four for `goalHandoffLine`,
+`db/chats.test.ts` two for the whole-object replace across a reopen,
+`stores/chats.test.ts` nine, `lib/workdir.test.ts` six for
+`relativeToWorkdir`, and `components/chat/goal.test.ts` seven for the chip.
+`npm test`: 83 files, 1293 tests, all passing; `npm run typecheck` clean.
+`e2e/executor.spec.ts` ran after `npm run build`: **12 passed**, including the
+two new offline cases — the two kinds disabled with their hint before a folder
+is bound, the chip naming the deliverable after one is, `data-delivered`
+flipping to `true` once the file is written, the three refusals, and all of it
+surviving a restart — and the two Ollama-gated ones, which found `qwen2.5:3b`
+and really ran. `e2e/members.spec.ts`, `editor.spec.ts`, `i18n.spec.ts`,
+`theme.spec.ts` and `ui-shell.spec.ts` were re-run for the chat page and the
+`SegmentedControl` change: 23 passed. The two native dialogs and the chip's
+click are **not** driven, for the reasons S3.2 and S5.7 already record; that
+gap, the polled delivery check and the exact path comparison are in the Phase 6
+backlog. Docs: `docs/features/{chats,agent-turn,database,backend-client}/` (all
+four each) plus `docs/features/{executor,editor,i18n,ui-shell}/`.
 
 ### S5.11 Read-only workspace tools and the materials briefing `[ ]`
 What: every member can read the folder, and the materials the user marked are
@@ -1540,6 +1654,43 @@ adds a line here in the same commit.
   reported the files it read as parts would be more precise than a regular
   expression over prose, and would make the chip work for a path the detector's
   extension rule refuses.
+
+### Chat goal (S5.10)
+
+- **The two native dialogs are not driven end to end.** `system.pickSavePath`
+  and `system.pickPaths` open native modals, which Playwright cannot answer —
+  the same gap `system.pickFolder` has had since S3.2. `e2e/executor.spec.ts`
+  writes the goal through the backend client instead, and the conversion those
+  buttons perform is unit-tested (`relativeToWorkdir`, `pickDeliverable`,
+  `pickMaterials`). The buttons themselves, and the `defaultDir` they open in,
+  were verified by reading rather than by clicking.
+- **The goal chip's click is not driven either**, for exactly the reason S5.7
+  records below: `shell.openExternal` would launch the developer's real editor
+  and `window.witena` cannot be stubbed from the page. The spec asserts the chip
+  is a button carrying the path; the backend accepting that call is asserted
+  separately by `e2e/editor.spec.ts`.
+- **"Delivered" is polled, not watched.** `chats.goalStatus` runs when a chat is
+  opened and on every `chat.updated` for it, so a deliverable written by
+  something that is not this app is noticed at the next such moment rather than
+  immediately. S5.12 adds an executor turn as one more moment; a filesystem
+  watcher would make it immediate and would be the first one in the product.
+- **`relativeToWorkdir` compares paths exactly.** Both strings come from one
+  dialog rooted at the folder, so a case-insensitive volume cannot make them
+  differ — but a path assembled some other way, on such a volume, with different
+  case, is refused as outside the folder. Case-folding it here would be a guess
+  about the volume it lives on.
+- **A goal has no history and no per-round scope.** It is one row, replaced in
+  place, so a chat that changes what it is for loses what it used to be for —
+  including from the briefings of the messages already in the transcript, which
+  were written under the old one. Whether that matters is a real question once a
+  chat runs for days.
+- **There is one way out of a goal: empty its description.** That is deliberate
+  (a goal *is* its description, so the way out is the way in) but it is not
+  discoverable, and a user who wants to keep the text while turning the goal off
+  has to delete it and paste it back.
+- **A `discussion` goal may carry materials** as long as the chat has a folder,
+  even though S5.11 is what reads them. Whether that combination should exist at
+  all is an open question in `docs/features/chats/context.md`.
 
 ### Editor integration (S5.7)
 

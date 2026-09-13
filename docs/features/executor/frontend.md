@@ -128,3 +128,10 @@ reason — they are data, not copy:
   `permission-allow-always`, `permission-deny`, `diff-block` (`data-path`),
   `diff-block-toggle`, `diff-block-path`, `diff-block-stat`, `file-ref`
   (`data-path`, `data-line`), `message-file-refs`.
+
+S5.10 adds nothing to this feature's own UI. The chat **goal** it now reads —
+the deliverable named in a hand-off briefing, the change a `codebase` chat
+describes — is edited in the Goal block of the group settings and drawn as a
+chip in the chat header, both owned by [`chats`](../chats/frontend.md). What
+this feature contributes is one sentence in a system prompt, which never reaches
+the renderer at all.

@@ -21,6 +21,11 @@
  * `validationReasonMessage` translates it with the same literal-`switch`
  * discipline.
  *
+ * S5.10 added nine more, all of them narrowing one request the Goal block sent:
+ * which field of the goal was wrong, and — for a path — whether the problem is
+ * that it is absolute or that it leaves the folder. Those two are separate
+ * reasons because they are corrected differently.
+ *
  * S5.3 used both halves, and the line between them is the one to keep: the two
  * refusals of the provider form (`oauth_unsupported_provider`,
  * `oauth_custom_base_url`) are reasons, because they narrow the refusal of one
@@ -86,6 +91,24 @@ export function validationReasonMessage(t: TranslateFn, reason: ValidationReason
       return t('errors.editor_path_not_absolute')
     case 'editor_path_outside_workdir':
       return t('errors.editor_path_outside_workdir')
+    case 'goal_description_empty':
+      return t('errors.goal_description_empty')
+    case 'goal_description_too_long':
+      return t('errors.goal_description_too_long')
+    case 'goal_deliverable_required':
+      return t('errors.goal_deliverable_required')
+    case 'goal_deliverable_not_relative':
+      return t('errors.goal_deliverable_not_relative')
+    case 'goal_deliverable_outside_workdir':
+      return t('errors.goal_deliverable_outside_workdir')
+    case 'goal_material_not_relative':
+      return t('errors.goal_material_not_relative')
+    case 'goal_material_outside_workdir':
+      return t('errors.goal_material_outside_workdir')
+    case 'goal_material_missing':
+      return t('errors.goal_material_missing')
+    case 'goal_needs_workdir':
+      return t('errors.goal_needs_workdir')
   }
 }
 

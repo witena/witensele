@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod } from '@shared/backend'
-import type { Chat, ChatMember } from '@shared/types'
+import type { Chat, ChatGoal, ChatMember } from '@shared/types'
 import { DEFAULT_CHAT_SETTINGS, LOCAL_USER_ID } from '@shared/types'
 import { applyBackendEvent } from '../lib/event-bridge'
 import { BackendClientError } from '../lib/backend'
@@ -24,6 +24,7 @@ function chat(id: string, updatedAt: number, title = id): Chat {
     updatedAt,
     title,
     workdir: null,
+    goal: null,
     settings: DEFAULT_CHAT_SETTINGS
   }
 }
@@ -37,6 +38,7 @@ beforeEach(() => {
   useChatsStore.setState({
     chats: [],
     membersByChat: {},
+    goalStatusByChat: {},
     status: 'idle',
     error: undefined,
     errorCode: undefined,
@@ -286,6 +288,145 @@ describe('chats store', () => {
     // Cancelling is an answer, not a failure: no write, and no error left behind.
     expect(calls).toEqual(['system.pickFolder'])
     expect(useChatsStore.getState().error).toBeUndefined()
+  })
+
+  it('replaces the whole goal and re-reads whether it has been delivered', async () => {
+    const goal: ChatGoal = { kind: 'document', description: 'Write it', deliverable: 'a.md', materials: [] }
+    const saved: Chat = { ...chat('a', 5), workdir: '/w', goal }
+    const calls: { method: BackendMethod; input: unknown }[] = []
+    setBackend({
+      invoke: (async (method: BackendMethod, input: unknown) => {
+        calls.push({ method, input })
+        if (method === 'chats.goalStatus') return { deliverable: '/w/a.md', delivered: true }
+        return saved
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().setGoal('a', goal)
+
+    // The whole object, never a field patch: `materials` is a list the user
+    // removes from, and a merge could not delete its last entry.
+    expect(calls[0]).toEqual({ method: 'chats.update', input: { id: 'a', patch: { goal } } })
+    expect(calls[1]).toEqual({ method: 'chats.goalStatus', input: { chatId: 'a' } })
+    expect(useChatsStore.getState().chats).toEqual([saved])
+    expect(useChatsStore.getState().goalStatusByChat.a).toEqual({
+      deliverable: '/w/a.md',
+      delivered: true
+    })
+  })
+
+  it('sends null to remove the goal, which an emptied description does', async () => {
+    const patches: unknown[] = []
+    setBackend({
+      invoke: (async (method: BackendMethod, input: unknown) => {
+        if (method === 'chats.goalStatus') return { deliverable: null, delivered: false }
+        patches.push((input as { patch: unknown }).patch)
+        return chat('a', 6)
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().setGoal('a', null)
+
+    expect(patches).toEqual([{ goal: null }])
+    expect(useChatsStore.getState().chats[0]?.goal).toBeNull()
+  })
+
+  it('keeps a refused goal\u2019s reason, so the line names the field that was wrong', async () => {
+    setBackend({
+      invoke: (async () => {
+        throw new BackendClientError({
+          code: 'validation',
+          message: 'a document goal needs a deliverable',
+          details: { reason: 'goal_deliverable_required' }
+        })
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await expect(
+      useChatsStore.getState().setGoal('a', { kind: 'document', description: 'x', materials: [] })
+    ).resolves.toBeUndefined()
+
+    expect(useChatsStore.getState().errorCode).toBe('validation')
+    expect(useChatsStore.getState().errorDetails).toEqual({ reason: 'goal_deliverable_required' })
+  })
+
+  it('turns a picked deliverable into a path relative to the folder', async () => {
+    const calls: { method: BackendMethod; input: unknown }[] = []
+    setBackend({
+      invoke: (async (method: BackendMethod, input: unknown) => {
+        calls.push({ method, input })
+        return '/w/docs/report.md'
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await expect(useChatsStore.getState().pickDeliverable('/w')).resolves.toBe('docs/report.md')
+    expect(calls).toEqual([{ method: 'system.pickSavePath', input: { defaultDir: '/w' } }])
+    expect(useChatsStore.getState().error).toBeUndefined()
+  })
+
+  it('refuses a deliverable saved outside the folder, with a reason', async () => {
+    setBackend({
+      invoke: (async () => '/elsewhere/report.md') as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await expect(useChatsStore.getState().pickDeliverable('/w')).resolves.toBeNull()
+
+    expect(useChatsStore.getState().errorCode).toBe('validation')
+    expect(useChatsStore.getState().errorDetails).toEqual({
+      reason: 'goal_deliverable_outside_workdir'
+    })
+  })
+
+  it('leaves nothing behind when the save dialog is cancelled', async () => {
+    setBackend({
+      invoke: (async () => null) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await expect(useChatsStore.getState().pickDeliverable('/w')).resolves.toBeNull()
+    expect(useChatsStore.getState().error).toBeUndefined()
+  })
+
+  it('keeps the materials that were inside the folder and reports the ones that were not', async () => {
+    setBackend({
+      invoke: (async () => ['/w/notes.md', '/elsewhere/x.md', '/w/src']) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    // Six files picked with one stray among them means the six, not nothing.
+    await expect(useChatsStore.getState().pickMaterials('/w')).resolves.toEqual([
+      'notes.md',
+      'src'
+    ])
+    expect(useChatsStore.getState().errorDetails).toEqual({
+      reason: 'goal_material_outside_workdir'
+    })
+  })
+
+  it('answers an empty list for a cancelled materials dialog', async () => {
+    setBackend({
+      invoke: (async () => []) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await expect(useChatsStore.getState().pickMaterials('/w')).resolves.toEqual([])
+    expect(useChatsStore.getState().error).toBeUndefined()
+  })
+
+  it('forgets a deleted chat\u2019s goal status along with everything else of it', async () => {
+    useChatsStore.setState({
+      chats: [chat('a', 5)],
+      goalStatusByChat: { a: { deliverable: '/w/a.md', delivered: true } }
+    })
+
+    applyBackendEvent({ type: 'chat.deleted', chatId: 'a' })
+
+    expect(useChatsStore.getState().goalStatusByChat).toEqual({})
   })
 
   it('ignores a rename to an empty title without calling the backend', async () => {

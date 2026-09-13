@@ -614,17 +614,23 @@ describe('handlers/buildHandlers', () => {
 
 describe('handlers/stubs', () => {
   /**
-   * What is left is the methods that need a window: `system.pickFolder`,
+   * What is left is the methods that need a window: the three native dialogs
+   * (`system.pickFolder`, and S5.10's `system.pickSavePath` / `system.pickPaths`)
    * implemented in `src/main/ipc/dialogs.ts`, and `system.applyTheme` (S5.8), in
-   * `src/main/ipc/theme.ts`. Outside the Electron transport both must reject
-   * rather than resolve — `null` would look to the renderer like the user
-   * cancelling, and a silent `undefined` like window chrome that was tinted.
+   * `src/main/ipc/theme.ts`. Outside the Electron transport all of them must
+   * reject rather than resolve — `null` or `[]` would look to the renderer like
+   * the user cancelling, and a silent `undefined` like window chrome that was
+   * tinted.
    *
    * `system.openInEditor` (S5.7) is excluded from the sweep rather than listed
    * as a stub, because it is the one method that is *conditionally* electron:
    * with `editor.kind: 'custom'` it runs here, and it reaches the database before
    * it can decide, which this sweep's context-shaped `{ userId }` has no room
    * for. Both of its branches have their own cases above.
+   *
+   * `chats.goalStatus` (S5.10) is excluded for the ordinary reason: it is a real
+   * handler, implemented in `handlers/chats.ts`, and it is listed with the rest
+   * of the implemented surface below.
    */
   it('every method the Electron-free layer cannot implement rejects rather than resolving undefined', async () => {
     const handlers = buildHandlers()
@@ -691,7 +697,9 @@ describe('handlers/stubs', () => {
       // S5.6
       'chat.handoff',
       // S5.7 — see the comment above: half of it is implemented here.
-      'system.openInEditor'
+      'system.openInEditor',
+      // S5.10
+      'chats.goalStatus'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

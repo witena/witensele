@@ -136,6 +136,13 @@ The plan for S1.7, recorded here so it is not rediscovered:
   Chinese-speaking user wants replies in Chinese. The briefing language is the
   cheapest lever on both.
 - The agent's own `systemPrompt` is user data and is never translated.
+- Since **S5.10** the same line runs through the chat's **goal**: the briefing's
+  sentences about it are written in both `briefing.en.ts` and `briefing.zh-CN.ts`
+  and follow the same setting, while the user's own `description` and the
+  deliverable's path are **data** and are placed verbatim in whichever language
+  the briefing is being written in. The `Goal` block's *labels* are ordinary
+  locale keys under `chat.*`, and its nine refusals are `errors.<reason>` keys
+  like every other `ValidationReason`.
 
 ## External dependencies
 

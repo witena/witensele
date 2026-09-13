@@ -48,6 +48,12 @@ be able to say no, and afterwards read the diff of what they said yes to.
   the rest of the transcript, which [`chats`](../chats/context.md) owns.
 - One `DiffPart` per file a turn wrote, appended to the executor's message when
   the stream ends (`diffPartsFrom`, [`agent-turn`](../agent-turn/context.md)).
+- **The goal's one sentence in the hand-off briefing** (S5.10):
+  `goalHandoffLine` — the file a `document` chat is supposed to end with, or the
+  change a `codebase` chat described. It **points at** the goal rather than
+  restating it, because the goal is already in the group briefing the same
+  prompt carries, and the goal itself belongs to
+  [`chats`](../chats/context.md).
 - **The hand-off briefing** (S5.6): the paragraph `buildExecutorSection` appends
   for the one turn "Hand to executor" schedules — implement the conclusion above,
   do not re-open the debate, report the paths you touched. The *scheduling* of

@@ -43,6 +43,8 @@ import {
 import { ActionsCard } from '../components/chat/actions-card'
 import { ChatList } from '../components/chat/chat-list'
 import { Composer, type ComposerHandle } from '../components/chat/composer'
+import { GoalChip } from '../components/chat/goal-chip'
+import { GoalSettings } from '../components/chat/goal-settings'
 import { HandoffButton } from '../components/chat/handoff-button'
 import { MemberPanel } from '../components/chat/member-panel'
 import { MessageList } from '../components/chat/message-list'
@@ -63,7 +65,7 @@ import {
 } from '../components/ui'
 import { translateFailure } from '../i18n/errors'
 import { useAgentsStore } from '../stores/agents'
-import { useChatMemberIds, useChatsStore } from '../stores/chats'
+import { useChatGoalStatus, useChatMemberIds, useChatsStore } from '../stores/chats'
 import { useChatMessages, useMessagesStore } from '../stores/messages'
 import { usePresenceStore } from '../stores/presence'
 import { usePendingPermissions } from '../stores/permissions'
@@ -138,11 +140,19 @@ export function ChatsPage(): React.JSX.Element {
   const runErrorCode = useRunStore((state) => state.errorCode)
   const runErrorDetails = useRunStore((state) => state.errorDetails)
   const usage = useChatUsage(selectedId)
+  // Whether this chat's deliverable is on disk. A query rather than a column on
+  // `Chat`, so it is loaded beside the transcript and the usage summary.
+  const goalStatus = useChatGoalStatus(selectedId)
   // The executor's open permission prompts for this chat, oldest first. They sit
   // above the composer because that is where the answer is given, and because a
   // suspended tool call must not hide the transcript that explains it.
   const permissions = usePendingPermissions(selectedId)
   const matchIds = useChatsStore((state) => state.matchIds)
+  // A primitive, so the effect below re-runs when the chat row really changed
+  // rather than on every store write that replaced the array.
+  const selectedUpdatedAt = useChatsStore(
+    (state) => state.chats.find((chat) => chat.id === state.selectedId)?.updatedAt ?? 0
+  )
   // What the box holds right now; the store only ever sees the debounced value.
   const [query, setQuery] = useState('')
 
@@ -172,6 +182,15 @@ export function ChatsPage(): React.JSX.Element {
     if (!selectedId) return
     void usePresenceStore.getState().load(selectedId)
   }, [selectedId])
+
+  // The goal's delivery state is a fact about the filesystem, so it is asked for
+  // rather than stored: on every visit, and again whenever this chat changes —
+  // which is what a `chat.updated` from a goal edit, a rename or a membership
+  // change already is. S5.12 is what makes an executor turn refresh it.
+  useEffect(() => {
+    if (!selectedId) return
+    void useChatsStore.getState().loadGoalStatus(selectedId)
+  }, [selectedId, selectedUpdatedAt])
 
   // Usage is seeded from the backend on every visit too, and for the same kind of
   // reason: the summary covers the **whole** transcript while the messages store
@@ -343,6 +362,11 @@ export function ChatsPage(): React.JSX.Element {
                 >
                   {folderName(selected.workdir)}
                 </Badge>
+              ) : null}
+              {/* What the chat is for (S5.10). For a `document` it carries the
+                  deliverable's name and, once the file is there, opens it. */}
+              {selected ? (
+                <GoalChip chatId={selected.id} goal={selected.goal} status={goalStatus} />
               ) : null}
             </>
           }
@@ -553,6 +577,15 @@ export function ChatsPage(): React.JSX.Element {
                 </Button>
               </div>
             </Field>
+
+            {/* The Goal block (S5.10), under the folder it is written against:
+                the two kinds that name files are impossible without one, and
+                reading the rows in this order is what makes that obvious. */}
+            <GoalSettings
+              chatId={selectedId}
+              workdir={selected?.workdir ?? null}
+              goal={selected?.goal ?? null}
+            />
           </section>
 
           <div className="flex-1" />

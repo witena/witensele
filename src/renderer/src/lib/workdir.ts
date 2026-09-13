@@ -27,3 +27,38 @@ export function folderName(path: string): string {
   const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
   return separator === -1 ? trimmed : trimmed.slice(separator + 1)
 }
+
+/**
+ * An absolute path from a native dialog, as a path relative to `workdir` — or
+ * `null` when it does not lie inside it (S5.10).
+ *
+ * A goal stores **relative** paths (`ChatGoal`), because the folder can be
+ * moved, restored from a backup or cloned onto another machine and an absolute
+ * path would then name something else. The dialogs know no such thing: they
+ * return what the platform gave them. So this is the conversion, and it is also
+ * where "you picked something outside this chat's folder" is discovered — no
+ * dialog on any platform this runs on can be confined to a directory.
+ *
+ * `null` is returned for three cases that are all the same answer to the user:
+ * there is no folder bound, the path is somewhere else entirely, and the path is
+ * the folder itself (a goal names things *in* the folder, never the folder).
+ *
+ * Separators are normalised to `/` on the way out, so the same goal reads
+ * identically wherever it is opened. The comparison is **exact**: both strings
+ * come from one dialog rooted at this folder, so a case-insensitive filesystem
+ * cannot make them differ, and case-folding a path here would be a guess about
+ * the volume it lives on.
+ */
+export function relativeToWorkdir(
+  workdir: string | null | undefined,
+  absolute: string
+): string | null {
+  if (!workdir) return null
+  const root = workdir.replace(/[/\\]+$/, '')
+  if (root.length === 0 || absolute.length <= root.length + 1) return null
+  const separator = absolute.charAt(root.length)
+  if (!absolute.startsWith(root) || (separator !== '/' && separator !== '\\')) return null
+
+  const relative = absolute.slice(root.length + 1).replace(/\\/g, '/').replace(/\/+$/, '')
+  return relative.length > 0 ? relative : null
+}

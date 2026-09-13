@@ -18,7 +18,10 @@ does not throw, it just makes every answer slightly worse.
   (S5.4), the enabled skills' `name — description` lines (S3.2) and the whole
   `MEMORY.md` index (S3.3).
 - **The group briefing** in both languages (`briefing.ts` + `briefing.en.ts` +
-  `briefing.zh-CN.ts`), following the UI language setting.
+  `briefing.zh-CN.ts`), following the UI language setting — including, since
+  S5.10, the **chat's goal**: one sentence for its kind, the user's description
+  verbatim, the deliverable for a `document`, and for a `codebase` the rule that
+  the executor makes the change afterwards.
 - **History transform** (`history.ts`): the shared transcript → this agent's
   `ModelMessage[]`.
 - **The streaming turn** (`agent-turn.ts`): `streamText`, `fullStream`, the
@@ -46,6 +49,8 @@ does not throw, it just makes every answer slightly worse.
 | The permission prompt itself — the gate, the two events, `permission.reply` | [`executor`](../executor/context.md). The turn supplies the signal that cancels a pending prompt, and stores the resulting `tool-error` like any other |
 | Drawing the `DiffPart`s — the collapsed block, the code block, the card that answered the prompt | [`executor`](../executor/frontend.md) and [`chats`](../chats/frontend.md). The turn produces the parts; the transcript decides what they look like |
 | The content of the skills, memory and executor prompt sections | `skills`, `memory` and `executor` build the text; the turn decides the order and whether to include them |
+| The goal itself — the panel, the validation, the column, the header chip | [`chats`](../chats/context.md), S5.10. This feature owns only what the goal *says to a model*, and its wording in both languages |
+| Placing a goal's `materials` in the context | S5.11. S5.10 records them; nothing reads them yet |
 | Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
 | Announcing that a context was truncated, and naming the chat | [`orchestration`](../orchestration/context.md). The turn *measures* (`fitHistory`, `droppedMessages`) and the runner *tells*, because both are facts about a run |
 | Displaying or pricing the stored `Usage` | [`chats`](../chats/context.md) and `src/shared/pricing.ts`. The turn records what the provider reported and nothing else |
@@ -80,6 +85,9 @@ per speaker and reads the returned status to decide how the run ends.
 | The briefing exists in Chinese and English as **`.ts` files** | Locale files; one English briefing for everyone | It never reaches the renderer, so it has no i18n key; a Chinese-first model follows a Chinese prompt far more reliably. `briefing.zh-CN.ts` is the documented exception to the English-only rule |
 | The briefing's `[name]:` and `@name` examples use a **real member of this chat** | A placeholder like `@name` | A model copies the example it is given |
 | The briefing's **memory sentence is conditional** on the tools being attached (S3.3) | Always include it | A prompt that asks for a tool the model was not given is how a model starts describing tool calls in prose |
+| The **goal lives in the briefing**, last, rather than in a section of its own (S5.10) | A `Goal` section beside the skills and memory ones; a paragraph at the top of the prompt | It is the same class of thing as the roster and the protocol — a rule of the room every member is held to — not reference material one of them may reach for, so it must survive a prompt being cut before the skills index does. Last because the end of a long prompt is the part a model is still following |
+| A `codebase` goal states that the **executor** makes the change (S5.10) | Let the goal speak for itself | PLAN.md's one-writer rule is invisible to a participant that has just been told the group is changing a codebase, and a model told to change code with no tools writes the change out in prose as if it had |
+| The **hand-off briefing points at the goal rather than restating it** (S5.10) | Repeat the whole goal in the executor section | The goal is already in the group briefing the same prompt carries, and a model given one instruction twice in two wordings follows neither reliably |
 | **`handoff` is an option of the turn, not a fact about the agent or the chat** (S5.6) | A column on the chat; an executor that always reads the hand-off briefing | It is true of exactly one turn. An executor asked a follow-up question by a reviewer is not being handed the discussion again, and a prompt that said so would make it start over instead of answering |
 | The **executor section is conditional on the same rule that attaches the tools** (S5.4), and sits between the briefing and the skills | Always include it for an `executor`; put it with the skills | Same reason as the memory sentence, and the section is protocol rather than reference material: a model running out of attention should lose the reference first. `executorWorkdir` is the one function both the prompt and the tool set ask |
 | Skills and memory come **after** the briefing in the prompt | Before it; interleaved | The briefing is how to behave, the other two are material to reach for. A model that runs out of attention should lose the reference material first, not the protocol |

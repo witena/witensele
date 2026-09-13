@@ -1,7 +1,7 @@
 /**
  * The executor: the role and the chat's working directory (S5.2), the permission
- * prompt and the diff block (S5.5), and the hand-off with its review round
- * (S5.6).
+ * prompt and the diff block (S5.5), the hand-off with its review round (S5.6),
+ * and the chat goal that briefs all of them (S5.10).
  *
  * Everything up to the hand-off button's disabled states is **offline** — it is
  * all configuration, and no message is ever sent — and always runs. The three
@@ -30,7 +30,7 @@
  * rendered copy, so none of them depends on the active language, and no Chinese
  * appears in this file (CLAUDE.md rule #1).
  */
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
@@ -73,6 +73,8 @@ let notAFolder: string
 let execdir: string
 /** A folder of its own for the S5.6 hand-off, so its assertions are about it. */
 let handoffdir: string
+/** And one for the S5.10 goal, holding the file its materials name. */
+let goaldir: string
 let toolModelAvailable = false
 
 /** The preload bridge's envelope, restated here: `e2e/` may not import preload. */
@@ -148,6 +150,8 @@ test.beforeAll(async () => {
   workdir = mkdtempSync(join(tmpdir(), 'witena-workdir-'))
   execdir = mkdtempSync(join(tmpdir(), 'witena-execdir-'))
   handoffdir = mkdtempSync(join(tmpdir(), 'witena-handoff-'))
+  goaldir = mkdtempSync(join(tmpdir(), 'witena-goaldir-'))
+  writeFileSync(join(goaldir, 'notes.md'), '# material\n')
   notAFolder = join(workdir, 'notes.md')
   writeFileSync(notAFolder, '# not a folder\n')
   toolModelAvailable = await probeOllamaModel(TOOL_MODEL)
@@ -169,6 +173,7 @@ test.afterAll(async () => {
   if (workdir) rmSync(workdir, { recursive: true, force: true })
   if (execdir) rmSync(execdir, { recursive: true, force: true })
   if (handoffdir) rmSync(handoffdir, { recursive: true, force: true })
+  if (goaldir) rmSync(goaldir, { recursive: true, force: true })
 })
 
 test('the agent list tags the executors and only the executors', async () => {
@@ -315,6 +320,111 @@ test('the hand-off button needs a folder and an executor, and says which is miss
   expect(await call('chat.handoff', { chatId })).toMatchObject({
     error: { code: 'validation', details: { reason: 'handoff_no_executor' } }
   })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.10: the chat goal                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The step's acceptance sentence, offline: a `document` goal on a chat bound to
+ * a folder draws a chip carrying the deliverable's name, and the chip reads
+ * "delivered" once the file is really there.
+ *
+ * The two native dialogs behind "Choose…" and "Add…" are not driven, for the
+ * same reason the folder picker is not: Playwright cannot answer a native modal.
+ * The goal is written through the backend client, which is the same call the
+ * panel makes, and the assertions are about what the UI does with it.
+ *
+ * The second `chats.update` is not a contrivance: "delivered" is a fact about
+ * the filesystem, which the renderer re-reads whenever the chat changes, and
+ * editing the goal is exactly such a change. S5.12 is what makes an executor
+ * turn refresh it too.
+ */
+test('a document goal shows the deliverable, and says so once it is written', async () => {
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chats-new').click()
+  await addMember('Reviewer')
+  const chatId = await selectedChatId()
+
+  // Without a folder there is nothing to write into: the two kinds that name
+  // files are disabled rather than hidden, and the hint says why.
+  await expect(window.getByTestId('goal-document')).toBeDisabled()
+  await expect(window.getByTestId('goal-codebase')).toBeDisabled()
+  await expect(window.getByTestId('goal-discussion')).toBeEnabled()
+  await expect(window.getByTestId('goal-needs-workdir')).toBeVisible()
+  await expect(window.getByTestId('chat-goal-chip')).toHaveCount(0)
+
+  expect((await call('chats.update', { id: chatId, patch: { workdir: goaldir } })).ok).toBe(true)
+  await expect(window.getByTestId('goal-document')).toBeEnabled()
+  await expect(window.getByTestId('goal-needs-workdir')).toHaveCount(0)
+
+  const goal = {
+    kind: 'document',
+    description: 'Write the release notes for the next version',
+    deliverable: 'docs/NOTES.md',
+    materials: ['notes.md']
+  }
+  expect((await call('chats.update', { id: chatId, patch: { goal } })).ok).toBe(true)
+
+  // The chip names the file, not the path: its last segment is the half that
+  // identifies it, and the rest is in the tooltip.
+  const chip = window.getByTestId('chat-goal-chip')
+  await expect(chip).toHaveText('NOTES.md')
+  await expect(window.locator('[data-kind="document"]')).toHaveAttribute('data-delivered', 'false')
+
+  // The panel is showing the stored goal, materials included.
+  await expect(window.getByTestId('goal-document')).toHaveAttribute('aria-pressed', 'true')
+  await expect(window.getByTestId('goal-deliverable')).toHaveValue('docs/NOTES.md')
+  await expect(window.getByTestId('goal-material')).toHaveAttribute('data-path', 'notes.md')
+
+  // Now the file really exists.
+  mkdirSync(join(goaldir, 'docs'), { recursive: true })
+  writeFileSync(join(goaldir, 'docs', 'NOTES.md'), '# Notes\n')
+  expect(
+    (await call('chats.update', { id: chatId, patch: { goal: { ...goal, description: `${goal.description}.` } } })).ok
+  ).toBe(true)
+
+  await expect(window.locator('[data-kind="document"]')).toHaveAttribute('data-delivered', 'true')
+  await expect(chip).toContainText('NOTES.md')
+})
+
+test('an invalid goal is refused with a reason, and the goal survives a restart', async () => {
+  const chatId = await selectedChatId()
+
+  // One case per class of mistake the panel can produce, each carrying the
+  // identifier the renderer turns into its own sentence.
+  expect(
+    await call('chats.update', {
+      id: chatId,
+      patch: { goal: { kind: 'document', description: 'x', materials: [] } }
+    })
+  ).toMatchObject({ error: { code: 'validation', details: { reason: 'goal_deliverable_required' } } })
+
+  expect(
+    await call('chats.update', {
+      id: chatId,
+      patch: { goal: { kind: 'document', description: 'x', deliverable: '/etc/passwd', materials: [] } }
+    })
+  ).toMatchObject({
+    error: { code: 'validation', details: { reason: 'goal_deliverable_not_relative' } }
+  })
+
+  expect(
+    await call('chats.update', {
+      id: chatId,
+      patch: { goal: { kind: 'discussion', description: 'x', materials: ['gone.md'] } }
+    })
+  ).toMatchObject({ error: { code: 'validation', details: { reason: 'goal_material_missing' } } })
+
+  await app?.close()
+  ;({ app, window } = await launchWitena(userDataDir))
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chat-item').first().click()
+
+  await expect(window.getByTestId('chat-goal-chip')).toContainText('NOTES.md')
+  await expect(window.getByTestId('goal-deliverable')).toHaveValue('docs/NOTES.md')
+  await expect(window.getByTestId('goal-material')).toHaveAttribute('data-path', 'notes.md')
 })
 
 /* -------------------------------------------------------------------------- */

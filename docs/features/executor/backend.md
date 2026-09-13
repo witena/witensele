@@ -8,7 +8,7 @@ None of these imports electron; `node:fs`, `node:path`, `node:child_process` and
 | File | Responsibility |
 |---|---|
 | `src/main/executor/paths.ts` | `resolveInWorkdir`, `realWorkdir`, `realPathOf`, `isInside`. The only place a path is turned into something the tools may touch |
-| `src/main/executor/tools.ts` | `buildExecutorTools` (the seven AI SDK tools), `buildExecutorSection(workdir, handoff)` (the prompt) and `HANDOFF_BRIEFING` (the paragraph it appends for a hand-off, S5.6), `runCommand` (the captured, killable child process), the caps, `GATED_EXECUTOR_TOOLS`, `PermissionDeniedError`, `unifiedDiff`, `cap` |
+| `src/main/executor/tools.ts` | `buildExecutorTools` (the seven AI SDK tools), `buildExecutorSection(workdir, handoff, goal)` (the prompt), `HANDOFF_BRIEFING` (the paragraph it appends for a hand-off, S5.6) and `goalHandoffLine` (the sentence S5.10 adds to that paragraph, naming the deliverable or the change), `runCommand` (the captured, killable child process), the caps, `GATED_EXECUTOR_TOOLS`, `PermissionDeniedError`, `unifiedDiff`, `cap` |
 | `src/main/executor/permissions.ts` | `createPermissionGate`: `ask` / `reply` / `pending` / `abortAll`, the `allowAlways` set |
 | `src/main/handlers/permissions.ts` | The `permission.reply` handler: two validations, then `ctx.permissions.reply` |
 | `src/main/app-context.ts` | `AppContext.permissions`, built with `emit: ctx.events.emit`; `close()` calls `abortAll()` after `runners.stopAll()` |

@@ -4,7 +4,8 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/handlers/chats.ts` | The `chats.*` / `messages.*` / `chat.*` methods: validation (including every `ChatSettings` field, and since S5.2 `workdir` against the real filesystem and the one-executor rule), the member list a chat is born with, stopping the run on delete, the `chat.*` events, plus `chats.search` and `messages.usageSummary` (S4.1, S4.3) |
+| `src/main/handlers/chats.ts` | The `chats.*` / `messages.*` / `chat.*` methods: validation (including every `ChatSettings` field, since S5.2 `workdir` against the real filesystem and the one-executor rule, and since S5.10 the whole goal table), the member list a chat is born with, stopping the run on delete, the `chat.*` events, plus `chats.search`, `messages.usageSummary` (S4.1, S4.3) and `chats.goalStatus` (S5.10) |
+| `src/main/executor/paths.ts` | `resolveInWorkdir`, reused by this handler since S5.10 so a goal can never name a file the executor itself would be refused. See [`executor`](../executor/backend.md) |
 | `src/shared/pricing.ts` | The model price table, `estimateCost`, `contextWindowFor` and the `formatTokens` / `formatCost` helpers. Shared, because the renderer prices the same numbers; see [`providers`](../providers/backend.md) for how to edit the table |
 | `src/shared/usage.ts` | `summarizeUsage`: the one copy of the per-chat / per-agent arithmetic, run by this handler over the database and by `stores/usage.ts` over the transcript in the store |
 | `src/main/handlers/agents.ts` | The five `agents.*` methods; see [`agents`](../agents/backend.md) |
@@ -32,6 +33,7 @@ is the only thing that reads it. See
 | `chats` | `id`, `user_id` | text | UUID primary key, scoped by user |
 | | `title` | text | `New chat` until it is renamed, or until `ChatRunner` generates one after the first run (S4.3) |
 | | `workdir` | text null | Absolute path of the folder this chat's executor works in, or `null`. Written by `chats.update`, which validates it; real since S5.2 |
+| | `goal` | json null | `ChatGoal` (S5.10), or `null`. Migration `0003_acoustic_vermin.sql`; **replaced** by `chats.update`, never merged |
 | | `settings` | json | `ChatSettings`; written by the member panel's group-settings block, merged field by field |
 | | `created_at` / `updated_at` | integer | Epoch ms. `updated_at` is bumped by every message insert, which is what floats an active chat to the top |
 | `chat_members` | `chat_id`, `agent_id`, `position` | text / text / integer | Composite key; `ON DELETE CASCADE` from both parents |
@@ -57,6 +59,7 @@ is the only thing that reads it. See
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` by `position` | `validation`, `not_found` |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | `validation` for a non-array or a duplicate agent, and `validation` + `second_executor` for two `executor` agents in the resulting list; `not_found` for an unknown agent. All of it before anything is written. An **empty** array is valid: it is how the last member is removed |
 | `chats.search` | `{ query }` | `string[]` chat ids, newest first, capped at `CHAT_SEARCH_LIMIT` (200) | `validation` when `query` is not a string. A blank query is **not** an error: it means "no filter" and returns every chat |
+| `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | `validation` on an empty id, `not_found` for an unknown chat. A chat with no `document` goal answers `{ deliverable: null, delivered: false }` rather than rejecting — the header asks for every chat it draws |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` newest first | `validation` on an empty chat id or a non-positive limit; `not_found` for an unknown cursor |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` over the whole transcript | `validation` on an empty id, `not_found` for an unknown chat |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | `validation` for a non-string or blank text and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
@@ -73,6 +76,7 @@ persisted on its own:
 |---|---|
 | `title` | Non-empty after trimming |
 | `workdir` | `null`, or an absolute path that `statSync` reports as a directory. Three distinct `ValidationReason`s: `workdir_not_absolute`, `workdir_missing`, `workdir_not_directory` |
+| `goal` | `null`, or the table in "The chat goal" below. Validated against the **effective** folder: the patch's own `workdir` when it carries one, otherwise the stored one |
 | `settings.mode` | `roundrobin` or `mention-only` |
 | `settings.speaking` | `sequential` or `parallel` |
 | `settings.maxAutoRounds` | An integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` = `[1, 10]` |
@@ -115,6 +119,59 @@ chat cannot be born pointing at a path a later update would refuse.
 `ChatRunner` already re-reads the chat record every round (`repos.chats.get`), so
 `workdir` reaches the orchestrator with no new plumbing; nothing reads it yet,
 because attaching executor tools is S5.4.
+
+### The chat goal (S5.10)
+
+`ChatPatch.goal` is `ChatGoal | null`, and `assertGoal` checks it against the
+folder the goal will live in — which is the **patch's own** `workdir` when the
+call binds one and the stored one otherwise, so binding a folder and setting a
+goal in a single `chats.update` is legal. The stored row is read lazily, through
+a thunk, so a patch with no goal still costs one write and no read.
+
+| Rule | Refusal |
+|---|---|
+| `description` non-empty after trimming | `goal_description_empty` |
+| `description` at most `MAX_GOAL_DESCRIPTION_CHARS` (2 000) | `goal_description_too_long` |
+| `kind: 'document'` carries a `deliverable` | `goal_deliverable_required` |
+| A `deliverable` is relative, non-empty and free of `..` | `goal_deliverable_not_relative` |
+| A `deliverable` resolves inside `workdir` (`resolveInWorkdir`, symlinks included) | `goal_deliverable_outside_workdir` |
+| Every `material` is relative, non-empty and free of `..` | `goal_material_not_relative` |
+| Every `material` resolves inside `workdir` | `goal_material_outside_workdir` |
+| Every `material` **exists** | `goal_material_missing` |
+| `document` / `codebase`, or any material, requires a `workdir` | `goal_needs_workdir` |
+| A `deliverable` on a kind that is not `document` | plain `validation`, **no reason** |
+| A malformed object: unknown `kind`, `materials` that is not an array of strings | plain `validation`, no reason |
+
+The last two rows are the line this table draws deliberately. A
+`ValidationReason` is a **sentence the user is meant to act on**, so it exists
+for every refusal a control can produce and for none of the ones only a
+hand-written call can: the panel drops the deliverable when the kind changes,
+and no control can send `kind: 'anything'`.
+
+Two asymmetries worth keeping:
+
+- **A deliverable is not checked for existence, a material is.** The whole point
+  of a deliverable is that it is not there yet, and its parent folder need not
+  exist either; a material is something the group reads, so a missing one is a
+  goal that cannot be met.
+- **Absolute and `..` share a reason**, because they share a fix: write the path
+  relative to the folder. "Outside the folder" is a different mistake with a
+  different fix, and it is discovered by a different check —
+  `resolveInWorkdir`, which follows symlinks, which is why a goal can never name
+  a file the executor would be refused at the moment of use.
+
+A goal stores **relative** paths for the reason the workdir is absolute: the
+folder is a machine-local binding, while the goal describes the project and
+survives it being moved, cloned or restored from a backup. Converting the
+absolute paths the native dialogs return is the renderer's job, and so is
+refusing one that fell outside the folder — no dialog on any platform this runs
+on can be confined to a directory (see [frontend.md](./frontend.md)).
+
+`chats.goalStatus` is separate from all of this because it asks the filesystem
+rather than validating a request: `join(workdir, deliverable)` plus `existsSync`.
+It uses `join` rather than `resolveInWorkdir` on purpose — the path was confined
+when the goal was saved, and a folder that has since gone should answer "not
+delivered" to a chip that only wants to know whether to say so, not throw.
 
 ### Handing a chat to its executor (S5.6)
 

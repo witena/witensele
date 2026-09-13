@@ -89,6 +89,79 @@ The chip prints `folderName(workdir)` with the whole path in `title`
 (`lib/workdir.ts`) — the interesting half of a path is its last segment, and the
 rest does not fit beside a title or in a 288px panel.
 
+### Setting the chat goal (S5.10)
+
+```
+the Goal block (components/chat/goal-settings.tsx)
+  a draft: { kind, description, deliverable, materials }, seeded from chat.goal
+  kind changed      → draft; persisted too, if the description already has text
+  description blur  → persist
+  deliverable blur  → persist
+  material added / removed → persist immediately (no blur to wait for)
+  → composeGoal(draft)      // null when the description is blank
+  → useChatsStore.setGoal(chatId, goal)
+  → invoke('chats.update', { id, patch: { goal } })
+  → assertGoal(goal, patch.workdir ?? stored.workdir)
+      refused → validation + { reason: 'goal_…' }   // nine of them, see backend.md
+  → store applies the returned chat, then re-reads chats.goalStatus
+  → the panel re-seeds from the stored value; the header chip re-renders
+```
+
+The block is the **only** control in the group settings that holds a draft, and
+the reason is the column: a goal is one JSON field, so there is no per-field
+patch to send, and persisting free text on every keystroke would be a write per
+character. So it writes on blur — which is what the chat title already does.
+
+Two edges fall out of "a goal is its description", and both are deliberate:
+picking a kind while the box is empty changes the draft only, and **emptying**
+the description of a chat that has a goal removes the goal. The way out is the
+same gesture as the way in, rather than a second control that exists only to
+undo the first.
+
+### Picking a deliverable or a material (S5.10)
+
+```
+"Choose…"                              |  "Add…"
+  pickDeliverable(workdir)             |    pickMaterials(workdir)
+  → invoke('system.pickSavePath')      |    → invoke('system.pickPaths')
+       cancelled → null → nothing      |         cancelled → [] → nothing
+  → relativeToWorkdir(workdir, picked) |    → the same, per pick
+       outside → null + errorDetails   |         outside → dropped + errorDetails
+         { reason: goal_deliverable_…  |           { reason: goal_material_… }
+           outside_workdir }           |
+  → the draft field / the list, then persisted
+```
+
+The conversion is the point. The dialogs answer **absolute** paths and a
+`ChatGoal` stores **relative** ones, because the folder is a machine-local
+binding while the goal describes a project that outlives it. And because no
+native dialog on any platform this runs on can be confined to a directory,
+`relativeToWorkdir` returning `null` is the only place "you picked something
+outside this chat's folder" can be noticed — so the renderer reports it the way
+a backend rejection is reported: the same three store fields, a
+`ValidationReason`, the same `translateFailure`, the same `chats-error` line.
+
+A materials pick keeps what was inside and reports what was not, rather than
+discarding the lot: a user who selected six files and one stray meant the six.
+
+### Is the deliverable there yet? (S5.10)
+
+```
+open a chat, or chat.updated for it
+  → useChatsStore.loadGoalStatus(chatId)
+  → invoke('chats.goalStatus', { chatId })
+  → join(workdir, goal.deliverable) + existsSync
+  → goalStatusByChat[chatId]
+  → goalChipState(goal, status) → the header chip
+```
+
+A **query**, not a column. Whether a file exists is a fact about the filesystem,
+so a stored boolean would be wrong the moment anything created, moved or deleted
+it — including something that is not this app — and the same reasoning already
+keeps the member count off `Chat`. It is re-asked whenever the chat row changes,
+which covers every edit the panel makes; S5.12 is what makes an executor turn
+one of those moments too.
+
 ### Adding an executor member (S5.2)
 
 ```
@@ -246,7 +319,10 @@ kebab → Delete → Delete again
 ## Key types and contracts
 
 `Chat`, `ChatMember`, `Message`, `MessagePart`, `MessageStatus` and `Usage` are
-unchanged from S1.1 except that **`Chat.workdir` is no longer reserved** (S5.2):
+unchanged from S1.1 except that **`Chat.goal` was added** (S5.10, with
+`ChatGoal`, `GoalKind`, `GOAL_KINDS`, `MAX_GOAL_DESCRIPTION_CHARS` and
+`ChatGoalStatus` beside it, plus nine more `VALIDATION_REASONS`) and that
+**`Chat.workdir` is no longer reserved** (S5.2):
 `ChatPatch` accepts it, and `VALIDATION_REASONS` / `ValidationReason` were added
 beside `BackendError` for the refusals the renderer names precisely. S2.2 added
 two input types next to them —
@@ -264,6 +340,7 @@ two input types next to them —
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **New in S1.7.** Ordered by `position` |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the list; array index becomes `position` |
 | `chats.search` | `{ query }` | `string[]` | Chat ids whose title or any message text matches; blank query means every chat |
+| `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | S5.10. Where the `document` goal's deliverable is and whether it exists. A chat with no such goal answers `{ deliverable: null, delivered: false }` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is a message id |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` | Tokens and estimated cost, total and per agent, over the whole transcript |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written |
@@ -286,10 +363,11 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | File | Covers |
 |---|---|
 | `src/main/orchestration/chat-runner.test.ts` (`describe('chats handlers')`) | `chats.create` default title and settings; the `validation` refusal with no usable provider; rename bumping `updatedAt` and emitting `chat.updated`; the empty-title rejection; `messages.list` order and the `before` cursor; delete stopping the run and emitting `chat.deleted`. Also: the runner re-reads the members on the next run, and `chat.send` on an empty chat stores nothing |
-| `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, every `ChatSettings` bound, and S5.2's two rules: `workdir` accepted / cleared / refused as relative, blank, missing and a file, and the second-executor refusal on both `members.set` and `chats.create` (with one executor beside participants, and an executor-for-executor swap, both allowed) |
+| `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, every `ChatSettings` bound, S5.10's whole goal table against a **real** temporary folder (one case per `ValidationReason` — including a symlink out for each of the two `outside_workdir` ones — plus the shapes that must stay legal: a discussion on an unbound chat, a deliverable whose parent does not exist, a folder as a material, a folder and a goal in one call, clearing with `null`, and `chats.goalStatus` before and after the file appears), and S5.2's two rules: `workdir` accepted / cleared / refused as relative, blank, missing and a file, and the second-executor refusal on both `members.set` and `chats.create` (with one executor beside participants, and an executor-for-executor swap, both allowed) |
 | `src/main/handlers/handlers.test.ts` | Every declared method has a handler; the ones still stubbed reject with `internal` |
-| `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection; `setWorkdir` binding and clearing, the rejection's `reason` kept in `errorDetails`, and `chooseWorkdir` writing nothing at all when the dialog is cancelled |
-| `src/renderer/src/lib/workdir.test.ts` | `folderName`: the last segment, trailing separators, Windows separators, the filesystem root, a bare name, a name with a dot or a space |
+| `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection; `setWorkdir` binding and clearing, the rejection's `reason` kept in `errorDetails`, and `chooseWorkdir` writing nothing at all when the dialog is cancelled; and S5.10's `setGoal` (the whole object, `null` to remove, the refusal's reason kept), `pickDeliverable` (converted, refused outside, nothing left behind on cancel), `pickMaterials` (the ones inside kept and the stray reported, `[]` on cancel) and a deleted chat forgetting its goal status |
+| `src/renderer/src/lib/workdir.test.ts` | `folderName`: the last segment, trailing separators, Windows separators, the filesystem root, a bare name, a name with a dot or a space. S5.10 adds `relativeToWorkdir`: the conversion, a path outside the folder, a sibling whose name starts with the same characters, the folder itself, no folder bound, and both separators |
+| `src/renderer/src/components/chat/goal.test.ts` | `goalChipState` (S5.10): nothing without a goal, the kind for `discussion` and `codebase` (including a stale `document` status arriving for one), the file name and path for a `document`, openable **only** once delivered, and not delivered while the query has not answered |
 | `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker` (S5.6): the enabled case, each of the three refusals, a blank `workdir`, and the order the rules are applied in when more than one is broken |
 | `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` and every `ValidationReason` resolving to distinct real copy; `validationReasonOf` narrowing a known reason and ignoring everything else; `translateFailure` preferring a reason only under `validation` |
 | `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
@@ -354,9 +432,23 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   card's `serverName · toolName` line reads.
 - **`chats.members.list` is one call per chat** on load. See the trade-off table
   in `context.md`.
-- **`workdir` is written but not yet read.** `ChatRunner` re-reads the chat record
-  every round, so the field reaches the orchestrator already; attaching the
-  executor's tools to it is S5.4.
+- **A goal's `materials` are recorded, validated and listed, and nothing reads
+  their contents.** Placing them in every member's context is S5.11; until then
+  they are a list the user curated and the briefing does not mention.
+- **"Delivered" is polled, not watched.** `chats.goalStatus` runs when a chat is
+  opened and on every `chat.updated` for it, so a deliverable written by
+  something that is not this app is noticed at the next such moment rather than
+  immediately. A filesystem watcher is deliberately not in S5.10; S5.12 adds the
+  executor turn as one more moment.
+- **The Goal block's two dialogs are not driven end to end.** They are native
+  modals, like the folder picker, so `e2e/executor.spec.ts` writes the goal
+  through the backend client and asserts what the UI does with it. The
+  conversion those buttons perform is unit-tested instead
+  (`relativeToWorkdir`, and the two store actions).
+- **`relativeToWorkdir` compares paths exactly.** Both strings come from one
+  dialog rooted at the folder, so a case-insensitive volume cannot make them
+  differ — but a path assembled some other way, on such a volume, with different
+  case, would be refused as outside.
 - **The one-executor rule is enforced on membership only.** Promoting an agent
   to `executor` while it is already in a chat that has one is not refused; see
   the known gap in `backend.md`.

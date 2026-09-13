@@ -4,7 +4,10 @@
 
 | File | Responsibility |
 |---|---|
-| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, the group-settings block (which writes straight through to `chats.update`) including the S5.2 "Working directory" row, and the folder chip beside the header title |
+| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, the group-settings block (which writes straight through to `chats.update`) including the S5.2 "Working directory" row, the folder chip beside the header title, and — since S5.10 — the goal-status load and the two goal surfaces it hosts |
+| `src/renderer/src/components/chat/goal-settings.tsx` | The **Goal** block (S5.10) under the Working directory row: the kind `SegmentedControl` (Document and Codebase disabled without a folder, with the reason under them), the description, the deliverable and its "Choose…", and the materials list with "Add…". The one block in the panel that holds a **draft**, because a goal is one JSON column and two of its fields are free text; it writes on blur |
+| `src/renderer/src/components/chat/goal-chip.tsx` | The goal chip in the header (S5.10). Four states, one of which is a button: a **delivered** document opens in the editor through S5.7's `openInEditor`, and a refused open paints the chip red for 2.5 s |
+| `src/renderer/src/components/chat/goal.ts` | `goalChipState(goal, status)`: which of those four states to draw, and what to open. Pure and unit-tested; the component turns it into `t()` copy |
 | `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete |
 | `src/renderer/src/components/chat/message-list.tsx` | The virtualized scroller (react-virtuoso): `followOutput` only while at the bottom, the "jump to latest" pill, and the day separators |
 | `src/renderer/src/components/chat/transcript-rows.ts` | The transcript's pure transforms: `buildTranscriptRows` / `dayBucket` (`Message[]` → the flat row array the virtualizer renders) and, since S5.5, `collectDiffs`, `collectFileRefs`, `countDiffLines` and `formatFileRef` — the part-level cases a message row draws. Unit-tested |
@@ -41,6 +44,7 @@
 |---|---|---|---|
 | `chats` | `chats` | `Chat[]` | Backend-owned, newest `updatedAt` first. Replaced by `chats.list`, upserted by `chat.updated`, filtered by `chat.deleted` |
 | `chats` | `membersByChat` | `Record<string, string[]>` | Backend-owned member agent ids, in speaking order. Written only by `setMembers`, which goes through the backend first |
+| `chats` | `goalStatusByChat` | `Record<string, ChatGoalStatus>` | Backend-owned (S5.10), from `chats.goalStatus`. A chat with no entry has simply not been asked about yet, which the chip draws as "not delivered" rather than as a third state |
 | `chats` | `selectedId` | `string \| null` | Local UI state, not persisted |
 | `chats` | `status` / `error` / `errorCode` / `errorDetails` | | Load state and the last failure. `errorDetails` is the rejection's own `details`, which may carry a `ValidationReason` — that is what turns "the request was rejected as invalid" into "that folder no longer exists" |
 | `messages` | `byChat` | `Record<string, Message[]>` | Backend-owned, **oldest first** |
@@ -79,6 +83,10 @@ selector re-renders on every store write.
 | `invoke('chats.update')` | Every group-settings control | Persists one `ChatSettings` field immediately; no Save button and no debounce |
 | `invoke('system.pickFolder')` + `invoke('chats.update')` | "Choose…" in the Working directory row, through `chooseWorkdir` | The native modal, then the binding. A cancelled dialog writes nothing and leaves no error |
 | `invoke('chats.update')` | "Clear" in the Working directory row, through `setWorkdir(id, null)` | Unbinds the folder; the one path that needs no dialog |
+| `invoke('chats.update')` | Every control in the Goal block, through `setGoal(id, goal)` | Persists the **whole** goal; `null` removes it, which is what emptying the description does |
+| `invoke('chats.goalStatus')` | The page's `selectedId` / `updatedAt` effect, and after every `setGoal` | Whether the deliverable is on disk. Re-asked whenever the chat changes, because a column nobody refreshed would be wrong the moment anything wrote the file |
+| `invoke('system.pickSavePath')` | "Choose…" in the Goal block, through `pickDeliverable(workdir)` | The native save dialog. Its absolute answer becomes a relative path, or the pick is refused with `goal_deliverable_outside_workdir` |
+| `invoke('system.pickPaths')` | "Add…" in the Materials list, through `pickMaterials(workdir)` | Files and folders, multi-select. The picks inside the folder are kept and the ones outside are reported: six files with one stray among them meant the six |
 | `invoke('providers.list')` | `providers.load()` on mount | The provider name in the member picker |
 | `invoke('chat.handoff')` | The "Hand to executor" button, through `run.handoff(chatId)` | Stores the hand-off message and runs implement + review ([`orchestration`](../orchestration/frontend.md)). Refused with the same three reasons the button is disabled for, which the composer's error line then prints |
 | `invoke('chat.stop')` | The Stop button | Aborts the run — which also closes every open permission prompt as `aborted` |
@@ -124,6 +132,11 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | second executor offered | The picker's row is disabled and at 55% opacity, and its mono model line is replaced by `chat.executorTaken`. The click is not merely ignored — there is nothing to click |
 | folder bound | An accent chip beside the chat title holding the folder's **name**, with the whole path in its `title`; the settings row prints the same name in mono and enables "Clear" |
 | folder refused | The left column's `chats-error` line names the reason: not absolute, no longer there, or a file rather than a folder |
+| chat with no folder | The Goal block's Document and Codebase segments are disabled and a hint under them says to choose a working directory. Discussion stays available: a chat can be about something without owning a folder |
+| goal set | A chip beside the folder chip. `discussion` / `codebase` show the kind; `document` shows the deliverable's **file name**, with the whole relative path in the tooltip |
+| deliverable written | The same chip reads `name · Delivered`, turns accent and becomes a button that opens the file (S5.7). A refused open paints it red for 2.5 s, exactly as a file-reference chip does |
+| goal refused | The `chats-error` line names the field: a description that is blank or too long, a missing deliverable, a path that is not relative, one that leaves the folder, or a material that is not there |
+| material picked outside the folder | The same line, from the **renderer** rather than from a rejection — the dialogs cannot be confined, so the conversion is where it is noticed. The picks that were inside are still added |
 | permission prompt open | A card between the transcript and the composer: the agent and the tool, the call itself (a command line verbatim in mono, a path plus a content preview, or a patch), and Allow / Always allow in this chat / Deny. The oldest card takes focus, so Enter and Escape work without a click. The agent stays `working` — its turn is suspended inside the tool call, not stalled |
 | permission answered, or the run stopped | The card disappears on `permission.resolved`. A denial is not a system notice: it comes back as an errored tool card carrying the sentence the **model** read |
 | a file was changed | One collapsed `diff-block` per file under the tool cards, headed by the path with `+n -n`; opening it renders the unified diff through the same `code-block` a fenced diff uses. The path itself opens the file (S5.7) |
@@ -153,6 +166,11 @@ New keys, all under the existing namespaces:
 | `chat.searchEmptyTitle`, `chat.searchEmptyDescription` | The empty state when a query matches no chat (distinct from "no chats yet") |
 | `chat.jumpToLatest` | The pill that appears when a message arrives while the user is scrolled up |
 | `chat.workdir`, `chat.workdirHint`, `chat.workdirNone`, `chat.workdirChoose`, `chat.workdirClear` | The Working directory row. The **path itself is never translated** — it is data, printed as it is stored |
+| `chat.goal`, `chat.goalHint`, `chat.goalKindDiscussion`, `chat.goalKindDocument`, `chat.goalKindCodebase`, `chat.goalNeedsWorkdirHint` | The Goal block's heading, its three segments and the hint under the two that need a folder |
+| `chat.goalDescription`, `chat.goalDescriptionPlaceholder`, `chat.goalDeliverable`, `chat.goalDeliverablePlaceholder`, `chat.goalDeliverableChoose` | The description box, the deliverable field and its picker button. The paths are data and are never translated |
+| `chat.goalMaterials`, `chat.goalMaterialsAdd`, `chat.goalMaterialsNone`, `chat.goalMaterialRemove` | The materials list, its "Add…" and each row's remove button |
+| `chat.goalDelivered`, `chat.goalChipTitleDiscussion`, `chat.goalChipTitleCodebase`, `chat.goalChipTitleDocument`, `chat.goalChipTitleDelivered` | The header chip's label and its four tooltips (`{{path}}` in the last two) |
+| `errors.goal_description_empty`, `errors.goal_description_too_long`, `errors.goal_deliverable_required`, `errors.goal_deliverable_not_relative`, `errors.goal_deliverable_outside_workdir`, `errors.goal_material_not_relative`, `errors.goal_material_outside_workdir`, `errors.goal_material_missing`, `errors.goal_needs_workdir` | S5.10's nine `ValidationReason` sentences, resolved by `translateFailure` — whether the refusal came from the backend or, for the two `outside_workdir` ones, from the renderer's own conversion |
 | `chat.executorTaken` | The picker's sub-line on a second executor |
 | `agents.executorBadge`, `agents.executorBadgeTitle` | The chip and its tooltip, shared with the Agents page — the copy belongs to the role, which `agents` owns |
 | `chat.handoff`, `chat.handoffTitle` | The "Hand to executor" button and its tooltip while it is enabled (S5.6) |
@@ -216,13 +234,25 @@ is never translated.
   `data-line`) and `message-file-refs`. S5.7 added `diff-block-more`,
   `tool-card-open` (with `data-path`), `data-openable` on `file-ref`, and
   `settings-editor` with `editor-vscode` / `editor-cursor` / `editor-custom` and
-  `settings-editor-command`.
+  `settings-editor-command`. S5.10 added `chat-goal`, `goal-discussion` /
+  `goal-document` / `goal-codebase`, `goal-needs-workdir`, `goal-description`,
+  `goal-deliverable`, `goal-deliverable-pick`, `goal-materials`, `goal-material`
+  (with `data-path`), `goal-material-remove`, `goal-materials-add`, and
+  `chat-goal-chip` — the last inside a wrapper carrying `data-kind` and
+  `data-delivered`, which is where the end-to-end spec reads the state without
+  touching copy.
 - **The permission card owns Enter and Escape only while it is focused.** The
   shortcuts are on the card element, not on the document: a global listener would
   take Enter away from the composer, where it sends. The oldest card is focused
   when it appears (`tabIndex={-1}`, so it takes no Tab stop) and the buttons keep
   their own focus ring; the card carries `aria-label` from
   `chat.permissionTitle`.
+- The goal chip is a `button` **only when it is openable**, and a plain chip
+  otherwise — a control whose click can only fail is worse than text. Both
+  branches carry the same `data-*`, so a test reads one place.
+- The Goal block's kind control is the shared `SegmentedControl`, which gained a
+  per-option `disabled` in S5.10; each segment stays a real `button` with
+  `aria-pressed`, and a disabled one keeps its place in the row.
 - Since S5.7 the diff header is **two** buttons rather than one containing
   another (invalid, and unreachable by keyboard): the toggle, and the path that
   opens the file, with the expand/collapse word as a third.

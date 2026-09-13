@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolSet } from 'ai'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { ChatGoal } from '@shared/types'
 import type { PermissionGate, PermissionRequest } from './permissions'
 import {
   EDIT_FILE_TOOL,
@@ -30,7 +31,8 @@ import {
   WRITE_FILE_TOOL,
   buildExecutorSection,
   buildExecutorTools,
-  cap
+  cap,
+  goalHandoffLine
 } from './tools'
 
 let workdir: string
@@ -382,6 +384,49 @@ describe('buildExecutorSection', () => {
     for (const name of EXECUTOR_TOOLS) expect(section).toContain(name)
     expect(section).toMatch(/summary of every file you changed/)
     expect(section).toMatch(/review/)
+  })
+})
+
+/**
+ * S5.10: the hand-off briefing names what the chat is for.
+ *
+ * "Implement the conclusion the group reached" is exactly right for a chat with
+ * no goal and one sentence short of useful for one that has a file to produce.
+ */
+describe('goalHandoffLine', () => {
+  const goal = (patch: Partial<ChatGoal>): ChatGoal => ({
+    kind: 'discussion',
+    description: 'Split the runner in two',
+    materials: [],
+    ...patch
+  })
+
+  it('names the deliverable of a document goal, and says to create its folders', () => {
+    const line = goalHandoffLine(goal({ kind: 'document', deliverable: 'docs/plan.md' }))
+    expect(line).toContain('docs/plan.md')
+    expect(line).toMatch(/parent folders/)
+  })
+
+  it('names the change of a codebase goal', () => {
+    expect(goalHandoffLine(goal({ kind: 'codebase' }))).toContain('Split the runner in two')
+  })
+
+  it('adds nothing for a discussion, or for a chat with no goal', () => {
+    // `HANDOFF_BRIEFING` already says to implement the conclusion; a discussion
+    // goal has nothing more concrete to point at.
+    expect(goalHandoffLine(goal({ kind: 'discussion' }))).toBeNull()
+    expect(goalHandoffLine(null)).toBeNull()
+    expect(goalHandoffLine(undefined)).toBeNull()
+  })
+
+  it('reaches the executor section only on the hand-off turn', () => {
+    const document = goal({ kind: 'document', deliverable: 'docs/plan.md' })
+
+    // A reviewer, and an executor a reviewer `@`-ed afterwards, are being asked
+    // something specific and must not be told to go and write the deliverable.
+    expect(buildExecutorSection('/tmp/project', false, document)).not.toContain('docs/plan.md')
+    expect(buildExecutorSection('/tmp/project', true, document)).toContain('docs/plan.md')
+    expect(buildExecutorSection('/tmp/project', true, null)).toMatch(/implement the conclusion/i)
   })
 })
 

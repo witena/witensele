@@ -10,7 +10,7 @@
 | `src/main/agents/title.ts` | `sanitizeTitle`, `fallbackTitle` and `generateChatTitle` — the automatic chat title (S4.3). `ChatRunner` is what calls it; see [`orchestration`](../orchestration/backend.md) |
 | `src/shared/pass.ts` | `PASS_TOKEN`, `isPassOnly` and `stripTrailingPass`: shared, because the status decision here and the rendering in the transcript have to read the identical rule |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
-| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3) |
+| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3) and the `Goal of this chat` section (S5.10) |
 | `src/main/agents/briefing.zh-CN.ts` | The Chinese wording, same rules in the same order. **The only `.ts` file in the repository that may contain Chinese** — see below |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, documented under [`chats`](../chats/backend.md) |
 
@@ -27,12 +27,16 @@ The prompt sections and the built-in tools themselves live with their features:
 file decides the **order** of the sections and **which** tools an agent gets.
 
 `buildSystemPrompt(ctx, chat, agent, members, handoff?)` takes the chat since
-S5.4, because the executor section names the folder, and the `handoff` flag since
-S5.6, because the one turn a hand-off schedules is briefed to implement the
+S5.4, because the executor section names the folder — and since S5.10 for a
+second reason: `chat.goal` reaches `buildGroupBriefing`, so **every** member is
+briefed with what the chat is for, executor or not. It takes the `handoff` flag
+since S5.6, because the one turn a hand-off schedules is briefed to implement the
 conclusion rather than to join the discussion (`AgentTurnOptions.handoff`, set
 only by `ChatRunner.handoff`'s round); `collectAgentTools(ctx, chat, agent, {
 signal, toolTimeoutMs, members })` takes it for the same reason plus the
-member list, which is how the chat's executor is picked deterministically.
+member list, which is how the chat's executor is picked deterministically. Since
+S5.10 `buildExecutorSection` takes the goal as well, and appends `goalHandoffLine`
+to the hand-off suffix — the deliverable to write, or the change to make.
 
 ## Database
 

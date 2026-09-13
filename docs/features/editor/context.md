@@ -31,6 +31,11 @@ work.
 - `src/renderer/src/components/chat/file-refs.ts`: the pure detector that finds
   `path:line` and `path` tokens in a message body and resolves them against the
   chat's folder, plus `absoluteInWorkdir`, which the other three surfaces use.
+- Since S5.10 a fifth surface, outside the transcript: the **goal chip** in the
+  chat header, which opens a `document` goal's deliverable once the file exists.
+  It calls the same `lib/editor.ts` helper, is a button only while there is
+  something to open, and paints red for the same 2.5 s on a refusal. The chip
+  itself belongs to [`chats`](../chats/context.md).
 - The four clickable surfaces in the transcript: the `FileRefPart` chip, a token
   the detector found in the body text, the `DiffPart` header path, and the "open"
   icon on a `read_file` / `write_file` / `edit_file` card.

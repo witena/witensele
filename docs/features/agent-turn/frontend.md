@@ -24,7 +24,10 @@ every one of these is a contract the message list has to honour:
 
 Since S5.6 one more option reaches the turn and **nothing** of it reaches the
 renderer: `handoff` only lengthens the system prompt, so a handed-over turn
-streams, fails, is stopped and is rendered exactly like any other.
+streams, fails, is stopped and is rendered exactly like any other. S5.10's goal
+is the same again — it changes what every member is told and nothing about how a
+reply is drawn. What the *user* sees of the goal is the panel and the header
+chip, both owned by [`chats`](../chats/frontend.md).
 
 Reasoning parts are rendered collapsed behind a "Reasoning" toggle
 (`chat.reasoning`) because they are long, low-signal and not what the group said.

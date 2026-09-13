@@ -11,6 +11,7 @@
 | `src/renderer/src/components/chat/tool-card.tsx` | An "open" icon beside the expand toggle for a `read_file` / `write_file` / `edit_file` card whose path resolves |
 | `src/renderer/src/components/chat/tool-call.ts` | `filePath` on `ToolCallDescription` and `openableFilePath(part)` — which cards get that icon |
 | `src/renderer/src/components/chat/message-item.tsx` | Reads the chat's folder and passes `chatId` + `workdir` to all four surfaces |
+| `src/renderer/src/components/chat/goal-chip.tsx` | S5.10's fifth caller, in the chat header rather than the transcript: a delivered `document` goal's chip opens its deliverable. It already has an absolute path (from `chats.goalStatus`), so it needs no detector — only `openInEditor` and the same red-for-2.5 s failure state. Owned by [`chats`](../chats/frontend.md) |
 | `src/renderer/src/lib/editor.ts` | `openInEditor({ path, line, chatId })` — the `BackendClient` call, and nothing else |
 | `src/renderer/src/pages/settings/developer-section.tsx` | The Editor block: a `SegmentedControl` for the kind, and a monospace `Input` for the template shown only for `custom` |
 | `src/renderer/src/pages/settings/editor.ts` | `applyEditorSetting(patch)` — the one place the controls write through, mirroring `./theme.ts` |

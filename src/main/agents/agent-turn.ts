@@ -408,6 +408,10 @@ export function enabledSkills(ctx: AppContext, agent: Agent): SkillMeta[] {
  * when it is one, the enabled skills' names and descriptions, then the whole
  * memory index.
  *
+ * Since S5.10 the briefing also carries the chat's **goal**, for every member;
+ * the executor section's hand-off suffix additionally names the deliverable or
+ * the change, because that turn is the one being asked to produce it.
+ *
  * Skills and memory come **after** the briefing because they are data the agent
  * may reach for, while the briefing is how it must behave; a model that runs out
  * of attention should lose the reference material first, not the protocol. The
@@ -430,13 +434,16 @@ export function buildSystemPrompt(
     language,
     self: toBriefingMember(agent),
     members: members.map(toBriefingMember),
-    memoryEnabled: agent.memoryEnabled
+    memoryEnabled: agent.memoryEnabled,
+    // S5.10: every member is briefed with the chat's goal, executor or not —
+    // what the group is for is not a fact about one role.
+    goal: chat.goal
   })
 
   const sections = [agent.systemPrompt.trim(), briefing]
 
   if (executorWorkdir(chat, agent, members)) {
-    sections.push(buildExecutorSection(chat.workdir as string, handoff))
+    sections.push(buildExecutorSection(chat.workdir as string, handoff, chat.goal))
   }
 
   const skills = buildSkillsSection(enabledSkills(ctx, agent))

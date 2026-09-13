@@ -14,6 +14,7 @@
  * It says the same things in the same order as `briefing.en.ts`, so the two can
  * be diffed side by side when either changes.
  */
+import type { ChatGoal } from '@shared/types'
 import type { BriefingBuilder } from './briefing'
 import { PASS_TOKEN } from './briefing'
 
@@ -23,7 +24,31 @@ function line(name: string, description: string): string {
   return trimmed.length > 0 ? `- ${name} — ${trimmed}` : `- ${name}`
 }
 
-export const buildChineseBriefing: BriefingBuilder = ({ self, members, memoryEnabled }) => {
+/** The goal section (S5.10); says the same things in the same order as `briefing.en.ts`. */
+function goalSection(goal: ChatGoal): string[] {
+  const lines = ['', '本群的目标:']
+  if (goal.kind === 'document') {
+    lines.push('- 这个群要产出一份文档,讨论是为了把它写出来。')
+  } else if (goal.kind === 'codebase') {
+    lines.push('- 这个群要修改本群工作目录里的代码。')
+  } else {
+    lines.push('- 这个群讨论到得出结论为止,不往任何地方写东西。')
+  }
+  lines.push(`- 用户的要求是:${goal.description.trim()}`)
+  if (goal.kind === 'document' && goal.deliverable) {
+    lines.push(
+      `- 产出文件是工作目录下的 ${goal.deliverable}。判断每一条发言好不好,就看它有没有让这个文件变得更好。`
+    )
+  }
+  if (goal.kind === 'codebase') {
+    lines.push(
+      '- 你自己不改任何文件。讨论结束后,由本群的 executor 按你们得出的结论去改,所以请说清楚应该改什么、为什么改,不要装作已经改过了。'
+    )
+  }
+  return lines
+}
+
+export const buildChineseBriefing: BriefingBuilder = ({ self, members, memoryEnabled, goal }) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat; see `briefing.en.ts`.
   const other = members.find((member) => member.name !== self.name) ?? self
@@ -52,6 +77,8 @@ export const buildChineseBriefing: BriefingBuilder = ({ self, members, memoryEna
       ? [
           '- 当你了解到关于用户或项目的长期有效的信息 —— 名字、约束条件、群里定下来的结论 —— 就用 memory_save 工具记下来,这样你在别的群聊里也还记得。'
         ]
-      : [])
+      : []),
+    // S5.10: last, for the same reason as in `briefing.en.ts`.
+    ...(goal ? goalSection(goal) : [])
   ].join('\n')
 }

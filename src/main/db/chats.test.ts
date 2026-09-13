@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_CHAT_SETTINGS, LOCAL_USER_ID } from '@shared/types'
+import { DEFAULT_CHAT_SETTINGS, LOCAL_USER_ID, type ChatGoal } from '@shared/types'
 import { BackendFailure } from '../errors'
 import { CHAT_SEARCH_LIMIT, DEFAULT_CHAT_TITLE, escapeLike } from './repositories'
 import { agentInput, createTestDatabase, messageInput, tick, type TestDatabase } from './testing'
@@ -21,7 +21,41 @@ describe('db/repositories/chats', () => {
     expect(created.title).toBe(DEFAULT_CHAT_TITLE)
     expect(created.settings).toEqual(DEFAULT_CHAT_SETTINGS)
     expect(created.workdir).toBeNull()
+    expect(created.goal).toBeNull()
     expect(created.userId).toBe(LOCAL_USER_ID)
+  })
+
+  it('replaces the goal wholesale rather than merging it, and survives a reopen', () => {
+    const goal: ChatGoal = {
+      kind: 'document',
+      description: 'Write the Q3 report',
+      deliverable: 'docs/q3.md',
+      materials: ['notes.md', 'src']
+    }
+    const created = database.repos.chats.create({ goal })
+    expect(created.goal).toEqual(goal)
+
+    // A merge could never delete the last material, which is why the column is
+    // written as a whole object (see `repositories/chats.ts`).
+    const narrowed = database.repos.chats.update(created.id, {
+      goal: { kind: 'discussion', description: 'Just talk it through', materials: [] }
+    })
+    expect(narrowed.goal).toEqual({
+      kind: 'discussion',
+      description: 'Just talk it through',
+      materials: []
+    })
+
+    expect(database.reopen().repos.chats.get(created.id).goal).toEqual(narrowed.goal)
+
+    expect(database.repos.chats.update(created.id, { goal: null }).goal).toBeNull()
+  })
+
+  it('leaves the goal alone when a patch does not mention it', () => {
+    const goal: ChatGoal = { kind: 'discussion', description: 'Decide', materials: [] }
+    const created = database.repos.chats.create({ goal })
+
+    expect(database.repos.chats.update(created.id, { title: 'Renamed' }).goal).toEqual(goal)
   })
 
   it('merges partial settings over the defaults on create and update', () => {

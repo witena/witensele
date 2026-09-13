@@ -7,6 +7,7 @@
  * invisible. Its Chinese twin in `briefing.zh-CN.ts` says the same things in the
  * same order, so the two can be diffed side by side.
  */
+import type { ChatGoal } from '@shared/types'
 import type { BriefingBuilder } from './briefing'
 import { PASS_TOKEN } from './briefing'
 
@@ -16,7 +17,40 @@ function line(name: string, description: string): string {
   return trimmed.length > 0 ? `- ${name} — ${trimmed}` : `- ${name}`
 }
 
-export const buildEnglishBriefing: BriefingBuilder = ({ self, members, memoryEnabled }) => {
+/**
+ * The `Goal of this chat` section (S5.10), or nothing when the chat has none.
+ *
+ * One sentence for the kind, then the user's description **verbatim** — it is
+ * the one part of the whole prompt they wrote themselves, and paraphrasing it
+ * would be the app rewriting the brief. The kind's sentence is what turns three
+ * words into an instruction: `document` names the file, and `codebase` says who
+ * is allowed to make the change, which is PLAN.md's one-writer rule and is
+ * otherwise invisible to a participant.
+ */
+function goalSection(goal: ChatGoal): string[] {
+  const lines = ['', 'Goal of this chat:']
+  if (goal.kind === 'document') {
+    lines.push('- The group is producing one document, and the discussion is how it gets written.')
+  } else if (goal.kind === 'codebase') {
+    lines.push('- The group is changing the code in the working directory of this chat.')
+  } else {
+    lines.push('- The group is discussing this until it reaches a conclusion; nothing is written anywhere.')
+  }
+  lines.push(`- What the user asked for: ${goal.description.trim()}`)
+  if (goal.kind === 'document' && goal.deliverable) {
+    lines.push(
+      `- The deliverable is the file ${goal.deliverable}, relative to the working directory. Judge every answer by whether it makes that file better.`
+    )
+  }
+  if (goal.kind === 'codebase') {
+    lines.push(
+      '- You do not change any file yourself. The executor of this chat makes the change after the discussion, from the conclusion you reach, so say what should change and why rather than pretending to have changed it.'
+    )
+  }
+  return lines
+}
+
+export const buildEnglishBriefing: BriefingBuilder = ({ self, members, memoryEnabled, goal }) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat rather than a made-up
   // one: a model copies the example it is given, and a concrete name is the
@@ -47,6 +81,10 @@ export const buildEnglishBriefing: BriefingBuilder = ({ self, members, memoryEna
       ? [
           '- When you learn something durable about the user or the project — a name, a constraint, a decision the group settled — save it with the memory_save tool so you still know it in other chats.'
         ]
-      : [])
+      : []),
+    // Last, and deliberately so: the rules say how to behave, and this says what
+    // for. The thing a model should still be following at the end of a long
+    // prompt is the one it was given a chat for.
+    ...(goal ? goalSection(goal) : [])
   ].join('\n')
 }

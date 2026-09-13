@@ -52,6 +52,8 @@ those screens:
 | `messages.list` pages with `before` as an exclusive cursor | Scrolling up loads older pages with no repeated and no skipped message |
 | An API key is stored encrypted and never returned | The provider form shows a "key is set" state rather than a masked value, and re-saving without touching the field keeps the existing key |
 | A provider row can store **no credential at all** (`auth = 'oauth'`, S5.3) | The card says "signed in" instead of "no key", and the editor shows the sign-in panel where the key field was. There is nothing to encrypt: the Anthropic CLI owns the token and this layer never sees one |
+| `chats.goal` is replaced whole, never merged (S5.10) | Removing the last material in the Goal block really removes it. A merged column could not: there is no JSON patch that says "this list is now empty" and also leaves every other field alone |
+| Whether a goal's deliverable **exists** is not stored at all (S5.10) | The header chip reads "delivered" from a query (`chats.goalStatus`) run when the chat is opened and whenever it changes — so a file created outside the app is noticed, and a column nobody refreshed can never be wrong |
 
 ## Copy and i18n
 

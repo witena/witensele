@@ -101,7 +101,12 @@ actually wanted.
    `invoke` is rendered from `errors.<BackendError.code>`; `BackendError.message`
    is log detail and is never shown. When the rejection carries a
    `ValidationReason` in `details`, `translateFailure` prefers `errors.<reason>`
-   over the generic `errors.validation` — the narrower half of the same contract
+   over the generic `errors.validation` — the narrower half of the same contract.
+   Since S5.10 a store may fill those same three fields **itself**, with a reason
+   and no rejection behind it: a path picked outside the chat's folder is refused
+   by the renderer, because no native dialog can be confined to a directory, and
+   it is reported through exactly this path so the user cannot tell — and does
+   not need to — which side noticed
    (S5.2).
 
 Things the guards will refuse: an English sentence in `zh-CN.json`, any CJK in
