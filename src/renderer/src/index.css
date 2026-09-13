@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens taken from the UI mockup.
+ * `static` keeps every token in the output even when no utility references it,
+ * so tokens can also be used through plain `var(--color-*)` in inline styles.
+ * Components must use these semantic tokens instead of literal color values.
+ */
+@theme static {
+  /* Surfaces */
+  --color-bg-base: #171614;
+  --color-bg-panel: #1a1917;
+  --color-bg-rail: #121110;
+  --color-bg-elevated: #1c1b18;
+  --color-bg-hover: #2a2825;
+  --color-bg-muted: #262421;
+
+  /* Borders */
+  --color-border: #262421;
+  --color-border-strong: #2e2c28;
+
+  /* Foreground */
+  --color-fg: #e6e2da;
+  --color-fg-secondary: #d6d1c8;
+  --color-fg-muted: #b9b4aa;
+  --color-fg-dim: #8a857b;
+  --color-fg-faint: #6f6a62;
+
+  /* Accent */
+  --color-accent: #d8a656;
+  --color-accent-hover: #e6b96f;
+
+  /* Presence / status */
+  --color-presence-available: #5fbf7a;
+  --color-presence-working: #e05c5c;
+  --color-presence-away: #e0a040;
+  --color-presence-offline: #6f6a62;
+  --color-danger: #e08a8a;
+
+  /* Typography */
+  --font-sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-bg-base);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
