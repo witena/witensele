@@ -345,6 +345,11 @@
     "languageSystemShort": "系统",
     "languageZhShort": "中文",
     "languageEnShort": "English",
+    "theme": "外观",
+    "themeSystem": "跟随系统",
+    "themeLight": "浅色",
+    "themeDark": "深色",
+    "themeHint": "选择“跟随系统”后，应用会在系统切换深浅色时同步变化。",
     "developer": {
       "backend": "后端：",
       "languageSetting": "语言设置：",

@@ -40,7 +40,8 @@ import type {
   ProviderInput,
   SkillDetail,
   SkillMeta,
-  SkillWarning
+  SkillWarning,
+  ThemeSetting
 } from './types'
 
 /**
@@ -89,6 +90,21 @@ export interface BackendApi {
    * build implements it by rejecting, or by an upload dialog in the browser.
    */
   'system.pickFolder': () => Promise<string | null>
+  /**
+   * Tells the window system which appearance the app is showing (S5.8).
+   *
+   * The **second** method whose implementation must import electron, and for the
+   * same kind of reason as `system.pickFolder`: the renderer paints the page, but
+   * the title bar's traffic lights, the native dialogs and the window's own
+   * background are drawn by the platform, and only `nativeTheme.themeSource` can
+   * tell it which way to draw them. The setting itself is stored by
+   * `settings.update` like any other — this call carries no state, it is a
+   * notification, which is why it resolves `void` and why a failure is ignored by
+   * the caller. `handlers/system.ts` declares it and rejects; `src/main/ipc/theme.ts`
+   * is the real one, layered in by `registerIpc`. A server build leaves it
+   * rejecting: a browser tab has no window chrome to tint.
+   */
+  'system.applyTheme': (input: { theme: ThemeSetting }) => Promise<void>
 
   /* -- settings ----------------------------------------------------------- */
 
@@ -320,6 +336,7 @@ export const BACKEND_METHODS = [
   'system.ping',
   'system.emitTestEvent',
   'system.pickFolder',
+  'system.applyTheme',
   'settings.get',
   'settings.update',
   'providers.list',

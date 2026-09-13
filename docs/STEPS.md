@@ -946,6 +946,118 @@ Acceptance: with VS Code installed, clicking a chip in a chat bound to a folder
 opens that file at that line; the tests above. Docs: `docs/features/editor/`
 (new, all four), `docs/features/chats/` (all four).
 
+### S5.8 Light theme `[x]` (2026-09-13)
+What: a light appearance next to the existing dark one, and a setting that
+follows the operating system.
+- `AppSettings.theme: 'system' | 'light' | 'dark'`, default `'system'` for a
+  fresh installation; a stored `'dark'` keeps meaning dark. `AppSettingsPatch.theme`
+  accepts the three values; the handler rejects anything else with the
+  `validation` code.
+- Tokens: keep the dark palette in `@theme static` as the base, and add a
+  complete light palette under `:root[data-theme='light']` that overrides
+  **every** `--color-*` token the base defines (backgrounds, borders, foreground
+  steps, accent, avatar, presence, danger, status surfaces). Set
+  `color-scheme: dark` / `light` on the root alongside so native controls and
+  scrollbars follow. Choose light values with the same roles and contrast steps
+  as the dark ones (warm off-white grounds, the same amber accent darkened
+  enough for AA contrast on white, status colours that stay distinguishable);
+  the presence-dot hues stay recognisable in both.
+- `src/renderer/src/lib/theme.ts`: a pure `resolveTheme(setting, prefersDark)`
+  returning `'light' | 'dark'`, and `applyTheme(setting)` that stamps
+  `data-theme` on `document.documentElement` and, for `'system'`, subscribes to
+  `matchMedia('(prefers-color-scheme: dark)')` and re-stamps on change (returns
+  the unsubscribe). Applied once at startup from the loaded settings and again
+  whenever the setting changes.
+- Code blocks: highlight with a light theme when the resolved theme is light
+  (shiki dual themes through CSS variables, or re-highlight on change — pick
+  what `code-block.tsx` already makes easy) so code is not a dark island on a
+  light page.
+- Settings → Appearance: a three-segment `SegmentedControl` — System / Light /
+  Dark — with test ids `theme-system`, `theme-light`, `theme-dark`, replacing
+  the placeholder text the section shows today. The section's existing language
+  control is untouched.
+- The Electron window: the initial `backgroundColor` should match the theme that
+  will be painted, so the first frame is not a dark flash on a light theme (read
+  the stored setting where the window is created, resolve `'system'` with
+  `nativeTheme.shouldUseDarkColors`), and `nativeTheme.themeSource` should follow
+  the setting so the title-bar traffic lights and native dialogs match. Both are
+  electron-only and belong in `src/main/index.ts` and an overlay in
+  `src/main/ipc/` (a `system.applyTheme` method declared in `handlers/system.ts`
+  as a no-op / rejection, exactly like `system.pickFolder`), never in business
+  logic.
+- Unit tests: `resolveTheme` for the six combinations; a test that reads
+  `index.css` and asserts every `--color-*` token in the `@theme static` block
+  has a light override (so a token added later cannot silently stay dark); the
+  settings store patch and the handler's validation of the three values and
+  rejection of a fourth.
+- e2e: a new `e2e/theme.spec.ts` — clicking Light sets `data-theme="light"` on
+  `html` and the body's computed background is light; Dark sets it back; System
+  follows `page.emulateMedia({ colorScheme })`; the choice survives a restart.
+Acceptance: the three-way control works, every screen is readable in light mode
+(no hard-coded dark colour left), the first frame after launch is not a dark
+flash on a light theme, the tests above pass. Docs: `ui-shell` and `i18n` (all
+four each) and `docs/features/backend-client/` for the new method.
+Done: the light theme is **one CSS block and one attribute**. `index.css` keeps
+the dark palette in `@theme static` as the base and adds
+`:root[data-theme='light']`, which redefines all 28 `--color-*` tokens;
+`lib/theme.ts` stamps `data-theme` on `<html>` and nothing else. No component
+branches on the theme, no class is written twice and no page has to subscribe to
+anything, because a Tailwind utility compiles to `var(--color-…)` and the
+variable is what changes. The palette is not an inversion. Each foreground keeps
+**at least** its dark counterpart's contrast on its own surface (`fg-faint` is
+4.05:1 on `bg-base` where the dark one is 3.37:1); the accent is *darkened*
+rather than lightened, because `#d8a656` is a 1.9:1 amber on white — `#92600f`
+is the same hue at 4.9:1, and `bg-accent` with `text-bg-base` on it is AA in both
+directions; and the rail stays the **recessed** surface in both themes, which
+literal lightness inversion would have put on top. The palette checks in
+`lib/theme.test.ts` read `index.css` as text and fail when a token added to the
+base has no override, which is the one way this can rot silently.
+
+`'system'` is a rule, not a value, so it is resolved at use and never stored
+resolved — the same decision the language made in S1.4, for the same reason: a
+machine that flips at sunset should take the app with it. `resolveTheme` lives in
+`@shared/theme` rather than in the renderer, because the main process makes the
+identical decision from `nativeTheme.shouldUseDarkColors` when it picks the
+window's `backgroundColor`, and two copies of that boolean would be two chances
+to disagree about the **first frame** — the one frame no stylesheet can correct.
+`WINDOW_BACKGROUND` is the app's only duplicated colour for the same reason, and
+the test asserts it equals `--color-bg-base` in both blocks. `activateTheme`
+exists on top of `applyTheme` to own the single `matchMedia` subscription: a
+leaked listener would be invisible until the OS flipped and repainted an app that
+was explicitly set to light.
+
+Code blocks switch through **CSS variables, not a re-highlight**: `highlightCode`
+asks shiki for `vitesse-dark` and `vitesse-light` at once with
+`defaultColor: false`, so every token span carries `--shiki-light` and
+`--shiki-dark` and two rules in `index.css` choose. Re-highlighting would have
+meant a second pass over a transcript holding hundreds of blocks, each flickering
+back to plain text mid-stream — and it would have had to reach into
+`components/chat/`, which this step deliberately did not touch. `highlighter.test.ts`
+asserts both variables are present and no literal `color:` is, because the
+function returns `null` on failure and a theme mistake would otherwise look like
+a passing app with duller code.
+
+`system.applyTheme` is the **second** method whose implementation must import
+electron, and it is arranged exactly like `system.pickFolder`: declared in
+`shared/backend.ts`, rejecting in `handlers/system.ts` with
+`APPLY_THEME_UNAVAILABLE`, real in `src/main/ipc/theme.ts`, layered by
+`registerIpc`. It carries no state — the setting is stored by `settings.update`
+like any other — so it is a notification, resolves `void`, and the store ignores
+its failure: window chrome that did not get tinted must never fail the setting.
+`settings.update` validates the *value* of `theme` (the only setting whose
+content is checked) because a stored `'sepia'` would resolve to light and leave
+the user with a theme no control in the app explains.
+
+`e2e/theme.spec.ts` drives the control, flips `prefers-color-scheme` with
+`page.emulateMedia` while `'system'` is selected (the `matchMedia` listener is
+the kind of code that works in a fake and not in Chromium), and after a restart
+asserts both `data-theme` and `BrowserWindow.getBackgroundColor()` — the frame
+painted before the renderer exists. Five light screenshots land in
+`test-results/shots/`; the chat, settings, agents, providers and agent-editor
+screens were looked at, and a real `qwen2.5:3b` transcript with a highlighted
+Python block was checked in light mode outside the suite. Docs in
+`docs/features/{ui-shell,i18n,backend-client}/`.
+
 ## Phase 6: Backlog (decided, not yet scheduled)
 
 Everything below is agreed work that is deliberately **not** in Phase 5. Each
@@ -1009,6 +1121,24 @@ adds a line here in the same commit.
   and needs a branch before any Windows or Linux packaging.
 - **Nothing reads the `patch` the write tools return yet.** S5.5 turns it into
   `DiffPart`s; until then the diff exists only inside the tool result.
+
+### Appearance
+
+- **The light theme has not been reviewed on a full transcript.** S5.8 looked at
+  the chat, settings, agents, providers and agent-editor screens, and at one real
+  reply with a highlighted code block, but the screens that only exist while
+  something is running — a streaming message, a tool card, an error message, the
+  four presence dots side by side, S5.5's permission card and diff block — were
+  read from their tokens rather than seen. They use no colour of their own, so
+  the risk is a *step* that is too subtle rather than an unreadable screen.
+- **Avatar and provider-logo colours stay dark in both themes.** They are data,
+  not tokens: an agent's `avatar.color` is stored in its record and
+  `provider-logo.ts` picks from a fixed palette, so a dark tile with a light
+  monogram is what both themes show. It reads as a brand chip on white and was
+  left alone deliberately — theming it means either rewriting stored rows or a
+  second palette keyed by theme, which is a step of its own.
+- **`prefers-contrast` and `prefers-reduced-transparency` are not honoured**, and
+  there is no high-contrast variant of either palette.
 
 ### Server and editor
 

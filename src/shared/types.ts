@@ -474,18 +474,33 @@ export interface AppTimeouts {
   toolTimeoutMs: number
 }
 
+/**
+ * The stored appearance setting.
+ *
+ * `'system'` is not a theme, it is a *rule*: the resolved theme follows
+ * `prefers-color-scheme` and changes while the app is running. Everything that
+ * paints turns it into `'light' | 'dark'` at use time — `resolveTheme` in the
+ * renderer, `nativeTheme` in the main process — exactly as `'system'` works for
+ * the language, and for the same reason: storing the resolved value would freeze
+ * a user who asked to follow the machine.
+ */
+export type ThemeSetting = 'system' | 'light' | 'dark'
+
+/** Every value `AppSettings.theme` accepts, in the order the control shows them. */
+export const THEME_SETTINGS = ['system', 'light', 'dark'] as const satisfies readonly ThemeSetting[]
+
 export interface AppSettings {
   /** `'system'` follows the OS language, which is the first-launch default. */
   language: Language | 'system'
-  /** Only a dark theme exists; the field is here so light can be added later. */
-  theme: 'dark'
+  /** `'system'` follows the OS appearance, which is the first-launch default. */
+  theme: ThemeSetting
   timeouts: AppTimeouts
 }
 
 /** Settings a fresh installation starts with. */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   language: 'system',
-  theme: 'dark',
+  theme: 'system',
   timeouts: {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,

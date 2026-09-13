@@ -16,7 +16,7 @@
 | `src/main/secrets.ts` | `SecretStore` + `createInsecureSecretStore()`, the base64 `plain:` fallback used when the OS has no key storage |
 | `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `mcp`, `memory`, `permissions`, `anthropicCli`, `close`) and `createAppContext({ databasePath, userDataDir, secrets, userId?, events?, fetchImpl?, anthropicCli?, runner?, supervisor?, mcp? })`. `close()` stops every run, the supervisor's loops and every pending permission prompt before closing the database |
 | `src/main/handlers/types.ts` | `HandlerMap` — `BackendApi` with an `AppContext` threaded in front of each method's arguments — and `HandlerModule` (`Partial<HandlerMap>`) |
-| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, and the `system.pickFolder` **stub** (see "The one electron exception") |
+| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, and the `system.pickFolder` / `system.applyTheme` **stubs** (see "The electron exceptions") |
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
 | `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
@@ -25,6 +25,7 @@
 | `src/main/ipc/register.ts` | `registerIpc(ipcMain, ctx, handlers)` and `forwardEvents(events, getWindows)` |
 | `src/main/ipc/secret-store.ts` | `createElectronSecretStore()` over `safeStorage` |
 | `src/main/ipc/dialogs.ts` | `system.pickFolder` over `dialog.showOpenDialog`, layered over the stub inside `registerIpc` (S3.2) |
+| `src/main/ipc/theme.ts` | `system.applyTheme` over `nativeTheme.themeSource`, layered the same way (S5.8) |
 | `src/main/index.ts` | Applies `WITENA_USER_DATA`, builds the secret store and the context on ready, registers IPC and event forwarding **before** the first window, closes the context on `before-quit` |
 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld('witena', { invoke, onEvent })` |
 | `src/preload/index.d.ts` | Ambient `Window['witena']` for the renderer project |
@@ -40,7 +41,7 @@ which must print nothing. Moving the backend to a Node server means replacing
 `src/main/ipc/`, `src/main/index.ts` and the preload bridge — the handlers, the
 context, the bus and the repositories go across untouched.
 
-### The one electron exception: `system.pickFolder`
+### The electron exceptions: `system.pickFolder` and `system.applyTheme`
 
 Every other `BackendApi` method is a pure function of storage, the filesystem and
 the network, so every other handler lives in `src/main/handlers/`. A **native
@@ -48,18 +49,25 @@ folder picker** is not: it belongs to the window system, there is no injectable
 stand-in for it, and the alternative — a text field the user pastes an absolute
 path into — would be a worse product for the sake of a rule.
 
+S5.8 added the second, and the shape of the exception is what made it cheap to
+add: the renderer paints the page, but the traffic lights of
+`titleBarStyle: 'hiddenInset'` and the native dialogs are drawn by the platform,
+and only `nativeTheme.themeSource` tells it which way. The difference from
+`pickFolder` is that nothing depends on the answer — the page is already themed
+by `data-theme` — so it resolves `void` and the store swallows its rejection.
+
 So the exception is made deliberately and kept honest rather than waived:
 
 | Layer | What it does |
 |---|---|
-| `shared/backend.ts` | Declares `'system.pickFolder': () => Promise<string \| null>`, with the reason in its doc comment |
-| `handlers/system.ts` | Implements it as a **rejection** (`internal`, `PICK_FOLDER_UNAVAILABLE`), so `buildHandlers()` stays total and a unit test gets a clear answer instead of a crash |
-| `ipc/dialogs.ts` | The real one, in the directory that may already import electron |
-| `ipc/register.ts` | `const table = { ...handlers, ...dialogHandlers }` — the override exists only in this transport |
+| `shared/backend.ts` | Declares `'system.pickFolder': () => Promise<string \| null>` and `'system.applyTheme': (input: { theme: ThemeSetting }) => Promise<void>`, with the reason in each doc comment |
+| `handlers/system.ts` | Implements both as **rejections** (`internal`, `PICK_FOLDER_UNAVAILABLE` / `APPLY_THEME_UNAVAILABLE`), so `buildHandlers()` stays total and a unit test gets a clear answer instead of a crash |
+| `ipc/dialogs.ts`, `ipc/theme.ts` | The real ones, in the directory that may already import electron |
+| `ipc/register.ts` | `const table = { ...handlers, ...dialogHandlers, ...themeHandlers }` — the overrides exist only in this transport |
 
 A server build layers nothing, and the rejection is the truth: a browser cannot
-hand a backend a path either. The grep above still prints nothing, because
-`dialogs.ts` is inside `src/main/ipc/`.
+hand a backend a path either, and a tab has no title bar to tint. The grep above
+still prints nothing, because both files are inside `src/main/ipc/`.
 
 Cancelling the dialog resolves **`null`**, which is not an error — the renderer
 must not show a failure for a user who changed their mind.
@@ -197,6 +205,7 @@ temporary directory. `SkillMeta.path` and `MemoryEntry.path` are declared in
 | electron `webContents.send` | The push channel | Throws on a destroyed window; `forwardEvents` checks `isDestroyed()` first |
 | electron `safeStorage` | Encrypting provider API keys | `isEncryptionAvailable()` can be false on a machine with no keyring, and returns a `Buffer` that must be base64-encoded for a `text` column |
 | electron `dialog.showOpenDialog` | `system.pickFolder` (S3.2) | Resolves `{ canceled, filePaths }` rather than rejecting when the user cancels, so the handler answers `null`. `properties: ['openDirectory']` only — no multi-select, no file creation |
+| electron `nativeTheme` | `system.applyTheme` (S5.8), and `backgroundColor` in `src/main/index.ts` | `themeSource` accepts `'system'` verbatim and is process-wide, so it also covers windows opened later and needs no listener of ours. `shouldUseDarkColors` is the *resolved* answer and is only read where a colour is needed now |
 | electron structured clone | Payload serialization | It preserves `undefined` and does **not** preserve prototypes. Do not rely on either — a future HTTP transport goes through `JSON.stringify`, which drops `undefined` keys, so treat an absent optional field and an explicit `undefined` as the same thing |
 | `@playwright/test` (`_electron`) | The end-to-end harness | Needs the built output in `out/`, launches with `args: ['.']` from the repository root, and needs no downloaded browsers. Config lives in `playwright.config.ts` with `testDir: 'e2e'`; vitest excludes `e2e/` so `npm test` stays unit-only |
 | TypeScript 5.9 | The contract itself | `exactOptionalPropertyTypes` is on: `baseUrl?: string` will not accept an explicit `undefined`, so build the object without the key. `verbatimModuleSyntax` is on: type-only imports must say `import type`. A `.d.ts` next to an `.ts` of the same name is excluded from the project that contains the `.ts`, which is why `src/preload/index.d.ts` restates the envelope instead of importing it |

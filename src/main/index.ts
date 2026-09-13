@@ -4,7 +4,9 @@
 // later on (CLAUDE.md rule #5).
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
+import { resolveTheme, WINDOW_BACKGROUND } from '@shared/theme'
+import { DEFAULT_APP_SETTINGS, type ThemeSetting } from '@shared/types'
 import { APP_NAME } from '@shared/version'
 import { createAppContext, skillsDir, type AppContext } from './app-context'
 import { buildHandlers } from './handlers'
@@ -89,7 +91,26 @@ function isExternalUrl(url: string): boolean {
   }
 }
 
+/**
+ * The appearance the next window should open in (S5.8).
+ *
+ * Read from the settings row rather than assumed, because `backgroundColor` is
+ * what the window paints **before the renderer exists**: getting it wrong is a
+ * dark flash on a light theme, which is the one frame every launch shows and
+ * nobody can style away afterwards. `'system'` is resolved here through
+ * `nativeTheme.shouldUseDarkColors` — the main process's answer to the renderer's
+ * `matchMedia` — using the same `resolveTheme` both sides share.
+ *
+ * Falls back to the default setting before the context exists, which only
+ * happens if the database could not be opened; a dark first frame is then the
+ * least of the problems.
+ */
+function currentThemeSetting(): ThemeSetting {
+  return context?.repos.settings.get().theme ?? DEFAULT_APP_SETTINGS.theme
+}
+
 function createWindow(): BrowserWindow {
+  const theme = resolveTheme(currentThemeSetting(), nativeTheme.shouldUseDarkColors)
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -97,7 +118,7 @@ function createWindow(): BrowserWindow {
     minHeight: 700,
     show: false,
     title: APP_NAME,
-    backgroundColor: '#171614',
+    backgroundColor: WINDOW_BACKGROUND[theme],
     autoHideMenuBar: true,
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: {
@@ -157,6 +178,13 @@ void app.whenReady().then(() => {
   // `invoke` in its first effect can never race the registration.
   registerIpc(ipcMain, context, buildHandlers())
   stopForwarding = forwardEvents(context.events, () => BrowserWindow.getAllWindows())
+
+  // The window chrome the renderer cannot paint — the traffic lights of
+  // `titleBarStyle: 'hiddenInset'` and the native dialogs — follows the stored
+  // setting from the first window on, not only after the user visits Settings.
+  // `themeSource` takes `'system'` verbatim, so following the machine keeps
+  // working with no listener of our own (see `src/main/ipc/theme.ts`).
+  nativeTheme.themeSource = currentThemeSetting()
 
   createWindow()
 

@@ -15,9 +15,10 @@
  *   "not loaded yet" and "load failed" need different UI.
  */
 import { create } from 'zustand'
-import type { AppSettings, AppTimeouts } from '@shared/types'
+import type { AppSettings, AppTimeouts, ThemeSetting } from '@shared/types'
 import { getNavigatorLanguage, i18n, resolveLanguage } from '../i18n'
 import { getBackend } from '../lib/backend-provider'
+import { activateTheme } from '../lib/theme'
 
 /** The stored setting: a concrete language, or "follow the system". */
 export type LanguageSetting = AppSettings['language']
@@ -35,6 +36,12 @@ export interface SettingsState {
   load: () => Promise<void>
   /** Persists the language setting and applies it to i18next immediately. */
   setLanguage: (language: LanguageSetting) => Promise<void>
+  /**
+   * Persists the appearance setting, repaints the window and tells the main
+   * process, which owns the parts of the window the renderer cannot paint: the
+   * traffic lights and the native dialogs (`system.applyTheme`).
+   */
+  setTheme: (theme: ThemeSetting) => Promise<void>
   /**
    * Persists one or more heartbeat budgets.
    *
@@ -72,6 +79,26 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     set({ settings, status: 'ready', error: undefined })
 
     await i18n.changeLanguage(resolveLanguage(settings.language, getNavigatorLanguage()))
+  },
+
+  async setTheme(theme) {
+    const previous = get().settings
+    // Optimistic for the same reason as the language, and then some: the click
+    // repaints the entire window, so a round trip of delay would look broken.
+    if (previous) set({ settings: { ...previous, theme } })
+    activateTheme(theme)
+
+    const settings = await getBackend().invoke('settings.update', { patch: { theme } })
+    set({ settings, status: 'ready', error: undefined })
+
+    // The authoritative answer may differ from the optimistic write (another
+    // window, a rejected value), so the attribute is stamped from it as well.
+    activateTheme(settings.theme)
+    // Best effort: the window chrome following the theme is a nicety, and a
+    // transport that cannot do it (a server build) must not fail the setting.
+    await getBackend()
+      .invoke('system.applyTheme', { theme: settings.theme })
+      .catch(() => undefined)
   },
 
   async setTimeouts(patch) {

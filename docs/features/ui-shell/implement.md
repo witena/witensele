@@ -10,6 +10,15 @@ stacks and (new in S1.5) the `drag-region` / `no-drag` utilities inside
 exception is *data* — an agent's `avatar.color` — which arrives as an inline
 style because Tailwind cannot see a value that only exists at runtime.
 
+Since S5.8 that block is the **dark** palette and `:root[data-theme='light']`
+overrides every `--color-*` token in it, with `color-scheme` set on both roots
+so scrollbars, selection and the native `<select>` follow. A utility compiles
+to `var(--color-…)`, so the attribute on `<html>` is the entire switch: nothing
+re-renders, no component reads the theme, and a screen written in a later step
+is themed the day it is written. The rule this creates: **a token added to
+`@theme static` must be added to the light block as well**, and
+`lib/theme.test.ts` fails when it is not.
+
 **Primitives.** `components/ui/` holds the vocabulary: `Button`, `IconButton`,
 `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Avatar`,
 `PresenceDot`, `EmptyState`, `SectionTitle`, `Field`. They are presentational and
@@ -36,6 +45,31 @@ Two conventions that are worth knowing before adding a screen:
   two tags. `AppShell` uses a `Record<Page, Component>` for exactly this reason.
 
 ## Data flow
+
+The appearance setting, the shell's second backend path (S5.8):
+
+```
+click a segment of System / Light / Dark
+  → applyThemeSetting(setting)               pages/settings/theme.ts
+  → useSettingsStore.setTheme(setting)       optimistic local write
+  → activateTheme(setting)                   lib/theme.ts: data-theme on <html>
+                                             (+ a matchMedia subscription for 'system')
+  → BackendClient.invoke('settings.update')  → IPC → SQLite
+  → activateTheme(stored.theme)              from the authoritative answer
+  → invoke('system.applyTheme')              → nativeTheme.themeSource
+                                             (traffic lights, native dialogs)
+```
+
+and on the next launch:
+
+```
+main:     settings.get().theme → resolveTheme(…, nativeTheme.shouldUseDarkColors)
+          → BrowserWindow({ backgroundColor: WINDOW_BACKGROUND[theme] })
+renderer: bootstrap → settings loaded → activateTheme(theme) → first React frame
+```
+
+Both sides call the same `resolveTheme`, which is why they cannot disagree
+about the frame that is painted before the renderer exists.
 
 Navigation, the only interaction the shell owns end to end:
 
@@ -76,12 +110,16 @@ Everything new is renderer-local; no shared type and no IPC channel was added.
 | `presenceColorClass(state)` | `components/ui/presence-dot.tsx` | `PresenceState` → `bg-presence-*`. Pure, total, unit-tested |
 | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` | `components/layout/window-chrome.ts` | Class names, not styles |
 | `applyLanguageSetting(setting)` | `pages/settings/language.ts` | The single handler both language controls call |
+| `applyThemeSetting(setting)` | `pages/settings/theme.ts` | Its counterpart for the appearance control (S5.8) |
+| `resolveTheme`, `ResolvedTheme`, `WINDOW_BACKGROUND` | `src/shared/theme.ts` | The rule and the one duplicated colour, shared with the main process |
+| `applyTheme`, `activateTheme`, `stampTheme`, `prefersDarkScheme`, `THEME_ATTRIBUTE` | `src/renderer/src/lib/theme.ts` | `activateTheme` owns the window's single `matchMedia` subscription |
 | `openDeveloperSettings(window)` | `e2e/helpers.ts` | Navigates a spec to Settings → Developer |
 
 Types consumed from `@shared/types`: `PresenceState`, `ChatMode`, `SpeakingMode`,
 `DEFAULT_CHAT_SETTINGS`, `DEFAULT_APP_SETTINGS`.
 
-No `BackendClient` method and no event is added by this feature.
+S5.8 added one `BackendClient` method, `system.applyTheme` — see
+[`../backend-client/backend.md`](../backend-client/backend.md). No event.
 
 ## Tests
 
@@ -89,6 +127,10 @@ No `BackendClient` method and no event is added by this feature.
 |---|---|
 | `src/renderer/src/stores/ui.test.ts` | Defaults, both setters over every value, and that the two fields are independent — leaving Settings must not reset the section |
 | `src/renderer/src/components/ui/presence-dot.test.ts` | `presenceColorClass`: the four mappings, that they are distinct, and that each is a literal token utility rather than an interpolated class |
+| `src/renderer/src/lib/theme.test.ts` | `resolveTheme` over all six combinations; `applyTheme` / `activateTheme` against a faked `document` and `matchMedia` (including that leaving `'system'` unsubscribes); and the palette itself — every `--color-*` token overridden, every override a different value, `color-scheme` on both roots, and `--color-bg-base` equal to `WINDOW_BACKGROUND` |
+| `src/renderer/src/lib/highlighter.test.ts` | That `highlightCode` emits `--shiki-light` and `--shiki-dark` and no literal `color:` — the contract the two `.shiki` rules in `index.css` depend on |
+| `src/renderer/src/stores/settings.test.ts` | `setTheme`: the patch, the optimistic repaint, `system.applyTheme`, and that `'system'` is stored unresolved |
+| `e2e/theme.spec.ts` | The three-segment control, `prefers-color-scheme` through `page.emulateMedia`, the choice surviving a restart including `BrowserWindow.getBackgroundColor()`, and five light screenshots |
 | `src/renderer/src/i18n/locales.test.ts` | Updated: `EXPECTED_NAMESPACES` no longer lists `smoke`. Still guards the key trees, CJK, placeholders |
 | `src/renderer/src/i18n/used-keys.test.ts` | Unchanged, and it did its job twice during S1.5 — once on a runtime-assembled key, once on a `switch` returning adjacent JSX |
 | `e2e/ui-shell.spec.ts` | Rail navigation with one page mounted at a time, section switching, the section surviving a page change, and the three 1440×900 screenshots |
@@ -117,5 +159,10 @@ Screenshots land in `$WITENA_SHOTS_DIR` (default: `test-results/shots`, gitignor
 - **`Avatar` has no image or emoji variant.** `AgentAvatar` is a union with one
   member today; the component takes text and colours directly rather than the
   whole record, which is the change to make when a second variant appears.
+- **`vitest.config.ts` has `css: true` since S5.8.** Vitest otherwise stubs
+  every CSS import with an empty module, and that stub also swallows
+  `import.meta.glob('../index.css', { query: '?raw' })`, which is how the token
+  test reads the palette. No plugin is configured in that file, so the cost is
+  reading one file.
 - **The renderer bundle is ~795 kB.** Mostly React plus the lucide icons that are
   actually imported. Worth a look at S4.4 (packaging), not before.
