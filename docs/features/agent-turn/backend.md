@@ -125,7 +125,10 @@ Pitfalls, each one hit while writing this step:
   request open; the loop always runs to completion or to an abort.
 - `maxOutputTokens` and `temperature` are spread in only when the agent sets
   them, because `exactOptionalPropertyTypes` forbids passing an explicit
-  `undefined`.
+  `undefined`. Since S5.9 the agent form no longer writes either, so the common
+  case is that **neither** option reaches the call and the provider's own
+  defaults decide the sampling; an agent saved before S5.9 still carries its
+  values and they still reach `streamText` unchanged.
 
 ### The group briefing, and why Chinese lives in a `.ts` file
 

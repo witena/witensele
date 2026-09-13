@@ -1189,6 +1189,67 @@ screens were looked at, and a real `qwen2.5:3b` transcript with a highlighted
 Python block was checked in light mode outside the suite. Docs in
 `docs/features/{ui-shell,i18n,backend-client}/`.
 
+### S5.9 No sampling parameters in the agent form `[x] (2026-09-13)`
+What: the agent editor stops asking for Temperature and Max tokens. The product
+decision, recorded here and in `docs/features/agents/context.md`: real users do
+not tune sampling, they pick a model and write a prompt; current models' provider
+defaults are what everyone should run with, and two numeric fields with
+validation copy were friction with no upside.
+- Remove the two controls, their draft fields, their range validation and their
+  locale keys (`agents.temperature`, `agents.maxTokens`, the two range messages,
+  and any hint keys) from `agent-editor.tsx`, `stores/agents.ts` and both locale
+  files. The `used-keys` and `locales` tests must stay green.
+- Keep `Agent.params.temperature` / `maxTokens` in the shared type, the row and
+  the handler validation: both are optional already, an agent that was saved with
+  values keeps behaving as before, and the backend needs no migration. The
+  handler continues to reject out-of-range values so a future API caller cannot
+  store nonsense.
+- `agent-turn.ts` and `context-budget.ts` keep their fallbacks
+  (`DEFAULT_OUTPUT_RESERVE`, provider-default sampling); confirm with a test that
+  an agent with no params streams with neither `maxOutputTokens` nor
+  `temperature` set.
+- `docs/PLAN.md`: adjust the wording that lists "parameters" among what the agent
+  page configures, so the plan does not promise a control the product removed.
+- Unit tests: the store no longer exposes the fields (or ignores them), the
+  editor's validation path for them is gone, the handler still validates them,
+  the turn falls back. e2e: `e2e/agents.spec.ts` no longer fills them; if it
+  asserted them, replace with an assertion that the fields are absent
+  (`agent-temperature` / `agent-max-tokens` test ids, whatever they were, have
+  count 0).
+Acceptance: the agent form shows model, prompt, role, skills, MCP servers and
+memory only; an agent saved earlier with a temperature still uses it; typecheck
+and tests pass. Docs: `docs/features/agents/` (all four) and
+`docs/features/agent-turn/` if its text mentions the controls.
+Done: this is a **deletion step**, and the whole of it is that the two fields
+stayed where they were useful and left where they were not. `AgentParams` is
+untouched, the `params` column is untouched, `assertParams` still bounds both
+values, and `agent-turn.ts` still spreads `temperature` / `maxOutputTokens` into
+`streamText` when an agent has them — so an agent configured before today keeps
+sampling exactly as it did and there is no migration to write. What went is the
+*writing* path: two `Field`s in `agent-editor.tsx`, `TEMPERATURE_MIN` /
+`TEMPERATURE_MAX` and the range branches in `validateDraft`, the
+`temperature` / `maxTokens` members of `AgentDraftErrors`, and four locale keys
+per language (`agents.temperature`, `agents.maxTokens`, the two
+`agents.validation.*Range` messages) — five, counting the already-dead
+`agents.parameters` section title, whose block no longer exists. The reasoning
+toggle stays and is now the only caller of `patchParams`: it changes what the
+model *produces* rather than how it samples, which is a product choice and not a
+knob.
+
+The fallbacks that were written as the exception are now the normal path, which
+is the one thing worth testing rather than asserting: `agent-turn.test.ts` gained
+a case where an agent with empty `params` streams with **neither** option set,
+next to the existing one where a tuned agent's values reach the call, and
+`fitHistory` therefore reserves `DEFAULT_OUTPUT_RESERVE` for practically every
+turn from now on. On the renderer side `validateDraft` deliberately stays silent
+about a temperature it can no longer produce — the store's test asserts the
+silence — and a separate test opens a stored agent that has both values and
+checks the draft carries them through an unrelated edit, because the draft is
+what `saveDraft` sends back and dropping them there would have quietly reset
+records this step promised not to touch. `e2e/agents.spec.ts` asserts the two
+test ids have count 0 while the editor is open; it never filled them, so there
+was nothing to remove.
+
 ## Phase 6: Backlog (decided, not yet scheduled)
 
 Everything below is agreed work that is deliberately **not** in Phase 5. Each

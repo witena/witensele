@@ -42,6 +42,17 @@
  * directory, and every change is confirmed. The same field already gates the MCP
  * checklist below (`allowSideEffects`), which is why the two sit on one screen.
  *
+ * ## Why the model block asks for no sampling parameters (S5.9)
+ *
+ * It used to carry Temperature and Max tokens. Nobody tuned them: a user picks a
+ * model and writes a prompt, and current models' provider defaults are what
+ * everyone should run with — so two numeric boxes with range messages under them
+ * were friction with nothing on the other side. `Agent.params` still holds both
+ * fields and `agent-turn.ts` still spreads them into the call, so an agent saved
+ * with a temperature keeps using it; there is simply no control that writes one.
+ * The reasoning toggle stays, because it changes what the model *produces*
+ * rather than how it samples.
+ *
  * ## Why the model control is a select *and* a text field
  *
  * A provider's `models` list can legitimately be empty (a custom endpoint nobody
@@ -391,61 +402,15 @@ export function AgentEditor({
               </Field>
             </div>
 
-            <div className="grid grid-cols-3 items-start gap-2.5">
-              <Field label={t('agents.temperature')} layout="column" htmlFor="agent-temperature">
-                <Input
-                  id="agent-temperature"
-                  data-testid="agent-temperature"
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="2"
-                  className="font-mono"
-                  value={draft.params.temperature ?? ''}
-                  onChange={(event) =>
-                    store().patchParams({
-                      temperature:
-                        event.target.value === '' ? undefined : Number(event.target.value)
-                    })
-                  }
-                />
-                {errors.temperature ? (
-                  <p className="text-[11px] text-danger">
-                    {t('agents.validation.temperatureRange')}
-                  </p>
-                ) : null}
-              </Field>
-
-              <Field label={t('agents.maxTokens')} layout="column" htmlFor="agent-max-tokens">
-                <Input
-                  id="agent-max-tokens"
-                  data-testid="agent-max-tokens"
-                  type="number"
-                  step="1"
-                  min="1"
-                  className="font-mono"
-                  value={draft.params.maxTokens ?? ''}
-                  onChange={(event) =>
-                    store().patchParams({
-                      maxTokens: event.target.value === '' ? undefined : Number(event.target.value)
-                    })
-                  }
-                />
-                {errors.maxTokens ? (
-                  <p className="text-[11px] text-danger">{t('agents.validation.maxTokensRange')}</p>
-                ) : null}
-              </Field>
-
-              <Field label={t('agents.reasoning')} hint={t('agents.reasoningHint')} layout="column">
-                <Toggle
-                  label={t('agents.reasoning')}
-                  checked={draft.params.reasoning === true}
-                  onChange={(checked) =>
-                    store().patchParams({ reasoning: checked ? true : undefined })
-                  }
-                />
-              </Field>
-            </div>
+            <Field label={t('agents.reasoning')} hint={t('agents.reasoningHint')} layout="column">
+              <Toggle
+                label={t('agents.reasoning')}
+                checked={draft.params.reasoning === true}
+                onChange={(checked) =>
+                  store().patchParams({ reasoning: checked ? true : undefined })
+                }
+              />
+            </Field>
           </section>
 
           <section className="flex min-h-0 flex-1 flex-col gap-2.5">

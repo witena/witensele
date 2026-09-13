@@ -49,7 +49,11 @@ agent may keep its name):
 - `providerId`: a string, and `repos.providers.get` must find it (`not_found`).
 - `modelId`: non-empty after trimming.
 - `params.temperature`: finite and within `[0, 2]`; `params.maxTokens`: a positive
-  integer. Absent means "the provider's default" and is always valid.
+  integer. Absent means "the provider's default" and is always valid — and since
+  S5.9 that is what every agent created through the UI holds, because the form
+  dropped both controls. The checks stay because the handler is the authority for
+  any caller, and the fields stay on the record so an agent saved earlier keeps
+  the values it was given.
 - `role`: `participant` or `executor`. **Both are written by the UI from S5.2**;
   the role decides whether `collectAgentTools` attaches a `sideEffects` MCP
   server (S3.1), and whether S5.4 attaches the executor's own tools.

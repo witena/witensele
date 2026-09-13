@@ -312,6 +312,30 @@ describe('runAgentTurn', () => {
     expect(model.doStreamCalls[0]).toMatchObject({ temperature: 0.2, maxOutputTokens: 64 })
   })
 
+  it('sets neither option for an agent with no parameters', async () => {
+    // S5.9 took the two controls off the agent form, so this is what every agent
+    // created from now on looks like: the provider's own defaults decide the
+    // sampling, and `fitHistory` reserves `DEFAULT_OUTPUT_RESERVE` instead of a
+    // number nobody chose.
+    const untuned = ctx.repos.agents.update(agent.id, { params: {} }, ctx.userId)
+    const model = mockModel(textChunks(['ok']))
+
+    await runAgentTurn({
+      ctx,
+      chat,
+      agent: untuned,
+      members: [untuned],
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+
+    const call = model.doStreamCalls[0]
+    expect(untuned.params).toEqual({})
+    expect(call?.temperature).toBeUndefined()
+    expect(call?.maxOutputTokens).toBeUndefined()
+  })
+
   it('stores the mentions parsed out of the finished reply', async () => {
     const bob = ctx.repos.agents.create(
       agentInput({ name: 'Bob', providerId: agent.providerId, modelId: 'deepseek-chat' }),

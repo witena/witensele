@@ -152,9 +152,6 @@
     "noProviders": "请先在设置中添加一个服务商。",
     "modelPlaceholder": "模型 id",
     "modelManualHint": "该服务商还没有模型列表，请手动输入 id。",
-    "parameters": "参数",
-    "temperature": "温度",
-    "maxTokens": "最大生成长度",
     "reasoning": "思考模式",
     "reasoningHint": "仅支持的模型生效",
     "skills": "技能",
@@ -183,9 +180,7 @@
       "nameAt": "名称中不能包含 @。",
       "nameTaken": "已有同名的智能体。",
       "providerRequired": "请选择服务商。",
-      "modelRequired": "请选择或输入模型。",
-      "temperatureRange": "温度需要在 0 到 2 之间。",
-      "maxTokensRange": "最大生成长度需要是正整数。"
+      "modelRequired": "请选择或输入模型。"
     }
   },
   "settings": {

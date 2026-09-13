@@ -152,9 +152,6 @@
     "noProviders": "Add a provider under Settings first.",
     "modelPlaceholder": "model id",
     "modelManualHint": "This provider lists no models; type an id.",
-    "parameters": "Parameters",
-    "temperature": "Temperature",
-    "maxTokens": "Max tokens",
     "reasoning": "Reasoning",
     "reasoningHint": "on supported models",
     "skills": "Skills",
@@ -183,9 +180,7 @@
       "nameAt": "A name cannot contain @.",
       "nameTaken": "Another agent already has that name.",
       "providerRequired": "Pick a provider.",
-      "modelRequired": "Pick or type a model.",
-      "temperatureRange": "Temperature must be between 0 and 2.",
-      "maxTokensRange": "Max tokens must be a positive whole number."
+      "modelRequired": "Pick or type a model."
     }
   },
   "settings": {

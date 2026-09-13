@@ -28,7 +28,12 @@ Actions: `load`, `create`, `update`, `remove`, `duplicate`, `startCreate`,
 
 `patchParams` accepts `undefined` for a field, which **removes** it — under
 `exactOptionalPropertyTypes` an absent key and a key holding `undefined` are
-different types, and "clear the temperature box" has to be spellable.
+different types, and "turn the reasoning toggle back off" has to mean an absent
+key rather than a stored `undefined`, which is not JSON. Since S5.9 the toggle is
+the only control that calls it: the Temperature and Max tokens boxes are gone,
+and `AgentDraftErrors` has no `temperature` / `maxTokens` member any more. A
+value stored on an older record is carried through the draft untouched and saved
+back unchanged.
 
 ## Backend calls
 
@@ -63,8 +68,7 @@ different types, and "clear the temperature box" has to be spellable.
 `agent-avatar-swatch`, `agent-description`, `agent-role-participant`,
 `agent-role-executor`, `agent-role-hint`, `agent-item-executor`,
 `agent-provider`, `agent-model`,
-`agent-model-input`, `agent-temperature`, `agent-max-tokens`,
-`agent-system-prompt`, `agents-error`, `agent-skill-item` (with `data-skill` and
+`agent-model-input`, `agent-system-prompt`, `agents-error`, `agent-skill-item` (with `data-skill` and
 `data-missing`), `agent-skill-checkbox`, `agent-memory-toggle`, `memory-index`,
 `memory-entry`, `memory-content`, `memory-save`, `memory-delete`.
 

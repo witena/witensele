@@ -17,6 +17,11 @@
  * a button and getting a red line. `validateDraft` is pure and exported so the
  * two stay comparable in a test rather than by inspection.
  *
+ * It covers the three fields the form can get wrong: name, provider and model.
+ * The handler also bounds `params.temperature` and `params.maxTokens`, but since
+ * S5.9 no control writes either, so the only values that can reach a draft come
+ * from a record the handler already accepted.
+ *
  * ## Why there is no `agent.created` event
  *
  * Agents are edited on one screen by one user, so the store applies its own
@@ -44,16 +49,13 @@ export type AgentEditorMode = 'idle' | 'create' | 'edit'
  */
 export const DUPLICATE_SUFFIX = 'copy'
 
-/** Bounds the editor enforces, mirroring `src/main/handlers/agents.ts`. */
-export const TEMPERATURE_MIN = 0
-export const TEMPERATURE_MAX = 2
-
 /**
  * A params patch where a field may be set to `undefined` to *remove* it.
  *
  * `Partial<AgentParams>` cannot express that under `exactOptionalPropertyTypes`:
  * there, an absent key and a key holding `undefined` are different types, and
- * "clear the temperature field" has to be spellable.
+ * "turn the reasoning toggle back off" has to mean "remove the field" rather
+ * than "store `undefined`", which is not JSON.
  */
 export type AgentParamsPatch = { [K in keyof AgentParams]?: AgentParams[K] | undefined }
 
@@ -62,8 +64,6 @@ export interface AgentDraftErrors {
   name?: 'required' | 'at' | 'taken'
   providerId?: 'required'
   modelId?: 'required'
-  temperature?: 'range'
-  maxTokens?: 'range'
 }
 
 function describe(cause: unknown): string {
@@ -137,16 +137,10 @@ export function validateDraft(
   if (draft.providerId.trim().length === 0) errors.providerId = 'required'
   if (draft.modelId.trim().length === 0) errors.modelId = 'required'
 
-  const { temperature, maxTokens } = draft.params
-  if (
-    temperature !== undefined &&
-    (!Number.isFinite(temperature) || temperature < TEMPERATURE_MIN || temperature > TEMPERATURE_MAX)
-  ) {
-    errors.temperature = 'range'
-  }
-  if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens <= 0)) {
-    errors.maxTokens = 'range'
-  }
+  // `params.temperature` / `params.maxTokens` are not checked here any more: no
+  // control writes them since S5.9, so the only values that reach a draft come
+  // from a stored record the handler already accepted. `agents.create` /
+  // `agents.update` still enforce the ranges for any other caller.
 
   return errors
 }

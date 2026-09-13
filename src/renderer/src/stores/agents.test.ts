@@ -110,18 +110,13 @@ describe('validateDraft', () => {
     expect(errors).toEqual({ providerId: 'required', modelId: 'required' })
   })
 
-  it('reports parameters outside the range the backend accepts', () => {
-    expect(validateDraft(validDraft({ params: { temperature: 2.1 } }), [], null).temperature).toBe(
-      'range'
-    )
-    expect(validateDraft(validDraft({ params: { temperature: -1 } }), [], null).temperature).toBe(
-      'range'
-    )
-    expect(validateDraft(validDraft({ params: { maxTokens: 0 } }), [], null).maxTokens).toBe('range')
-    expect(validateDraft(validDraft({ params: { maxTokens: 1.5 } }), [], null).maxTokens).toBe(
-      'range'
-    )
-    // Absent is not invalid: both fields mean "the provider's default".
+  it('says nothing about the sampling parameters the form no longer offers', () => {
+    // S5.9 removed the two controls. A value can still reach a draft — from a
+    // record saved before the change — and it is not the form's to complain
+    // about; `agents.create` / `agents.update` still bound both fields for any
+    // caller that sets them.
+    expect(validateDraft(validDraft({ params: { temperature: 2.1 } }), [], null)).toEqual({})
+    expect(validateDraft(validDraft({ params: { maxTokens: 0 } }), [], null)).toEqual({})
     expect(validateDraft(validDraft({ params: {} }), [], null)).toEqual({})
   })
 })
@@ -238,11 +233,28 @@ describe('agents store', () => {
     setBackend(fakeBackend().client)
 
     useAgentsStore.getState().startCreate()
-    useAgentsStore.getState().patchParams({ temperature: 0.7 })
-    expect(useAgentsStore.getState().draft?.params).toEqual({ temperature: 0.7 })
+    useAgentsStore.getState().patchParams({ reasoning: true })
+    expect(useAgentsStore.getState().draft?.params).toEqual({ reasoning: true })
 
-    useAgentsStore.getState().patchParams({ temperature: undefined })
+    useAgentsStore.getState().patchParams({ reasoning: undefined })
     expect(Object.keys(useAgentsStore.getState().draft?.params ?? {})).toEqual([])
+  })
+
+  it('carries a stored temperature through the draft untouched', () => {
+    // The form cannot write one any more, but editing an agent that has one must
+    // not drop it: the draft is what `saveDraft` sends back.
+    const { client } = fakeBackend()
+    setBackend(client)
+
+    const tuned = agentFrom('a1', validDraft({ params: { temperature: 0.2, maxTokens: 64 } }))
+    useAgentsStore.setState({ agents: [tuned], status: 'ready' })
+    useAgentsStore.getState().startEdit('a1')
+
+    expect(useAgentsStore.getState().draft?.params).toEqual({ temperature: 0.2, maxTokens: 64 })
+
+    useAgentsStore.getState().patchDraft({ description: 'edited' })
+    expect(useAgentsStore.getState().draft?.params).toEqual({ temperature: 0.2, maxTokens: 64 })
+    expect(useAgentsStore.getState().dirty).toBe(true)
   })
 
   it('picks an avatar colour pair from the palette', () => {
