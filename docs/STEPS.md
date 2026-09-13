@@ -23,14 +23,14 @@ Acceptance:
 What: `docs/README.md` index, `docs/features/` directory with the four-document template, root `CLAUDE.md` stating the conventions (four docs per feature, test gate, no hard-coded UI strings, English-only repository, `CLAUDE.local.md` as the gitignored Chinese copy).
 Acceptance: files exist; CLAUDE.md is picked up by later sessions.
 
-### S0.3 First commit and push `[~]`
+### S0.3 First commit and push `[x]` (2026-09-13, PR #1)
 Acceptance: `git log` has commits; the GitHub repository's main branch shows the code.
 
 ---
 
 ## Phase 1: Skeleton (PLAN milestone 1)
 
-### S1.1 Shared contracts `[ ]`
+### S1.1 Shared contracts `[x]` (2026-09-13)
 What: `src/shared/types.ts` (domain types), `events.ts` (typed events), `backend.ts` (BackendClient interface).
 Acceptance: typecheck passes; the four docs under `docs/features/backend-client/` are written.
 
