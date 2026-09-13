@@ -104,7 +104,18 @@
     "toolExpand": "展开",
     "toolCollapse": "收起",
     "toolInput": "输入",
-    "toolOutput": "输出"
+    "toolOutput": "输出",
+    "permissionTitle": "需要授权",
+    "permissionRequest": "{{agent}} 想执行 {{tool}}",
+    "permissionAllow": "允许",
+    "permissionAllowAlways": "本群聊内始终允许",
+    "permissionDeny": "拒绝",
+    "permissionKeyHint": "回车允许,Esc 拒绝",
+    "permissionTruncated": "此处已截断显示,写入的仍是完整内容。",
+    "permissionCommandHint": "在本群聊的文件夹中以你的身份和环境变量运行。",
+    "diffExpand": "展开",
+    "diffCollapse": "收起",
+    "fileRefTitle": "复制该路径"
   },
   "agents": {
     "title": "智能体",

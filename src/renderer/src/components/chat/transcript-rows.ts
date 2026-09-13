@@ -1,6 +1,6 @@
 /**
- * Day separators: the "Today / Yesterday / 3 May" lines the transcript puts
- * between messages written on different calendar days.
+ * The pure transforms the transcript is drawn from: the day separators between
+ * messages, and the two part kinds a message row renders as blocks of their own.
  *
  * The list is virtualized (react-virtuoso), which means it renders a **flat
  * array of rows**, not a nested structure: a separator has to be a row of its
@@ -11,8 +11,16 @@
  * Calendar days in the **viewer's** local timezone, exactly like `groupChats` in
  * `stores/chats.ts`: a message sent at 23:50 has to read as yesterday the next
  * morning rather than as "9 hours ago".
+ *
+ * ## Diffs and file references (S5.5)
+ *
+ * `collectDiffs` and `collectFileRefs` live here for the same reason the day
+ * grouping does: they are `MessagePart[] → something` transforms with cases
+ * worth testing (a part in the middle of the text, a message with none, a
+ * message with several), and `message-item.tsx` is markup that should not also
+ * be the place those cases are decided.
  */
-import type { Message } from '@shared/types'
+import type { DiffPart, FileRefPart, Message, MessagePart } from '@shared/types'
 
 /** Which of the three labels a separator carries. */
 export type DayBucket = 'today' | 'yesterday' | 'date'
@@ -72,4 +80,59 @@ export function buildTranscriptRows(
   }
 
   return rows
+}
+
+/**
+ * The `diff` parts of one message, in the order the backend appended them.
+ *
+ * One per **file**: the turn concatenates several writes to the same path before
+ * it stores them (`diffPartsFrom` in `src/main/agents/agent-turn.ts`), so a
+ * duplicate path here would be a backend bug rather than something to merge a
+ * second time in the renderer.
+ */
+export function collectDiffs(parts: readonly MessagePart[]): DiffPart[] {
+  return parts.filter((part): part is DiffPart => part.type === 'diff')
+}
+
+/**
+ * The `file-ref` parts of one message, de-duplicated by `path:line`.
+ *
+ * De-duplicated because the same reference pointed at twice is one file to open,
+ * and a row of identical chips reads as a rendering mistake. The first
+ * occurrence keeps its position.
+ */
+export function collectFileRefs(parts: readonly MessagePart[]): FileRefPart[] {
+  const seen = new Set<string>()
+  const refs: FileRefPart[] = []
+  for (const part of parts) {
+    if (part.type !== 'file-ref') continue
+    const key = `${part.path}:${part.line ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    refs.push(part)
+  }
+  return refs
+}
+
+/**
+ * How many lines a unified diff adds and removes, for the collapsed header.
+ *
+ * `+++` and `---` are the file headers, not changed lines; counting them would
+ * report `+1 -1` for a patch that changed nothing. Everything else is counted by
+ * its first character, which is all a unified diff encodes.
+ */
+export function countDiffLines(patch: string): { added: number; removed: number } {
+  let added = 0
+  let removed = 0
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) added += 1
+    else if (line.startsWith('-')) removed += 1
+  }
+  return { added, removed }
+}
+
+/** `src/main.ts:42`, or the bare path when the reference carries no line. */
+export function formatFileRef(part: FileRefPart): string {
+  return part.line === undefined ? part.path : `${part.path}:${part.line}`
 }

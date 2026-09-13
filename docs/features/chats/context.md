@@ -38,6 +38,12 @@ can hold a real conversation and still holds it after a restart.
 - The **one executor per chat** rule (S5.2): refused by `chats.members.set`, and
   explained in advance by the member picker, which greys a second executor out.
   The executor badge on member rows and message headers is here too.
+- The three renderer surfaces the executor needs (S5.5): the **permission card**
+  above the composer (`stores/permissions.ts` plus `permission-card.tsx`), the
+  **diff block** a `DiffPart` renders as, and the `path:line` chip a
+  `FileRefPart` renders as. The transcript is where the user watches an agent
+  change their files, so it is this feature that draws it; what the executor may
+  do, and when it asks, is [`executor`](../executor/context.md)'s.
 
 ## Out of scope
 
@@ -49,7 +55,8 @@ can hold a real conversation and still holds it after a restart.
 | The presence state machine, the heartbeat, the two timeouts and the Retry button | [`presence`](../presence/context.md). This feature owns the `ChatSettings` fields that override the budgets, and the rows the dots are drawn on |
 | Generating the title itself | [`orchestration`](../orchestration/context.md) — `ChatRunner` writes it after the first run (S4.3); this feature owns the field, the rename and the list row |
 | The `executor` **role** itself — the control, the badge's copy, what the role means | [`agents`](../agents/context.md). This feature owns the *membership* rule and the surfaces that draw the badge |
-| The executor's file, shell and git tools, and the permission prompt | S5.4 and S5.5 (`docs/features/executor/`). This feature owns the folder the tools will be confined to, and nothing more |
+| The executor's file, shell and git tools, the permission **gate** and the `DiffPart`s the backend appends | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md). This feature owns the folder they are confined to and the three surfaces that draw their results — not what they may do |
+| Opening a `file-ref` chip or a diff header in the editor | S5.7. In S5.5 the chip copies the reference, because an editor integration that does not exist yet would be a button that lies |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
 | Virtualized message list, upward paging | S2.5 |
 

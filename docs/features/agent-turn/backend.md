@@ -4,7 +4,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]`. From S4.2 it also caps each replayed `tool-result` at `MAX_TOOL_RESULT_CHARS` (4 KB) and strips a trailing `[PASS]` from a reply that had real content |
 | `src/main/agents/context-budget.ts` | `estimateTokens` and `fitHistory`: the character-count estimate and the drop-oldest-first budget (S4.2). Pure; no database, no `AppContext` |
 | `src/main/agents/title.ts` | `sanitizeTitle`, `fallbackTitle` and `generateChatTitle` — the automatic chat title (S4.3). `ChatRunner` is what calls it; see [`orchestration`](../orchestration/backend.md) |
@@ -65,6 +65,7 @@ None. This feature is called by `ChatRunner`, never by the transport.
 | `message.created` | the `agentSkipped` notice | The turn ended on the supervisor's hard timeout |
 | `message.created` | the `toolsUnsupported` notice | The provider rejected the tools and the turn was retried without them — once per chat per agent (S3.1) |
 | `permission.requested` / `permission.resolved` | see [`executor`](../executor/backend.md) | A gated tool suspends inside a turn and is released. Emitted by `ctx.permissions`, not by this file, but they are part of a turn's observable event stream |
+| `message.delta` with a `diff` part | `{ chatId, messageId, delta: { kind: 'part', part } }` | After the stream ends, one per file the turn wrote (S5.5). The rules — only the write tools, only successful calls, grouped by path in call order — are in [`executor`](../executor/backend.md), "Diff parts" |
 
 ## External dependencies
 

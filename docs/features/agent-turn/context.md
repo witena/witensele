@@ -30,6 +30,10 @@ does not throw, it just makes every answer slightly worse.
   one's.
 - Storing the `inReplyTo` the caller passed, and accepting a **prebuilt history
   snapshot** so a parallel round can hand every speaker the same transcript.
+- Appending one `DiffPart` per file the turn wrote, once the stream has ended
+  (`diffPartsFrom`, S5.5): the patches the write tools returned, grouped by path
+  in call order. The turn is where the stored parts are, so it is where "what did
+  this turn change" can be answered without asking the filesystem.
 
 ## Out of scope
 
@@ -40,6 +44,7 @@ does not throw, it just makes every answer slightly worse.
 | The `@name` matching rule itself | `src/shared/mentions.ts`, shared with the composer |
 | Tool **definitions**: the MCP pool, `read_skill` / `read_skill_file`, `memory_save` / `memory_search`, the seven executor tools | [`mcp`](../mcp/context.md) (S3.1), [`skills`](../skills/context.md) (S3.2), [`memory`](../memory/context.md) (S3.3), [`executor`](../executor/context.md) (S5.4). The turn calls `ctx.mcp`, `buildSkillTools`, `buildMemoryTools` and `buildExecutorTools`; the `stopWhen` loop, the tool message parts and **which of them an agent gets** are here |
 | The permission prompt itself — the gate, the two events, `permission.reply` | [`executor`](../executor/context.md). The turn supplies the signal that cancels a pending prompt, and stores the resulting `tool-error` like any other |
+| Drawing the `DiffPart`s — the collapsed block, the code block, the card that answered the prompt | [`executor`](../executor/frontend.md) and [`chats`](../chats/frontend.md). The turn produces the parts; the transcript decides what they look like |
 | The content of the skills, memory and executor prompt sections | `skills`, `memory` and `executor` build the text; the turn decides the order and whether to include them |
 | Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
 | Announcing that a context was truncated, and naming the chat | [`orchestration`](../orchestration/context.md). The turn *measures* (`fitHistory`, `droppedMessages`) and the runner *tells*, because both are facts about a run |

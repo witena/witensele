@@ -104,7 +104,18 @@
     "toolExpand": "expand",
     "toolCollapse": "collapse",
     "toolInput": "Input",
-    "toolOutput": "Output"
+    "toolOutput": "Output",
+    "permissionTitle": "Permission needed",
+    "permissionRequest": "{{agent}} wants to run {{tool}}",
+    "permissionAllow": "Allow",
+    "permissionAllowAlways": "Always allow in this chat",
+    "permissionDeny": "Deny",
+    "permissionKeyHint": "Enter allows, Esc denies",
+    "permissionTruncated": "Shown shortened; the whole content is written as sent.",
+    "permissionCommandHint": "Runs in this chat's folder, as you, with your environment.",
+    "diffExpand": "expand",
+    "diffCollapse": "collapse",
+    "fileRefTitle": "Copy this path"
   },
   "agents": {
     "title": "Agents",

@@ -101,7 +101,7 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 |---|---|
 | `common` | App name, OK / Cancel / Save / Delete / Add / Search, loading, generic error |
 | `nav` | The three navigation rail entries |
-| `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped` |
+| `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, and since S5.5 the executor's permission card, the diff block and the file-reference chip |
 | `agents` | Agent list and configuration form labels |
 | `settings` | Section names, the language switcher's own copy, the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` |
 | `presence` | The four presence states |

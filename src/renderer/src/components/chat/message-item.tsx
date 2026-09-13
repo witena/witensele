@@ -45,6 +45,14 @@
  * `tool-call` and `tool-result` parts render as `ToolCard`, paired by
  * `toolCallId` in `collectToolCalls`. No tool exists until S3.1; the renderer
  * handles the parts now so the first real call is visible on the day it happens.
+ *
+ * ## Diffs and file references (S5.5)
+ *
+ * A `diff` part is one file the executor changed, drawn as a collapsed
+ * `DiffBlock` under the tool cards and above the agent's own summary — the
+ * summary is what should be read first, the diffs are what it is about. A
+ * `file-ref` part is a `path:line` chip; clicking it copies the reference, and
+ * S5.7 makes it open the editor. Both come from `transcript-rows.ts`.
  */
 import clsx from 'clsx'
 import { ChevronRight } from 'lucide-react'
@@ -69,9 +77,12 @@ import { useAgentPresence } from '../../stores/presence'
 import { useProvidersStore } from '../../stores/providers'
 import { Avatar, Badge } from '../ui'
 import { isExecutor } from '../agents/agent-display'
+import { DiffBlock } from './diff-block'
+import { FileRefChip } from './file-ref-chip'
 import { Markdown } from './markdown'
 import { ToolCard } from './tool-card'
 import { collectToolCalls } from './tool-call'
+import { collectDiffs, collectFileRefs } from './transcript-rows'
 
 /** Literal `t()` calls so the used-keys guard can see every status label. */
 function statusLabel(t: TFunction, message: Message): string | null {
@@ -218,6 +229,8 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
   const reasoning = message.parts.filter(isReasoning).map((part) => part.text).join('')
   const notices = message.parts.filter(isNotice)
   const toolCalls = collectToolCalls(message.parts)
+  const diffs = collectDiffs(message.parts)
+  const fileRefs = collectFileRefs(message.parts)
   const label = statusLabel(t, message)
   const dimmed = message.status === 'passed' || message.status === 'skipped'
   const usageHint = usageTooltip(t, message, agent, providers)
@@ -371,6 +384,18 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
         {toolCalls.map((call) => (
           <ToolCard key={call.toolCallId} call={call} />
         ))}
+
+        {diffs.map((part, index) => (
+          <DiffBlock key={`${part.path}-${index}`} part={part} />
+        ))}
+
+        {fileRefs.length > 0 ? (
+          <div data-testid="message-file-refs" className="flex flex-wrap items-center gap-1.5">
+            {fileRefs.map((part, index) => (
+              <FileRefChip key={`${part.path}-${part.line ?? ''}-${index}`} part={part} />
+            ))}
+          </div>
+        ) : null}
 
         {notices.map((part, index) => (
           <p

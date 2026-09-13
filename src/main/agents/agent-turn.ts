@@ -73,6 +73,11 @@
  * part the model reads and can talk about. The whole feature is written up in
  * `docs/features/executor/`.
  *
+ * When the stream is over, `diffPartsFrom` turns the patches those writes
+ * returned into one `DiffPart` per file and appends them to the same message
+ * (S5.5), so what an executor changed is a block in the transcript rather than a
+ * field inside a tool result nobody expands.
+ *
  * ## Skills and memory (S3.2, S3.3)
  *
  * The same function also attaches the built-in tools. `read_skill` and
@@ -114,6 +119,7 @@ import { contextWindowFor } from '@shared/pricing'
 import type {
   Agent,
   Chat,
+  DiffPart,
   Message,
   MessagePart,
   MessageStatus,
@@ -129,7 +135,9 @@ import { skillsDir } from '../app-context'
 import {
   buildExecutorSection,
   buildExecutorTools,
-  PermissionDeniedError
+  EDIT_FILE_TOOL,
+  PermissionDeniedError,
+  WRITE_FILE_TOOL
 } from '../executor/tools'
 import { toAiTools, type AgentTools, type ToolOrigin } from '../mcp/tools'
 import { buildMemorySection, buildMemoryTools } from '../memory/tools'
@@ -277,6 +285,73 @@ function textOf(parts: MessagePart[]): string {
     .filter((part): part is TextPart => part.type === 'text')
     .map((part) => part.text)
     .join('')
+}
+
+/**
+ * One `DiffPart` per file this turn wrote (S5.5).
+ *
+ * The write tools return `{ path, patch }` and the patch reaches the transcript
+ * only as a field buried inside the `tool-result` JSON, which nobody reads. This
+ * turns it into the block the user actually looks at, and it is computed from
+ * the parts rather than collected during the stream so that it has exactly one
+ * source of truth: what was stored.
+ *
+ * Three rules, each of them a case that occurs:
+ *
+ * - **Per file, not per call.** An executor that writes a file and then edits it
+ *   twice produced one changed file, so the patches are concatenated in the
+ *   order they happened. First-write order decides where the file's block sits.
+ * - **Only successful calls.** A denied or refused write has `isError`, no
+ *   patch, and nothing to show.
+ * - **Only the write tools.** `git_diff` also returns a `patch`, and it is a
+ *   *report* about the folder rather than a change this turn made; posting it as
+ *   the turn's diff would claim the executor wrote something it did not.
+ */
+export function diffPartsFrom(parts: readonly MessagePart[]): DiffPart[] {
+  /** The write calls, in the order the model made them. */
+  const writes = parts
+    .filter(
+      (part): part is ToolCallPart =>
+        part.type === 'tool-call' &&
+        (part.toolName === WRITE_FILE_TOOL || part.toolName === EDIT_FILE_TOOL)
+    )
+    .map((part) => part.toolCallId)
+  if (writes.length === 0) return []
+
+  const results = new Map<string, ToolResultPart>()
+  for (const part of parts) {
+    if (part.type === 'tool-result') results.set(part.toolCallId, part)
+  }
+
+  // Walked in **call** order rather than in the order the results came back: two
+  // writes issued in one step finish in whichever order the filesystem answers,
+  // and a transcript whose blocks reshuffle between two identical turns is one
+  // nobody can compare against anything.
+  //
+  // Insertion-ordered, so a file keeps the position of its first write.
+  const byPath = new Map<string, string[]>()
+  for (const toolCallId of writes) {
+    const result = results.get(toolCallId)
+    if (!result || result.isError === true) continue
+
+    const output = result.output as { path?: unknown; patch?: unknown } | null
+    if (!output || typeof output !== 'object') continue
+    const { path, patch } = output
+    if (typeof path !== 'string' || path.length === 0) continue
+    if (typeof patch !== 'string' || patch.trim().length === 0) continue
+
+    const collected = byPath.get(path)
+    if (collected) collected.push(patch)
+    else byPath.set(path, [patch])
+  }
+
+  return [...byPath.entries()].map(([path, patches]) => ({
+    type: 'diff' as const,
+    path,
+    // A patch from `createPatch` ends with a newline, but a hand-made one may
+    // not, and two headers running into each other would break the block.
+    patch: patches.map((patch) => (patch.endsWith('\n') ? patch : `${patch}\n`)).join('')
+  }))
 }
 
 /**
@@ -811,6 +886,13 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   }
 
   if (turnSignal.aborted) aborted = true
+
+  // What the turn changed on disk, as one block per file (S5.5). Appended after
+  // the stream rather than as each write returns, so a file written three times
+  // is one block instead of three — and appended even when the turn was stopped
+  // or failed afterwards, because the writes really happened and hiding them is
+  // the one thing the transcript must never do.
+  for (const diff of diffPartsFrom(parts)) onPart(diff)
 
   // The supervisor's hard timeout and the user's Stop both arrive as an abort;
   // only the reason tells them apart, and they end in different statuses.

@@ -278,9 +278,11 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
 | `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
-| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client |
+| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client. S5.5 adds the acceptance sentence: a chat with no executor shows no card (offline, always runs) and — behind the same `qwen2.5:3b` guard `mcp.spec.ts` uses — an executor asked for a file raises the card, nothing is on disk while it waits, Allow writes the file, the card disappears and the diff block appears and opens onto a `diff` code block |
 | `src/renderer/src/components/chat/tool-call.test.ts` | `previewToolArgs`, `countToolResults` over the shapes a tool actually returns, `describeToolCall`'s three states, and `collectToolCalls` pairing by id rather than by position |
-| `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp) and `buildTranscriptRows`' interleaving and key stability |
+| `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp), `buildTranscriptRows`' interleaving and key stability, and (S5.5) `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines` ignoring the `+++` / `---` headers and counting a concatenation of two patches, and `formatFileRef` with and without a line |
+| `src/renderer/src/stores/permissions.test.ts` | The permission store (S5.5): a request drawing a card, several ordered oldest first and split per chat, `reply` calling `permission.reply` without removing anything optimistically, `permission.resolved` dismissing the card for all four decisions including `aborted`, a stop clearing every open prompt, a `not_found` rejection dropping the stale card, a second answer while the first is in flight being ignored, and a deleted chat forgetting only its own |
+| `src/renderer/src/components/chat/permission-input.test.ts` | `describePermissionInput` (S5.5): a command line kept **verbatim** however long or oddly spaced, a write's path plus its capped content preview, an empty file still reading as a write, an edit's patch, and the fallback to raw JSON for an MCP tool and for arguments that are not the shape the schema promises |
 | `src/renderer/src/components/chat/mention-query.test.ts` | `extractMentionQuery`'s boundary rules, `filterMentionCandidates`' longest-first order, and both insertion helpers' spacing |
 | `src/renderer/src/components/chat/code-language.test.ts` | Every id, every alias, the first-word rule, and `null` for an unknown language |
 | `e2e/polish.spec.ts` | Against a real local model: the header and member-row token counts, an automatic title replacing `New chat`, and the search box filtering the list down to the chat with the distinctive word in it. Captures `test-results/shots/polish.png` |
@@ -314,6 +316,12 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   Adding one is a row in `SHIKI_LANGUAGE` and a loader in `lib/highlighter.ts`.
 - **The Copy button does not report failure.** `navigator.clipboard` is either
   available or it is not, and a red message on a copy button is noise.
+- **The permission card is not a modal**, so a user can switch chats with a
+  prompt open. The card is per chat and comes back when that chat is reopened;
+  nothing warns the user that another chat is waiting on them. A count on the
+  chat-list row is the obvious fix and is not in S5.5.
+- **A `file-ref` chip copies rather than opens** until S5.7, and nothing produces
+  `FileRefPart`s yet: the rendering is ready for the step that emits them.
 - **Tool cards are unexercised by a real tool.** The parts are rendered and
   unit-tested against fixtures, and S3.1 produces the first real ones: a
   `tool-call` part now also carries `serverId` / `serverName`, which is what the

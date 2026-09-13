@@ -853,7 +853,7 @@ two-executor tie is broken by position. `npm test`: 75 files, 1078 tests.
 Docs in `docs/features/executor/` (new), `docs/features/agent-turn/`,
 `docs/features/mcp/` and `docs/features/backend-client/`.
 
-### S5.5 Permission prompt, diff and file-ref rendering `[ ]`
+### S5.5 Permission prompt, diff and file-ref rendering `[x]` (2026-09-13)
 What: the renderer half of S5.4 — the user can answer the prompt, and what the
 executor changed is visible in the transcript.
 - `stores/permissions.ts`: pending requests keyed by `requestId`, filled from
@@ -883,6 +883,68 @@ executor changed is visible in the transcript.
 Acceptance: the flow above end to end with a real local model; the tests
 above. Docs: `docs/features/executor/` and `docs/features/chats/` (all four
 each).
+Done: the card is **above the composer, not a modal**, and that is the decision
+the rest follows from. Several prompts can be open at once — a parallel round, or
+two chats — the transcript above the card is exactly the context needed to judge
+the call, and a modal would have to hide it and pick one prompt to be about. So
+the cards stack oldest first between the message list and the composer, and Enter
+and Escape are bound **on the card** rather than on the document: a global
+listener would take Enter away from the composer, where Enter sends. The oldest
+card takes focus so the shortcuts work without a click, and the **card** takes it
+rather than the Allow button, because a focused default button is one stray Enter
+away from approving a write.
+
+`stores/permissions.ts` is a reducer over the two events and one call, and the
+rule that matters is that **nothing is optimistic**: a card is removed by
+`permission.resolved`, never by the click that answered it — the tool call has
+not returned when the reply resolves. A reply the gate refuses with `not_found`
+(answered twice, or a stop this window missed) drops the card silently: a stale
+permission prompt must stop being offered, not sit there with an error under it.
+A second answer while the first is in flight is ignored, which is also what makes
+Enter-on-a-focused-button harmless.
+
+`permission-input.ts` decides what a call looks like, and `run_command` is the
+case it exists for: the command line is printed **verbatim**, in monospace, and
+is the one body that is never capped, because the shell is not sandboxed and the
+prompt is therefore the entire boundary. `write_file` shows the path and a
+1 200-character preview of the content — not a diff, because the tool computes
+the patch only *after* the grant — `edit_file` shows the patch it already sent,
+and anything else falls back to raw JSON, which is also where arguments that are
+not the shape the schema promises land: a model that sent `write_file` without a
+`content` string is exactly when the user should see what it really sent.
+
+`diffPartsFrom` in `agent-turn.ts` runs once when the stream ends, over the parts
+already stored, and appends one `DiffPart` per **file**. Grouping is by the path
+the tool returned (the resolved one, not the string the model typed) and the walk
+is in **call** order rather than result order: two writes issued in one step
+finish in whichever order the filesystem answers, and a transcript that
+reshuffles between two identical turns cannot be compared with anything. It
+ignores `git_diff`, which returns a `patch` but only reports on the folder, and
+appends the blocks even when the turn was stopped or failed afterwards — the
+writes really happened. The pure helpers (`collectDiffs`, `collectFileRefs`,
+`countDiffLines`, `formatFileRef`) went into `transcript-rows.ts` so the
+components stayed markup and the cases could be tested without a DOM.
+
+S5.5 adds **no shared type, method or event and no `notices.*` key**. A denial is
+already visible as the errored tool card it was, carrying the English sentence
+the *model* read; a notice repeating it would be the app narrating the user's own
+click back to them. The eleven new keys are all under `chat.*`, and the three
+things on these surfaces that are never translated — the path, the command line
+and the patch — are data, the same rule the working-directory chip follows.
+
+Tests: `stores/permissions.test.ts` (9), `permission-input.test.ts` (8),
+`transcript-rows.test.ts` gained 9 (`collectDiffs`, `collectFileRefs`,
+`countDiffLines`, `formatFileRef`), `tool-call.test.ts` gained 6 for the executor
+labels, and `agent-turn.test.ts` gained an eight-case `diffPartsFrom` block plus
+three whole turns. Writing the last of those found a real ordering bug: two
+dependent calls in one step race, so the mock model now makes one call per step,
+and the grouping was moved from result order to call order. `npm test`: 77 files,
+1121 tests; `npm run typecheck` clean. `e2e/executor.spec.ts` ran with
+`qwen2.5:3b` present and all 8 cases passed — the card appeared, nothing was on
+disk while it waited, Allow wrote the file and the diff block opened onto a
+`diff` code block. Docs in `docs/features/executor/` (all four, `frontend.md`
+rewritten), `docs/features/chats/`, `docs/features/agent-turn/`,
+`docs/features/backend-client/` and `docs/features/i18n/`.
 
 ### S5.6 Hand to executor and the review loop `[ ]`
 What: PLAN.md's workflow — discuss → "hand to executor" → it implements the
@@ -1007,8 +1069,19 @@ adds a line here in the same commit.
   for `rg` itself, so the question is whether the built-in should grow or go.
 - **`run_command` assumes `/bin/sh`**, which is correct for the macOS-only build
   and needs a branch before any Windows or Linux packaging.
-- **Nothing reads the `patch` the write tools return yet.** S5.5 turns it into
-  `DiffPart`s; until then the diff exists only inside the tool result.
+- **A pending prompt is invisible from another chat.** S5.5's card is drawn per
+  chat, so a user looking at a different chat is not told that an executor is
+  waiting on them — the run simply appears to have stalled until they come back.
+  A count on the chat-list row, or a rail badge, is the obvious shape.
+- **The `write_file` card previews content, not a diff.** The tool computes the
+  patch only *after* the grant (deliberately: the file it would diff against can
+  change while the user decides), so the card shows the first 1 200 characters of
+  what will be written. `edit_file` already sends its patch. "Allow, but show me
+  the diff first" is the open question `docs/features/executor/context.md`
+  carries.
+- **Nothing emits a `FileRefPart`.** S5.5 renders one as a `path:line` chip that
+  copies on click; producing them from an agent's text, and opening them in the
+  editor, is S5.7.
 
 ### Server and editor
 

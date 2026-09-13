@@ -182,7 +182,11 @@ drift.
 
 `message.delta`, `message.updated`, `run.*` and `presence.changed` are emitted by
 [`agent-turn`](../agent-turn/backend.md) and
-[`orchestration`](../orchestration/backend.md).
+[`orchestration`](../orchestration/backend.md); `permission.requested` /
+`permission.resolved`, which the S5.5 card is drawn from and dismissed by, come
+from [`executor`](../executor/backend.md)'s gate. This feature's backend half is
+unchanged by S5.5: the permission card, the diff block and the file-reference
+chip are renderer-only, and the `DiffPart`s they draw are appended by the turn.
 
 ## Filesystem
 

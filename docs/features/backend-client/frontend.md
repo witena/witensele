@@ -16,7 +16,7 @@
 | `src/renderer/src/pages/settings/developer-section.tsx` | The smoke surface that exercises both directions, translated in S1.4 and moved here from `App.tsx` in S1.5. A deliberate test surface, not product UI |
 | `src/renderer/src/lib/backend-provider.ts` | S1.4: `getBackend()` / `setBackend()`. The injection point stores use instead of importing the singleton, so a store is testable in plain Node with a fake client. It replaced the planned `backendContext.tsx` — the bootstrap needs the client *before* the React tree exists, which a context cannot provide |
 | `src/renderer/src/lib/event-bridge.ts` | S1.7: the **single** `subscribe` call for the whole renderer, started by `main.tsx` before the first render. `applyBackendEvent(event)` is its exported reducer, which the store tests drive directly |
-| `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, `stores/providers.ts` in S1.6, and `chats` / `messages` / `run` / `presence` / `agents` in S1.7 |
+| `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, `stores/providers.ts` in S1.6, `chats` / `messages` / `run` / `presence` / `agents` in S1.7, and `stores/permissions.ts` in S5.5 |
 
 Rule (CLAUDE.md #6): components call store actions, stores call `BackendClient`,
 and only `lib/backend.ts` knows a transport exists. A component that imports
@@ -99,6 +99,10 @@ Event handling worth writing down once:
 - `presence.changed` → update the dot in the member panel and on that agent's
   message avatars (the dot shows the agent's *current* state, not the state at
   send time).
+- `permission.requested` → add a card to `stores/permissions.ts`;
+  `permission.resolved` → remove it, whatever the decision says. Exactly one
+  `resolved` per `requested`, on every path, which is what lets the card be
+  dismissed without knowing why (S5.4, drawn in S5.5).
 
 ## Interaction states
 

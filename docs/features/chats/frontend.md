@@ -7,8 +7,12 @@
 | `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, the group-settings block (which writes straight through to `chats.update`) including the S5.2 "Working directory" row, and the folder chip beside the header title |
 | `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete |
 | `src/renderer/src/components/chat/message-list.tsx` | The virtualized scroller (react-virtuoso): `followOutput` only while at the bottom, the "jump to latest" pill, and the day separators |
-| `src/renderer/src/components/chat/transcript-rows.ts` | `buildTranscriptRows` / `dayBucket`: `Message[]` → the flat row array the virtualizer renders. Pure and unit-tested |
-| `src/renderer/src/components/chat/message-item.tsx` | One message row: avatar + presence dot, header (name, model badge, round, "replying to @who", time), reasoning, tool cards, body, streaming cursor, status hint. A `system` message takes the short branch: one centred dimmed line, no avatar and no name |
+| `src/renderer/src/components/chat/transcript-rows.ts` | The transcript's pure transforms: `buildTranscriptRows` / `dayBucket` (`Message[]` → the flat row array the virtualizer renders) and, since S5.5, `collectDiffs`, `collectFileRefs`, `countDiffLines` and `formatFileRef` — the part-level cases a message row draws. Unit-tested |
+| `src/renderer/src/components/chat/message-item.tsx` | One message row: avatar + presence dot, header (name, model badge, round, "replying to @who", time), reasoning, tool cards, the S5.5 diff blocks and file-reference chips, body, streaming cursor, status hint. A `system` message takes the short branch: one centred dimmed line, no avatar and no name |
+| `src/renderer/src/components/chat/permission-card.tsx` | The executor's permission prompt (S5.5): one card per pending request, above the composer, with Allow / Always allow in this chat / Deny. Enter allows and Escape denies, handled on the card so the composer keeps Enter |
+| `src/renderer/src/components/chat/permission-input.ts` | `describePermissionInput`: what the card shows about a call — a command line **verbatim**, a path plus a capped content preview, the patch of an edit, or raw JSON. Pure and unit-tested |
+| `src/renderer/src/components/chat/diff-block.tsx` | One `DiffPart`: a collapsed header with the path and the `+`/`-` counts, opening onto `CodeBlock` in the `diff` language |
+| `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip. Clicking copies the reference; S5.7 makes it open the editor |
 | `src/renderer/src/components/chat/markdown.tsx` | `react-markdown` + `remark-gfm` with the mockup's prose rules as descendant utilities; hands fenced blocks to `CodeBlock`, wraps tables in their own scroller and marks every link `target="_blank" rel="noreferrer"` |
 | `src/renderer/src/components/chat/code-block.tsx` | A fenced block: language header, Copy button ("Copied" for 1.5 s), shiki markup when a grammar exists and plain monospace otherwise |
 | `src/renderer/src/components/chat/code-language.ts` | `resolveCodeLanguage` / `codeLanguageLabel`: the fourteen highlighted languages, their aliases, and `null` for everything else. Pure and unit-tested |
@@ -46,6 +50,8 @@
 | `providers` | `providers` | `Provider[]` | Backend-owned; the member picker prints the provider's name beside the model, and the usage store reads each provider's `presetId` to know whether its tokens are free |
 | `chats` | `searchQuery` / `matchIds` | `string` / `string[] \| null` | The debounced query and what it matched. `null` means "no filter", which is how the column tells that apart from "filtered and nothing matched" |
 | `usage` | `byChat` | `Record<string, ChatUsageSummary>` | Total and per-agent tokens plus an estimated cost. Seeded by `messages.usageSummary`, then recomputed from the messages store |
+| `permissions` | `pending` | `Record<string, PendingPermission>` | Backend-owned, keyed by `requestId`. Filled by `permission.requested`, emptied by `permission.resolved` — the only two writers. `seq` orders the cards oldest first |
+| `permissions` | `replyingById` | `Record<string, boolean>` | Local; covers the `permission.reply` round trip and disables that card's three buttons. Nothing is optimistic: a card disappears when the backend says the prompt ended |
 | `messages` | `complete` | `Record<string, boolean>` | True when the store holds the **whole** transcript rather than a page. The usage store recomputes locally only when it does |
 
 Selectors worth knowing: `useChatMessages(chatId)`, `useChatMemberIds(chatId)`,
@@ -71,7 +77,8 @@ selector re-renders on every store write.
 | `invoke('system.pickFolder')` + `invoke('chats.update')` | "Choose…" in the Working directory row, through `chooseWorkdir` | The native modal, then the binding. A cancelled dialog writes nothing and leaves no error |
 | `invoke('chats.update')` | "Clear" in the Working directory row, through `setWorkdir(id, null)` | Unbinds the folder; the one path that needs no dialog |
 | `invoke('providers.list')` | `providers.load()` on mount | The provider name in the member picker |
-| `invoke('chat.stop')` | The Stop button | Aborts the run |
+| `invoke('chat.stop')` | The Stop button | Aborts the run — which also closes every open permission prompt as `aborted` |
+| `invoke('permission.reply')` | The permission card's three buttons, through `permissions.reply` | Releases the suspended tool call. A rejection (`not_found`) drops the card: the prompt is stale, not broken |
 | `subscribe(...)` | `startEventBridge()` in `main.tsx`, once at bootstrap | Fans `message.*`, `chat.*`, `run.*` and `presence.changed` into the stores |
 
 Event handling is written once, in `lib/event-bridge.ts`:
@@ -87,6 +94,9 @@ Event handling is written once, in `lib/event-bridge.ts`:
 - `run.started` / `run.round` → set the active run. `run.finished` → clear it.
 - `presence.changed` → update the dot, both in the member panel and on that
   agent's message avatars.
+- `permission.requested` → add a card. `permission.resolved` → remove it,
+  whatever the `decision` says (`aborted` is a Stop closing a prompt nobody
+  answered).
 
 ## Interaction states
 
@@ -110,6 +120,10 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | second executor offered | The picker's row is disabled and at 55% opacity, and its mono model line is replaced by `chat.executorTaken`. The click is not merely ignored — there is nothing to click |
 | folder bound | An accent chip beside the chat title holding the folder's **name**, with the whole path in its `title`; the settings row prints the same name in mono and enables "Clear" |
 | folder refused | The left column's `chats-error` line names the reason: not absolute, no longer there, or a file rather than a folder |
+| permission prompt open | A card between the transcript and the composer: the agent and the tool, the call itself (a command line verbatim in mono, a path plus a content preview, or a patch), and Allow / Always allow in this chat / Deny. The oldest card takes focus, so Enter and Escape work without a click. The agent stays `working` — its turn is suspended inside the tool call, not stalled |
+| permission answered, or the run stopped | The card disappears on `permission.resolved`. A denial is not a system notice: it comes back as an errored tool card carrying the sentence the **model** read |
+| a file was changed | One collapsed `diff-block` per file under the tool cards, headed by the path with `+n -n`; opening it renders the unified diff through the same `code-block` a fenced diff uses |
+| a file is referenced | A `path:line` chip. Clicking copies the reference and the icon becomes a tick for 1.5 s |
 
 Sending during a run is deliberately allowed: the message appears immediately and
 is answered after the current run (see `../orchestration/context.md`).
@@ -142,6 +156,9 @@ New keys, all under the existing namespaces:
 | `chat.copy`, `chat.copied`, `chat.copyCode` | The code block's Copy button, its confirmed state and its accessible name |
 | `chat.toolRunning`, `chat.toolDone`, `chat.toolError`, `chat.toolResults`, `chat.toolExpand`, `chat.toolCollapse`, `chat.toolInput`, `chat.toolOutput` | The tool card |
 | `chat.actions.title`, `.summarize`, `.vote` | The Actions card's heading and its two buttons (S2.5 nested what were three flat keys) |
+| `chat.permissionTitle`, `chat.permissionRequest`, `chat.permissionAllow`, `chat.permissionAllowAlways`, `chat.permissionDeny`, `chat.permissionKeyHint`, `chat.permissionTruncated`, `chat.permissionCommandHint` | The permission card (S5.5). The **call itself is never translated**: a path, a command line and a patch are data |
+| `chat.diffExpand`, `chat.diffCollapse` | The diff block's toggle |
+| `chat.fileRefTitle` | The file-reference chip's tooltip |
 | `chat.actions.summarizePrompt`, `chat.actions.votePrompt` | The **message text** each action sends, after the `@mention`. A locale key rather than a constant, because an agent answers in the language it is addressed in |
 
 Already present and now actually used: `chat.today` / `yesterday` / `earlier`,
@@ -185,4 +202,18 @@ is never translated.
   S5.2 added `chat-workdir` (with `data-path`, empty when unbound),
   `chat-workdir-chip`, `chat-workdir-choose`, `chat-workdir-clear`,
   `member-executor`, `member-candidate-executor`, `message-executor` and
-  `data-blocked` on `member-candidate`.
+  `data-blocked` on `member-candidate`. S5.5 added `permission-stack`,
+  `permission-card` (with `data-request-id`, `data-tool` and `data-agent-id`),
+  `permission-card-title`, `permission-card-path`, `permission-card-body` (with
+  `data-kind`), `permission-allow`, `permission-allow-always`,
+  `permission-deny`, `diff-block` (with `data-path`), `diff-block-toggle`,
+  `diff-block-path`, `diff-block-stat`, `file-ref` (with `data-path` and
+  `data-line`) and `message-file-refs`.
+- **The permission card owns Enter and Escape only while it is focused.** The
+  shortcuts are on the card element, not on the document: a global listener would
+  take Enter away from the composer, where it sends. The oldest card is focused
+  when it appears (`tabIndex={-1}`, so it takes no Tab stop) and the buttons keep
+  their own focus ring; the card carries `aria-label` from
+  `chat.permissionTitle`.
+- The diff block's toggle is a `button` with `aria-expanded`; the file-reference
+  chip is a `button` with a translated `title`.

@@ -13,6 +13,9 @@
  * state, so the header badge, the controls and the database can never disagree:
  * the write returns the stored row and the `chat.updated` event re-renders both.
  *
+ * The executor's permission prompts (S5.5) are drawn between the transcript and
+ * the composer, one card per pending request, from `stores/permissions.ts`.
+ *
  * Data comes from five stores and nothing is fetched here directly: `chats`,
  * `agents` and `providers` mirror the backend, `messages` holds the transcript,
  * `run` says whether the Stop button is showing and `presence` colours the dots —
@@ -40,6 +43,7 @@ import { ChatList } from '../components/chat/chat-list'
 import { Composer, type ComposerHandle } from '../components/chat/composer'
 import { MemberPanel } from '../components/chat/member-panel'
 import { MessageList } from '../components/chat/message-list'
+import { PermissionCard } from '../components/chat/permission-card'
 import { Column } from '../components/layout/column'
 import { PageHeader } from '../components/layout/page-header'
 import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from '../components/layout/window-chrome'
@@ -59,6 +63,7 @@ import { useAgentsStore } from '../stores/agents'
 import { useChatMemberIds, useChatsStore } from '../stores/chats'
 import { useChatMessages, useMessagesStore } from '../stores/messages'
 import { usePresenceStore } from '../stores/presence'
+import { usePendingPermissions } from '../stores/permissions'
 import { useIsRunning, useRunStore } from '../stores/run'
 import { useProvidersStore } from '../stores/providers'
 import { useChatUsage, useUsageStore } from '../stores/usage'
@@ -129,6 +134,10 @@ export function ChatsPage(): React.JSX.Element {
   const runError = useRunStore((state) => state.error)
   const runErrorCode = useRunStore((state) => state.errorCode)
   const usage = useChatUsage(selectedId)
+  // The executor's open permission prompts for this chat, oldest first. They sit
+  // above the composer because that is where the answer is given, and because a
+  // suspended tool call must not hide the transcript that explains it.
+  const permissions = usePendingPermissions(selectedId)
   const matchIds = useChatsStore((state) => state.matchIds)
   // What the box holds right now; the store only ever sees the debounced value.
   const [query, setQuery] = useState('')
@@ -365,6 +374,21 @@ export function ChatsPage(): React.JSX.Element {
             />
           </div>
         )}
+
+        {permissions.length > 0 ? (
+          <div
+            data-testid="permission-stack"
+            className="flex shrink-0 flex-col gap-2 px-7 pt-3"
+          >
+            {permissions.map((request, index) => (
+              <PermissionCard
+                key={request.requestId}
+                request={request}
+                autoFocus={index === 0}
+              />
+            ))}
+          </div>
+        ) : null}
 
         <Composer
           chatId={selectedId}

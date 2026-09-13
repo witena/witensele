@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendEvent, MessageDeltaEvent } from '@shared/events'
-import type { Agent, Chat, McpServer, Message } from '@shared/types'
+import type { Agent, Chat, McpServer, Message, MessagePart } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { skillsDir } from '../app-context'
 import {
@@ -31,6 +31,7 @@ import { createTestAppContext } from '../testing'
 import {
   FLUSH_EVERY_DELTAS,
   NOTICE_TOOLS_UNSUPPORTED,
+  diffPartsFrom,
   looksLikeToolRejection,
   runAgentTurn,
   toUsage
@@ -1120,6 +1121,45 @@ describe('runAgentTurn with executor tools', () => {
     })
   }
 
+  /**
+   * A model that makes each of `calls` in a step of its own, then answers.
+   *
+   * One call per step, not several in one: an executor that creates a file and
+   * then edits it depends on its own previous call having finished, which is how
+   * a real multi-step turn is shaped — and two dependent calls issued in a single
+   * step would race, with the edit finding no file to edit.
+   */
+  function callsThenAnswer(
+    calls: { toolCallId: string; toolName: string; input: Record<string, unknown> }[]
+  ): MockLanguageModelV4 {
+    let steps = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        const call = calls[steps]
+        steps += 1
+        const chunks: StreamPart[] = call
+          ? [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: call.toolCallId,
+                toolName: call.toolName,
+                input: JSON.stringify(call.input)
+              },
+              {
+                type: 'finish',
+                finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                usage: USAGE
+              }
+            ]
+          : textChunks(['Done.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
   beforeEach(() => {
     database = createTestDatabase()
     const created = createTestAppContext(database)
@@ -1323,5 +1363,173 @@ describe('runAgentTurn with executor tools', () => {
     const failed = result.message.parts[1] as { isError?: boolean; output: unknown }
     expect(failed.isError).toBe(true)
     expect(String(failed.output)).toMatch(/outside the working directory/)
+  })
+
+  /* S5.5: the diffs the finished turn appends to its own message. */
+
+  it('appends one diff part per written file, with the real patch', async () => {
+    const stop = answerEveryPrompt('allowAlways')
+
+    const result = await turn(
+      callsThenAnswer([
+        { toolCallId: 'call-1', toolName: 'write_file', input: { path: 'NOTES.md', content: '# Notes\n' } },
+        { toolCallId: 'call-2', toolName: 'write_file', input: { path: 'TODO.md', content: '- one\n' } }
+      ])
+    )
+
+    const diffs = result.message.parts.filter((part) => part.type === 'diff')
+    expect(diffs.map((part) => (part as { path: string }).path)).toEqual(['NOTES.md', 'TODO.md'])
+    expect((diffs[0] as { patch: string }).patch).toContain('+# Notes')
+
+    // The renderer learns about them as a `part` delta, like a tool card, and
+    // the stored message carries them after the tool results.
+    const appended = events.filter(
+      (event) =>
+        event.type === 'message.delta' &&
+        event.delta.kind === 'part' &&
+        event.delta.part.type === 'diff'
+    )
+    expect(appended).toHaveLength(2)
+    stop()
+  })
+
+  it('joins two writes to the same file into one block', async () => {
+    const stop = answerEveryPrompt('allowAlways')
+
+    const result = await turn(
+      callsThenAnswer([
+        { toolCallId: 'call-1', toolName: 'write_file', input: { path: 'NOTES.md', content: 'one\n' } },
+        {
+          toolCallId: 'call-2',
+          toolName: 'edit_file',
+          input: { path: 'NOTES.md', oldString: 'one', newString: 'two' }
+        }
+      ])
+    )
+
+    const diffs = result.message.parts.filter((part) => part.type === 'diff')
+    expect(diffs).toHaveLength(1)
+    const { patch } = diffs[0] as { patch: string }
+    expect(patch).toContain('+one')
+    expect(patch).toContain('+two')
+    expect(readFileSync(join(workdir, 'NOTES.md'), 'utf8')).toBe('two\n')
+    stop()
+  })
+
+  it('appends no diff when the user denied the write', async () => {
+    const stop = answerEveryPrompt('deny')
+
+    const result = await turn(writeCall())
+
+    expect(result.message.parts.some((part) => part.type === 'diff')).toBe(false)
+    stop()
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.5: the diff parts a finished executor turn appends                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `diffPartsFrom` on its own, against the part shapes a turn really stores.
+ *
+ * The grouping rule is the whole point: an executor that writes a file and then
+ * edits it twice changed **one** file, and the transcript has to say so with one
+ * block rather than three. The rest of the cases are the ones where a patch
+ * exists but does not belong in the message.
+ */
+describe('diffPartsFrom', () => {
+  const call = (toolCallId: string, toolName: string): MessagePart => ({
+    type: 'tool-call',
+    toolCallId,
+    toolName,
+    input: {}
+  })
+  const result = (toolCallId: string, output: unknown, isError?: boolean): MessagePart => ({
+    type: 'tool-result',
+    toolCallId,
+    output,
+    ...(isError ? { isError: true } : {})
+  })
+
+  it('is empty for a turn that wrote nothing', () => {
+    expect(diffPartsFrom([{ type: 'text', text: 'Nothing to change.' }])).toEqual([])
+  })
+
+  it('makes one part per written file', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', { path: 'a.ts', patch: '--- a.ts\n+++ a.ts\n+one\n' }),
+      call('c2', 'edit_file'),
+      result('c2', { path: 'b.ts', patch: '--- b.ts\n+++ b.ts\n+two\n' })
+    ]
+
+    expect(diffPartsFrom(parts).map((part) => part.path)).toEqual(['a.ts', 'b.ts'])
+  })
+
+  it('concatenates several writes to one file, in order, at its first position', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', { path: 'a.ts', patch: '--- a.ts\n+++ a.ts\n+one\n' }),
+      call('c2', 'write_file'),
+      result('c2', { path: 'b.ts', patch: '--- b.ts\n+++ b.ts\n+other\n' }),
+      call('c3', 'edit_file'),
+      result('c3', { path: 'a.ts', patch: '--- a.ts\n+++ a.ts\n-one\n+two\n' })
+    ]
+
+    const diffs = diffPartsFrom(parts)
+    expect(diffs.map((part) => part.path)).toEqual(['a.ts', 'b.ts'])
+    expect(diffs[0]?.patch).toBe('--- a.ts\n+++ a.ts\n+one\n--- a.ts\n+++ a.ts\n-one\n+two\n')
+  })
+
+  it('separates two patches that do not end in a newline', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', { path: 'a.ts', patch: '+one' }),
+      call('c2', 'write_file'),
+      result('c2', { path: 'a.ts', patch: '+two' })
+    ]
+
+    expect(diffPartsFrom(parts)[0]?.patch).toBe('+one\n+two\n')
+  })
+
+  it('ignores a denied or failed write', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', 'The user declined to allow write_file.', true)
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
+  })
+
+  it('ignores an edit that changed nothing', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'edit_file'),
+      result('c1', { path: 'a.ts', replacements: 0, unchanged: true, patch: '' })
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
+  })
+
+  it('ignores git_diff, which reports rather than changes', () => {
+    // Its output carries a `patch` too, and posting it would claim the executor
+    // wrote something it only looked at.
+    const parts: MessagePart[] = [
+      call('c1', 'git_diff'),
+      result('c1', { patch: '--- a.ts\n+++ a.ts\n+someone else\n' })
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
+  })
+
+  it('ignores a result whose output is not the shape the write tools return', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', 'wrote it'),
+      call('c2', 'write_file'),
+      result('c2', { path: 'a.ts' })
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
   })
 })

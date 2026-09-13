@@ -31,8 +31,40 @@
  * | `undefined` / `null` | `null`, and the card says nothing about results |
  *
  * A wrong count here is cosmetic; the expanded card always shows the real JSON.
+ *
+ * ## The executor's own tools (S5.5)
+ *
+ * `write_file(path: "src/a.ts", content: "…")` is a card nobody can read at a
+ * glance, and the argument that matters is always the same one: the path, the
+ * query, or the command line. `EXECUTOR_PREVIEW_ARG` names it per tool and the
+ * value is printed **bare**, without the `key: ` prefix and without JSON quotes,
+ * so the line reads `write_file(src/a.ts)` and `run_command(npm test)`.
+ *
+ * The preview is still capped at `ARGS_PREVIEW_MAX`, including for
+ * `run_command`: this is a one-line summary of a call that already happened, not
+ * the permission prompt. The prompt is the security boundary and shows the
+ * command verbatim (`permission-input.ts`); the expanded card below shows the
+ * whole input as JSON either way.
  */
 import type { ToolCallPart, ToolResultPart } from '@shared/types'
+
+/**
+ * The one argument worth printing for each built-in executor tool.
+ *
+ * Keyed by the tool's own name, which is what the transcript stores: these tools
+ * have no MCP server behind them, so there is no prefix to strip. A tool missing
+ * from this table — or a call whose argument is not a string — falls back to the
+ * generic `key: value` preview.
+ */
+export const EXECUTOR_PREVIEW_ARG: Record<string, string> = {
+  read_file: 'path',
+  list_dir: 'path',
+  search_files: 'query',
+  write_file: 'path',
+  edit_file: 'path',
+  run_command: 'command',
+  git_diff: 'path'
+}
 
 /** How long `argsPreview` may get before it is cut. Roughly the mockup's width. */
 export const ARGS_PREVIEW_MAX = 48
@@ -87,7 +119,21 @@ function previewValue(value: unknown): string {
  * declaration order, because a tool's first argument is nearly always the one
  * worth reading.
  */
-export function previewToolArgs(input: unknown, max: number = ARGS_PREVIEW_MAX): string {
+export function previewToolArgs(
+  input: unknown,
+  max: number = ARGS_PREVIEW_MAX,
+  toolName?: string
+): string {
+  const primary = toolName === undefined ? undefined : EXECUTOR_PREVIEW_ARG[toolName]
+  const bare =
+    primary !== undefined && input !== null && typeof input === 'object'
+      ? (input as Record<string, unknown>)[primary]
+      : undefined
+  if (typeof bare === 'string') {
+    const single = bare.replace(/\s+/g, ' ').trim()
+    return single.length > max ? `${single.slice(0, max - 1)}…` : single
+  }
+
   const full =
     input === undefined || input === null
       ? ''
@@ -131,7 +177,14 @@ export function describeToolCall(
     toolName: part.toolName,
     ...(part.serverName ? { serverName: part.serverName } : {}),
     label: part.serverName ? `${part.serverName} · ${part.toolName}` : part.toolName,
-    argsPreview: previewToolArgs(part.input),
+    // The tool's own name, not the label: an MCP tool called `write_file` comes
+    // from a server and is not this executor tool, so it keeps the generic
+    // preview — `serverName` is what tells them apart, and it is on the part.
+    argsPreview: previewToolArgs(
+      part.input,
+      ARGS_PREVIEW_MAX,
+      part.serverName ? undefined : part.toolName
+    ),
     state,
     // An errored call's output is the error itself, not a list of results.
     resultCount: result && state !== 'error' ? countToolResults(result.output) : null,

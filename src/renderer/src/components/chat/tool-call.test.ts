@@ -181,3 +181,67 @@ describe('collectToolCalls', () => {
     expect(collectToolCalls([SEARCH_CALL])[0]?.state).toBe('running')
   })
 })
+
+/**
+ * The executor's own tools (S5.5).
+ *
+ * `write_file(path: "src/a.ts", content: "…")` is unreadable at the width the
+ * card has, and the argument that matters is always the same one. These cases
+ * pin which argument that is per tool, and the two ways the rule is *not*
+ * applied: an MCP tool that happens to share a name, and arguments that are not
+ * the shape the schema promises.
+ */
+describe('executor tool previews', () => {
+  const call = (toolName: string, input: unknown, serverName?: string): ToolCallPart => ({
+    type: 'tool-call',
+    toolCallId: 'call-1',
+    toolName,
+    input,
+    ...(serverName ? { serverName } : {})
+  })
+
+  it('prints the path bare for a write', () => {
+    const described = describeToolCall(
+      call('write_file', { path: 'src/notes.md', content: '# Notes\nlong body\n' })
+    )
+    expect(`${described.label}(${described.argsPreview})`).toBe('write_file(src/notes.md)')
+  })
+
+  it('prints the command line for run_command', () => {
+    expect(describeToolCall(call('run_command', { command: 'npm test' })).argsPreview).toBe(
+      'npm test'
+    )
+  })
+
+  it('flattens a multi-line command onto one line and caps it', () => {
+    const long = `echo ${'x'.repeat(ARGS_PREVIEW_MAX)}\nnpm test`
+    const preview = describeToolCall(call('run_command', { command: long })).argsPreview
+
+    expect(preview).not.toContain('\n')
+    expect(preview.length).toBe(ARGS_PREVIEW_MAX)
+    expect(preview.endsWith('…')).toBe(true)
+  })
+
+  it('uses the query for a search and the path for the rest', () => {
+    expect(describeToolCall(call('search_files', { query: 'workdir' })).argsPreview).toBe('workdir')
+    expect(describeToolCall(call('read_file', { path: 'README.md' })).argsPreview).toBe('README.md')
+    expect(describeToolCall(call('edit_file', { path: 'a.ts', oldString: 'x', newString: 'y' })).argsPreview).toBe(
+      'a.ts'
+    )
+  })
+
+  it('leaves an MCP tool of the same name on the generic preview', () => {
+    // A server's `write_file` is not this executor's tool, and the card says so
+    // by printing the server beside it.
+    const described = describeToolCall(call('write_file', { path: 'a.ts' }, 'filesystem'))
+    expect(described.label).toBe('filesystem · write_file')
+    expect(described.argsPreview).toBe('path: "a.ts"')
+  })
+
+  it('falls back to the generic preview when the argument is missing', () => {
+    expect(describeToolCall(call('run_command', { cmd: 'npm test' })).argsPreview).toBe(
+      'cmd: "npm test"'
+    )
+    expect(describeToolCall(call('git_diff', {})).argsPreview).toBe('')
+  })
+})

@@ -19,7 +19,8 @@ every one of these is a contract the message list has to honour:
 | `usage` | Stored per message. Since S4.1 it is the source of the chat header's `12.4k tokens · $0.04`, each member row's share, and the tooltip on that message's model badge — see [`chats`](../chats/frontend.md) |
 | `status: 'done'` on text that **ends** with `[PASS]` | Strip the trailing marker when rendering (`messageText`), keep the status. A model that answered and then signed off with the token has not abstained (S4.3) |
 | `message.delta { kind: 'part' }` carrying a `tool-call` with no `serverId` | Draw the tool card with the bare tool name and no server prefix. That is what a built-in tool looks like: `read_skill`, `read_skill_file`, `memory_save`, `memory_search` (S3.2, S3.3) and the seven executor tools (S5.4) |
-| A turn that has gone quiet because a `permission.requested` is open (S5.4) | Keep the agent `working` — it is, and its hard timeout is still counting. The card that unblocks it is [`executor`](../executor/frontend.md)'s, built in S5.5 |
+| A turn that has gone quiet because a `permission.requested` is open (S5.4) | Keep the agent `working` — it is, and its hard timeout is still counting. The card that unblocks it is [`executor`](../executor/frontend.md)'s (S5.5) |
+| `message.delta { kind: 'part' }` carrying a `diff` (S5.5) | Draw one collapsed block per file, headed by the path, through the shared code block in the `diff` language. They arrive **after** the tool results and the text, once the stream has ended, and the final `message.updated` carries them too |
 
 Reasoning parts are rendered collapsed behind a "Reasoning" toggle
 (`chat.reasoning`) because they are long, low-signal and not what the group said.

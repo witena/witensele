@@ -13,7 +13,7 @@ None of these imports electron; `node:fs`, `node:path`, `node:child_process` and
 | `src/main/handlers/permissions.ts` | The `permission.reply` handler: two validations, then `ctx.permissions.reply` |
 | `src/main/app-context.ts` | `AppContext.permissions`, built with `emit: ctx.events.emit`; `close()` calls `abortAll()` after `runners.stopAll()` |
 | `src/main/testing.ts` | The same gate for unit tests, with an injectable `newRequestId` so a suite can answer `request-1` |
-| `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, and the executor section in `buildSystemPrompt` |
+| `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, the executor section in `buildSystemPrompt`, and — S5.5 — `diffPartsFrom`, which turns the stored tool results into one `DiffPart` per written file |
 
 ## Database
 
@@ -32,6 +32,22 @@ No migration. `allowAlways` is deliberately in memory only.
 | Channel | Input | Output | Errors |
 |---|---|---|---|
 | `permission.reply` | `{ requestId: string, decision: 'allow' \| 'deny' \| 'allowAlways' }` | `void` | `validation` — blank `requestId`, or a `decision` outside the union (refused rather than read as `deny`: silently denying a call the user allowed is the worse wrong answer, and the call stays pending). `not_found` — nothing is waiting on that id, because it was answered already or a stop closed it |
+
+## Diff parts
+
+`diffPartsFrom(parts)` runs once, after the stream ends and before the terminal
+update, over the parts the turn has already stored. It reads the `patch` the
+write tools return and appends one `DiffPart` per file, each as a
+`message.delta` of kind `part` followed by the final `messages.update`.
+
+| Rule | Why |
+|---|---|
+| Only `write_file` and `edit_file` calls | `git_diff` returns a `patch` too, and it *reports* on the folder rather than changing it. Posting it would claim the executor wrote something it only looked at |
+| Only results without `isError`, with a non-blank `patch` | A denied write, a refused path and an edit that changed nothing all have nothing to show |
+| Grouped by the `path` the **tool** returned | That is the path as resolved against the folder, not the string the model typed |
+| Walked in **call** order, patches concatenated in that order | Two writes issued in one step finish in whichever order the filesystem answers. A block order that depends on that would reshuffle between two identical turns |
+| A patch that does not end in a newline gets one | Two `+++` headers running into each other would break the block |
+| Appended even when the turn was stopped or failed afterwards | The writes really happened. Hiding them is the one thing the transcript must never do |
 
 ## Events emitted
 

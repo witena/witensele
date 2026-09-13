@@ -9,9 +9,10 @@ tests and report what it did — while every other member stays read-only, so
 several models never write over each other and every change stays reviewable.
 
 This feature is the acting half of that: the tools the executor has, the folder
-they are confined to, and the prompt that appears before anything with side
-effects happens. The user must never discover a file was rewritten; they must be
-asked, see what is about to change, and be able to say no.
+they are confined to, the prompt that appears before anything with side effects
+happens, and — since S5.5 — the record of what changed. The user must never
+discover a file was rewritten; they must be asked, see what is about to change,
+be able to say no, and afterwards read the diff of what they said yes to.
 
 ## Scope
 
@@ -39,15 +40,21 @@ asked, see what is about to change, and be able to say no.
   executor of a chat that has a `workdir`, and every tool of a `sideEffects` MCP
   server goes through the same gate.
 - The `permission.reply` backend method and its handler.
+- The renderer half (S5.5): `stores/permissions.ts`, the `PermissionCard` above
+  the composer, the readable rendering of a call's input, the `DiffPart` block
+  and the `FileRefPart` chip, and the readable tool-card labels for the seven
+  tools. Written up in [`frontend.md`](./frontend.md); the surfaces live beside
+  the rest of the transcript, which [`chats`](../chats/context.md) owns.
+- One `DiffPart` per file a turn wrote, appended to the executor's message when
+  the stream ends (`diffPartsFrom`, [`agent-turn`](../agent-turn/context.md)).
 
 ## Out of scope
 
 | Not here | Who owns it |
 |---|---|
-| The permission **card**, the diff block and the `file-ref` chip in the transcript | S5.5. This step is backend only; nothing in the renderer draws a prompt yet, so an executor turn in the running app waits until the user's Stop closes it |
-| Appending a `DiffPart` per written file to the executor's message | S5.5. The tools already **return** the unified diff (`patch`) that step needs |
+| The transcript around the card — the message list, the code block, the composer the card sits on | [`chats`](../chats/context.md). S5.5 adds components to that page; the rules they follow are here |
 | "Hand to executor" and the review round | S5.6 |
-| Opening a path in the editor | S5.7 |
+| Opening a path in the editor, and finding `path:line` tokens in agent **text** | S5.7. In S5.5 a `file-ref` chip copies the reference, and nothing produces one yet |
 | `agents.role` as a first-class choice, the executor badge, `Chat.workdir` and its picker | [`agents`](../agents/context.md) and [`chats`](../chats/context.md), S5.2 `[x]` |
 | Tools that come from an MCP server | [`mcp`](../mcp/context.md). This feature only decides **when** one of them is confirmed |
 | `read_skill` / `memory_save` and why they bypass the side-effects rule | [`skills`](../skills/context.md), [`memory`](../memory/context.md) |
@@ -76,6 +83,14 @@ return.
 | `allowAlways` is **not persisted** | A column on `chats` | A grant that survived a restart is a permission the user cannot see and does not remember giving. Closing the app is always a way back to being asked |
 | A denial is a **tool error the model reads**, in English | A turn-ending failure; a system notice | The executor should be able to say "you declined the write, here is what I wanted to do instead" — which it can only do if the refusal comes back into its context. It is prompt content like an MCP server's error text, not UI copy, so CLAUDE.md rule #4 does not make it a `notices.*` key |
 | Read-only tools never ask | Ask for everything | A prompt per `read_file` trains the user to click Allow without looking, which is how a permission prompt stops being one |
+| The card is **above the composer**, not a modal | A modal dialog; a banner in the header | Several prompts can be open at once, and the transcript above the card is exactly the context needed to judge the call. A modal would hide it and would have to pick one prompt to be about |
+| Enter and Escape are handled **on the card**, and the card — not the Allow button — takes focus | A document-level listener; `autoFocus` on Allow | A global listener would steal Enter from the composer, where Enter sends. A focused default button is one stray keypress away from approving a write, and approving is meant to be a decision |
+| The `run_command` line is printed **verbatim**, never shortened | A summarised or prettified command | The shell is not sandboxed: only `cwd` is confined, so the prompt is the entire boundary. A boundary that paraphrases is a boundary that lies |
+| A `write_file` card previews the **content**, not a diff | Compute the diff before asking | The tool computes the patch only after the grant, because the file it would diff against may change while the user decides. `edit_file` already sends its patch, so the two cards differ — see "Open questions" |
+| One `DiffPart` per **file**, not per call | One per write | An executor that creates a file and then edits it twice changed one file. Three blocks for one file would read as three changes |
+| The diff blocks are **collapsed** by default | Expanded | A turn that touched six files would push the agent's own summary — the thing to read first — off the screen. The header carries the path and `+n -n`, which is enough to decide |
+| Blocks are ordered by **call** order, not by the order the results came back | Result order | Two writes issued in one step finish in whichever order the filesystem answers, and a transcript that reshuffles between two identical turns cannot be compared with anything |
+| A denial is **not** a system notice | `notices.permissionDenied` in the transcript | It is already visible as the failed tool card it was. A notice repeating it would be the app narrating the user's own click back to them |
 | **Every** tool of a `sideEffects` MCP server asks | Only tools whose name looks dangerous | The flag is the server's own declaration that its tools change the world; this layer cannot tell which of `create_issue` and `list_issues` is which, and guessing wrong in that direction is silent |
 | Tools return an **object** with a `patch` field, not a rendered string | A string the renderer parses back | Two consumers want different things from one result: the model wants something to reason about and S5.5 wants the diff. JSON serves both, and the MCP wrapper's string rendering exists only because MCP hands us content blocks |
 | The unified diff comes from the `diff` package | Hand-rolled line comparison | It is the record of what an agent did to the user's files. A format with a specification, not one with whatever the author remembered of it (STEPS S5.4 says so outright) |
@@ -98,3 +113,12 @@ return.
   `run_command` exists.
 - Whether a permission prompt should have a timeout of its own, rather than
   relying on the turn's hard timeout to end a prompt nobody answered.
+- Whether the prompt should be able to answer "allow, but show me the diff
+  first" for `write_file`. The tool computes the patch only *after* the grant, so
+  the card previews the content it was given rather than the diff against what is
+  on disk; `edit_file` already sends the patch in its input.
+- **A prompt is invisible from another chat.** The card is per chat and a user
+  looking at a different one is not told that an executor is waiting. A count on
+  the chat-list row is the obvious shape.
+- `allowAlways` is still neither visible nor revocable (S5.4's note): the card
+  offers it, and nothing lists what has been granted.
