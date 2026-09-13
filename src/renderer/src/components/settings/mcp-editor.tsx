@@ -6,6 +6,13 @@
  * writes, Delete confirms with a second click rather than a modal — and adds the
  * three ideas a server has and a provider does not:
  *
+ * - **A new server starts from the connector gallery.** `McpPresetGrid` sits
+ *   above the form while the draft is unsaved, and a tile rewrites the draft's
+ *   connection fields through `applyPreset`. It is deliberately absent when a
+ *   stored server is open: a preset replaces a command, a tool prefix's worth of
+ *   arguments and an environment, which is a new registration rather than an
+ *   edit of the one on screen. Which tile was picked is view state here, not a
+ *   column — `McpServer` has no `presetId` and needs none.
  * - **The transport decides which half of the form exists.** `SegmentedControl`
  *   switches between the stdio fields (command, arguments, environment) and the
  *   http one (URL, headers). The hidden half is *kept* in the draft rather than
@@ -42,6 +49,7 @@ import {
   useMcpStore
 } from '../../stores/mcp'
 import { canonicalArgs, canonicalEnv, visibleText } from './mcp-text'
+import { McpPresetGrid } from './mcp-preset-grid'
 
 /** How long the delete latch stays armed before it forgets it was clicked. */
 const CONFIRM_DELETE_MS = 4_000
@@ -66,6 +74,10 @@ export function McpEditor(): React.JSX.Element | null {
   // them is mounted at a time.
   const [argsText, setArgsText] = useState('')
   const [envText, setEnvText] = useState('')
+  // Which gallery tile the draft came from, for the outline only. Nothing is
+  // stored: the fields the preset wrote are the whole of what it did, and the
+  // user is free to edit every one of them afterwards.
+  const [presetId, setPresetId] = useState<string | undefined>(undefined)
 
   // The latch must not stay armed while the user is off doing something else.
   useEffect(() => {
@@ -80,6 +92,7 @@ export function McpEditor(): React.JSX.Element | null {
     setShowLog(false)
     setArgsText('')
     setEnvText('')
+    setPresetId(undefined)
   }, [selectedId, mode])
 
   if (!draft) return null
@@ -105,6 +118,22 @@ export function McpEditor(): React.JSX.Element | null {
 
   return (
     <div data-testid="mcp-editor" className="flex max-w-2xl flex-col gap-4.5">
+      {mode === 'create' ? (
+        <Field
+          label={t('settings.mcp.preset')}
+          hint={t('settings.mcp.presetHint')}
+          layout="column"
+        >
+          <McpPresetGrid
+            selectedId={presetId}
+            onSelect={(id) => {
+              setPresetId(id)
+              store().applyPreset(id)
+            }}
+          />
+        </Field>
+      ) : null}
+
       <Field label={t('settings.mcp.name')} htmlFor="mcp-name" layout="column">
         <Input
           id="mcp-name"

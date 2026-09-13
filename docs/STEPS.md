@@ -392,7 +392,7 @@ live in `src/main/handlers/`, the electron-only overlays in `src/main/ipc/`);
 `npm run typecheck` and `npm test` pass; everything committed is English; the
 step's marker here is flipped to `[x]` with the date in the same commit.
 
-### S5.1 Connector gallery `[ ]`
+### S5.1 Connector gallery `[x] (2026-09-13)`
 What: a preset table of common MCP servers and a picker that prefills the MCP
 editor from one, so "add the GitHub server" is one click plus a token rather
 than a command typed from memory.
@@ -429,6 +429,37 @@ Acceptance: picking "GitHub" yields a stdio draft running `npx -y
 @modelcontextprotocol/server-github` with `GITHUB_PERSONAL_ACCESS_TOKEN=` in the
 environment box and the side-effects switch on; picking "Fetch" leaves it off;
 the tests above pass. Docs: `docs/features/mcp/` (all four).
+Done: `src/shared/mcp-presets.ts` is the table — eleven entries (the ten the step
+names plus `custom`, which is the blank form), shaped like `presets.ts` and
+static in the same way: no electron, no node, no backend method, and **no stored
+`presetId`**. Unlike a provider, nothing in an MCP server's life depends on which
+tile it came from — there is no logo to pick again and no key rule to derive — so
+the gallery's selection is view state in `McpEditor` rather than a column and a
+migration. `env` values are empty strings on purpose (`GITHUB_PERSONAL_ACCESS_TOKEN: ''`),
+which is what makes the environment box open as a form to fill in and what keeps
+a preset from ever carrying a secret; `sideEffects` is set from what a server's
+tools *can* do (`git` writes because `git_commit` exists, `playwright` because a
+browser clicks real buttons), because that flag is the one field a tile writes
+that is not cosmetic — `collectAgentTools` reads it. `components/settings/mcp-preset-grid.tsx`
+is a **sibling** of `preset-grid.tsx`, not a generalisation of it: a connector
+tile answers "what is this and will it change anything" with a badge, a
+description and the runner hint, and folding both into one component would have
+meant six optional slots and would have pulled the providers feature into this
+step to gain a shared `<button>`. The grid is mounted only while `mode ===
+'create'`, and `applyPreset` rewrites transport, command, args, env, url and
+`sideEffects` **unconditionally** — `custom` after `github` has to leave an empty
+form — while keeping a name the user already typed and otherwise filling it with
+the preset **id**, since the name is also the tool prefix (`everything__echo`).
+Five keys plus the `settings.mcp.presets.*` subtree in both locale files; brand
+names stay data. The description is a runtime key, so `locales.test.ts` gained the
+check `used-keys.test.ts` cannot do: the description keys in both files are
+exactly the preset ids, in both directions. `src/shared/mcp-presets.test.ts`
+asserts the table's invariants including the acceptance sentence itself;
+`src/renderer/src/stores/mcp.test.ts` covers `applyPreset`; `e2e/mcp.spec.ts` now
+registers `everything` through the tile — prefill asserted, then the arguments
+retyped key by key with a real Enter, which is the regression the gallery must
+not hide — and checks the grid is gone once the row is saved. Docs in
+`docs/features/mcp/`.
 
 ### S5.2 Executor role and the chat working directory `[ ]`
 What: make the two reserved fields real. `agents.role = 'executor'` becomes a

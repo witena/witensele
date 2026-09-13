@@ -13,6 +13,11 @@
  *
  * The first run downloads the package, hence the generous budget on the probe.
  *
+ * Since S5.1 the server is registered **through the connector gallery** — the
+ * `everything` tile, then Test, then Save — so the spec also proves that what a
+ * preset writes into the draft is a configuration that actually connects, which
+ * is the one claim a unit test over static data cannot make.
+ *
  * ## The two halves, and why one of them may be skipped
  *
  * Everything up to and including the restart is **offline** and always runs.
@@ -48,7 +53,11 @@ const SHOTS_DIR = process.env['WITENA_SHOTS_DIR'] ?? join(repoRoot, 'test-result
 /** The artboard size, so the screenshot lines up with the mockup. */
 const WINDOW_SIZE = { width: 1440, height: 900 }
 
-/** The reference server from PLAN.md's milestone list. */
+/**
+ * The reference server from PLAN.md's milestone list, which S5.1 made the first
+ * tile of the connector gallery. The name is the preset **id**, because that is
+ * what `applyPreset` writes into an untouched name field.
+ */
 const SERVER_NAME = 'everything'
 const SERVER_COMMAND = 'npx'
 const SERVER_ARG_FLAG = '-y'
@@ -130,19 +139,35 @@ test('starts with no servers and an editor that cannot be saved empty', async ()
   // A fresh draft has no name and no command, so neither Test nor Save is live.
   await expect(window.getByTestId('mcp-save')).toBeDisabled()
   await expect(window.getByTestId('mcp-test')).toBeDisabled()
+  // The gallery is part of what "Add server" opens (S5.1).
+  await expect(window.getByTestId(`mcp-preset-${SERVER_NAME}`)).toBeVisible()
 })
 
 test('connects to server-everything and lists its tools before saving', async () => {
   test.setTimeout(FIRST_CONNECT_MS + 60_000)
 
-  await window.getByTestId('mcp-name-input').fill(SERVER_NAME)
-  await window.getByTestId('mcp-command-input').fill(SERVER_COMMAND)
-  // Typed key by key, with a real Enter between the two arguments, rather than
-  // `fill`: the arguments box once erased a typed newline on the next render
-  // (the draft stores a normalised list, and rendering it back dropped the empty
-  // second line), and a single change event never exercised that path.
+  // Registered through the gallery rather than typed from memory: one click has
+  // to produce a draft that can be probed as it stands.
+  await window.getByTestId(`mcp-preset-${SERVER_NAME}`).click()
+  await expect(window.getByTestId('mcp-name-input')).toHaveValue(SERVER_NAME)
+  await expect(window.getByTestId('mcp-command-input')).toHaveValue(SERVER_COMMAND)
+  await expect(window.getByTestId('mcp-args-input')).toHaveValue(SERVER_ARGS)
+  // `everything` only reads, so the preset must leave the switch alone.
+  await expect(window.getByTestId('mcp-side-effects').getByRole('switch')).toHaveAttribute(
+    'aria-checked',
+    'false'
+  )
+
+  // The arguments box is still typed into by hand, key by key with a real Enter
+  // between the two arguments, rather than with `fill`: the box once erased a
+  // typed newline on the next render (the draft stores a normalised list, and
+  // rendering it back dropped the empty second line), and neither a single
+  // change event nor a preset ever exercises that path.
   const args = window.getByTestId('mcp-args-input')
   await args.click()
+  await args.press('ControlOrMeta+a')
+  await args.press('Backspace')
+  await expect(args).toHaveValue('')
   await args.pressSequentially(SERVER_ARG_FLAG)
   await args.press('Enter')
   await args.pressSequentially(SERVER_ARG_PACKAGE)
@@ -170,6 +195,9 @@ test('saves the server and shows it as connected with a tool count', async () =>
   // The probe that ran against the draft belongs to the row it became.
   await expect(window.getByTestId('mcp-card-status')).toHaveAttribute('data-status', 'connected')
   await expect(window.getByTestId('mcp-card-tools')).not.toBeEmpty()
+  // Saving leaves the editor on the stored row, where the gallery is gone: a
+  // preset rewrites a command and an environment, which is a new registration.
+  await expect(window.getByTestId(`mcp-preset-${SERVER_NAME}`)).toHaveCount(0)
 })
 
 test('rejects a second server with the same name', async () => {

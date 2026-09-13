@@ -7,6 +7,7 @@
  * pasted into the Chinese file.
  */
 import { describe, expect, it } from 'vitest'
+import { MCP_PRESETS } from '@shared/mcp-presets'
 import en from '../locales/en.json'
 import zhCN from '../locales/zh-CN.json'
 
@@ -88,6 +89,21 @@ describe('locale files', () => {
         flatEn.get(key)
       )
     }
+  })
+
+  it('describe every connector preset in both languages', () => {
+    // The gallery looks its description up with a runtime key
+    // (`settings.mcp.presets.<id>`), which `used-keys.test.ts` cannot see. This
+    // is the check that replaces it: a preset added to `@shared/mcp-presets`
+    // without copy would otherwise render its own key on the tile.
+    const expected = MCP_PRESETS.map((preset) => `settings.mcp.presets.${preset.id}`).sort()
+    const described = (flat: Map<string, string>): string[] =>
+      [...flat.keys()].filter((key) => key.startsWith('settings.mcp.presets.')).sort()
+
+    // Both directions: no preset without copy, and no copy left behind by a
+    // preset that was renamed or removed.
+    expect(described(flatEn)).toEqual(expected)
+    expect(described(flatZh)).toEqual(expected)
   })
 
   it('use the same interpolation placeholders in both languages', () => {

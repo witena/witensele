@@ -135,7 +135,7 @@ the one `.ts` file allowed to contain Chinese; see
 
 | File | Covers |
 |---|---|
-| `src/renderer/src/i18n/locales.test.ts` | Identical key trees; the expected top-level namespaces; no empty values; no CJK in `en.json`; every `zh-CN` value either contains CJK or is deliberately identical to English; identical `{{placeholders}}` on both sides |
+| `src/renderer/src/i18n/locales.test.ts` | Identical key trees; the expected top-level namespaces; no empty values; no CJK in `en.json`; every `zh-CN` value either contains CJK or is deliberately identical to English; identical `{{placeholders}}` on both sides; and, since S5.1, that the `settings.mcp.presets.*` keys are exactly the ids in `@shared/mcp-presets` — a runtime key `used-keys.test.ts` cannot resolve |
 | `src/renderer/src/i18n/used-keys.test.ts` | Every literal `t('…')` / `i18nKey="…"` resolves in `en.json`; no JSX text node is a hard-coded string |
 | `src/renderer/src/i18n/notices.test.ts` | `translateNotice` prefixes, interpolates, follows the active language, and falls back to the raw key |
 | `src/renderer/src/stores/settings.test.ts` | `load` populates and records failure instead of throwing; `setLanguage` sends the right patch, stores the answer, switches i18next, resolves `'system'` through the navigator, and updates optimistically |
@@ -153,9 +153,10 @@ trap described in [frontend.md](./frontend.md).
 
 - **The guard only reads `.tsx` for literals.** A string assembled in a `.ts`
   helper and rendered elsewhere is invisible to it.
-- **Runtime keys are unchecked.** `t(option.labelKey)` and
-  `t('notices.' + part.key)` cannot be resolved statically; `notices.test.ts`
-  covers the second by exercising real keys.
+- **Runtime keys are unchecked.** `t(option.labelKey)`,
+  `t('notices.' + part.key)` and the gallery's `settings.mcp.presets.<id>` cannot
+  be resolved statically; `notices.test.ts` covers the second by exercising real
+  keys, and `locales.test.ts` covers the third against the preset table.
 - **No plural or gender rules** beyond i18next's defaults, because nothing needs
   them yet. Adding them is a locale-file change, not a code change.
 - **`zh-TW` is folded into `zh-CN`.** Adding it means a third resource and one

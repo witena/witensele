@@ -15,6 +15,20 @@
 None of them imports electron. `McpManager` receives `getServer` by injection and
 reaches the database through nothing else (CLAUDE.md rule #5).
 
+### What S5.1 did *not* change
+
+The connector gallery is renderer and shared code only: no handler, no method, no
+migration, no validation rule. A preset is prefill, so a draft that came from a
+tile arrives at `mcp.testConnection` and `mcp.create` as an ordinary
+`McpServerInput` and is validated exactly like one typed by hand — a preset with
+a broken command is refused by the same check, in the same place.
+
+`src/shared/mcp-presets.ts` is the one file the step added outside the renderer.
+It is static data (no electron, no node, no imports beyond `McpTransport`), and
+the main process does not read it: unlike `ProviderPreset`, whose
+`requiresApiKey` / `local` fields the provider registry consults, nothing in an
+MCP server's lifecycle depends on which tile it came from.
+
 ## Database
 
 No migration: the `mcp_servers` table has existed since S1.2 and this step is the
@@ -81,7 +95,14 @@ synchronous because every caller is (electron's `will-quit`, a test's
 ### Security posture, stated plainly
 
 Registering an MCP server means asking the app to run an arbitrary command with
-the user's privileges. The environment is therefore **not** filtered: the SDK's
+the user's privileges. The connector gallery does not change that and does not
+soften it: a tile fills the form in, the user reads the command and presses Test
+and Save, and what runs is what the form says. A preset carries no secret (its
+`env` values are empty) and cannot quietly flip the `sideEffects` flag off — the
+flag is set from what the server's tools *can* do, which is what keeps the
+participant / executor rule meaningful for a server nobody inspected.
+
+The environment is therefore **not** filtered: the SDK's
 `getDefaultEnvironment()` allowlist would break `npx`, `uvx` and `docker` without
 protecting anything a registered command could not already read from disk. The
 real boundary is the register step itself, plus the `sideEffects` flag, which
