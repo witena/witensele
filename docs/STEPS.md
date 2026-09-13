@@ -65,13 +65,23 @@ Acceptance:
 - Unit tests: the preset table is complete; the registry constructs an instance for all four provider types
 Done: 14 presets in `src/shared/presets.ts`; `src/main/providers/{registry,discovery,resolve}.ts`; the seven `providers.*` handlers; the Settings -> Providers list and editor; `stores/providers.ts`; `e2e/providers.spec.ts` drives the Ollama flow against the real local server (its two network assertions are annotated as skipped when Ollama is not running). Docs in `docs/features/providers/`.
 
-### S1.7 Single-agent chat end to end `[ ]`
+### S1.7 Single-agent chat end to end `[x]` (2026-09-13)
 What: chats CRUD and the left column list; minimal ChatRunner (one agent); AgentTurn streaming via streamText; messages persisted; composer and Stop button.
 Acceptance:
 - Create a chat, send a message, see a token-by-token streaming reply
 - Stop interrupts the reply
 - Messages survive an app restart
 - Integration test: a mock model runs one full send → stream → persist cycle
+Done: `src/main/agents/{briefing,briefing.en,briefing.zh-CN,history,agent-turn,default-agent}.ts`;
+`src/main/orchestration/chat-runner.ts` with `ChatRunnerRegistry` on the AppContext;
+the ten `chats.*` / `messages.list` / `chat.*` / `agents.list` handlers (`chats.members.list`
+was added to `BackendApi`, which had a setter but no getter); the renderer's
+`stores/{chats,messages,run,presence,agents}.ts` behind one `lib/event-bridge.ts`;
+the chat page wired to the mockup (`components/chat/*`). `e2e/chat.spec.ts` drives a
+real `qwen2.5:1.5b` through Ollama — create, stream, stop, restart — and skips the whole
+file when localhost:11434 does not answer. Docs in `docs/features/{chats,agent-turn,orchestration}/`.
+`orchestration` is deliberately partial: one agent, one round. S2.3 adds round scheduling,
+@mentions, parallel speaking and the barrier.
 
 ---
 

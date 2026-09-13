@@ -1,0 +1,120 @@
+# agent-turn — Implementation
+
+## Approach
+
+Four modules, each a pure function except the last:
+
+| Module | Shape |
+|---|---|
+| `briefing.ts` | `(language, self, members) → string`, delegating to `briefing.en.ts` / `briefing.zh-CN.ts`. Also `resolveMainLanguage(setting)` |
+| `history.ts` | `(self, agentsById, userName, messages) → ModelMessage[]` |
+| `default-agent.ts` | `ensureDefaultAgent(ctx)`, documented under [`chats`](../chats/backend.md) |
+| `agent-turn.ts` | `runAgentTurn(options) → AgentTurnResult`; the only one with side effects |
+
+`runAgentTurn` takes its storage, its event sink and its model by injection and
+imports no electron, so the whole feature is exercised in vitest against a
+temporary database file and a `MockLanguageModelV4` (CLAUDE.md rule #5).
+
+## Data flow
+
+```
+ChatRunner picks a speaker
+  │
+  ├─ messages.create({ parts: [], status: 'streaming', round })   → message.created
+  ├─ presence.changed { working }
+  │
+  ├─ system  = agent.systemPrompt + "\n\n" + buildGroupBriefing(...)
+  ├─ messages = toModelMessages({ self, agentsById, messages: listForContext(chat) })
+  ├─ streamText({ model, system, messages, abortSignal, maxOutputTokens?, temperature? })
+  │
+  └─ for await (part of result.fullStream)
+        text-delta      → append to the in-memory parts → message.delta { kind: 'text' }
+        reasoning-delta → …                            → message.delta { kind: 'reasoning' }
+        finish          → usage = toUsage(part.totalUsage)
+        abort           → aborted = true
+        error           → failure = message
+        ↳ every 500 ms or 40 deltas: messages.update({ parts })
+
+  ├─ messages.update({ parts, status, usage?, error? })           → message.updated
+  └─ presence.changed { available }
+```
+
+The final block runs on **every** path — normal finish, abort, provider failure,
+even a signal that was already aborted before the first request — because a row
+left in `streaming` shows a cursor forever.
+
+### Terminal status
+
+| Condition | `status` | `error` |
+|---|---|---|
+| The stream finished and the trimmed text is exactly `[PASS]` | `passed` | — |
+| The stream finished otherwise | `done` | — |
+| `signal.aborted`, or an `abort` part arrived | `error` | `'aborted'` |
+| Anything else failed | `error` | the provider's message |
+
+### History transform
+
+| Source message | Becomes |
+|---|---|
+| The user's | role `user`, prefixed `[User]: ` |
+| Another agent's | role `user`, prefixed `[Name]: ` |
+| **This** agent's | role `assistant`, no prefix |
+| A system notice | role `user`, prefixed `[system]: `, rendered from the key into short English |
+
+Then: consecutive same-role messages are merged with a blank line (several
+providers reject two adjacent user messages, and one round of three agents
+produces exactly that), and empty, `passed` and `skipped` messages are dropped.
+
+### The group briefing
+
+Per PLAN's "One agent turn": the member list with descriptions, which member the
+agent is, that other members arrive as `[name]:` prefixed user messages, `@name`
+to call on someone, and `[PASS]` to abstain. Both language files say the same
+things in the same order, so they can be diffed side by side.
+
+## Key types and contracts
+
+```ts
+runAgentTurn({
+  ctx, chat, agent, members, round, signal,
+  model?,        // already built; otherwise createModel builds one
+  createModel?,  // default: resolveProvider + createLanguageModel
+  onEvent?       // default: ctx.events.emit
+}): Promise<{ message: Message; status: MessageStatus; aborted: boolean }>
+```
+
+Constants other modules and tests rely on: `FLUSH_INTERVAL_MS` (500),
+`FLUSH_EVERY_DELTAS` (40), `ABORTED_ERROR` (`'aborted'`), `PASS_TOKEN`
+(`'[PASS]'`), `DEFAULT_USER_NAME` (`'User'`), `SYSTEM_SENDER_NAME` (`'system'`).
+
+| Event | Payload | Emitted when |
+|---|---|---|
+| `message.created` | `{ message }` | The empty `streaming` row is inserted |
+| `message.delta` | `{ chatId, messageId, delta }` | Once per `text-delta` / `reasoning-delta` |
+| `message.updated` | `{ message }` | The turn reaches its terminal status |
+| `presence.changed` | `{ presence }` | `working` at the start, `available` at the end |
+
+The presence pair is a plain emit, not a state machine: `AgentSupervisor` (S2.4)
+owns the session, the heartbeat and the `away` / `offline` transitions.
+
+## Tests
+
+| File | Covers |
+|---|---|
+| `src/main/agents/history.test.ts` | Every rule in the table above, one case each: prefixes, roles, the unknown-agent fallback, merging in both directions, dropping `passed` / `skipped` / empty / streaming, reasoning excluded, notices rendered and unknown keys skipped, and the same transcript producing a different view per agent |
+| `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage` |
+| `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call, and `createModel` being used when no model is passed |
+| `src/main/agents/default-agent.test.ts` | Creating exactly one agent on the first usable provider, reusing it, preferring a user-created agent, and the `validation` refusal |
+
+## Known limitations and TODOs
+
+- **No tools.** `streamText` runs with no `tools` and no `stopWhen`, so a model
+  that wants to call one simply answers in prose. S3.1 adds the loop.
+- **No skills or memory in the system prompt.** PLAN's assembly order ends with
+  the skill headers and the memory index; S3.2 and S3.3 append them.
+- **`mentions` is stored as `[]`** on every agent message. S2.3 parses the
+  finished text for `@name` and fills it in, which is what schedules a round 2.
+- **No context truncation.** A long chat eventually exceeds the model's window and
+  the provider errors; S4.2 drops oldest-first while keeping the system prompt.
+- **The user's display name is a constant** (`'User'`). There is no user profile
+  yet; the server version gives it one.

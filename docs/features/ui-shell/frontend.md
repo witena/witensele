@@ -65,7 +65,7 @@ which is a deliberate test surface rather than product UI.
 |---|---|
 | idle | The rail highlights the current page (`aria-current="page"`); the settings nav highlights the current section; the language toggle highlights the stored setting with `aria-pressed` |
 | loading | None. The bootstrap resolves settings and the language before the React root is created, so the first frame is already correct — the window shows the dark page background until then, never a white flash or a frame of raw keys |
-| streaming | n/a until S1.7. The composer is disabled and there is no Stop button |
+| streaming | Shipped in S1.7, see [`../chats/frontend.md`](../chats/frontend.md): the reply grows with a cursor and Send becomes Stop |
 | empty | This is the shell's normal state in S1.5: an `EmptyState` (icon, title, description) for no chats, no conversation, no members, no agents, no agent selected, and for each settings section that its own step has yet to build |
 | error | `settings.get` failing leaves the language at the system default and shows the detail in Settings → Developer under `data-testid="error"`; the app still starts. A failed `settings.update` is written into the same field by `applyLanguageSetting`, and the optimistic highlight is corrected by the next successful read |
 
@@ -113,7 +113,8 @@ brand mark. It is below the guard's three-letter threshold, so it needs no
 - Focus is visible everywhere: `focus-visible:ring-1 focus-visible:ring-accent`
   on every interactive element.
 - Tab order follows the DOM: rail → column header → column body → next column.
-  No focus traps, no custom key handling — Enter/Shift+Enter in the composer is
+  No focus traps. (S1.7 added the composer's own Enter / Shift+Enter handling; the
+  shell itself still has none.) Enter/Shift+Enter in the composer is
   S2.5.
 
 ### Window chrome

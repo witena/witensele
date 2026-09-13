@@ -1,6 +1,7 @@
 {
   "common": {
     "appName": "Witena",
+    "you": "你",
     "ok": "确定",
     "cancel": "取消",
     "save": "保存",
@@ -22,11 +23,19 @@
     "today": "今天",
     "yesterday": "昨天",
     "earlier": "更早",
+    "memberCount": "{{members}} 位成员",
+    "chatOptions": "对话操作",
+    "rename": "重命名",
+    "renameChat": "重命名对话",
+    "deleteChat": "删除对话",
+    "deleteConfirm": "再点一次确认删除",
     "noChatSelected": "未选择对话",
     "emptyChatsTitle": "还没有对话",
     "emptyChatsDescription": "新建一个对话，开始讨论。",
     "emptyConversationTitle": "这里还没有内容",
     "emptyConversationDescription": "新建对话，邀请几位智能体，然后向他们提问。",
+    "emptyMessagesTitle": "还没有消息",
+    "emptyMessagesDescription": "发送第一条消息,开始这场讨论。",
     "members": "群成员",
     "emptyMembersTitle": "还没有成员",
     "emptyMembersDescription": "从智能体库中添加成员，让他们参与讨论。",
@@ -53,7 +62,10 @@
     "round": "第 {{round}} 轮",
     "replyingTo": "回复 @{{name}}",
     "passed": "已弃权",
-    "skipped": "已跳过"
+    "skipped": "已跳过",
+    "reasoning": "思考过程",
+    "stopped": "已停止",
+    "failed": "回复失败"
   },
   "agents": {
     "title": "智能体",

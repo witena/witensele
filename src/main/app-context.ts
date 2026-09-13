@@ -18,6 +18,8 @@ import type { Repositories } from './db/repositories'
 import { createRepositories } from './db/repositories'
 import type { EventBus } from './events/bus'
 import { createEventBus } from './events/bus'
+import { ChatRunnerRegistry } from './orchestration/chat-runner'
+import type { ChatRunnerOptions } from './orchestration/chat-runner'
 import type { FetchImpl } from './providers/discovery'
 import type { SecretStore } from './secrets'
 
@@ -32,6 +34,15 @@ export interface AppContext {
   secrets: SecretStore
   /** The implicit single user of the desktop build. */
   userId: UserId
+  /**
+   * One `ChatRunner` per chat, holding the live run and its `AbortController`.
+   *
+   * It lives on the context rather than in a module singleton because a run
+   * outlives the IPC call that started it: `chat.stop` must reach the same
+   * controller `chat.send` created, and two contexts (a test's and the app's)
+   * must never share one.
+   */
+  runners: ChatRunnerRegistry
   /**
    * Outbound HTTP for handlers that talk to a provider's REST endpoint
    * (`providers.fetchModels`). Absent means the platform `fetch`; a test injects
@@ -53,6 +64,8 @@ export interface AppContextOptions {
   events?: EventBus
   /** Injectable outbound HTTP; omitted, handlers use the platform `fetch`. */
   fetchImpl?: FetchImpl
+  /** Passed through to every `ChatRunner`; a test injects its own `createModel`. */
+  runner?: ChatRunnerOptions
 }
 
 export function createAppContext(options: AppContextOptions): AppContext {
@@ -64,19 +77,27 @@ export function createAppContext(options: AppContextOptions): AppContext {
 
   let closed = false
 
-  return {
+  const ctx: AppContext = {
     db,
     repos,
     events: options.events ?? createEventBus(),
     secrets,
     userId: options.userId ?? LOCAL_USER_ID,
+    // Replaced immediately below: the registry needs the finished context, and
+    // the context declares the registry, so one of the two has to be tied off
+    // after construction. Doing it here keeps every consumer's type honest.
+    runners: undefined as unknown as ChatRunnerRegistry,
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close() {
       if (closed) return
       closed = true
+      ctx.runners.stopAll()
       db.close()
     }
   }
+
+  ctx.runners = new ChatRunnerRegistry(ctx, options.runner ?? {})
+  return ctx
 }

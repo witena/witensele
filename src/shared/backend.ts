@@ -119,6 +119,8 @@ export interface BackendApi {
   'chats.create': (input: { input: Partial<ChatInput> }) => Promise<Chat>
   'chats.update': (input: { id: string; patch: Partial<ChatInput> }) => Promise<Chat>
   'chats.delete': (input: { id: string }) => Promise<void>
+  /** The chat's members ordered by `position`. Read by the member panel. */
+  'chats.members.list': (input: { chatId: string }) => Promise<ChatMember[]>
   /** Replaces the whole member list; array order becomes `ChatMember.position`. */
   'chats.members.set': (input: { chatId: string; agentIds: string[] }) => Promise<ChatMember[]>
 
@@ -198,6 +200,7 @@ export const BACKEND_METHODS = [
   'chats.create',
   'chats.update',
   'chats.delete',
+  'chats.members.list',
   'chats.members.set',
   'messages.list',
   'chat.send',

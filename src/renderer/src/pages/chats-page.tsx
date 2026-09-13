@@ -2,42 +2,51 @@
  * The chat page: the three-column layout the whole product is shaped around —
  * chat list (264px), conversation, member panel (288px).
  *
- * S1.5 builds the *shell* of it. There is no chat data yet (S1.7), no members
- * (S2.2) and no orchestration (S2.3), so every list is an `EmptyState` and the
- * composer is disabled. What is real: the layout, the spacing and colours from
- * the mockup, and the group-settings controls, which are wired to local state so
- * the page behaves like the finished one. They are deliberately *not* persisted —
- * a `ChatSettings` write needs a chat to write it to, and that is S2.2's job.
+ * S1.5 built the shell; **S1.7 makes it real**. The left column lists stored
+ * chats and creates, renames and deletes them; the middle column streams a live
+ * conversation; the right column lists the chat's actual members with their live
+ * presence dots. What is still local-only is the group-settings block: a
+ * `ChatSettings` write needs the member picker and the settings form that **S2.2**
+ * owns, so those controls stay wired to component state and are not persisted.
  *
- * The group-settings state lives here rather than in the member panel because the
- * conversation header's summary badge renders from the same values; two copies
- * would drift the moment either one changed.
+ * Data comes from four stores and nothing is fetched here directly: `chats` and
+ * `messages` mirror the backend, `run` says whether the Stop button is showing,
+ * `presence` colours the dots. Events reach all four through
+ * `lib/event-bridge.ts`, which the bootstrap starts once.
  */
 import type { TFunction } from 'i18next'
-import { AtSign, MessagesSquare, Plus, Search, SendHorizontal, UserPlus } from 'lucide-react'
-import { useState } from 'react'
+import { MessagesSquare, Plus, Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
+  type Agent,
   type ChatMode,
   type SpeakingMode
 } from '@shared/types'
+import { ChatList } from '../components/chat/chat-list'
+import { Composer } from '../components/chat/composer'
+import { MemberPanel } from '../components/chat/member-panel'
+import { MessageList } from '../components/chat/message-list'
 import { Column } from '../components/layout/column'
 import { PageHeader } from '../components/layout/page-header'
 import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from '../components/layout/window-chrome'
 import {
   Badge,
-  Button,
   EmptyState,
   Field,
   IconButton,
   Input,
   SectionTitle,
   SegmentedControl,
-  Select,
-  TextArea
+  Select
 } from '../components/ui'
+import { translateError } from '../i18n/errors'
+import { useAgentsStore } from '../stores/agents'
+import { useChatMemberIds, useChatsStore } from '../stores/chats'
+import { useChatMessages, useMessagesStore } from '../stores/messages'
+import { useIsRunning, useRunStore } from '../stores/run'
 
 /** Literal `t()` calls so the `used-keys` guard can verify both branches. */
 function modeLabel(t: TFunction, mode: ChatMode): string {
@@ -73,12 +82,50 @@ interface GroupSettings {
 
 export function ChatsPage(): React.JSX.Element {
   const { t } = useTranslation()
+
+  const chats = useChatsStore((state) => state.chats)
+  const membersByChat = useChatsStore((state) => state.membersByChat)
+  const selectedId = useChatsStore((state) => state.selectedId)
+  const chatsError = useChatsStore((state) => state.error)
+  const chatsErrorCode = useChatsStore((state) => state.errorCode)
+  const agents = useAgentsStore((state) => state.agents)
+
+  const messages = useChatMessages(selectedId)
+  const memberIds = useChatMemberIds(selectedId)
+  const running = useIsRunning(selectedId)
+
   const [settings, setSettings] = useState<GroupSettings>({
     mode: DEFAULT_CHAT_SETTINGS.mode,
     speaking: DEFAULT_CHAT_SETTINGS.speaking,
     maxAutoRounds: DEFAULT_CHAT_SETTINGS.maxAutoRounds,
     hardTimeoutMs: DEFAULT_APP_SETTINGS.timeouts.hardTimeoutMs
   })
+
+  // The page owns both lists: the chat list needs them, and so does every message
+  // row (author name, avatar, model badge).
+  useEffect(() => {
+    void useChatsStore.getState().load()
+    void useAgentsStore.getState().load()
+  }, [])
+
+  // Transcripts are loaded per chat, the first time one is opened. Later visits
+  // read the copy already in the store, which the events keep current.
+  useEffect(() => {
+    if (!selectedId) return
+    const { byChat, status } = useMessagesStore.getState()
+    if (byChat[selectedId] === undefined && status[selectedId] !== 'loading') {
+      void useMessagesStore.getState().load(selectedId)
+    }
+  }, [selectedId])
+
+  const selected = chats.find((chat) => chat.id === selectedId) ?? null
+  const members: Agent[] = memberIds
+    .map((id) => agents.find((agent) => agent.id === id))
+    .filter((agent): agent is Agent => agent !== undefined)
+
+  const memberCounts = Object.fromEntries(
+    Object.entries(membersByChat).map(([chatId, ids]) => [chatId, ids.length])
+  )
 
   // The header badge in the mockup: "Round-robin · In turn · Max 3 rounds".
   const orchestrationSummary = [
@@ -101,15 +148,17 @@ export function ChatsPage(): React.JSX.Element {
             <IconButton
               variant="primary"
               label={t('chat.newChat')}
+              data-testid="chats-new"
               className={NO_DRAG}
-              disabled
-              onClick={() => undefined}
+              onClick={() => void useChatsStore.getState().create()}
             >
               <Plus aria-hidden="true" strokeWidth={2.2} className="h-4 w-4" />
             </IconButton>
           </div>
+          {/* Filtering the list is S4.3; the field is the mockup's, still inert. */}
           <Input
             type="search"
+            disabled
             placeholder={t('chat.searchChats')}
             aria-label={t('chat.searchChats')}
             wrapperClassName={NO_DRAG}
@@ -117,13 +166,30 @@ export function ChatsPage(): React.JSX.Element {
           />
         </div>
 
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          <EmptyState
-            size="sm"
-            icon={MessagesSquare}
-            title={t('chat.emptyChatsTitle')}
-            description={t('chat.emptyChatsDescription')}
-          />
+        <div className="flex-1 overflow-y-auto">
+          {chats.length === 0 ? (
+            <EmptyState
+              size="sm"
+              icon={MessagesSquare}
+              title={t('chat.emptyChatsTitle')}
+              description={t('chat.emptyChatsDescription')}
+            />
+          ) : (
+            <ChatList
+              chats={chats}
+              selectedId={selectedId}
+              memberCounts={memberCounts}
+              onSelect={(id) => useChatsStore.getState().select(id)}
+              onRename={(id, title) => void useChatsStore.getState().rename(id, title)}
+              onDelete={(id) => void useChatsStore.getState().remove(id)}
+            />
+          )}
+
+          {chatsError ? (
+            <p data-testid="chats-error" className="px-3 pb-3 text-xs text-danger">
+              {translateError(t, { code: chatsErrorCode ?? 'internal', message: chatsError })}
+            </p>
+          ) : null}
         </div>
       </Column>
 
@@ -131,65 +197,39 @@ export function ChatsPage(): React.JSX.Element {
       <Column border="none" className="bg-bg-panel">
         <PageHeader
           testId="page-chats-conversation"
-          title={t('chat.noChatSelected')}
+          title={selected ? selected.title : t('chat.noChatSelected')}
           badge={<Badge>{orchestrationSummary}</Badge>}
         />
 
-        <div className="flex flex-1 items-center justify-center overflow-y-auto px-7 py-5">
-          <EmptyState
-            icon={MessagesSquare}
-            title={t('chat.emptyConversationTitle')}
-            description={t('chat.emptyConversationDescription')}
-          />
-        </div>
-
-        {/* Composer. Disabled until S1.7 gives it a chat to send into. */}
-        <div className="shrink-0 px-7 pt-3 pb-[18px]">
-          <div className="flex flex-col gap-2.5 rounded-[10px] border border-border-strong bg-bg-elevated px-3 py-2.5">
-            <TextArea
-              rows={2}
-              disabled
-              placeholder={t('chat.composerPlaceholder')}
-              aria-label={t('chat.composerPlaceholder')}
+        {selected ? (
+          <MessageList chatId={selected.id} messages={messages} />
+        ) : (
+          <div className="flex flex-1 items-center justify-center overflow-y-auto px-7 py-5">
+            <EmptyState
+              icon={MessagesSquare}
+              title={t('chat.emptyConversationTitle')}
+              description={t('chat.emptyConversationDescription')}
             />
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                <Badge font="sans" className="gap-1">
-                  <AtSign aria-hidden="true" className="h-3 w-3" />
-                  {t('chat.mentionHint')}
-                </Badge>
-              </div>
-              <IconButton
-                variant="secondary"
-                label={t('chat.send')}
-                disabled
-                onClick={() => undefined}
-              >
-                <SendHorizontal aria-hidden="true" className="h-3.5 w-3.5" />
-              </IconButton>
-            </div>
           </div>
-        </div>
+        )}
+
+        <Composer
+          chatId={selectedId}
+          running={running}
+          onSend={(text) =>
+            selectedId ? useRunStore.getState().send(selectedId, text) : Promise.resolve(false)
+          }
+          onStop={() => {
+            if (selectedId) void useRunStore.getState().stop(selectedId)
+          }}
+        />
       </Column>
 
       {/* Right: members and the chat's orchestration settings. */}
       <Column width={288} border="left" scroll className="bg-bg-base">
         {/* No traffic-light inset here: the lights are on the far left of the window. */}
         <div className="flex min-h-full flex-col gap-[18px] px-3 pt-3.5 pb-3.5">
-          <section className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between px-1">
-              <SectionTitle count={0}>{t('chat.members')}</SectionTitle>
-              <Button variant="ghost" size="sm" className="text-accent" disabled>
-                {t('common.add')}
-              </Button>
-            </div>
-            <EmptyState
-              size="sm"
-              icon={UserPlus}
-              title={t('chat.emptyMembersTitle')}
-              description={t('chat.emptyMembersDescription')}
-            />
-          </section>
+          <MemberPanel chatId={selectedId} members={members} />
 
           <div className="h-px shrink-0 bg-border" />
 
