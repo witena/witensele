@@ -16,10 +16,11 @@
 import type { BackendEvent } from '@shared/events'
 import { LOCAL_USER_ID } from '@shared/types'
 import type { AppContext, SupervisorOverrides } from './app-context'
-import { createSupervisor } from './app-context'
+import { createMcpManager, createSupervisor } from './app-context'
 import { createRepositories } from './db/repositories'
 import type { TestDatabase } from './db/testing'
 import { createEventBus } from './events/bus'
+import type { McpManager, McpManagerOptions } from './mcp/manager'
 import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat-runner'
 import type { AgentSupervisor } from './presence/supervisor'
 import type { FetchImpl } from './providers/discovery'
@@ -39,6 +40,14 @@ export interface TestAppContextOptions {
    * heartbeat passes `heartbeatIntervalMs` (and a fake `probeProvider`) here.
    */
   supervisor?: SupervisorOverrides
+  /**
+   * Transport construction for the `McpManager`.
+   *
+   * A suite that exercises tools passes `createTransport` so the client talks to
+   * an in-process `McpServer` over `InMemoryTransport` — no child process, no
+   * `npx` download, and a deterministic tool list.
+   */
+  mcp?: Omit<McpManagerOptions, 'getServer'>
 }
 
 export interface TestAppContext {
@@ -67,9 +76,11 @@ export function createTestAppContext(
     // Tied off immediately below, as in `createAppContext`.
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
+    mcp: undefined as unknown as McpManager,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close: () => {
       ctx.supervisor.stop()
+      void ctx.mcp.closeAll().catch(() => undefined)
       database.cleanup()
     }
   }
@@ -79,6 +90,7 @@ export function createTestAppContext(
     probeProvider: () => Promise.resolve(false),
     ...options.supervisor
   })
+  ctx.mcp = createMcpManager(ctx, options.mcp ?? {})
 
   return { ctx, events, secrets }
 }

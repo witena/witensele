@@ -12,11 +12,24 @@
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendEvent, MessageDeltaEvent } from '@shared/events'
-import type { Agent, Chat, Message } from '@shared/types'
+import type { Agent, Chat, McpServer, Message } from '@shared/types'
 import type { AppContext } from '../app-context'
-import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
+import {
+  agentInput,
+  createTestDatabase,
+  mcpServerInput,
+  providerInput,
+  type TestDatabase
+} from '../db/testing'
+import { failingTransport, inMemoryTransport } from '../mcp/testing'
 import { createTestAppContext } from '../testing'
-import { FLUSH_EVERY_DELTAS, runAgentTurn, toUsage } from './agent-turn'
+import {
+  FLUSH_EVERY_DELTAS,
+  NOTICE_TOOLS_UNSUPPORTED,
+  looksLikeToolRejection,
+  runAgentTurn,
+  toUsage
+} from './agent-turn'
 
 /* -------------------------------------------------------------------------- */
 /* Mock model                                                                  */
@@ -439,5 +452,280 @@ describe('toUsage', () => {
         outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined }
       })
     ).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Tools (S3.1)                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The tool loop, end to end: a real `streamText`, a real MCP server running in
+ * this process (`mcp/testing.ts`), and a mock model that asks for a tool on its
+ * first call and answers on its second.
+ *
+ * The point of the fixture is that nothing about the tool path is stubbed —
+ * discovery, the `${slug}__${tool}` naming, `tools/call` over the protocol, the
+ * content-block mapping and the SDK's own step loop all run.
+ */
+describe('runAgentTurn with MCP tools', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let agent: Agent
+  let chat: Chat
+  let server: McpServer
+
+  /**
+   * A model that calls `everything__echo` once, then answers.
+   *
+   * The V4 stream part carries `input` as a **stringified** JSON object, unlike
+   * the `ai`-level `tool-call` part where it is already parsed.
+   */
+  function toolThenAnswer(toolName = 'everything__echo'): MockLanguageModelV4 {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                {
+                  type: 'tool-call',
+                  toolCallId: 'call-1',
+                  toolName,
+                  input: JSON.stringify({ message: 'WITENA-42' })
+                },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks(['It returned ', 'Echo: WITENA-42.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  function bind(options: { sideEffects?: boolean; role?: Agent['role'] } = {}): void {
+    server = ctx.repos.mcpServers.create(
+      mcpServerInput({ name: 'everything', sideEffects: options.sideEffects ?? false }),
+      ctx.userId
+    )
+    agent = ctx.repos.agents.update(
+      agent.id,
+      { mcpServerIds: [server.id], ...(options.role ? { role: options.role } : {}) },
+      ctx.userId
+    )
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    const created = createTestAppContext(database, {
+      // A genuine MCP server over `InMemoryTransport`: no child process, no npx.
+      mcp: { createTransport: inMemoryTransport() }
+    })
+    ctx = created.ctx
+    events = created.events
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Tooling' }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'Echo WITENA-42 for me.' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+  })
+
+  const turn = (model: MockLanguageModelV4) =>
+    runAgentTurn({ ctx, chat, agent, members: [agent], round: 1, signal: new AbortController().signal, model })
+
+  it('runs the tool and stores the call, the result and the answer in order', async () => {
+    bind()
+
+    const result = await turn(toolThenAnswer())
+
+    expect(result.status).toBe('done')
+    expect(result.message.parts).toEqual([
+      {
+        type: 'tool-call',
+        toolCallId: 'call-1',
+        // The tool's own name, not the `everything__echo` key the model saw.
+        toolName: 'echo',
+        input: { message: 'WITENA-42' },
+        serverId: server.id,
+        serverName: 'everything'
+      },
+      { type: 'tool-result', toolCallId: 'call-1', output: 'Echo: WITENA-42' },
+      { type: 'text', text: 'It returned Echo: WITENA-42.' }
+    ])
+  })
+
+  it('emits the call and the result as part deltas before the text', async () => {
+    bind()
+
+    await turn(toolThenAnswer())
+
+    const kinds = events
+      .filter((event): event is MessageDeltaEvent => event.type === 'message.delta')
+      .map((event) => event.delta.kind)
+    expect(kinds).toEqual(['part', 'part', 'text', 'text'])
+  })
+
+  it('adds up the usage of every step of the loop', async () => {
+    bind()
+
+    const result = await turn(toolThenAnswer())
+
+    // Two model calls, 11 in / 4 out each.
+    expect(result.message.usage).toEqual({ inputTokens: 22, outputTokens: 8, totalTokens: 30 })
+  })
+
+  it('stores a failed tool as an errored result the card can mark red', async () => {
+    bind()
+
+    const result = await turn(toolThenAnswer('everything__fail'))
+
+    const parts = result.message.parts
+    expect(parts[0]).toMatchObject({ type: 'tool-call', toolName: 'fail' })
+    expect(parts[1]).toMatchObject({ type: 'tool-result', isError: true })
+    expect(result.status).toBe('done')
+  })
+
+  it('withholds a side-effecting server from a participant', async () => {
+    bind({ sideEffects: true })
+    const model = toolThenAnswer()
+
+    await turn(model)
+
+    // The rule from PLAN.md: the model is never even offered the tools.
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+  })
+
+  it('attaches the same server to an executor', async () => {
+    bind({ sideEffects: true, role: 'executor' })
+    const model = toolThenAnswer()
+
+    await turn(model)
+
+    expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
+      'everything__echo',
+      'everything__fail',
+      'everything__slow'
+    ])
+  })
+
+  it('offers no tools at all when the server is disabled', async () => {
+    bind()
+    ctx.repos.mcpServers.update(server.id, { enabled: false }, ctx.userId)
+    const model = toolThenAnswer()
+
+    await turn(model)
+
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+  })
+
+  it('answers without tools, and says so once, when the provider rejects them', async () => {
+    bind()
+    let calls = 0
+    const model = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('model qwen2.5:1.5b does not support tools')
+        return { stream: simulateReadableStream({ chunks: textChunks(['Plain answer.']) }) }
+      }
+    })
+
+    const result = await turn(model)
+
+    expect(result.status).toBe('done')
+    expect(result.message.parts).toEqual([{ type: 'text', text: 'Plain answer.' }])
+    const notices = events
+      .filter((event) => event.type === 'message.created')
+      .flatMap((event) => (event as { message: Message }).message.parts)
+      .filter((part) => part.type === 'system-notice')
+    expect(notices).toEqual([
+      { type: 'system-notice', key: NOTICE_TOOLS_UNSUPPORTED, params: { agent: 'Ada' } }
+    ])
+  })
+
+  it('does not repeat the notice on a later turn in the same chat', async () => {
+    bind()
+    const rejecting = (): MockLanguageModelV4 => {
+      let calls = 0
+      return new MockLanguageModelV4({
+        provider: 'mock',
+        modelId: 'mock-model',
+        doStream: async () => {
+          calls += 1
+          if (calls === 1) throw new Error('tools are not supported by this model')
+          return { stream: simulateReadableStream({ chunks: textChunks(['Again.']) }) }
+        }
+      })
+    }
+
+    await turn(rejecting())
+    events.length = 0
+    await turn(rejecting())
+
+    const notices = events
+      .filter((event) => event.type === 'message.created')
+      .flatMap((event) => (event as { message: Message }).message.parts)
+      .filter((part) => part.type === 'system-notice')
+    expect(notices).toEqual([])
+  })
+
+  it('still answers when the MCP server cannot be reached', async () => {
+    bind()
+    const broken = createTestAppContext(database, { mcp: { createTransport: failingTransport() } })
+    const result = await runAgentTurn({
+      ctx: broken.ctx,
+      chat,
+      agent,
+      members: [agent],
+      round: 1,
+      signal: new AbortController().signal,
+      model: mockModel(textChunks(['No tools, but an answer.']))
+    })
+
+    expect(result.status).toBe('done')
+    expect(result.message.parts).toEqual([{ type: 'text', text: 'No tools, but an answer.' }])
+    broken.ctx.supervisor.stop()
+  })
+})
+
+describe('looksLikeToolRejection', () => {
+  it('matches the ways providers say a model cannot use tools', () => {
+    expect(looksLikeToolRejection('model x does not support tools')).toBe(true)
+    expect(looksLikeToolRejection('tools are not supported')).toBe(true)
+    expect(looksLikeToolRejection('unknown parameter: tools')).toBe(true)
+  })
+
+  it('does not match a tool that merely failed', () => {
+    expect(looksLikeToolRejection('the echo tool threw ENOENT')).toBe(false)
+    expect(looksLikeToolRejection('rate limit exceeded')).toBe(false)
   })
 })

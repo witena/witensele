@@ -4,7 +4,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection` |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]` |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
 | `src/main/agents/briefing.en.ts` | The English wording |
@@ -20,12 +20,12 @@ No migration. It writes one `messages` row per turn:
 
 | Column | Written | When |
 |---|---|---|
-| `parts` | `[]`, then the accumulated parts | On create, on every flush, and once at the end |
+| `parts` | `[]`, then the accumulated parts — text, reasoning, and from S3.1 `tool-call` / `tool-result` | On create, on every flush, once per tool part, and once at the end |
 | `status` | `streaming`, then `done` \| `passed` \| `error` | Create, then the terminal update |
 | `round` | The round the runner passed | On create |
 | `in_reply_to` | The `inReplyTo` the runner passed, when it is not empty | On create |
 | `mentions` | `[]`, then the ids parsed out of the finished text (empty for a `[PASS]`) | Create, then the terminal update |
-| `usage` | `Usage` mapped from the `finish` part | Terminal update, when the provider reported any |
+| `usage` | `Usage` mapped from the `finish` part, whose `totalUsage` is already the **sum over every step** of a tool loop | Terminal update, when the provider reported any |
 | `error` | `'aborted'` or the provider's message | Terminal update, on the failure paths |
 
 Flush policy: `messages.update({ parts })` every `FLUSH_INTERVAL_MS` (500) or
@@ -44,7 +44,9 @@ None. This feature is called by `ChatRunner`, never by the transport.
 | `message.delta` | `{ chatId, messageId, delta: { kind, text } }` | Once per `text-delta` / `reasoning-delta` |
 | `message.updated` | `{ message }` | The terminal status is persisted — on every path |
 | `presence.changed` | `{ presence }` | Emitted by `AgentSupervisor`, which the turn drives: `beginTurn` → `working`, `endTurn` → `available` (or `offline`). Every stream part is reported as `activity`, which emits only when it clears `away` |
+| `message.delta` | `{ delta: { kind: 'part', part } }` | A `tool-call` or `tool-result` part was appended (S3.1) |
 | `message.created` | the `agentSkipped` notice | The turn ended on the supervisor's hard timeout |
+| `message.created` | the `toolsUnsupported` notice | The provider rejected the tools and the turn was retried without them — once per chat per agent (S3.1) |
 
 ## External dependencies
 
@@ -53,7 +55,9 @@ None. This feature is called by `ChatRunner`, never by the transport.
 Read from `node_modules/ai/dist/index.d.ts` (ai **7.0.99**) and
 `node_modules/@ai-sdk/provider/dist/index.d.ts`, not from memory. This extends the
 table in [`../providers/backend.md`](../providers/backend.md), which covers the
-four provider factories and `generateText`.
+four provider factories and `generateText`. The **tool** half of the SDK —
+`tool`, `jsonSchema`, `stepCountIs`, and the three tool stream parts — is
+documented in [`../mcp/backend.md`](../mcp/backend.md), where it is used.
 
 | Name | Package | Shape used here |
 |---|---|---|
@@ -92,7 +96,9 @@ Pitfalls, each one hit while writing this step:
   and the `finish` part must not be recorded as a successful turn.
 - **A stream part union grows.** The `switch` has a `default: break`, so a new
   part type (tool input deltas, sources, files) is ignored rather than crashing a
-  turn — S3.1 adds the cases it needs.
+  turn. S3.1 added `tool-call`, `tool-result` and `tool-error`; the `tool-input-*`
+  streaming cases are still deliberately ignored, because the card only appears
+  once the arguments are complete.
 - **`fullStream` must be fully consumed.** Abandoning it mid-iteration leaves the
   request open; the loop always runs to completion or to an abort.
 - `maxOutputTokens` and `temperature` are spread in only when the agent sets

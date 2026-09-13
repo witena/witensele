@@ -3,10 +3,17 @@
  * draws: a wrench, `toolName(argsPreview)`, and a right-hand summary that reads
  * "running…", "n results" or "error".
  *
- * No tool ever reaches this file yet — MCP lands in S3.1 — but the renderer has
- * to handle the parts before they arrive, or the first real tool call would be
- * an invisible message. Keeping the whole rule here as a pure function is what
- * lets it be tested today against fixtures instead of against a live server.
+ * Keeping the whole rule here as a pure function is what lets it be tested
+ * against fixtures instead of against a live MCP server.
+ *
+ * ## The name the card shows
+ *
+ * A tool from an MCP server is stored with its **own** name (`echo`) plus the
+ * server it came from, because the `everything__echo` key the model was shown is
+ * an implementation detail of keeping two servers apart (see
+ * `src/main/mcp/tools.ts`). The card prints `serverName · toolName` when there is
+ * a server and the bare name when there is not — which is what the built-in
+ * tools of S3.2 and S3.3 will look like.
  *
  * ## What "n results" counts
  *
@@ -37,6 +44,10 @@ export type ToolCallState = 'running' | 'done' | 'error'
 export interface ToolCallDescription {
   toolCallId: string
   toolName: string
+  /** The MCP server the tool came from, absent for a built-in tool. */
+  serverName?: string | undefined
+  /** `serverName · toolName`, or just the name — what the card's line shows. */
+  label: string
   /** The arguments, flattened to one short line for the collapsed card. */
   argsPreview: string
   state: ToolCallState
@@ -118,6 +129,8 @@ export function describeToolCall(
   return {
     toolCallId: part.toolCallId,
     toolName: part.toolName,
+    ...(part.serverName ? { serverName: part.serverName } : {}),
+    label: part.serverName ? `${part.serverName} · ${part.toolName}` : part.toolName,
     argsPreview: previewToolArgs(part.input),
     state,
     // An errored call's output is the error itself, not a list of results.

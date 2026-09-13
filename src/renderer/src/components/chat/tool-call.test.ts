@@ -91,6 +91,27 @@ describe('countToolResults', () => {
 })
 
 describe('describeToolCall', () => {
+  it('labels an MCP tool with its server', () => {
+    const described = describeToolCall({
+      type: 'tool-call',
+      toolCallId: 'call-1',
+      toolName: 'echo',
+      input: { message: 'hi' },
+      serverId: 'server-1',
+      serverName: 'everything'
+    })
+
+    expect(described.label).toBe('everything \u00b7 echo')
+    expect(described.serverName).toBe('everything')
+    // `toolName` stays the bare name, which is what a spec addresses a card by.
+    expect(described.toolName).toBe('echo')
+  })
+
+  it('labels a tool with no server with its bare name', () => {
+    expect(describeToolCall(SEARCH_CALL).label).toBe(SEARCH_CALL.toolName)
+    expect(describeToolCall(SEARCH_CALL).serverName).toBeUndefined()
+  })
+
   it('is running while no result has arrived', () => {
     const described = describeToolCall(SEARCH_CALL)
     expect(described.state).toBe('running')

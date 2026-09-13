@@ -104,6 +104,17 @@ export async function openProviderSettings(window: Page): Promise<void> {
 }
 
 /**
+ * Opens Settings → MCP servers.
+ *
+ * Settings opens on Providers, so the section click is never optional here.
+ */
+export async function openMcpSettings(window: Page): Promise<void> {
+  await window.getByTestId('nav-settings').click()
+  await window.getByTestId('settings-section-mcp').click()
+  await expect(window.getByTestId('settings-section-title')).toBeVisible()
+}
+
+/**
  * Opens the Agents page.
  *
  * Trivial today, but every S2.1 spec starts with it and the rail is exactly the

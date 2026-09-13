@@ -22,6 +22,15 @@ export interface AgentRepository {
   update(id: string, patch: Partial<AgentInput>, userId?: UserId): Agent
   /** Also removes the agent from every chat, through the cascading foreign key. */
   delete(id: string, userId?: UserId): void
+  /**
+   * Drops one MCP server id from every agent that lists it, returning the ids of
+   * the agents that actually changed.
+   *
+   * `agents.mcp_server_ids` is a JSON column, not a foreign key, so deleting a
+   * server cannot cascade — without this an agent keeps pointing at a row that no
+   * longer exists and its editor shows a checkbox for nothing.
+   */
+  removeMcpServer(serverId: string, userId?: UserId): string[]
 }
 
 function toAgent(row: AgentRow): Agent {
@@ -114,6 +123,23 @@ export function createAgentRepository(db: DrizzleDb): AgentRepository {
     delete(id, userId = LOCAL_USER_ID) {
       const current = row(id, userId)
       db.delete(agents).where(eq(agents.id, current.id)).run()
+    },
+
+    removeMcpServer(serverId, userId = LOCAL_USER_ID) {
+      const affected: string[] = []
+      const timestamp = now()
+      for (const agent of this.list(userId)) {
+        if (!agent.mcpServerIds.includes(serverId)) continue
+        db.update(agents)
+          .set({
+            mcpServerIds: agent.mcpServerIds.filter((candidate) => candidate !== serverId),
+            updatedAt: timestamp
+          })
+          .where(eq(agents.id, agent.id))
+          .run()
+        affected.push(agent.id)
+      }
+      return affected
     }
   }
 }

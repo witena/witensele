@@ -7,14 +7,26 @@
  * reaches the backend until Save, which is disabled until the draft is both
  * `dirty` and valid.
  *
- * ## Why three of the blocks are empty states
+ * ## Why two of the blocks are still empty states
  *
- * Skills (S3.2), MCP servers (S3.1) and the memory viewer (S3.3) are later steps.
- * They are drawn as `EmptyState`s that *name the step* rather than being left out,
- * because the artboard's proportions depend on them: dropping them would make the
- * right column collapse and the form stop looking like the design. The memory
+ * Skills (S3.2) and the memory viewer (S3.3) are later steps. They are drawn as
+ * `EmptyState`s that *name the step* rather than being left out, because the
+ * artboard's proportions depend on them: dropping them would make the right
+ * column collapse and the form stop looking like the design. The memory
  * **toggle** is real — `memoryEnabled` is a stored field the agent turn will read
  * — only its contents are pending.
+ *
+ * ## MCP servers (S3.1)
+ *
+ * The block is a checklist bound to `mcpServerIds`. Its one rule is the
+ * side-effects one: a server flagged `sideEffects` is shown disabled for a
+ * `participant`, because only an `executor` is ever given those tools — see
+ * `McpChecklist` and `main/agents/agent-turn.ts`, which enforces it.
+ *
+ * Tool counts are read for the servers this agent is **bound to** and no others.
+ * `mcp.tools` connects, which for a stdio server spawns a child process; doing it
+ * for the whole registry the moment the page opens would start a handful of
+ * `npx` processes the user never asked for.
  *
  * ## Why the model control is a select *and* a text field
  *
@@ -27,7 +39,7 @@
  */
 import type { TFunction } from 'i18next'
 import { Puzzle, Server } from 'lucide-react'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Agent, Provider } from '@shared/types'
 import {
@@ -42,8 +54,10 @@ import {
   Toggle
 } from '../ui'
 import { AGENT_AVATAR_COLORS, avatarInitial } from './agent-display'
+import { McpChecklist } from './mcp-checklist'
 import type { AgentDraftErrors } from '../../stores/agents'
 import { useAgentsStore, validateDraft } from '../../stores/agents'
+import { useMcpStore } from '../../stores/mcp'
 
 /** Literal `t()` calls so `used-keys.test.ts` can verify every message. */
 function nameError(t: TFunction, code: AgentDraftErrors['name']): string | undefined {
@@ -93,6 +107,32 @@ export function AgentEditor({
   const errors: AgentDraftErrors = useMemo(
     () => (draft ? validateDraft(draft, agents, selectedId) : {}),
     [draft, agents, selectedId]
+  )
+
+  const mcpServers = useMcpStore((state) => state.servers)
+  const mcpTools = useMcpStore((state) => state.tools)
+  const boundServerIds = draft?.mcpServerIds
+
+  // The registry itself is cheap — one table read — so it is always loaded.
+  useEffect(() => {
+    void useMcpStore.getState().load()
+  }, [])
+
+  // Tool counts are not: each one opens a connection, so only the servers this
+  // agent actually uses are asked, and only once per id.
+  useEffect(() => {
+    const store = useMcpStore.getState()
+    for (const id of boundServerIds ?? []) {
+      if (store.tools[id] === undefined) void store.loadTools(id)
+    }
+  }, [boundServerIds])
+
+  const toolCounts = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(mcpTools).map(([id, tools]) => [id, tools.length])
+      ) as Record<string, number>,
+    [mcpTools]
   )
 
   if (!draft) return null
@@ -371,13 +411,33 @@ export function AgentEditor({
 
           <section className="flex flex-col gap-2.5">
             <SectionTitle level={3}>{t('agents.mcpServers')}</SectionTitle>
-            <div className="rounded-lg border border-border-strong bg-bg-elevated">
-              <EmptyState
-                size="sm"
-                icon={Server}
-                title={t('agents.mcpEmptyTitle')}
-                description={t('agents.mcpEmptyDescription')}
-              />
+            <div className="overflow-hidden rounded-lg border border-border-strong bg-bg-elevated">
+              {mcpServers.length > 0 ? (
+                <McpChecklist
+                  servers={mcpServers}
+                  value={draft.mcpServerIds}
+                  allowSideEffects={draft.role === 'executor'}
+                  toolCounts={toolCounts}
+                  toolsLabel={(tools) => t('agents.mcpToolCount', { tools })}
+                  sideEffectsLabel={t('agents.mcpSideEffects')}
+                  sideEffectsBlockedLabel={t('agents.mcpSideEffectsBlocked')}
+                  disabledLabel={t('agents.mcpDisabled')}
+                  onToggle={(serverId, checked) =>
+                    store().patchDraft({
+                      mcpServerIds: checked
+                        ? [...draft.mcpServerIds, serverId]
+                        : draft.mcpServerIds.filter((id) => id !== serverId)
+                    })
+                  }
+                />
+              ) : (
+                <EmptyState
+                  size="sm"
+                  icon={Server}
+                  title={t('agents.mcpEmptyTitle')}
+                  description={t('agents.mcpEmptyDescription')}
+                />
+              )}
             </div>
           </section>
 

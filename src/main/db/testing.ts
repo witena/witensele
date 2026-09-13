@@ -107,7 +107,16 @@ export function agentInput(overrides: Partial<AgentInput> = {}): AgentInput {
   }
 }
 
-export function mcpServerInput(overrides: Partial<McpServerInput> = {}): McpServerInput {
+/**
+ * Overrides that may set a field to an explicit `undefined`, i.e. *remove* it.
+ *
+ * `Partial<McpServerInput>` cannot express that under
+ * `exactOptionalPropertyTypes`, and "an http server has no command" is exactly
+ * what several cases are about.
+ */
+export type McpServerOverrides = { [K in keyof McpServerInput]?: McpServerInput[K] | undefined }
+
+export function mcpServerInput(overrides: McpServerOverrides = {}): McpServerInput {
   return {
     name: 'everything',
     transport: 'stdio',
@@ -117,7 +126,9 @@ export function mcpServerInput(overrides: Partial<McpServerInput> = {}): McpServ
     enabled: true,
     sideEffects: false,
     ...overrides
-  }
+    // The spread reintroduces `| undefined` on every field it may cover; the
+    // record is still a complete `McpServerInput` at runtime.
+  } as McpServerInput
 }
 
 export function messageInput(

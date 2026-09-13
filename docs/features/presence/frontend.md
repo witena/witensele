@@ -40,7 +40,7 @@ starts from `presence.list` and the events take over from there.
 | State | What the user sees |
 |---|---|
 | idle | Green dot, `presence.available`, and the usage placeholder in the member row |
-| working | Red dot, `presence.working`, while the agent is requesting, streaming or (from S3.1) running a tool |
+| working | Red dot, `presence.working`, while the agent is requesting, streaming or running a tool |
 | away | Orange dot and `presence.awayFor` — "Away · 34s", counting up once a second from `lastActivityAt`. Nothing is interrupted and the message keeps its streaming cursor |
 | offline | Grey dot, `presence.offline`, and the usage column is replaced by a "Retry" text button |
 | retrying | The same button reads `presence.retrying` and is disabled until the probe answers; a failed probe leaves everything exactly as it was |

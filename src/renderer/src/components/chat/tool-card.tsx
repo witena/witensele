@@ -7,9 +7,12 @@
  * pretty-printed JSON of both halves, which is the only place a user can see
  * what a tool was actually asked and actually answered.
  *
- * Everything worth testing is in `tool-call.ts`; this file is the markup. No
- * tool exists until S3.1, so the card is exercised by unit tests over fixtures
- * rather than by a running server.
+ * The name line reads `serverName · toolName` for a tool that came from an MCP
+ * server and the bare name for a built-in one; `tool-call.ts` computes it, and
+ * `data-tool` stays the tool's own name so an end-to-end spec can address a card
+ * without depending on which server provided it.
+ *
+ * Everything worth testing is in `tool-call.ts`; this file is the markup.
  */
 import clsx from 'clsx'
 import { Wrench } from 'lucide-react'
@@ -45,6 +48,7 @@ export function ToolCard({ call }: ToolCardProps): React.JSX.Element {
     <div
       data-testid="tool-card"
       data-tool={call.toolName}
+      data-server={call.serverName}
       data-state={call.state}
       className="flex flex-col gap-2 rounded-lg border border-border-strong bg-bg-elevated px-2.5 py-2 text-xs"
     >
@@ -57,7 +61,7 @@ export function ToolCard({ call }: ToolCardProps): React.JSX.Element {
       >
         <Wrench aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         <span data-testid="tool-card-name" className="truncate font-mono">
-          {`${call.toolName}(${call.argsPreview})`}
+          {`${call.label}(${call.argsPreview})`}
         </span>
         <span
           data-testid="tool-card-summary"

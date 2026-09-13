@@ -1,0 +1,84 @@
+# mcp — Context
+
+## Problem
+
+Witena's agents can only talk. Every capability beyond conversation — reading a
+repository, searching the web, querying a database — has to come from outside,
+and the plan settled on one mechanism for all of it: **MCP servers** (PLAN.md,
+"Capability boundaries": *no built-in file / shell / git tools; all capabilities
+come from MCP servers*).
+
+This feature is the whole of that mechanism: registering a server in settings,
+proving it works, binding it to an agent, discovering its tools, and letting a
+turn call them and show what came back.
+
+## Scope
+
+- `McpManager`: a lazily-connected, pooled MCP client per registered server, over
+  **stdio** (a child process) and **Streamable HTTP**.
+- Tool discovery, and conversion of MCP tools into AI SDK tools.
+- Tool execution inside one agent turn, with a per-call timeout, the tool loop
+  capped at `MAX_TOOL_STEPS`, and `tool-call` / `tool-result` message parts.
+- The **side-effects rule**: a server flagged `sideEffects` is attached to
+  `executor` agents only.
+- Settings → MCP servers: CRUD, transport-specific form, test connection with the
+  tool list, enable switch, stderr log.
+- The agent form's MCP checklist, bound to `agents.mcpServerIds`.
+
+## Out of scope
+
+| Not here | Who owns it |
+|---|---|
+| Permission prompts before a tool runs | Post-MVP; `permission.requested` is reserved in `shared/events.ts` (PLAN, "Future extension") |
+| The executor agent itself | Post-MVP. This feature only **enforces** the rule that reserves side-effecting tools for it |
+| MCP **resources** and **prompts** | Not in the MVP. Only `tools/list` and `tools/call` are used |
+| A connector gallery (preset servers, one-click add) | Post-MVP (PLAN, "Future extension", point 1) |
+| `read_skill` / `read_skill_file` | [`skills`](../skills/context.md), S3.2 — different tools, same `ToolSet` |
+| `memory_save` / `memory_search` | [`memory`](../memory/context.md), S3.3 |
+| OAuth against an HTTP MCP server | Not in the MVP; the SDK's `authProvider` hook is where it would go |
+| Sampling, roots, elicitation (server → client requests) | Not advertised; the client declares no capabilities |
+
+## Dependencies
+
+| Needs | From |
+|---|---|
+| `mcp_servers` table and its repository | [`database`](../database/context.md) |
+| `agents.mcpServerIds`, `agents.role` | [`agents`](../agents/context.md) |
+| The turn that attaches and runs the tools | [`agent-turn`](../agent-turn/context.md) |
+| `AppSettings.timeouts.toolTimeoutMs` | [`presence`](../presence/context.md) |
+| `ToolCallPart` / `ToolResultPart` rendering | [`chats`](../chats/context.md) |
+| `BackendClient`, the `mcp.*` methods | [`backend-client`](../backend-client/context.md) |
+
+Depending on this feature in return: `agent-turn` (it calls `ctx.mcp`), and
+S3.2 / S3.3, which add their own tools to the same `ToolSet`.
+
+## Decisions and trade-offs
+
+| Decision | Alternatives considered | Why this one |
+|---|---|---|
+| Connections are **pooled and lazy** | Connect every server at startup; connect per turn | A stdio server is a child process. Startup would spawn one `npx` per registered server whether or not it is ever used; per-turn would pay seconds of spawn cost on every message |
+| The cache holds the **promise**, not the client | Cache the resolved client | Two agents speaking in parallel would otherwise race to create two connections to the same server |
+| A failed connection is **evicted** | Keep it and keep failing | A server that was not installed yet, or a laptop that was asleep, must recover without restarting the app |
+| Tool keys are `${serverSlug}__${toolName}` | The bare tool name; a dotted name | The model sees one flat namespace and two servers may both offer `search`. `[a-zA-Z0-9_-]` is the intersection of what providers accept — a dot or a space is rejected outright |
+| The transcript stores the **original** tool name plus `serverId` / `serverName` | Store the prefixed key | The prefix is our bookkeeping. A user reading a transcript wants `everything · echo`, and a renamed server must not rewrite history |
+| An MCP result is flattened to **text** | Pass the content blocks through as JSON | Every provider accepts a string tool result; only some accept structured content. Images become `[image <mime>]` rather than base64 — the MVP has no vision path and the payload would swamp the context |
+| `isError: true` **throws** | Return it as a normal result | The AI SDK then emits a `tool-error` part, so the model is told the call failed instead of being fed an error message it may read as data |
+| `testConnection` uses a **fresh** client | Reuse the pool | It usually probes an unsaved draft, must leave no process behind, and must not disturb a connection an agent is mid-call on |
+| `mcp.testConnection` takes a `McpServerRef` | Take an id | "Test" has to work before "Save", exactly as it does for a provider key. Saving first would leave broken rows behind |
+| stdio children inherit `process.env` | Inherit the SDK's `DEFAULT_INHERITED_ENV_VARS`; inherit nothing | `npx`, `uvx` and `docker` need `PATH`, `HOME`, `NODE_*` and proxy variables. A registered server already runs an arbitrary command by design, so there is nothing left to protect by stripping variables (see `backend.md`, "Security posture") |
+| stderr is kept in a **ring buffer** | Log to the app's stderr; drop it | "Could not connect" is not a diagnostic. The real reason (missing package, wrong path) is on the child's stderr and nowhere else |
+| The side-effects rule is enforced in `collectAgentTools` | Enforce in the handler; enforce in the UI | The UI explains it and the handler never sees a turn. The one place every tool must pass through is where the turn assembles them |
+| A model that cannot use tools gets **one retry without them** | Fail the turn; never attach tools to small models | Answering without tools beats answering nothing, and which local models support tool calling cannot be known ahead of time |
+| Tool counts are fetched **on demand**, never on page load | Load every server's tools when settings opens | `mcp.tools` connects; a settings page that spawns six `npx` processes on open is a page that is wrong to open |
+
+## Open questions
+
+- **`notifications/tools/list_changed` is ignored.** The tool list is cached for
+  the life of a connection and refreshed only on request. A server that adds
+  tools at runtime will not be noticed until reconnection. The SDK's
+  `listChanged` handler is where that would be wired.
+- **No per-tool selection.** An agent gets all of a server's tools or none. A
+  server with forty tools spends a lot of context on definitions; per-tool
+  checkboxes are the obvious next step if that becomes a problem in practice.
+- **`MAX_TOOL_STEPS = 8` is a guess.** It has not yet been tuned against a real
+  multi-step task.

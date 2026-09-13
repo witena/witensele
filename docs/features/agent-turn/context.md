@@ -36,7 +36,7 @@ does not throw, it just makes every answer slightly worse.
 | Who speaks and when | `orchestration` |
 | Deciding who the `@mentions` in a reply make speak next | `orchestration` |
 | The `@name` matching rule itself | `src/shared/mentions.ts`, shared with the composer |
-| Tools: MCP, `read_skill`, `memory_*`, and the `stopWhen` loop around them | `mcp` (S3.1), `skills` (S3.2), `memory` (S3.3) |
+| Tool **definitions**: the MCP pool, `read_skill`, `memory_*` | `mcp` (S3.1 `[x]` — the turn calls `ctx.mcp`), `skills` (S3.2), `memory` (S3.3). The `stopWhen` loop and the tool message parts are **here**, from S3.1 |
 | Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
 | Context overflow and truncation | S4.2 |
 | Cost accounting on top of the stored `Usage` | S4.1 |

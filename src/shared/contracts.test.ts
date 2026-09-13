@@ -43,6 +43,8 @@ const EXPECTED_METHODS = [
   'mcp.update',
   'mcp.delete',
   'mcp.testConnection',
+  'mcp.tools',
+  'mcp.log',
   'skills.list',
   'skills.import',
   'memory.list',

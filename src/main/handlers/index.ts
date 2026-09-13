@@ -15,6 +15,7 @@ import { systemHandlers } from './system'
 import { settingsHandlers } from './settings'
 import { providerHandlers } from './providers'
 import { agentHandlers } from './agents'
+import { mcpHandlers } from './mcp'
 import { chatHandlers } from './chats'
 import { presenceHandlers } from './presence'
 import type { HandlerMap, HandlerModule } from './types'
@@ -25,6 +26,7 @@ const MODULES: HandlerModule[] = [
   settingsHandlers,
   providerHandlers,
   agentHandlers,
+  mcpHandlers,
   chatHandlers,
   presenceHandlers
 ]

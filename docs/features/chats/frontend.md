@@ -87,7 +87,7 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | streaming | The agent's row grows token by token with a blinking accent cursor, its presence dot is red, and Send is replaced by Stop. While *reasoning* is arriving and the text has not started, the reasoning block is auto-expanded and pulsing; it collapses again on the first text token, unless the user has toggled it by hand |
 | scrolled up | New messages no longer move the viewport; a floating "Jump to latest" pill appears and scrolls to the end |
 | autocomplete open | A popover above the composer lists the matching members (avatar, `@name`, model) plus `@all`. ↑/↓ move, Enter and Tab insert `@Name `, Escape closes, a click does what Enter does |
-| tool call | A one-line card — wrench, `toolName(argsPreview)`, and "running…" / "n results · expand" / "error" — which expands to the pretty-printed input and output. No tool exists until S3.1 |
+| tool call | A one-line card — wrench, `serverName · toolName(argsPreview)`, and "running…" / "n results · expand" / "error" — which expands to the pretty-printed input and output. Real from S3.1; `data-tool` is the tool's own name and `data-server` the MCP server it came from |
 | system notice | A centred dimmed line across the column, with no avatar, no name and no timestamp. It keeps `data-notice-key` |
 | empty | "No chats yet" in the left column, "Nothing here yet" with no chat selected, "No messages yet" in a new chat, "No members yet" if a chat somehow has none |
 | error (call) | The left column shows the translated `BackendError.code` under the list — the first-run "no provider with models" path lands here |

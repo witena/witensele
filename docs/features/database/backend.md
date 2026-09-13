@@ -77,7 +77,7 @@ names are snake_case, the TypeScript properties camelCase. JSON columns are
 | `env` | text json null | `Record<string, string>`, stdio only |
 | `url` | text null | http only |
 | `enabled` | integer boolean not null default true | |
-| `side_effects` | integer boolean not null default false | Reserved for the permission prompt and the executor rule in STEPS S3.1 |
+| `side_effects` | integer boolean not null default false | Read from S3.1: `collectAgentTools` attaches a flagged server's tools to `executor` agents only. Still reserved for the post-MVP permission prompt |
 
 ### `chats`
 

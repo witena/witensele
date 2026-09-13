@@ -53,7 +53,7 @@ that owns the `AbortController` the Stop button reaches.
 | The matching rule behind `@name` itself | `src/shared/mentions.ts`, shared with the composer |
 | Persisting chats and messages, and the chat UI | [`chats`](../chats/context.md) |
 | Heartbeat, timeouts, presence transitions, deciding *that* an agent is offline | [`presence`](../presence/context.md) |
-| Tool execution | `mcp` (S3.1) |
+| Tool execution | `mcp` (S3.1 `[x]`) and `agent-turn`. The runner never sees a tool: a turn with a tool loop is still one turn |
 
 ## Dependencies
 

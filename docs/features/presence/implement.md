@@ -126,8 +126,9 @@ Main-process types worth knowing:
 
 ## Known limitations and TODOs
 
-- `toolTimeoutMs` is stored and editable but nothing reads it; S3.1 gives it a
-  meaning.
+- `toolTimeoutMs` is read from S3.1: `runAgentTurn` passes it to every
+  `McpManager.callTool`, which hands it to the MCP SDK's `RequestOptions.timeout`
+  so the request is cancelled rather than merely abandoned.
 - The probe interval is fixed at 60 s with no back-off, so an agent that has been
   offline for an hour is still probed every minute.
 - `probeOffline()` probes every offline agent in parallel; with many dead

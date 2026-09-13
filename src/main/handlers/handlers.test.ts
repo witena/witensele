@@ -50,11 +50,11 @@ describe('handlers/buildHandlers', () => {
   })
 
   it('rejects with internal and a pointer to STEPS.md for a method that is not implemented yet', async () => {
-    const unimplemented: BackendMethod = 'mcp.list'
+    const unimplemented: BackendMethod = 'skills.list'
 
     await expect(handlers[unimplemented](ctx)).rejects.toMatchObject({
       code: 'internal',
-      message: 'Not implemented yet: mcp.list (see docs/STEPS.md)'
+      message: 'Not implemented yet: skills.list (see docs/STEPS.md)'
     })
   })
 
@@ -342,7 +342,15 @@ describe('handlers/stubs', () => {
       'chat.stop',
       // S2.4
       'presence.list',
-      'presence.retry'
+      'presence.retry',
+      // S3.1
+      'mcp.list',
+      'mcp.create',
+      'mcp.update',
+      'mcp.delete',
+      'mcp.testConnection',
+      'mcp.tools',
+      'mcp.log'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

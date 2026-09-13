@@ -29,6 +29,7 @@ import type {
   McpConnectionTestResult,
   McpServer,
   McpServerInput,
+  McpToolInfo,
   MemoryEntry,
   Message,
   Provider,
@@ -41,6 +42,16 @@ import type {
  * the model list can be fetched before the provider is created.
  */
 export type ProviderRef = { id: string } | { draft: ProviderInput }
+
+/**
+ * Either a saved MCP server or an unsaved draft from the settings form.
+ *
+ * The same shape as `ProviderRef`, for the same reason: "Test connection" has to
+ * work **before** Save. A user who has just typed a command wants to know it
+ * spawns and lists tools before committing a record — and a server that is saved
+ * first and only then found to be wrong leaves a broken row behind.
+ */
+export type McpServerRef = { id: string } | { draft: McpServerInput }
 
 /**
  * Every request/response method the backend exposes.
@@ -98,8 +109,31 @@ export interface BackendApi {
   'mcp.create': (input: { input: McpServerInput }) => Promise<McpServer>
   'mcp.update': (input: { id: string; patch: Partial<McpServerInput> }) => Promise<McpServer>
   'mcp.delete': (input: { id: string }) => Promise<void>
-  /** Connects, lists tools, disconnects. Never leaves the probe connection open. */
-  'mcp.testConnection': (input: { id: string }) => Promise<McpConnectionTestResult>
+  /**
+   * Connects, lists tools, disconnects. Never leaves the probe connection open,
+   * and never touches the pooled client an agent may be mid-call on.
+   *
+   * Takes a `McpServerRef` rather than an id so an unsaved draft is testable.
+   */
+  'mcp.testConnection': (input: { server: McpServerRef }) => Promise<McpConnectionTestResult>
+  /**
+   * The server's tool list from the **pooled** connection, connecting if this is
+   * the first ask.
+   *
+   * Unlike `testConnection` it keeps the client open, because the agent editor
+   * asks for every bound server's tool count at once and a probe per card would
+   * spawn and kill one child process per card. Rejects with `mcp_error` when the
+   * server cannot be reached.
+   */
+  'mcp.tools': (input: { id: string }) => Promise<McpToolInfo[]>
+  /**
+   * The tail of a stdio server's stderr, oldest line first.
+   *
+   * The only way to see why a server that "just does not connect" is failing:
+   * a missing package, a wrong path, a credential it printed a complaint about.
+   * Empty for an http server and for one that has never been started.
+   */
+  'mcp.log': (input: { id: string }) => Promise<string[]>
 
   /* -- skills ------------------------------------------------------------- */
 
@@ -212,6 +246,8 @@ export const BACKEND_METHODS = [
   'mcp.update',
   'mcp.delete',
   'mcp.testConnection',
+  'mcp.tools',
+  'mcp.log',
   'skills.list',
   'skills.import',
   'memory.list',
