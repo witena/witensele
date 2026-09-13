@@ -341,6 +341,15 @@ export interface Message extends EntityBase {
   round: number
   /** Agent ids @mentioned in this message; drives the next round's speakers. */
   mentions: string[]
+  /**
+   * Who this message answers: the agent ids whose previous-round messages
+   * mentioned this agent, plus the literal `'user'` when the human's message did.
+   *
+   * Absent on user messages and on any reply nobody asked for by name. It is
+   * what the UI's "replying to @x" label reads, so it is stored rather than
+   * recomputed: membership and mentions both change over the life of a chat.
+   */
+  inReplyTo?: string[]
   usage?: Usage
   /** Present when `status` is `error`; an operator-facing detail, not UI copy. */
   error?: string

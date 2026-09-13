@@ -18,10 +18,22 @@
  * its own element rather than widening the column: the message list is a fixed
  * middle column and a horizontal scrollbar on the page would be a layout bug.
  *
+ * ## Mentions
+ *
+ * `@Name` tokens that name a member of this chat are painted in the accent
+ * colour. It is done by decorating the *rendered* children of `p` and `li`
+ * rather than by rewriting the markdown source, because a rewrite would change
+ * the text inside code fences and links too. The rule itself is
+ * `splitMentions` in `@shared/mentions`, the same function the backend resolves
+ * a reply's mentions with, so a highlighted name and a scheduled speaker can
+ * never disagree. S2.5 refines the styling and adds the composer's autocomplete.
+ *
  * S2.5 adds syntax highlighting (shiki) on top of the same component.
  */
-import ReactMarkdown from 'react-markdown'
+import { Children, Fragment, type ReactNode } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { splitMentions, type MentionMember } from '@shared/mentions'
 
 /**
  * The prose rules, as descendant utilities on one wrapper.
@@ -57,17 +69,60 @@ const PROSE = [
   '[&_td]:border [&_td]:border-border-strong [&_td]:px-2 [&_td]:py-1'
 ].join(' ')
 
+/**
+ * Wraps every `@Name` token of a text child in an accent-coloured span.
+ *
+ * Only string children are touched; an element child (a link, inline code) is
+ * returned untouched, which is what keeps `@Name` inside a code span plain.
+ */
+function highlightMentions(children: ReactNode, members: readonly MentionMember[]): ReactNode {
+  if (members.length === 0) return children
+  return Children.map(children, (child, childIndex) => {
+    if (typeof child !== 'string') return child
+    const segments = splitMentions(child, members)
+    if (!segments.some((segment) => segment.agentIds)) return child
+    return segments.map((segment, index) =>
+      segment.agentIds ? (
+        <span
+          key={`${childIndex}-${index}`}
+          data-testid="message-mention"
+          className="font-medium text-accent"
+        >
+          {segment.text}
+        </span>
+      ) : (
+        <Fragment key={`${childIndex}-${index}`}>{segment.text}</Fragment>
+      )
+    )
+  })
+}
+
 export interface MarkdownProps {
   /** The raw markdown. May be a partial document while a reply is streaming. */
   children: string
+  /** Members whose names are highlighted where they appear as `@Name`. */
+  mentions?: readonly MentionMember[]
 }
 
-export function Markdown({ children }: MarkdownProps): React.JSX.Element {
+export function Markdown({ children, mentions = [] }: MarkdownProps): React.JSX.Element {
+  // `node` is react-markdown's AST node and is not a DOM attribute; it is
+  // destructured away so the rest can be spread onto the element.
+  const components: Components = {
+    p: ({ node: _node, children: content, ...props }) => (
+      <p {...props}>{highlightMentions(content, mentions)}</p>
+    ),
+    li: ({ node: _node, children: content, ...props }) => (
+      <li {...props}>{highlightMentions(content, mentions)}</li>
+    )
+  }
+
   return (
     <div className={PROSE}>
       {/* Partial markdown mid-stream (an unclosed fence, half a table) is normal:
           react-markdown renders what it can rather than throwing. */}
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {children}
+      </ReactMarkdown>
     </div>
   )
 }

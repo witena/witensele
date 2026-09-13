@@ -90,7 +90,9 @@ composer → messages store → BackendClient.invoke('chat.send', …)
 
 A streaming agent reply is the same insert with `status: 'streaming'` and empty
 `parts`, followed by repeated `messages.update(id, { parts })` as chunks arrive
-and a final update carrying `status`, `usage` and `mentions`.
+and a final update carrying `status`, `usage` and `mentions`. `inReplyTo` is
+written **once, at insert**, and never patched: who asked for a reply is decided
+before it is written, while what it mentions is only known when it ends.
 
 Reading a chat, two different orders for two different consumers:
 

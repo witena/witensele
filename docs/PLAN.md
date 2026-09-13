@@ -50,6 +50,7 @@ src/
     lib/backend.ts        # BackendClient implementation over preload api
   shared/
     types.ts              # domain types + IPC contract (shared by main and renderer)
+    mentions.ts           # the @name matching rule, shared by ChatRunner and the composer
     presets.ts            # provider presets (name, baseUrl, default model list)
 ```
 
@@ -60,7 +61,7 @@ src/
 - `mcp_servers`: id, name, transport (stdio | http), command, args (json), env (json), url, enabled
 - `chats`: id, title, settings (json: mode = roundrobin | mention-only, speaking = sequential | parallel, maxAutoRounds, memberOrder)
 - `chat_members`: chatId, agentId, position
-- `messages`: id, chatId, seq, senderType (user | agent | system), senderId, parts (json: text | reasoning | tool-call | tool-result), status (streaming | done | error | passed | skipped), round, mentions (json), usage (json), error, createdAt
+- `messages`: id, chatId, seq, senderType (user | agent | system), senderId, parts (json: text | reasoning | tool-call | tool-result), status (streaming | done | error | passed | skipped), round, mentions (json), inReplyTo (json, nullable: who asked for this reply), usage (json), error, createdAt
 - `settings`: userId, data (json: the whole `AppSettings` object), updatedAt
 
 Every table also carries `userId`, a UUID primary key and `createdAt` / `updatedAt` as epoch milliseconds (see "Reserved server capability"). `messages.seq` is a per-chat monotonic counter assigned at insert: parallel agents in one round can be persisted within the same millisecond, so `createdAt` alone does not define a stable transcript order. Details in `docs/features/database/`.

@@ -24,7 +24,8 @@ ChatRunner picks a speaker
   ├─ presence.changed { working }
   │
   ├─ system  = agent.systemPrompt + "\n\n" + buildGroupBriefing(...)
-  ├─ messages = toModelMessages({ self, agentsById, messages: listForContext(chat) })
+  ├─ messages = toModelMessages({ self, agentsById,
+  │               messages: options.history ?? listForContext(chat) })
   ├─ streamText({ model, system, messages, abortSignal, maxOutputTokens?, temperature? })
   │
   └─ for await (part of result.fullStream)
@@ -35,7 +36,8 @@ ChatRunner picks a speaker
         error           → failure = message
         ↳ every 500 ms or 40 deltas: messages.update({ parts })
 
-  ├─ messages.update({ parts, status, usage?, error? })           → message.updated
+  ├─ mentions = status === 'passed' ? [] : parseMentions(text, members)
+  ├─ messages.update({ parts, status, mentions, usage?, error? })  → message.updated
   └─ presence.changed { available }
 ```
 
@@ -77,11 +79,19 @@ things in the same order, so they can be diffed side by side.
 ```ts
 runAgentTurn({
   ctx, chat, agent, members, round, signal,
+  inReplyTo?,    // agent ids (plus 'user') stored on the message for the UI label
+  history?,      // a transcript snapshot; omitted, the turn reads listForContext itself
   model?,        // already built; otherwise createModel builds one
   createModel?,  // default: resolveProvider + createLanguageModel
   onEvent?       // default: ctx.events.emit
 }): Promise<{ message: Message; status: MessageStatus; aborted: boolean }>
 ```
+
+`history` is what makes the two speaking modes differ: **sequential** omits it,
+so every turn re-reads the transcript and sees the replies given earlier in the
+same round; **parallel** reads it once at the start of the round and passes the
+same array to every speaker, so the round's replies are invisible to each other
+by construction rather than by timing.
 
 Constants other modules and tests rely on: `FLUSH_INTERVAL_MS` (500),
 `FLUSH_EVERY_DELTAS` (40), `ABORTED_ERROR` (`'aborted'`), `PASS_TOKEN`
@@ -103,7 +113,7 @@ owns the session, the heartbeat and the `away` / `offline` transitions.
 |---|---|
 | `src/main/agents/history.test.ts` | Every rule in the table above, one case each: prefixes, roles, the unknown-agent fallback, merging in both directions, dropping `passed` / `skipped` / empty / streaming, reasoning excluded, notices rendered and unknown keys skipped, and the same transcript producing a different view per agent |
 | `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage` |
-| `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call, and `createModel` being used when no model is passed |
+| `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call, `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
 | `src/main/agents/default-agent.test.ts` | Creating exactly one agent on the first usable provider, reusing it, preferring a user-created agent, and the `validation` refusal |
 
 ## Known limitations and TODOs
@@ -112,8 +122,6 @@ owns the session, the heartbeat and the `away` / `offline` transitions.
   that wants to call one simply answers in prose. S3.1 adds the loop.
 - **No skills or memory in the system prompt.** PLAN's assembly order ends with
   the skill headers and the memory index; S3.2 and S3.3 append them.
-- **`mentions` is stored as `[]`** on every agent message. S2.3 parses the
-  finished text for `@name` and fills it in, which is what schedules a round 2.
 - **No context truncation.** A long chat eventually exceeds the model's window and
   the provider errors; S4.2 drops oldest-first while keeping the system prompt.
 - **The user's display name is a constant** (`'User'`). There is no user profile

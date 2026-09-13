@@ -148,10 +148,9 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 
 ## Known limitations and TODOs
 
-- **The stored settings are not acted on yet.** `mode`, `speaking` and
-  `maxAutoRounds` are persisted and shown in the header badge, but `ChatRunner`
-  still runs one round with the first member; S2.3 is where they start to matter.
-  `stallTimeoutMs` / `hardTimeoutMs` are read by S2.4.
+- **`stallTimeoutMs` / `hardTimeoutMs` are stored but unread.** S2.4's supervisor
+  is what uses them; `mode`, `speaking` and `maxAutoRounds` have been acted on by
+  `ChatRunner` since S2.3.
 - **Reordering is mouse-only**, and the per-member token count is an em dash
   until S4.1.
 - **The search field is disabled** (S4.3), and titles are always the default

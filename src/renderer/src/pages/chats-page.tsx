@@ -103,6 +103,7 @@ export function ChatsPage(): React.JSX.Element {
   const messages = useChatMessages(selectedId)
   const memberIds = useChatMemberIds(selectedId)
   const running = useIsRunning(selectedId)
+  const activeRun = useRunStore((state) => (selectedId ? state.activeByChat[selectedId] : undefined))
   const runError = useRunStore((state) => state.error)
   const runErrorCode = useRunStore((state) => state.errorCode)
 
@@ -152,6 +153,13 @@ export function ChatsPage(): React.JSX.Element {
     useRunStore.getState().clearError()
     void useChatsStore.getState().setMembers(selectedId, agentIds)
   }
+
+  // "Round 2 · Architect, Reviewer speaking": what the backend's `run.round`
+  // event says, with the ids resolved to names. It replaces nothing — it appears
+  // beside the settings badge only while a run is in flight.
+  const speakingNow = (activeRun?.speakers ?? [])
+    .map((id) => agents.find((agent) => agent.id === id)?.name ?? id)
+    .join(', ')
 
   // The header badge in the mockup: "Round-robin · In turn · Max 3 rounds".
   const orchestrationSummary = [
@@ -228,10 +236,17 @@ export function ChatsPage(): React.JSX.Element {
           testId="page-chats-conversation"
           title={selected ? selected.title : t('chat.noChatSelected')}
           badge={<Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>}
+          actions={
+            activeRun && speakingNow.length > 0 ? (
+              <span data-testid="run-status" className="truncate text-xs text-accent">
+                {t('chat.runStatus', { round: activeRun.round, speakers: speakingNow })}
+              </span>
+            ) : undefined
+          }
         />
 
         {selected ? (
-          <MessageList chatId={selected.id} messages={messages} />
+          <MessageList chatId={selected.id} messages={messages} members={members} />
         ) : (
           <div className="flex flex-1 items-center justify-center overflow-y-auto px-7 py-5">
             <EmptyState
@@ -244,12 +259,15 @@ export function ChatsPage(): React.JSX.Element {
 
         <Composer
           chatId={selectedId}
+          members={members}
           running={running}
           {...(runError
             ? { error: translateError(t, { code: runErrorCode ?? 'internal', message: runError }) }
             : {})}
-          onSend={(text) =>
-            selectedId ? useRunStore.getState().send(selectedId, text) : Promise.resolve(false)
+          onSend={(text, mentions) =>
+            selectedId
+              ? useRunStore.getState().send(selectedId, text, mentions)
+              : Promise.resolve(false)
           }
           onStop={() => {
             if (selectedId) void useRunStore.getState().stop(selectedId)

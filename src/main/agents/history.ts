@@ -62,6 +62,8 @@ const NOTICE_TEXT: Record<string, (params: Record<string, string | number>) => s
   agentSkipped: (params) => `${String(params['agent'] ?? 'An agent')} did not respond and was skipped this round.`,
   runStopped: () => 'The user stopped the previous run.',
   maxRoundsReached: () => 'The automatic round limit was reached; the user has the floor.',
+  noMentions: () => 'Nobody was mentioned, so no one answered that message.',
+  runFailed: (params) => `The previous run stopped after an error: ${String(params['message'] ?? 'unknown')}`,
   providerError: (params) => `A provider error occurred: ${String(params['message'] ?? 'unknown')}`
 }
 

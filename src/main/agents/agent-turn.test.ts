@@ -290,6 +290,106 @@ describe('runAgentTurn', () => {
     expect(model.doStreamCalls[0]).toMatchObject({ temperature: 0.2, maxOutputTokens: 64 })
   })
 
+  it('stores the mentions parsed out of the finished reply', async () => {
+    const bob = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: agent.providerId, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+
+    const result = await runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent, bob],
+      round: 1,
+      signal: new AbortController().signal,
+      model: mockModel(textChunks(['I agree with ', '@Bob on this.']))
+    })
+
+    // Parsed here, scheduled by `orchestration/scheduling.ts`: the stored set is
+    // what the agent wrote, self-mentions included.
+    expect(result.message.mentions).toEqual([bob.id])
+    expect(ctx.repos.messages.get(result.message.id, ctx.userId).mentions).toEqual([bob.id])
+  })
+
+  it('stores no mentions for a [PASS]', async () => {
+    const bob = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: agent.providerId, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+
+    const result = await runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent, bob],
+      round: 1,
+      signal: new AbortController().signal,
+      model: mockModel(textChunks(['[PASS]']))
+    })
+
+    expect(result.status).toBe('passed')
+    expect(result.message.mentions).toEqual([])
+  })
+
+  it('records inReplyTo on the message when the caller supplies it', async () => {
+    const result = await runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent],
+      round: 2,
+      inReplyTo: ['user', 'agent-42'],
+      signal: new AbortController().signal,
+      model: mockModel(textChunks(['ok']))
+    })
+
+    expect(ctx.repos.messages.get(result.message.id, ctx.userId).inReplyTo).toEqual([
+      'user',
+      'agent-42'
+    ])
+  })
+
+  it('leaves inReplyTo absent when nobody asked for the reply', async () => {
+    const result = await turn(mockModel(textChunks(['ok'])))
+
+    expect(result.message.inReplyTo).toBeUndefined()
+  })
+
+  it('uses the prebuilt history snapshot instead of re-reading the transcript', async () => {
+    // What parallel speaking hands every speaker: the transcript as it was at the
+    // start of the round. A message stored after the snapshot must not appear.
+    const snapshot = ctx.repos.messages.listForContext(chat.id, ctx.userId)
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'A later thought nobody has seen' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    const model = mockModel(textChunks(['ok']))
+
+    await runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent],
+      round: 1,
+      history: snapshot,
+      signal: new AbortController().signal,
+      model
+    })
+
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
+    expect(prompt).toContain('What should we build first?')
+    expect(prompt).not.toContain('A later thought nobody has seen')
+  })
+
   it('builds the model through createModel when none is supplied', async () => {
     const model = mockModel(textChunks(['ok']))
     const createModel = vi.fn(() => model)

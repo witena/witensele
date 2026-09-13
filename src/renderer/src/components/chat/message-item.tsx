@@ -22,16 +22,23 @@
  * The presence dot shows the agent's **current** state, not its state when the
  * message was sent (PLAN, "Presence dots"), which is why it comes from the
  * presence store by agent id rather than from the message.
+ *
+ * The header line also carries the round and, from S2.3, **who the reply
+ * answers**: `Message.inReplyTo` holds the agent ids whose previous-round
+ * messages mentioned this agent, plus the literal `user`. The names are resolved
+ * against the agents store rather than stored, because an agent can be renamed
+ * long after the message was written.
  */
 import clsx from 'clsx'
 import { ChevronRight } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import type { Message, MessagePart, PresenceState, ReasoningPart } from '@shared/types'
+import type { MentionMember } from '@shared/mentions'
+import type { Agent, Message, MessagePart, PresenceState, ReasoningPart } from '@shared/types'
 import { translateNotice } from '../../i18n/notices'
 import { messageText, wasStopped } from '../../lib/message-view'
-import { useAgent } from '../../stores/agents'
+import { useAgent, useAgentsStore } from '../../stores/agents'
 import { useAgentPresence } from '../../stores/presence'
 import { Avatar, Badge } from '../ui'
 import { Markdown } from './markdown'
@@ -92,19 +99,38 @@ function monogram(label: string): string {
 
 const isReasoning = (part: MessagePart): part is ReasoningPart => part.type === 'reasoning'
 
+/** The literal `Message.inReplyTo` carries for the human. */
+const USER_SOURCE = 'user'
+
 export interface MessageItemProps {
   message: Message
   /** The chat the message is in; the presence dot is per (chat, agent). */
   chatId: string
+  /** The chat's members; their names are what gets highlighted in the body. */
+  members?: readonly Agent[]
 }
 
-export function MessageItem({ message, chatId }: MessageItemProps): React.JSX.Element {
+export function MessageItem({ message, chatId, members = [] }: MessageItemProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const [reasoningOpen, setReasoningOpen] = useState(false)
 
   const isUser = message.senderType === 'user'
   const agent = useAgent(isUser ? undefined : message.senderId)
+  const agents = useAgentsStore((state) => state.agents)
   const presence = useAgentPresence(chatId, message.senderId)
+
+  const mentionMembers: MentionMember[] = members.map((member) => ({
+    agentId: member.id,
+    name: member.name
+  }))
+  // "@Ada, @Bob" — one string, so the sentence stays translatable as a whole.
+  const replyingTo = (message.inReplyTo ?? [])
+    .map((id) =>
+      id === USER_SOURCE
+        ? `@${t('common.you')}`
+        : `@${agents.find((candidate) => candidate.id === id)?.name ?? id}`
+    )
+    .join(', ')
 
   const you = t('common.you')
   const name = isUser ? you : (agent?.name ?? message.senderId)
@@ -121,6 +147,10 @@ export function MessageItem({ message, chatId }: MessageItemProps): React.JSX.El
       data-testid="message-item"
       data-sender={message.senderType}
       data-status={message.status}
+      // `data-*` rather than rendered copy, so the end-to-end specs can assert on
+      // the round and the author without depending on the active language.
+      data-round={message.round}
+      data-author={name}
       className={clsx('flex gap-3', dimmed && 'opacity-50')}
     >
       <Avatar
@@ -145,6 +175,11 @@ export function MessageItem({ message, chatId }: MessageItemProps): React.JSX.El
           {agent ? <Badge>{agent.modelId}</Badge> : null}
           {message.round > 0 ? (
             <span className="text-fg-faint">{t('chat.round', { round: message.round })}</span>
+          ) : null}
+          {replyingTo.length > 0 ? (
+            <span data-testid="message-replying-to" className="text-fg-faint">
+              {t('chat.replyingTo', { names: replyingTo })}
+            </span>
           ) : null}
           <span className="text-fg-faint">{formatTime(message.createdAt, i18n.language)}</span>
         </div>
@@ -176,14 +211,21 @@ export function MessageItem({ message, chatId }: MessageItemProps): React.JSX.El
         ) : null}
 
         {notices.map((part, index) => (
-          <p key={index} className="text-xs text-fg-dim">
+          <p
+            key={index}
+            data-testid="message-notice"
+            // The key, not the sentence: an end-to-end spec asserting on copy
+            // would break the moment a translation is reworded.
+            data-notice-key={part.type === 'system-notice' ? part.key : undefined}
+            className="text-xs text-fg-dim"
+          >
             {part.type === 'system-notice' ? translateNotice(t, part) : null}
           </p>
         ))}
 
         {text.length > 0 && !dimmed ? (
           <div data-testid="message-text">
-            <Markdown>{text}</Markdown>
+            <Markdown mentions={mentionMembers}>{text}</Markdown>
             {message.status === 'streaming' ? (
               <span
                 data-testid="message-cursor"

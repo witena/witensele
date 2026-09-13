@@ -67,7 +67,8 @@
     "send": "Send",
     "stop": "Stop",
     "round": "Round {{round}}",
-    "replyingTo": "Replying to @{{name}}",
+    "replyingTo": "Replying to {{names}}",
+    "runStatus": "Round {{round}} · {{speakers}} speaking",
     "passed": "Passed",
     "skipped": "Skipped",
     "reasoning": "Reasoning",
@@ -213,8 +214,10 @@
   },
   "notices": {
     "agentSkipped": "{{agent}} did not respond and was skipped this round",
+    "noMentions": "Nobody was mentioned, so no agent answered. Mention a member with @ to get a reply.",
     "runStopped": "The run was stopped",
     "maxRoundsReached": "Reached the limit of {{max}} automatic rounds. Send a message to continue.",
-    "providerError": "The provider could not answer: {{message}}"
+    "providerError": "The provider could not answer: {{message}}",
+    "runFailed": "The run stopped after an internal error: {{message}}"
   }
 }

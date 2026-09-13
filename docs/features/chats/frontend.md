@@ -127,7 +127,9 @@ is never translated.
   `role="img"` name; the member row also prints the state in words next to the
   model.
 - Reordering is mouse-only for now. That is a known gap: it is the one control on
-  this screen with no keyboard path, and S2.3 — which also reads `position` — is
-  where a keyboard reorder belongs.
-- Each message is an `<article>` carrying `data-sender` and `data-status`, which
-  is also what the end-to-end spec asserts on so it stays language-independent.
+  this screen with no keyboard path, and since S2.3 reads `position` every round
+  it decides the speaking order of every discussion.
+- Each message is an `<article>` carrying `data-sender`, `data-status`,
+  `data-round` and `data-author` (and `data-notice-key` on a system notice),
+  which is what the end-to-end specs assert on so they stay
+  language-independent.

@@ -158,6 +158,12 @@ export const messages = sqliteTable(
     /** 1-based round this message belongs to; 0 for messages outside a run. */
     round: integer('round').notNull().default(0),
     mentions: text('mentions', { mode: 'json' }).$type<string[]>().notNull(),
+    /**
+     * Agent ids (plus the literal `user`) whose messages asked for this reply.
+     * Nullable rather than an empty array so a row written before S2.3 — and a
+     * user message, which never answers anyone — stores nothing at all.
+     */
+    inReplyTo: text('in_reply_to', { mode: 'json' }).$type<string[]>(),
     usage: text('usage', { mode: 'json' }).$type<Usage>(),
     error: text('error'),
     createdAt: integer('created_at').notNull(),

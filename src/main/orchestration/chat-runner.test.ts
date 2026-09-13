@@ -1,17 +1,21 @@
 /**
- * The runner, driven the way the renderer drives it: through the handlers, with a
- * mock model behind `createModel` and a real temporary database underneath.
+ * The runner, driven the way the renderer drives it: through the handlers, with
+ * mock models behind `createModel` and a real temporary database underneath.
  *
  * What is asserted here is the **event sequence**, because that sequence is the
  * contract the renderer's stores are written against — a reordering that still
  * produces the right database rows would still break the UI. The second theme is
  * cancellation: stop mid-run, delete mid-run, and send again mid-run, which are
  * the three things a user does that the happy path never covers.
+ *
+ * The `multi-agent` block is S2.3's: rounds, both speaking modes, `@mentions`,
+ * `[PASS]`, the round cap, and what happens when one speaker fails and the
+ * others do not.
  */
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { BackendEvent, RunFinishedEvent } from '@shared/events'
-import type { Agent, Chat, Message } from '@shared/types'
+import type { BackendEvent, RunFinishedEvent, RunRoundEvent } from '@shared/events'
+import type { Agent, Chat, Message, SystemNoticePart } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
 import { buildHandlers } from '../handlers'
@@ -42,6 +46,22 @@ function mockModel(chunks: StreamPart[], delayMs: number | null = null): MockLan
     doStream: async () => ({
       stream: simulateReadableStream({ chunks, initialDelayInMs: delayMs, chunkDelayInMs: delayMs })
     })
+  })
+}
+
+/** A model that answers with one whole message, optionally paced. */
+function saying(text: string, delayMs: number | null = null): MockLanguageModelV4 {
+  return mockModel(textChunks([text]), delayMs)
+}
+
+/** A model whose request fails the way a dead provider's does. */
+function failing(): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    provider: 'mock',
+    modelId: 'mock-model',
+    doStream: async () => {
+      throw new Error('provider exploded')
+    }
   })
 }
 
@@ -100,7 +120,7 @@ describe('ChatRunner', () => {
     await settle()
 
     // The member list changes between the two runs; the runner must pick the new
-    // first speaker up without being recreated.
+    // membership up without being recreated.
     await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [second.id, agent.id] })
     await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Again' })
     await settle()
@@ -108,7 +128,9 @@ describe('ChatRunner', () => {
     const stored = ctx.repos.messages.listForContext(chat.id, ctx.userId)
     expect(stored.filter((message) => message.senderType === 'agent').map((m) => m.senderId)).toEqual([
       agent.id,
-      second.id
+      // Round-robin, in the new `position` order.
+      second.id,
+      agent.id
     ])
   })
 
@@ -170,12 +192,17 @@ describe('ChatRunner', () => {
     model = mockModel(textChunks(['slow ', 'answer']), 10)
 
     await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
-    const state = ctx.runners.state(chat.id)
+    const state = ctx.runners.getState(chat.id)
 
     expect(state).toMatchObject({ chatId: chat.id, round: 1, speakers: [agent.id] })
     expect(state?.startedAt).toBeGreaterThan(0)
+    expect(state?.pendingUserMessageIds).toEqual([])
+    // The turn is in flight, and names the row it is writing into.
+    expect(state?.activeTurns).toHaveLength(1)
+    expect(state?.activeTurns[0]).toMatchObject({ agentId: agent.id })
 
     await settle()
+    expect(ctx.runners.getState(chat.id)).toBeNull()
     expect(ctx.runners.state(chat.id)).toBeNull()
   })
 
@@ -186,7 +213,7 @@ describe('ChatRunner', () => {
     await settle()
 
     const stored = ctx.repos.messages.listForContext(chat.id, ctx.userId)
-    expect(stored[1]).toMatchObject({ status: 'passed' })
+    expect(stored[1]).toMatchObject({ status: 'passed', mentions: [] })
     expect(finished()[0]).toMatchObject({ reason: 'completed' })
   })
 
@@ -209,13 +236,7 @@ describe('ChatRunner', () => {
   })
 
   it('ends the run with reason error when the provider fails', async () => {
-    model = new MockLanguageModelV4({
-      provider: 'mock',
-      modelId: 'mock-model',
-      doStream: async () => {
-        throw new Error('provider exploded')
-      }
-    })
+    model = failing()
 
     await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
     await settle()
@@ -226,33 +247,35 @@ describe('ChatRunner', () => {
     })
   })
 
-  it('queues a message sent during a run and answers it in a second run', async () => {
+  it('answers a message sent during a run in the next round of the same run', async () => {
     model = mockModel(textChunks(['first ', 'answer']), 5)
 
     await handlers['chat.send'](ctx, { chatId: chat.id, text: 'First question' })
     const second = await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Second question' })
     await settle()
 
-    // Stored immediately, before the first run finished: the user sees what they
-    // typed, and a crash cannot lose it.
+    // Stored immediately, before the first round finished: the user sees what
+    // they typed, and a crash cannot lose it.
     expect(second).toMatchObject({ senderType: 'user' })
 
-    // Two runs, not one, and not two at the same time.
-    expect(types().filter((type) => type === 'run.started')).toHaveLength(2)
-    expect(finished().map((event) => event.reason)).toEqual(['completed', 'completed'])
+    // One run, two rounds — S1.7's "second run" became a second round, so the
+    // composer's Stop button stays up for the whole exchange.
+    expect(types().filter((type) => type === 'run.started')).toHaveLength(1)
+    expect(rounds(events).map((event) => event.round)).toEqual([1, 2])
+    expect(finished().map((event) => event.reason)).toEqual(['completed'])
 
-    // Interleaved, not grouped: the first run's message row is created as soon
-    // as the run starts, so the second question lands after it in `seq` order.
+    // Interleaved, not grouped: the first round's message row is created as soon
+    // as the round starts, so the second question lands after it in `seq` order.
     const stored = ctx.repos.messages.listForContext(chat.id, ctx.userId)
     expect(stored.map((message) => message.senderType)).toEqual(['user', 'agent', 'user', 'agent'])
-    // The second run sees both questions, because every turn rebuilds its view
+    // The second round sees both questions, because every turn rebuilds its view
     // from the whole transcript.
     const prompt = JSON.stringify(model.doStreamCalls[1]?.prompt)
     expect(prompt).toContain('First question')
     expect(prompt).toContain('Second question')
   })
 
-  it('drops the queue when the run is stopped instead of answering it anyway', async () => {
+  it('drops the pending messages when the run is stopped instead of answering them anyway', async () => {
     model = mockModel(textChunks(Array.from({ length: 60 }, () => 'x ')), 5)
 
     await handlers['chat.send'](ctx, { chatId: chat.id, text: 'First' })
@@ -261,8 +284,9 @@ describe('ChatRunner', () => {
     await handlers['chat.stop'](ctx, { chatId: chat.id })
     await settle()
 
-    expect(types().filter((type) => type === 'run.started')).toHaveLength(1)
+    expect(rounds(events)).toHaveLength(1)
     expect(finished()).toHaveLength(1)
+    expect(finished()[0]).toMatchObject({ reason: 'stopped' })
   })
 
   it('rejects an empty message before anything is stored', async () => {
@@ -276,6 +300,290 @@ describe('ChatRunner', () => {
     await expect(handlers['chat.send'](ctx, { chatId: 'nope', text: 'Hi' })).rejects.toMatchObject({
       code: 'not_found'
     })
+  })
+})
+
+/**
+ * S2.3: several members, several rounds.
+ *
+ * Each agent gets its **own** mock model, so `doStreamCalls` can be read per
+ * agent — that is how "the second speaker saw the first one's answer" is
+ * asserted without inspecting a prompt that belongs to somebody else.
+ */
+describe('ChatRunner (multi-agent)', () => {
+  const handlers = buildHandlers()
+
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let ada: Agent
+  let bob: Agent
+  let chat: Chat
+  /** Agent name → the model that answers for it. Swapped per test. */
+  let models: Map<string, MockLanguageModelV4>
+
+  beforeEach(async () => {
+    database = createTestDatabase()
+    models = new Map()
+    const created = createTestAppContext(database, {
+      runner: {
+        createModel: (_ctx, agent) => models.get(agent.name) ?? saying('nothing to add')
+      }
+    })
+    ctx = created.ctx
+    events = created.events
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    ada = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    bob = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = await handlers['chats.create'](ctx, {
+      input: { title: 'Group chat', memberAgentIds: [ada.id, bob.id] }
+    })
+    events.length = 0
+  })
+
+  afterEach(() => {
+    database.cleanup()
+  })
+
+  const settle = () => ctx.runners.for(chat.id).whenIdle()
+  const finished = (): RunFinishedEvent[] => finishedIn(events)
+  const agentMessages = (): Message[] =>
+    ctx.repos.messages
+      .listForContext(chat.id, ctx.userId)
+      .filter((message) => message.senderType === 'agent')
+
+  /** Replaces the chat's settings through the handler that validates them. */
+  const configure = async (settings: Record<string, unknown>): Promise<void> => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { settings } })
+  }
+
+  /** The prompt of one agent's n-th request, as text. */
+  const promptOf = (name: string, index = 0): string =>
+    JSON.stringify(models.get(name)?.doStreamCalls[index]?.prompt ?? null)
+
+  it('gives every member the floor in round 1 of a roundrobin chat', async () => {
+    models.set('Ada', saying('Ada here'))
+    models.set('Bob', saying('Bob here'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hello everyone' })
+    await settle()
+
+    expect(rounds(events)).toEqual([
+      { type: 'run.round', chatId: chat.id, round: 1, speakers: [ada.id, bob.id] }
+    ])
+    expect(agentMessages().map((message) => message.senderId)).toEqual([ada.id, bob.id])
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+  })
+
+  it('sequential: the second speaker sees the first speaker’s reply', async () => {
+    models.set('Ada', saying('the answer is 42'))
+    models.set('Bob', saying('agreed'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is the answer?' })
+    await settle()
+
+    expect(promptOf('Bob')).toContain('the answer is 42')
+    // …and the first speaker obviously did not see the second one's.
+    expect(promptOf('Ada')).not.toContain('agreed')
+  })
+
+  it('parallel: both speakers get the same snapshot and cannot see each other', async () => {
+    await configure({ speaking: 'parallel' })
+    models.set('Ada', saying('the answer is 42', 5))
+    models.set('Bob', saying('agreed', 5))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is the answer?' })
+    await settle()
+
+    expect(promptOf('Bob')).toContain('What is the answer?')
+    expect(promptOf('Bob')).not.toContain('the answer is 42')
+    // The barrier still held: both turns finished before the run did.
+    expect(agentMessages().map((message) => message.status)).toEqual(['done', 'done'])
+    expect(finished()).toHaveLength(1)
+  })
+
+  it('a reply that mentions another member schedules round 2 with only that member', async () => {
+    models.set('Ada', saying('@Bob what do you think?'))
+    models.set('Bob', saying('nothing to add'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Start' })
+    await settle()
+
+    expect(rounds(events).map((event) => ({ round: event.round, speakers: event.speakers }))).toEqual([
+      { round: 1, speakers: [ada.id, bob.id] },
+      { round: 2, speakers: [bob.id] }
+    ])
+
+    const stored = agentMessages()
+    expect(stored[0]).toMatchObject({ senderId: ada.id, round: 1, mentions: [bob.id] })
+    // …and the round-2 message records who asked, for the "replying to" label.
+    expect(stored[2]).toMatchObject({ senderId: bob.id, round: 2, inReplyTo: [ada.id] })
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+  })
+
+  it('ignores an agent that mentions itself', async () => {
+    models.set('Ada', saying('@Ada should keep thinking'))
+    models.set('Bob', saying('nothing to add'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Start' })
+    await settle()
+
+    // The mention is still stored — it is what Ada wrote — but it schedules nobody.
+    expect(agentMessages()[0]).toMatchObject({ mentions: [ada.id] })
+    expect(rounds(events)).toHaveLength(1)
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+  })
+
+  it('never lets a [PASS] schedule a round', async () => {
+    models.set('Ada', saying('[PASS]'))
+    models.set('Bob', saying('[PASS]'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Anything to add?' })
+    await settle()
+
+    expect(agentMessages().map((message) => message.status)).toEqual(['passed', 'passed'])
+    expect(rounds(events)).toHaveLength(1)
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+  })
+
+  it('stops the chain at maxAutoRounds and says so', async () => {
+    await configure({ maxAutoRounds: 2 })
+    // Each agent keeps handing the floor to the other, forever.
+    models.set('Ada', saying('@Bob your turn'))
+    models.set('Bob', saying('@Ada your turn'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Discuss' })
+    await settle()
+
+    expect(rounds(events).map((event) => event.round)).toEqual([1, 2])
+    expect(finished()[0]).toMatchObject({ reason: 'max-rounds' })
+    expect(noticeKeys(ctx, chat)).toEqual(['maxRoundsReached'])
+    expect(noticeParams(ctx, chat, 'maxRoundsReached')).toEqual({ max: 2 })
+  })
+
+  it('mention-only: only the mentioned member answers', async () => {
+    await configure({ mode: 'mention-only' })
+    models.set('Bob', saying('on it'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: '@Bob take this one' })
+    await settle()
+
+    expect(rounds(events).map((event) => event.speakers)).toEqual([[bob.id]])
+    expect(agentMessages()).toHaveLength(1)
+    expect(agentMessages()[0]).toMatchObject({ senderId: bob.id, inReplyTo: ['user'] })
+  })
+
+  it('mention-only: a message that mentions nobody finishes at once with a notice', async () => {
+    await configure({ mode: 'mention-only' })
+    // The settings write emits its own `chat.updated`; the sequence asserted
+    // below is the run's.
+    events.length = 0
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'thinking out loud' })
+    await settle()
+
+    expect(events.map((event) => event.type)).toEqual([
+      'message.created', // the user's message
+      'run.started',
+      'message.created', // the notice
+      'run.finished'
+    ])
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+    expect(noticeKeys(ctx, chat)).toEqual(['noMentions'])
+    expect(agentMessages()).toHaveLength(0)
+  })
+
+  it('takes the composer’s explicit mentions into account as well', async () => {
+    await configure({ mode: 'mention-only' })
+    models.set('Ada', saying('on it'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'over to you', mentions: [ada.id] })
+    await settle()
+
+    expect(rounds(events).map((event) => event.speakers)).toEqual([[ada.id]])
+  })
+
+  it('lets a message sent mid-run join the next round and reset the round counter', async () => {
+    // One automatic round only: without the reset the run would stop after it.
+    await configure({ maxAutoRounds: 1 })
+    models.set('Ada', saying('@Bob your turn', 5))
+    models.set('Bob', saying('@Ada your turn', 5))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'First' })
+    const pending = await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Second' })
+    // The pending message is visible in the run state before it is scheduled.
+    expect(ctx.runners.getState(chat.id)?.pendingUserMessageIds).toEqual([pending.id])
+
+    await settle()
+
+    // Round 2 exists *and* has both members: the union of what the user asked
+    // (roundrobin → everyone) and what round 1 mentioned.
+    expect(rounds(events).map((event) => ({ round: event.round, speakers: event.speakers }))).toEqual([
+      { round: 1, speakers: [ada.id, bob.id] },
+      { round: 2, speakers: [ada.id, bob.id] }
+    ])
+    // …and then the cap applies again, counted from the new user message.
+    expect(finished()[0]).toMatchObject({ reason: 'max-rounds' })
+  })
+
+  it('stop aborts every active turn of a parallel round', async () => {
+    await configure({ speaking: 'parallel' })
+    models.set('Ada', mockModel(textChunks(Array.from({ length: 60 }, () => 'a ')), 5))
+    models.set('Bob', mockModel(textChunks(Array.from({ length: 60 }, () => 'b ')), 5))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Count to 200' })
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(ctx.runners.getState(chat.id)?.activeTurns).toHaveLength(2)
+
+    await handlers['chat.stop'](ctx, { chatId: chat.id })
+    await settle()
+
+    expect(agentMessages().map((message) => message.status)).toEqual(['error', 'error'])
+    expect(agentMessages().every((message) => message.error === 'aborted')).toBe(true)
+    expect(finished()[0]).toMatchObject({ reason: 'stopped' })
+  })
+
+  it('one failing speaker does not stop the round or the run', async () => {
+    models.set('Ada', failing())
+    models.set('Bob', saying('I can still answer'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hello' })
+    await settle()
+
+    expect(agentMessages().map((message) => message.status)).toEqual(['error', 'done'])
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+  })
+
+  it('finishes with error when every speaker of a round failed', async () => {
+    models.set('Ada', failing())
+    models.set('Bob', failing())
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hello' })
+    await settle()
+
+    expect(agentMessages().map((message) => message.status)).toEqual(['error', 'error'])
+    expect(finished()[0]).toMatchObject({ reason: 'error' })
+  })
+
+  it('emits run.started once and run.finished once for a multi-round run', async () => {
+    models.set('Ada', saying('@Bob your turn'))
+    models.set('Bob', saying('done here'))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Start' })
+    await settle()
+
+    const sequence = events.map((event) => event.type)
+    expect(sequence.filter((type) => type === 'run.started')).toHaveLength(1)
+    expect(sequence.filter((type) => type === 'run.finished')).toHaveLength(1)
+    expect(sequence.indexOf('run.started')).toBeLessThan(sequence.indexOf('run.round'))
+    expect(sequence.lastIndexOf('run.round')).toBeLessThan(sequence.indexOf('run.finished'))
   })
 })
 
@@ -379,7 +687,7 @@ describe('chats handlers', () => {
     const chat = await handlers['chats.create'](ctx, { input: {} })
     await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Count to 200' })
     await new Promise((resolve) => setTimeout(resolve, 25))
-    expect(ctx.runners.state(chat.id)).not.toBeNull()
+    expect(ctx.runners.getState(chat.id)).not.toBeNull()
 
     const runner = ctx.runners.for(chat.id)
     await handlers['chats.delete'](ctx, { id: chat.id })
@@ -391,13 +699,38 @@ describe('chats handlers', () => {
     expect(events).toContainEqual({ type: 'chat.deleted', chatId: chat.id })
     expect(finishedIn(events).at(-1)).toMatchObject({ reason: 'stopped' })
     await expect(handlers['chats.list'](ctx)).resolves.toEqual([])
-    expect(ctx.runners.state(chat.id)).toBeNull()
+    expect(ctx.runners.getState(chat.id)).toBeNull()
   })
 })
 
 /** Every `run.finished` in an event log, narrowed. */
 function finishedIn(events: BackendEvent[]): RunFinishedEvent[] {
   return events.filter((event): event is RunFinishedEvent => event.type === 'run.finished')
+}
+
+/** Every `run.round` in an event log, narrowed. */
+function rounds(events: BackendEvent[]): RunRoundEvent[] {
+  return events.filter((event): event is RunRoundEvent => event.type === 'run.round')
+}
+
+/** The `system-notice` parts stored in a chat, in order. */
+function notices(ctx: AppContext, chat: Chat): SystemNoticePart[] {
+  return ctx.repos.messages
+    .listForContext(chat.id, ctx.userId)
+    .flatMap((message) => message.parts)
+    .filter((part): part is SystemNoticePart => part.type === 'system-notice')
+}
+
+function noticeKeys(ctx: AppContext, chat: Chat): string[] {
+  return notices(ctx, chat).map((part) => part.key)
+}
+
+function noticeParams(
+  ctx: AppContext,
+  chat: Chat,
+  key: string
+): Record<string, string | number> | undefined {
+  return notices(ctx, chat).find((part) => part.key === key)?.params
 }
 
 /** The text of a message's first part, for the paging assertions. */

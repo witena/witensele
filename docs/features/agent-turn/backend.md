@@ -23,7 +23,8 @@ No migration. It writes one `messages` row per turn:
 | `parts` | `[]`, then the accumulated parts | On create, on every flush, and once at the end |
 | `status` | `streaming`, then `done` \| `passed` \| `error` | Create, then the terminal update |
 | `round` | The round the runner passed | On create |
-| `mentions` | `[]` | On create. S2.3 fills it from the finished text |
+| `in_reply_to` | The `inReplyTo` the runner passed, when it is not empty | On create |
+| `mentions` | `[]`, then the ids parsed out of the finished text (empty for a `[PASS]`) | Create, then the terminal update |
 | `usage` | `Usage` mapped from the `finish` part | Terminal update, when the provider reported any |
 | `error` | `'aborted'` or the provider's message | Terminal update, on the failure paths |
 

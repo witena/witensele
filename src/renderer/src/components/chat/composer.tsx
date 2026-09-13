@@ -11,6 +11,11 @@
  * is either happening or not, and two controls would leave the user guessing
  * which one applies. The mockup shows Stop in the same corner.
  *
+ * `@Name` tokens are resolved against the chat's members with the **same**
+ * parser the backend uses (`@shared/mentions`) and sent along with the text, so
+ * "who did the user call on" is decided once rather than twice. The autocomplete
+ * that helps type them is S2.5's.
+ *
  * The text is local state and is cleared only after `send` resolves true, so a
  * rejected send (no provider, chat deleted, no members yet) leaves what was typed
  * in the box — and `error` prints why, right where the user is looking, instead
@@ -20,15 +25,19 @@ import { SendHorizontal, Square } from 'lucide-react'
 import { useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AtSign } from 'lucide-react'
+import { parseMentions } from '@shared/mentions'
+import type { Agent } from '@shared/types'
 import { Badge, Button, IconButton, TextArea } from '../ui'
 
 export interface ComposerProps {
   /** `null` disables everything: there is nothing to send into. */
   chatId: string | null
+  /** The chat's members, for resolving `@Name` before the message is sent. */
+  members?: readonly Agent[]
   /** True while a run is active; the button becomes Stop. */
   running: boolean
   /** Resolves true when the message was accepted, which clears the box. */
-  onSend: (text: string) => Promise<boolean>
+  onSend: (text: string, mentions: string[]) => Promise<boolean>
   onStop: () => void
   /** Already-translated reason the last send was refused. */
   error?: string | undefined
@@ -36,6 +45,7 @@ export interface ComposerProps {
 
 export function Composer({
   chatId,
+  members = [],
   running,
   onSend,
   onStop,
@@ -52,7 +62,11 @@ export function Composer({
     if (!canSend) return
     setBusy(true)
     try {
-      if (await onSend(text)) setText('')
+      const mentions = parseMentions(
+        text,
+        members.map((member) => ({ agentId: member.id, name: member.name }))
+      )
+      if (await onSend(text, mentions)) setText('')
     } finally {
       setBusy(false)
     }
