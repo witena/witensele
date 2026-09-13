@@ -946,7 +946,7 @@ disk while it waited, Allow wrote the file and the diff block opened onto a
 rewritten), `docs/features/chats/`, `docs/features/agent-turn/`,
 `docs/features/backend-client/` and `docs/features/i18n/`.
 
-### S5.6 Hand to executor and the review loop `[ ]`
+### S5.6 Hand to executor and the review loop `[x]` (2026-09-13)
 What: PLAN.md's workflow — discuss → "hand to executor" → it implements the
 group's conclusion → posts what changed → the others review.
 - A "Hand to executor" action in the chat (next to the composer, or in the
@@ -974,6 +974,75 @@ group's conclusion → posts what changed → the others review.
 Acceptance: the tests above; the button is disabled without a folder or an
 executor and enabled with both. Docs: `docs/features/orchestration/`,
 `docs/features/executor/` and `docs/features/chats/` (all four each).
+Done: a hand-off is **two staged rounds of an ordinary run**, and everything else
+follows from that. `ChatRunner.handoff` validates, stores the message, sets
+`#handoffTo` and starts the normal loop; `#loop` *takes* that field once — not
+reads it, because `#start`'s restart would otherwise hand the same chat over
+twice — and spends it over two iterations: `planFromHandoff` (the executor,
+alone) and then `planFromReview` (everybody else, in `position` order, replying
+to it). Both are **merged** with whatever the previous round scheduled rather
+than replacing it, so a message the user sent while the executor was working is
+still answered by the review round. From the third round on it is ordinary `@`
+scheduling, which is what makes "re-`@` the executor to iterate" free: nothing in
+the runner knows the chain started as a hand-off. Stop, the barrier, the offline
+filter, the truncation notice and `maxAutoRounds` needed no change at all.
+
+Both plans ignore the chat's `mode` deliberately. `roundrobin` would put four
+models in front of the executor before it started working, and `mention-only`
+would answer a hand-off with the `noMentions` notice instead of a review — the
+mode describes how a *typed* message is answered, and this is not one. The review
+round is "everybody except the executor" rather than "every participant": the two
+sets differ only in S5.2's known gap (a promoted second executor), where the
+extra agent has no tools and nothing to lose by reviewing.
+
+What is stored is a **`user` message whose only part is the `handoff` notice
+key**, mentioning the executor alone. It is the user speaking — it is what the
+executor replies to, it carries the mention that schedules the turn, and it is
+what someone scrolling back has to see — so a `system` row would have been the
+app narrating an instruction the user gave. That also meant `history.ts` needed a
+`handoff` entry in `NOTICE_TEXT`: a notice with no prompt rendering is skipped,
+and the executor would have been handed an empty request.
+
+The briefing is `HANDOFF_BRIEFING`, appended by `buildExecutorSection(workdir,
+handoff)` and reached by `AgentTurnOptions.handoff`, which the runner sets for
+exactly one turn (`implementing` in `#runRound`). A reviewer must not be told to
+"implement the conclusion", and neither must an executor a reviewer `@`-ed
+afterwards: that one is being asked something specific, which is asserted by the
+*absence* of the paragraph in its second prompt.
+
+The three refusals are S5.2's layer: `handoff_no_workdir`, `handoff_no_executor`
+and `handoff_run_active` as `ValidationReason`s. `components/chat/handoff.ts`'s
+`handoffBlocker` computes the **same three from the same facts in the same
+order** in the renderer, so the disabled button's tooltip and a rejection's
+sentence are one string (`validationReasonMessage`), and only two locale keys
+were needed for the control itself. A hand-off is refused rather than queued
+while a run is active, because merging it into a round somebody else's mentions
+had filled would make "the executor speaks alone" untrue.
+
+The button is above the composer rather than in the Actions card: that card's two
+actions are ordinary messages and say so in its header comment — nothing there
+bypasses `chat.send` — while this is a backend path of its own. It is disabled,
+never hidden, and carries the reason in `data-blocked` so the end-to-end spec can
+assert *which* rule applies without reading copy.
+
+Tests: `chat-runner.test.ts` gained a nine-case `ChatRunner (hand to executor)`
+block (the stored message and its mentions; the executor alone in a `roundrobin`
+chat then one review round with the other two and their `inReplyTo`; the briefing
+in the handed-over prompt and the executor's answer in the reviewers'; no review
+round when the executor is the only member; a reviewer's `@` scheduling a third
+round whose prompt no longer carries the briefing, until `maxAutoRounds` takes
+the floor back; a Stop inside the executor's `write_file` leaving
+`permissions.pending()` empty, nothing on disk and no review round; and the three
+refusals), `scheduling.test.ts` six for the two new plans, `handoff.test.ts` five
+for the blocker, `run.test.ts` two for the store, plus `contracts.test.ts` and
+`handlers.test.ts`. `npm test`: 78 files, 1143 tests; `npm run typecheck` clean.
+`e2e/executor.spec.ts` ran with `qwen2.5:3b` present: 10 passed, including the
+new offline case and the full hand-off — two participants and an executor
+discussed, "Hand to executor" was clicked, the prompt was allowed, a file
+appeared in the folder and a participant reviewed it with nothing typed. Docs in
+`docs/features/orchestration/`, `docs/features/executor/`,
+`docs/features/chats/`, `docs/features/agent-turn/`,
+`docs/features/backend-client/` and `docs/features/i18n/`.
 
 ### S5.7 Open in editor `[ ]`
 What: PLAN.md point 3, step one — file paths and diffs in a message open in
@@ -1079,6 +1148,24 @@ adds a line here in the same commit.
   what will be written. `edit_file` already sends its patch. "Allow, but show me
   the diff first" is the open question `docs/features/executor/context.md`
   carries.
+- **`maxAutoRounds: 1` buys an implementation but no review.** S5.6's two rounds
+  count towards the cap like any others, so a chat capped at one round stops
+  after the executor with the `maxRoundsReached` notice. Exempting the review
+  round was rejected — the cap is the user's promise that the chat will not run
+  away, and a hand-off is the most expensive thing in the product to let run
+  away — but a hand-off that *knows* it needs two rounds could say so before it
+  starts, or the cap could be raised for the duration with a notice.
+- **A hand-off cannot be queued.** It is refused with `handoff_run_active` while
+  a run is in flight, and the button is disabled in that state. "Hand it over
+  when this round finishes" is the obvious shape, and needs a second pending
+  slot in the runner rather than the boolean it has.
+- **The review round reads the patches through the tool results**, not through
+  the `DiffPart`s: `history.ts` renders `text`, `tool-result` and
+  `system-notice` parts, and a `write_file` result already carries its `patch`
+  (capped at 4 KB). Rendering the diff blocks into the prompt as well would put
+  the same patch in twice; rendering them *instead* would mean parsing back what
+  the model already read. Worth revisiting when a turn's tool results start
+  being summarised rather than replayed.
 - **Nothing emits a `FileRefPart`.** S5.5 renders one as a `path:line` chip that
   copies on click; producing them from an agent's text, and opening them in the
   editor, is S5.7.

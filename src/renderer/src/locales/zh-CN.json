@@ -68,6 +68,8 @@
     "workdirNone": "未设置",
     "workdirChoose": "选择…",
     "workdirClear": "清除",
+    "handoff": "交给执行者",
+    "handoffTitle": "让执行者在本对话的目录里实现上面讨论出的结论",
     "actions": {
       "title": "动作",
       "summarize": "让某位智能体汇总各方观点",
@@ -390,7 +392,10 @@
     "workdir_not_directory": "这个路径是文件，不是文件夹。",
     "second_executor": "一个对话只能有一位执行者。",
     "oauth_unsupported_provider": "该提供方暂不支持账号登录,请使用 API 密钥。",
-    "oauth_custom_base_url": "使用账号登录的提供方不能自定义 Base URL。"
+    "oauth_custom_base_url": "使用账号登录的提供方不能自定义 Base URL。",
+    "handoff_no_workdir": "先给这个对话选一个工作目录，再交给执行者。",
+    "handoff_no_executor": "先往这个对话里加一位执行者，再交给它。",
+    "handoff_run_active": "这个对话还在运行，等它结束或先点停止。"
   },
   "notices": {
     "agentSkipped": "{{agent}} 本轮没有响应，已被跳过",
@@ -401,6 +406,7 @@
     "providerError": "服务商未能作答：{{message}}",
     "runFailed": "出现内部错误，本次运行已中止：{{message}}",
     "toolsUnsupported": "{{agent}} 的模型不支持工具调用,这条回复没有使用工具",
-    "contextTruncated": "{{agent}} 的上下文窗口装不下整段对话，最早的 {{dropped}} 条消息已从它的视野中省略"
+    "contextTruncated": "{{agent}} 的上下文窗口装不下整段对话，最早的 {{dropped}} 条消息已从它的视野中省略",
+    "handoff": "已交给 {{agent}}：实现大家讨论出的结论，并汇报改了什么"
   }
 }

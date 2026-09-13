@@ -4,6 +4,12 @@ S5.4 was the backend half — the tools, the folder confinement and the permissi
 gate. S5.5 is the visible half: the user can answer the prompt, and what the
 executor changed is in the transcript.
 
+The one surface S5.6 adds — the "Hand to executor" button above the composer —
+is **not** here: it starts a run, so it belongs to
+[`orchestration`](../orchestration/frontend.md) and is drawn on
+[`chats`](../chats/frontend.md)'s page. The only thing this feature contributes
+to it is the executor's own briefing, which nobody sees.
+
 ## Pages and components
 
 | File | Responsibility |

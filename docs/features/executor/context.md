@@ -10,7 +10,8 @@ several models never write over each other and every change stays reviewable.
 
 This feature is the acting half of that: the tools the executor has, the folder
 they are confined to, the prompt that appears before anything with side effects
-happens, and — since S5.5 — the record of what changed. The user must never
+happens, the record of what changed (S5.5), and the briefing it is given when the
+user hands it the discussion (S5.6). The user must never
 discover a file was rewritten; they must be asked, see what is about to change,
 be able to say no, and afterwards read the diff of what they said yes to.
 
@@ -47,13 +48,19 @@ be able to say no, and afterwards read the diff of what they said yes to.
   the rest of the transcript, which [`chats`](../chats/context.md) owns.
 - One `DiffPart` per file a turn wrote, appended to the executor's message when
   the stream ends (`diffPartsFrom`, [`agent-turn`](../agent-turn/context.md)).
+- **The hand-off briefing** (S5.6): the paragraph `buildExecutorSection` appends
+  for the one turn "Hand to executor" schedules — implement the conclusion above,
+  do not re-open the debate, report the paths you touched. The *scheduling* of
+  that turn and of the review round after it belongs to
+  [`orchestration`](../orchestration/context.md); this feature only owns what the
+  executor is told.
 
 ## Out of scope
 
 | Not here | Who owns it |
 |---|---|
 | The transcript around the card — the message list, the code block, the composer the card sits on | [`chats`](../chats/context.md). S5.5 adds components to that page; the rules they follow are here |
-| "Hand to executor" and the review round | S5.6 |
+| Scheduling the hand-off and the review round, and the `chat.handoff` method | [`orchestration`](../orchestration/context.md), S5.6 `[x]`. The button that calls it is [`chats`](../chats/context.md)'s |
 | Opening a path in the editor, and finding `path:line` tokens in agent **text** | S5.7. In S5.5 a `file-ref` chip copies the reference, and nothing produces one yet |
 | `agents.role` as a first-class choice, the executor badge, `Chat.workdir` and its picker | [`agents`](../agents/context.md) and [`chats`](../chats/context.md), S5.2 `[x]` |
 | Tools that come from an MCP server | [`mcp`](../mcp/context.md). This feature only decides **when** one of them is confirmed |
@@ -100,6 +107,8 @@ return.
 | A non-zero exit code is a **result**, not a thrown error | Throw on failure | Failing tests are the most useful thing `run_command` returns. A throw would hide the output that explains them |
 | The chat's executor is **the first `executor` member in `position` order** | Trust `agents.role` alone | S5.2 recorded a known gap: `agents.update` can still promote a participant that is already in a chat with an executor. Two writers in one folder is exactly what the one-writer decision exists to prevent, so the tie is broken deterministically rather than by whichever turn runs first |
 | An executor in a chat with **no** `workdir` gets no tools, silently | Refuse to add the member; insert a notice | S5.2 chose to allow the member, so this is the other half of that choice. The agent is still a useful discussion partner |
+| The hand-off paragraph is a **suffix** of the same executor section, added only for that one turn | A separate section; always present | The folder and the tool list must be described once, in one order, in both situations. And the instruction is wrong outside a hand-off: an executor re-`@`-ed by a reviewer is being asked something specific, not being handed the whole discussion again |
+| It is **model-facing English**, not a `notices.*` key | An i18n key rendered into the prompt | Prompt text is in the same class as the group briefing and the skills section: the model reads it, the user never does. CLAUDE.md rule #4 governs UI copy |
 
 ## Open questions
 

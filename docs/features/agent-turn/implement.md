@@ -106,6 +106,15 @@ seven tools and what each is for, says which three pause for the user, and ends
 with the instruction that makes PLAN.md's review loop work: finish with a summary
 of every file changed and ask the others to review it.
 
+**S5.6** adds one optional flag on top: `AgentTurnOptions.handoff`, passed
+straight into `buildExecutorSection(workdir, handoff)`, which appends
+`HANDOFF_BRIEFING` — implement the conclusion above, do not re-open the debate,
+report the paths. `ChatRunner` sets it for exactly one turn, the executor's in
+the round "Hand to executor" scheduled ([`orchestration`](../orchestration/implement.md)),
+and it reaches nothing else in the turn: not the history, not the tools, not the
+result. A reviewer, and an executor re-`@`-ed later, are being asked something
+specific and must not be told the discussion is over.
+
 ### Tools attached to one turn
 
 `collectAgentTools` is the single place every tool passes through:

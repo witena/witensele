@@ -223,6 +223,7 @@ Naming conventions the whole app follows:
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is an exclusive message-id cursor |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | Resolves with the stored user message; agent output arrives as events |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent when nothing is running |
+| `chat.handoff` | `{ chatId }` | `Message` | S5.6. Stores the hand-off message and starts the implement + review run; resolves as soon as it is scheduled, like `chat.send`. Rejects `validation` with `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details` |
 
 As of **S3.3 every declared method is implemented.** The stub mechanism stays —
 `buildHandlers()` still fills any gap with

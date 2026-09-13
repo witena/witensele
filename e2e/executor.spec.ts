@@ -1,15 +1,19 @@
 /**
- * The executor: the role and the chat's working directory (S5.2), then the
- * permission prompt and the diff block (S5.5).
+ * The executor: the role and the chat's working directory (S5.2), the permission
+ * prompt and the diff block (S5.5), and the hand-off with its review round
+ * (S5.6).
  *
- * Everything up to the restart is **offline** — it is all configuration, and no
- * message is ever sent — and always runs. The last two tests are the S5.5
- * acceptance sentence: an executor bound to a temporary folder is asked to
- * create a file, the prompt card appears, Allow is clicked, the file is on disk
- * and its diff is in the transcript. That needs a local model that can emit a
- * tool call, so it is skipped — explicitly, in the report — when `qwen2.5:3b` is
- * not pulled, exactly as `mcp.spec.ts` does; without it the file still asserts
- * that a chat with no executor shows no card.
+ * Everything up to the hand-off button's disabled states is **offline** — it is
+ * all configuration, and no message is ever sent — and always runs. The three
+ * tests at the end are the S5.5 and S5.6 acceptance sentences: an executor bound
+ * to a temporary folder is asked to create a file, the prompt card appears,
+ * Allow is clicked, the file is on disk and its diff is in the transcript; and
+ * then two participants plus an executor discuss, the work is handed over, a
+ * file appears and a participant reviews it. Those need a local model that can
+ * emit a tool call, so they are skipped — explicitly, in the report — when
+ * `qwen2.5:3b` is not pulled, exactly as `mcp.spec.ts` does. Without it the file
+ * still asserts that a chat with no executor shows no card, and that the
+ * hand-off button is disabled with the reason on it.
  *
  * Two things are deliberately not driven through the UI:
  *
@@ -67,6 +71,8 @@ let workdir: string
 let notAFolder: string
 /** The folder the executor is actually let loose in, in the S5.5 tests. */
 let execdir: string
+/** A folder of its own for the S5.6 hand-off, so its assertions are about it. */
+let handoffdir: string
 let toolModelAvailable = false
 
 /** The preload bridge's envelope, restated here: `e2e/` may not import preload. */
@@ -141,6 +147,7 @@ test.beforeAll(async () => {
   userDataDir = createUserDataDir()
   workdir = mkdtempSync(join(tmpdir(), 'witena-workdir-'))
   execdir = mkdtempSync(join(tmpdir(), 'witena-execdir-'))
+  handoffdir = mkdtempSync(join(tmpdir(), 'witena-handoff-'))
   notAFolder = join(workdir, 'notes.md')
   writeFileSync(notAFolder, '# not a folder\n')
   toolModelAvailable = await probeOllamaModel(TOOL_MODEL)
@@ -161,6 +168,7 @@ test.afterAll(async () => {
   if (userDataDir) removeUserDataDir(userDataDir)
   if (workdir) rmSync(workdir, { recursive: true, force: true })
   if (execdir) rmSync(execdir, { recursive: true, force: true })
+  if (handoffdir) rmSync(handoffdir, { recursive: true, force: true })
 })
 
 test('the agent list tags the executors and only the executors', async () => {
@@ -270,6 +278,45 @@ test('the binding and the roles survive a restart', async () => {
   await expect(window.getByTestId('member-executor')).toHaveCount(1)
 })
 
+/**
+ * S5.6, offline half: the button is disabled without a folder or an executor and
+ * enabled with both, which is the step's acceptance sentence for everything a
+ * model is not needed for. The chat this runs on is the one the tests above
+ * built: Reviewer + Hands, bound to `workdir`.
+ */
+test('the hand-off button needs a folder and an executor, and says which is missing', async () => {
+  const chatId = await selectedChatId()
+  const handoff = window.getByTestId('chat-handoff')
+
+  await expect(handoff).toBeEnabled()
+  await expect(handoff).toHaveAttribute('data-blocked', '')
+
+  // No folder: the reason is on the element, so this assertion does not depend
+  // on the active language.
+  await window.getByTestId('chat-workdir-clear').click()
+  await expect(handoff).toBeDisabled()
+  await expect(handoff).toHaveAttribute('data-blocked', 'handoff_no_workdir')
+
+  expect((await call('chats.update', { id: chatId, patch: { workdir } })).ok).toBe(true)
+  await expect(handoff).toBeEnabled()
+
+  // No executor: the folder is still bound, so this is the second rule and not
+  // the first one again. The member is removed through the panel rather than
+  // through `chats.members.set`, because a membership written from outside this
+  // window is not pushed back into the member list today (see
+  // `docs/features/chats/`); the button reads the list the panel is drawing.
+  await memberRows().filter({ hasText: 'Hands' }).getByTestId('member-remove').click()
+  await expect(memberRows()).toHaveCount(1)
+  await expect(handoff).toBeDisabled()
+  await expect(handoff).toHaveAttribute('data-blocked', 'handoff_no_executor')
+
+  // …and the backend refuses it on the same rule, for a client that never saw
+  // the disabled button.
+  expect(await call('chat.handoff', { chatId })).toMatchObject({
+    error: { code: 'validation', details: { reason: 'handoff_no_executor' } }
+  })
+})
+
 /* -------------------------------------------------------------------------- */
 /* S5.5: the permission prompt and the diff block                              */
 /* -------------------------------------------------------------------------- */
@@ -365,4 +412,100 @@ test('the executor asks before writing, and the diff appears once it is allowed'
   // block in the `diff` language.
   await diff.first().getByTestId('diff-block-toggle').click()
   await expect(diff.first().getByTestId('code-block')).toHaveAttribute('data-language', 'diff')
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.6: hand to executor, and the review round                                */
+/* -------------------------------------------------------------------------- */
+
+test('hands the discussion to the executor, and a participant reviews what it did', async () => {
+  test.skip(
+    !toolModelAvailable,
+    `${TOOL_MODEL} is not available on ${OLLAMA_MODELS_URL}; the hand-off test needs a local model that can call tools.`
+  )
+  test.setTimeout(TOOL_ATTEMPTS * TOOL_CALL_MS + 240_000)
+
+  // A second participant, so the review round has more than one member in it and
+  // the "everybody except the executor" rule is visible rather than implied.
+  await openAgents(window)
+  await createAgent('Critic', 'participant')
+  // The executor keeps the tool-calling model and the prompt the S5.5 test gave
+  // it; both are set again here so this test does not depend on that one having
+  // run first.
+  await window.getByTestId('agent-item').filter({ hasText: 'Hands' }).click()
+  await window.getByTestId('agent-model').selectOption(TOOL_MODEL)
+  await window
+    .getByTestId('agent-system-prompt')
+    .fill('You write files with the write_file tool. When asked to implement something, call write_file once with the path and the content, then say what you wrote.')
+  await window.getByTestId('agent-save').click()
+  await expect(window.getByTestId('agent-save')).toBeDisabled()
+
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chats-new').click()
+  await addMember('Reviewer')
+  await addMember('Critic')
+  await addMember('Hands')
+  const chatId = await selectedChatId()
+  // Two rounds is enough for both halves — one round of discussion, and the
+  // hand-off's own implement + review pair — and keeps three small models from
+  // talking to each other for minutes. `mention-only` keeps the discussion to
+  // the two participants: the executor has a large model and a tool-calling
+  // prompt, and it has nothing useful to add before it is handed the work.
+  await window.getByTestId('chat-max-rounds').selectOption('2')
+  await window.getByTestId('chat-mode').selectOption('mention-only')
+  expect((await call('chats.update', { id: chatId, patch: { workdir: handoffdir } })).ok).toBe(true)
+  await expect(window.getByTestId('chat-workdir-chip')).toHaveText(basename(handoffdir))
+
+  // The short discussion. What it concludes does not matter; what matters is
+  // that there is a transcript above the hand-off for the executor to implement.
+  const stop = window.getByTestId('composer-stop')
+  await window
+    .getByTestId('composer-input')
+    .fill('@Reviewer @Critic in one sentence each: we need a file called PLAN.md containing the single line "Build the thing". Agree or object.')
+  await window.getByTestId('composer-input').press('Enter')
+  // Both halves of the budget: the models have to start, and the whole
+  // discussion run has to end before the hand-off can begin.
+  await expect(stop).toHaveCount(0, { timeout: 2 * TOOL_CALL_MS })
+
+  const handoff = window.getByTestId('chat-handoff')
+  await expect(handoff).toBeEnabled()
+  const reviews = window.locator('[data-testid="message-item"][data-author="Reviewer"]')
+  const reviewsBefore = await reviews.count()
+  const card = window.getByTestId('permission-card')
+
+  // The same three-attempt budget the S5.5 test uses, and for the same reason: a
+  // 3B model is not a reliable tool caller. A hand-off that produced no prompt
+  // has simply finished, and the button is enabled again.
+  let asked = false
+  for (let attempt = 0; attempt < TOOL_ATTEMPTS && !asked; attempt += 1) {
+    await handoff.click()
+    // The click is recorded in the transcript as a message of its own.
+    await expect(window.locator('[data-notice-key="handoff"]')).toHaveCount(attempt + 1)
+    try {
+      await expect(card.first()).toBeVisible({ timeout: TOOL_CALL_MS })
+      asked = true
+    } catch {
+      await expect(stop).toHaveCount(0, { timeout: TOOL_CALL_MS })
+    }
+  }
+
+  expect(
+    asked,
+    `${TOOL_MODEL} did not reach for a gated tool in ${TOOL_ATTEMPTS} hand-offs. The scheduling itself is covered by the unit suite; this case measures a small local model's willingness to call a tool.`
+  ).toBe(true)
+
+  await card.first().getByTestId('permission-allow').click()
+
+  // The file is on disk…
+  await expect(card).toHaveCount(0, { timeout: TOOL_CALL_MS })
+  await expect
+    .poll(() => readdirSync(handoffdir).length, { timeout: TOOL_CALL_MS })
+    .toBeGreaterThan(0)
+
+  // …and the review round follows: a participant speaks again, after the
+  // executor, without anybody typing anything.
+  await expect
+    .poll(() => reviews.count(), { timeout: TOOL_CALL_MS })
+    .toBeGreaterThan(reviewsBefore)
+  await expect(stop).toHaveCount(0, { timeout: TOOL_CALL_MS })
 })

@@ -38,6 +38,12 @@ can hold a real conversation and still holds it after a restart.
 - The **one executor per chat** rule (S5.2): refused by `chats.members.set`, and
   explained in advance by the member picker, which greys a second executor out.
   The executor badge on member rows and message headers is here too.
+- **"Hand to executor"** (S5.6): the button above the composer, its three
+  disabled states and the sentence each of them shows. The action it starts —
+  the executor's round and the review round after it — is
+  [`orchestration`](../orchestration/context.md)'s; this feature owns the place
+  it sits and the chat facts it reads (`workdir`, the member list, whether a run
+  is going).
 - The three renderer surfaces the executor needs (S5.5): the **permission card**
   above the composer (`stores/permissions.ts` plus `permission-card.tsx`), the
   **diff block** a `DiffPart` renders as, and the `path:line` chip a
@@ -49,7 +55,7 @@ can hold a real conversation and still holds it after a restart.
 
 | Not here | Owned by |
 |---|---|
-| Who speaks, in which order, and for how many rounds | [`orchestration`](../orchestration/context.md) |
+| Who speaks, in which order, and for how many rounds — including the hand-off's two rounds and the `chat.handoff` method behind the button | [`orchestration`](../orchestration/context.md) |
 | What one agent does during its turn | `agent-turn` |
 | Creating and editing agents | [`agents`](../agents/context.md) (S2.1) |
 | The presence state machine, the heartbeat, the two timeouts and the Retry button | [`presence`](../presence/context.md). This feature owns the `ChatSettings` fields that override the budgets, and the rows the dots are drawn on |
@@ -83,6 +89,8 @@ the next round boundary rather than mid-turn.
 | A chat with an `executor` member and **no** `workdir` is allowed | Refuse the member until a folder is bound | Configuration order is the user's. S5.4 simply attaches no executor tools, which is the same outcome with none of the ordering rules |
 | The second-executor refusal lives in `chats.members.set` | Refuse it in `agents.update`; enforce it when tools are attached | `members.set` replaces the whole list and is the only place that sees the resulting set, so it is the only place the rule can be *checked* rather than guessed. The cost is the promotion gap recorded in `backend.md` |
 | A refused `workdir` or member carries a `ValidationReason` in `details` | One more `BackendErrorCode` each; a generic `validation` line | The seven codes are a failure *taxonomy*, not a message catalogue, and four new ones would dilute it. A reason is an identifier the renderer translates, which is the same contract `SystemNoticePart` already uses for stored text |
+| The hand-off button sits **above the composer**, not in the Actions card | A third row in the Actions card; a header button | The Actions card's two actions are ordinary messages and say so in their own header comment — nothing there bypasses `chat.send`. A hand-off is a backend path of its own that schedules rounds the chat's `mode` does not describe, so it belongs beside Send, where the user already is when they decide the talking is over |
+| It is **disabled, never hidden**, and the tooltip names the missing rule | Hide it until the chat qualifies | A control that vanishes teaches nothing: "where is hand to executor?" has no answer on screen. The disabled button plus "choose a working directory first" is the answer |
 | The workdir failure is shown in the left column's `chats-error` line, like every other chats-store failure | A dedicated error line under the Working directory row | One store, one error field, one place it is rendered. A second surface for one field would be the first exception in a screen that has had none, and the reason sentence is now specific enough to be read anywhere |
 | `chats.create` takes `memberAgentIds`, and only falls back to the bootstrap agent while the agents table is empty | Always add the first agent; never add anyone | Once the user owns agents, deciding who is in a chat is theirs. The fallback is kept because it is the only thing that makes the *first* chat of a fresh install answerable |
 | `ChatCreateInput` carries `memberAgentIds` rather than `Chat` carrying members | Put a member list on `Chat`; save the chat and then its members | Membership is a separate table and not a property of the chat row, but a chat created from the picker must be born with its members rather than saved twice |

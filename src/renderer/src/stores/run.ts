@@ -1,5 +1,6 @@
 /**
- * Whether a chat is currently running, and the two actions that change that.
+ * Whether a chat is currently running, and the three actions that change that:
+ * `send`, `handoff` (S5.6) and `stop`.
  *
  * The state is **entirely derived from `run.*` events**, never from the local
  * `send()` call: the backend decides when a run starts (a message sent during an
@@ -32,6 +33,18 @@ function classify(cause: unknown): BackendErrorCode {
   return cause instanceof BackendClientError ? cause.code : 'internal'
 }
 
+/**
+ * The `details` a refusal carried, or `undefined`.
+ *
+ * Kept beside the code because a `validation` on this store can now be one of
+ * three hand-off rules (S5.6), and `translateFailure` needs the identifier in
+ * `details` to say which — the generic "the request was rejected as invalid"
+ * would be the one sentence that helps nobody here.
+ */
+function detailsOf(cause: unknown): unknown {
+  return cause instanceof BackendClientError ? cause.details : undefined
+}
+
 export interface RunState {
   /** Backend-owned: the run of each chat, or absent when that chat is idle. */
   activeByChat: Record<string, ActiveRun>
@@ -39,6 +52,8 @@ export interface RunState {
   sendingByChat: Record<string, boolean>
   error?: string | undefined
   errorCode?: BackendErrorCode | undefined
+  /** `BackendError.details` of the last failure; narrowed by `translateFailure`. */
+  errorDetails?: unknown
 
   /**
    * Sends a message. Never rejects; a failure lands in `error`.
@@ -49,6 +64,16 @@ export interface RunState {
    * a future autocomplete name a member the plain text does not spell out.
    */
   send: (chatId: string, text: string, mentions?: string[]) => Promise<boolean>
+  /**
+   * Hands the chat to its executor (S5.6). Never rejects; a refusal lands in
+   * `error` / `errorCode` / `errorDetails`, which is what the composer prints.
+   *
+   * It goes through the run store rather than the chats store because what it
+   * starts is a **run**: the Stop button, the round status and this call are the
+   * same piece of state, and the three refusals are read with the same
+   * `translateFailure` the composer already uses for a failed send.
+   */
+  handoff: (chatId: string) => Promise<boolean>
   /**
    * Forgets the last failure.
    *
@@ -70,9 +95,10 @@ export const useRunStore = create<RunState>()((set) => ({
   sendingByChat: {},
   error: undefined,
   errorCode: undefined,
+  errorDetails: undefined,
 
   clearError() {
-    set({ error: undefined, errorCode: undefined })
+    set({ error: undefined, errorCode: undefined, errorDetails: undefined })
   },
 
   async send(chatId, text, mentions) {
@@ -82,7 +108,8 @@ export const useRunStore = create<RunState>()((set) => ({
     set((state) => ({
       sendingByChat: { ...state.sendingByChat, [chatId]: true },
       error: undefined,
-      errorCode: undefined
+      errorCode: undefined,
+      errorDetails: undefined
     }))
     try {
       // The stored message arrives as `message.created` too, so nothing is done
@@ -94,7 +121,33 @@ export const useRunStore = create<RunState>()((set) => ({
       })
       return true
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause) })
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
+      return false
+    } finally {
+      set((state) => {
+        const { [chatId]: _sending, ...sendingByChat } = state.sendingByChat
+        return { sendingByChat }
+      })
+    }
+  },
+
+  async handoff(chatId) {
+    // `sendingByChat` covers this call too: it is what keeps the button (and the
+    // composer) from starting a second run in the fraction of a second before
+    // `run.started` arrives, and the disabled state is then one rule, not two.
+    set((state) => ({
+      sendingByChat: { ...state.sendingByChat, [chatId]: true },
+      error: undefined,
+      errorCode: undefined,
+      errorDetails: undefined
+    }))
+    try {
+      // The stored hand-off message arrives as `message.created`, like a sent
+      // one, so the return value is deliberately dropped here as well.
+      await getBackend().invoke('chat.handoff', { chatId })
+      return true
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
       return false
     } finally {
       set((state) => {
@@ -108,7 +161,7 @@ export const useRunStore = create<RunState>()((set) => ({
     try {
       await getBackend().invoke('chat.stop', { chatId })
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause) })
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
     }
     // The authoritative clear is `run.finished`; this only stops the button from
     // sitting there while the abort unwinds.

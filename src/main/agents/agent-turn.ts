@@ -228,6 +228,17 @@ export interface AgentTurnOptions {
    * rather than a race between concurrent turns.
    */
   history?: Message[]
+  /**
+   * True for the one turn "Hand to executor" schedules (S5.6).
+   *
+   * It only extends the executor's briefing — implement the conclusion above,
+   * do not re-open the debate, report the paths you touched — and reaches no
+   * other part of the turn. The runner sets it for the agent it handed the work
+   * to, in that round only: a reviewer told to "implement the conclusion" would
+   * be the wrong instruction, and an executor re-@'d later is being asked
+   * something specific rather than being handed the whole discussion again.
+   */
+  handoff?: boolean
   /** Aborting it stops the turn; the message ends as `error` / `'aborted'`. */
   signal: AbortSignal
   /** A model client built by the caller. Omitted, `createModel` builds one. */
@@ -410,7 +421,9 @@ export function buildSystemPrompt(
   ctx: AppContext,
   chat: Chat,
   agent: Agent,
-  members: Agent[]
+  members: Agent[],
+  /** True for the executor's turn in a hand-off run (S5.6). */
+  handoff = false
 ): string {
   const language = resolveMainLanguage(ctx.repos.settings.get(ctx.userId).language)
   const briefing = buildGroupBriefing({
@@ -423,7 +436,7 @@ export function buildSystemPrompt(
   const sections = [agent.systemPrompt.trim(), briefing]
 
   if (executorWorkdir(chat, agent, members)) {
-    sections.push(buildExecutorSection(chat.workdir as string))
+    sections.push(buildExecutorSection(chat.workdir as string, handoff))
   }
 
   const skills = buildSkillsSection(enabledSkills(ctx, agent))
@@ -742,7 +755,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const agentsById = Object.fromEntries(members.map((member) => [member.id, member]))
     const origins = attached?.origins ?? {}
 
-    const system = buildSystemPrompt(ctx, chat, agent, members)
+    const system = buildSystemPrompt(ctx, chat, agent, members, options.handoff === true)
     // Both history paths go through the budget: the sequential turn's fresh read
     // and the snapshot the runner took once for a parallel round. A long chat
     // overflows every speaker at the same moment, so exempting either one would

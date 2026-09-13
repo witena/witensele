@@ -6,11 +6,18 @@ button, the run status in the header, the round and "replying to" labels on a
 message, and the highlighted `@Name` tokens in a reply. S2.5 polishes all of it;
 S2.3 made it real.
 
+S5.6 adds the one **control** that is this feature's own: "Hand to executor",
+directly above the composer. It is the second way to start a run, so it lives in
+the run store beside `send` and `stop` rather than in the Actions card, whose two
+actions are deliberately ordinary messages.
+
 ## The renderer's half
 
 | File | Responsibility |
 |---|---|
-| `src/renderer/src/stores/run.ts` | `activeByChat`, reduced from `run.started` / `run.round` / `run.finished`; `send(chatId, text, mentions?)` and `stop` |
+| `src/renderer/src/stores/run.ts` | `activeByChat`, reduced from `run.started` / `run.round` / `run.finished`; `send(chatId, text, mentions?)`, `handoff(chatId)` (S5.6) and `stop`; `errorDetails` beside `errorCode`, so a refusal's `ValidationReason` survives to the sentence |
+| `src/renderer/src/components/chat/handoff-button.tsx` | The button above the composer: always drawn for a selected chat, disabled with the reason in its `title` and in `data-blocked` |
+| `src/renderer/src/components/chat/handoff.ts` | `handoffBlocker({ workdir, members, running })` → the `ValidationReason` that disables it, or `null`. Pure, and the same three rules the backend applies in the same order |
 | `src/renderer/src/lib/event-bridge.ts` | Routes the three `run.*` events into the store |
 | `src/renderer/src/pages/chats-page.tsx` | The header's run status, and the members it passes to the composer and the message list |
 | `src/renderer/src/components/chat/composer.tsx` | Renders Stop instead of Send while a run is active, and resolves `@Name` before sending |
@@ -21,7 +28,8 @@ S2.3 made it real.
 | Store | Field | Type | Meaning |
 |---|---|---|---|
 | `run` | `activeByChat` | `Record<string, { round, speakers }>` | Backend-owned. Present = a run is in flight |
-| `run` | `sendingByChat` | `Record<string, boolean>` | Local; covers the `chat.send` round trip before `run.started` arrives |
+| `run` | `sendingByChat` | `Record<string, boolean>` | Local; covers the `chat.send` **or `chat.handoff`** round trip before `run.started` arrives |
+| `run` | `errorDetails` | `unknown` | The `details` of the last refusal; `translateFailure` narrows it to a `ValidationReason` |
 
 The rule the store is written around: **the run state comes from the events, not
 from the local `send()` call.** A message sent during an active run joins that
@@ -65,6 +73,7 @@ them language-independent.
 | Call / subscription | Called from | Purpose |
 |---|---|---|
 | `invoke('chat.send', { chatId, text, mentions? })` | The composer, on Enter or Send | Stores the message and starts or joins a run. `mentions` is what the composer resolved with `parseMentions`; the backend parses the text again, so it is a hint rather than the authority |
+| `invoke('chat.handoff', { chatId })` | The "Hand to executor" button | Stores the hand-off message and runs implement + review. Refused with `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active`, which are the three states the button is already disabled in — the call is what a stale window or a second client meets |
 | `invoke('chat.stop', { chatId })` | The Stop button | Aborts every active turn and drops what is pending |
 | `subscribeTo('run.*')` (via the bridge) | Bootstrap | Drives the Send / Stop swap and the header status |
 
@@ -79,6 +88,9 @@ them language-independent.
 | max rounds | The button returns to Send and a notice line explains why nobody is speaking any more |
 | nobody mentioned | In `mention-only`: no agent row at all, one notice line |
 | error | The button returns to Send; the failure is on the message row. A run that failed entirely also leaves a `runFailed` notice |
+| hand-off available | "Hand to executor" is enabled: the chat has a folder, has an executor, and is idle |
+| hand-off unavailable | The same button, **disabled**, with the missing rule in its `title` — no folder, no executor, or a run in flight. Disabled rather than hidden: a control that vanishes teaches nothing |
+| handed over | The transcript gains a user row reading "Handed to X…", the executor answers alone, and every other member reviews in the next round. Nothing else about the screen is special |
 
 Sending while a run is active is **not** blocked: the message appears
 immediately and is answered from the next round. See the decision table in
@@ -97,6 +109,10 @@ immediately and is answered from the next round. See the decision table in
 | `notices.agentSkipped` | Written by `agent-turn` when the hard timeout skipped a member; see [`presence`](../presence/frontend.md) |
 | `notices.allOffline` | Written by the runner when every speaker of a round is offline |
 | `notices.contextTruncated` | Written once per run per agent when `fitHistory` had to drop messages, with `{{agent}}` and `{{dropped}}` (S4.2) |
+| `chat.handoff` | The button's label |
+| `chat.handoffTitle` | Its tooltip while it is enabled |
+| `errors.handoff_no_workdir`, `errors.handoff_no_executor`, `errors.handoff_run_active` | The tooltip while it is **disabled**, and the sentence under the composer if the call is refused anyway. One set of words for one rule |
+| `notices.handoff` | The hand-off message itself, with `{{agent}}` — rendered by `translateNotice` on a `user` row (S5.6) |
 | `notices.runStopped` | Reserved; Stop writes no notice, because the interrupted row already says so |
 
 ## Accessibility and keyboard

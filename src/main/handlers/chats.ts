@@ -334,6 +334,16 @@ export const chatHandlers: HandlerModule = {
     })
   },
 
+  'chat.handoff': async (ctx, input) => {
+    const chatId = (input as { chatId?: unknown })?.chatId
+    if (typeof chatId !== 'string' || chatId.length === 0) throw validation('A chat id is required')
+    // Everything else this refuses — no folder, no executor, a run already in
+    // flight — is a fact about the *run*, and the runner is the only object that
+    // holds all three. It rejects with a `ValidationReason` the renderer
+    // translates; see `ChatRunner.handoff`.
+    return ctx.runners.handoff({ chatId })
+  },
+
   'chat.stop': async (ctx, input) => {
     const chatId = (input as { chatId?: unknown })?.chatId
     if (typeof chatId !== 'string' || chatId.length === 0) throw validation('A chat id is required')

@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod } from '@shared/backend'
+import { BackendClientError } from '../lib/backend'
 import { LOCAL_USER_ID, type Message } from '@shared/types'
 import { applyBackendEvent } from '../lib/event-bridge'
 import { resetBackend, setBackend } from '../lib/backend-provider'
@@ -41,7 +42,7 @@ function fakeBackend(failure: Error | null = null): Call[] {
     invoke: (async (method: BackendMethod, input: unknown) => {
       calls.push({ method, input })
       if (failure) throw failure
-      return method === 'chat.send' ? stored : undefined
+      return method === 'chat.send' || method === 'chat.handoff' ? stored : undefined
     }) as BackendClient['invoke'],
     subscribe: () => () => {}
   })
@@ -55,7 +56,8 @@ beforeEach(() => {
     activeByChat: {},
     sendingByChat: {},
     error: undefined,
-    errorCode: undefined
+    errorCode: undefined,
+    errorDetails: undefined
   })
 })
 
@@ -179,5 +181,33 @@ describe('run store', () => {
 
     await expect(useRunStore.getState().stop(CHAT)).resolves.toBeUndefined()
     expect(useRunStore.getState().error).toContain('gone')
+  })
+
+  it('hands the chat over with nothing but its id (S5.6)', async () => {
+    const calls = fakeBackend()
+
+    await expect(useRunStore.getState().handoff(CHAT)).resolves.toBe(true)
+
+    expect(calls).toEqual([{ method: 'chat.handoff', input: { chatId: CHAT } }])
+    // The run is announced by `run.started`, here as everywhere else.
+    expect(active()).toBeUndefined()
+    expect(useRunStore.getState().sendingByChat[CHAT]).toBeUndefined()
+  })
+
+  it('keeps the refusal’s reason so the composer can name it', async () => {
+    fakeBackend(
+      new BackendClientError({
+        code: 'validation',
+        message: 'this chat is not bound to a working directory',
+        details: { reason: 'handoff_no_workdir' }
+      })
+    )
+
+    await expect(useRunStore.getState().handoff(CHAT)).resolves.toBe(false)
+
+    expect(useRunStore.getState().errorCode).toBe('validation')
+    // `translateFailure` narrows on this; the generic sentence would be the one
+    // that helps nobody here.
+    expect(useRunStore.getState().errorDetails).toEqual({ reason: 'handoff_no_workdir' })
   })
 })

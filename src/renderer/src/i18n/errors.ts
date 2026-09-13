@@ -76,6 +76,12 @@ export function validationReasonMessage(t: TranslateFn, reason: ValidationReason
       return t('errors.oauth_unsupported_provider')
     case 'oauth_custom_base_url':
       return t('errors.oauth_custom_base_url')
+    case 'handoff_no_workdir':
+      return t('errors.handoff_no_workdir')
+    case 'handoff_no_executor':
+      return t('errors.handoff_no_executor')
+    case 'handoff_run_active':
+      return t('errors.handoff_run_active')
   }
 }
 

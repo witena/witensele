@@ -542,7 +542,9 @@ describe('handlers/stubs', () => {
       'providers.login',
       'providers.logout',
       // S5.4
-      'permission.reply'
+      'permission.reply',
+      // S5.6
+      'chat.handoff'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

@@ -150,6 +150,25 @@ export class PermissionDeniedError extends Error {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * The paragraph added to the briefing when the user pressed "Hand to executor"
+ * (S5.6).
+ *
+ * It answers the one question the standing briefing leaves open in that moment:
+ * the model has just been given a transcript full of *proposals*, and without
+ * this it reads them as an invitation to add a seventh opinion. So it says the
+ * discussion is over, that the conclusion above is what to build, and that the
+ * report has to name paths — the review round that follows is reading the diff,
+ * and a summary without file names is not something anybody can check.
+ *
+ * Model-facing English, not an i18n key, exactly like the rest of the section.
+ */
+export const HANDOFF_BRIEFING = [
+  'The discussion above has finished and the user has handed it to you. Implement the conclusion the group reached, in this working directory, now.',
+  'Do not re-open the debate, do not ask which option to take, and do not propose an alternative: if the conclusion is genuinely ambiguous, implement the smallest reading of it and say what you assumed.',
+  'When you are done, report what you changed file by file, with the path of each one, so the others can review it.'
+].join(' ')
+
+/**
  * The `Executor` section of the system prompt.
  *
  * Model-facing text, so it is English only and not an i18n key — the same rule
@@ -158,8 +177,12 @@ export class PermissionDeniedError extends Error {
  * bound to, what each tool is for, and what to do at the end (summarize, ask for
  * review) — PLAN.md's review loop only works if the executor closes its turn
  * with something the others can review.
+ *
+ * `handoff` appends `HANDOFF_BRIEFING` for the one turn "Hand to executor"
+ * schedules. It is a *suffix* rather than a different section so the folder and
+ * the tool list are described once, in one order, in both situations.
  */
-export function buildExecutorSection(workdir: string): string {
+export function buildExecutorSection(workdir: string, handoff = false): string {
   return [
     'You are the executor of this chat: the one member allowed to change anything. Your working directory is:',
     '',
@@ -178,7 +201,8 @@ export function buildExecutorSection(workdir: string): string {
     '',
     `${WRITE_FILE_TOOL}, ${EDIT_FILE_TOOL} and ${RUN_COMMAND_TOOL} pause until the user allows or declines the call. A declined call is an answer, not a failure: do not retry it, say what you wanted to do and why.`,
     '',
-    `Read a file before you edit it, prefer ${EDIT_FILE_TOOL} over rewriting a whole file, and make the smallest change that does the job. When you are finished, end your message with a short summary of every file you changed and what it now does, and ask the others to review it.`
+    `Read a file before you edit it, prefer ${EDIT_FILE_TOOL} over rewriting a whole file, and make the smallest change that does the job. When you are finished, end your message with a short summary of every file you changed and what it now does, and ask the others to review it.`,
+    ...(handoff ? ['', HANDOFF_BRIEFING] : [])
   ].join('\n')
 }
 

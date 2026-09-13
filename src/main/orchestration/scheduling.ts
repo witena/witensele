@@ -14,6 +14,8 @@
  * | A user message, `roundrobin` | every member, in `position` order |
  * | A user message, `mention-only` | the members the message mentioned, in `position` order |
  * | The round that just ended | every member mentioned by that round's replies, minus self-mentions, minus non-members, minus the repliers that `passed` |
+ * | "Hand to executor" (S5.6) | the chat's executor, alone, whatever the mode |
+ * | The round after that one | every other member, in `position` order, reviewing what it changed |
  *
  * Two details that are decisions rather than implementation:
  *
@@ -129,6 +131,47 @@ export function planFromReplies(
       if (!memberIds.includes(agentId)) continue
       addSource(sources, agentId, reply.agentId)
     }
+  }
+  return toPlan(memberIds, sources)
+}
+
+/**
+ * The first round of a hand-off (S5.6): the executor, alone, answering the user.
+ *
+ * It ignores the chat's `mode` on purpose. "Hand to executor" is not a message
+ * everybody is invited to answer — the whole point of PLAN.md's one-writer rule
+ * is that exactly one member touches the folder — so a `roundrobin` chat must
+ * not put four models in front of the executor before it starts working.
+ *
+ * An executor that is no longer a member schedules nobody, which the runner
+ * reads as an empty plan and finishes on. `memberIds` is therefore the filter
+ * here as everywhere else.
+ */
+export function planFromHandoff(memberIds: readonly string[], executorId: string): RoundPlan {
+  const sources = new Map<string, string[]>()
+  if (memberIds.includes(executorId)) addSource(sources, executorId, USER_SOURCE)
+  return toPlan(memberIds, sources)
+}
+
+/**
+ * The review round of a hand-off: everybody **except** the executor, in
+ * `position` order, replying to it.
+ *
+ * Every other member rather than "every participant": a chat that somehow holds
+ * two executors (S5.2's known gap — `agents.update` can promote a member) has
+ * exactly one that `executorWorkdir` armed, and the other one has no tools and
+ * nothing to lose by reviewing. The rule "whoever did not just write the code
+ * reads it" is also the one that stays true if roles grow a third value.
+ *
+ * The round is scheduled whatever the chat's `mode` is, for the same reason the
+ * hand-off round ignores it: the user asked for a review, and `mention-only`
+ * would silently answer with nothing because a notice is not a review.
+ */
+export function planFromReview(memberIds: readonly string[], executorId: string): RoundPlan {
+  const sources = new Map<string, string[]>()
+  for (const id of memberIds) {
+    if (id === executorId) continue
+    addSource(sources, id, executorId)
   }
   return toPlan(memberIds, sources)
 }

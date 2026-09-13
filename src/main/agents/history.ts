@@ -73,7 +73,13 @@ const NOTICE_TEXT: Record<string, (params: Record<string, string | number>) => s
     `window, so the ${String(params['dropped'] ?? 'oldest')} oldest messages were left out of its view.`,
   toolsUnsupported: (params) =>
     `${String(params['agent'] ?? 'An agent')}'s model cannot use tools, so it answered without them.`,
-  allOffline: () => 'Every member of this chat was offline, so nobody answered.'
+  allOffline: () => 'Every member of this chat was offline, so nobody answered.',
+  // The one notice that is a *request* rather than a report (S5.6): it is the
+  // whole content of the message the hand-off button stores, so a key with no
+  // rendering here would leave the executor with an empty turn to answer.
+  handoff: (params) =>
+    `The user handed the discussion to ${String(params['agent'] ?? 'the executor')}: ` +
+    'implement the conclusion reached above in the working directory, then report what changed.'
 }
 
 /**

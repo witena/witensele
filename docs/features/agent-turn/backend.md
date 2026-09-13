@@ -26,8 +26,11 @@ The prompt sections and the built-in tools themselves live with their features:
 `executor/tools.ts` ([`../executor/backend.md`](../executor/backend.md)). This
 file decides the **order** of the sections and **which** tools an agent gets.
 
-`buildSystemPrompt(ctx, chat, agent, members)` takes the chat since S5.4, because
-the executor section names the folder; `collectAgentTools(ctx, chat, agent, {
+`buildSystemPrompt(ctx, chat, agent, members, handoff?)` takes the chat since
+S5.4, because the executor section names the folder, and the `handoff` flag since
+S5.6, because the one turn a hand-off schedules is briefed to implement the
+conclusion rather than to join the discussion (`AgentTurnOptions.handoff`, set
+only by `ChatRunner.handoff`'s round); `collectAgentTools(ctx, chat, agent, {
 signal, toolTimeoutMs, members })` takes it for the same reason plus the
 member list, which is how the chat's executor is picked deterministically.
 

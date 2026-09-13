@@ -648,7 +648,13 @@ export const VALIDATION_REASONS = [
   /** `auth: 'oauth'` on a provider type that has no sign-in flow yet. */
   'oauth_unsupported_provider',
   /** `auth: 'oauth'` together with a custom base URL, which cannot be signed into. */
-  'oauth_custom_base_url'
+  'oauth_custom_base_url',
+  /** `chat.handoff` on a chat that is not bound to a folder (S5.6). */
+  'handoff_no_workdir',
+  /** `chat.handoff` on a chat whose members include no executor (S5.6). */
+  'handoff_no_executor',
+  /** `chat.handoff` while a run of that chat is still going (S5.6). */
+  'handoff_run_active'
 ] as const
 
 export type ValidationReason = (typeof VALIDATION_REASONS)[number]

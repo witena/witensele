@@ -10,7 +10,7 @@ Three modules:
 | File | Shape |
 |---|---|
 | `src/shared/mentions.ts` | Pure. `parseMentions(text, members) → agentId[]`, plus `findMentions` and `splitMentions` for the renderer. Shared with the composer so both sides resolve `@Name` identically |
-| `src/main/orchestration/scheduling.ts` | Pure. Member ids + already-parsed mentions → a `RoundPlan`. No database, no events, no clock |
+| `src/main/orchestration/scheduling.ts` | Pure. Member ids + already-parsed mentions → a `RoundPlan`. No database, no events, no clock. Since S5.6 also `planFromHandoff` (the executor alone) and `planFromReview` (everybody else) |
 | `src/main/orchestration/chat-runner.ts` | Stateful. `ChatRunner` (one per chat) and `ChatRunnerRegistry` (the map on `AppContext`) |
 
 A runner is stateful because a run outlives the IPC call that started it: `send`
@@ -21,7 +21,7 @@ controller, and the pending list must survive between calls.
 ## The state machine
 
 ```
-                    ┌──────────────── send() while idle ────────────────┐
+                    ┌───────── send() / handoff() while idle ──────────┐
                     ▼                                                   │
   idle ──────► run.started ──► [round loop] ──► run.finished ──► idle ──┘
                                    ▲   │
@@ -45,6 +45,20 @@ plan    = pending.length > 0
      mergePlans(memberIds, planFromUserMessages(chat.settings.mode, memberIds, pending), carried))
   : carried
 carried = EMPTY_PLAN
+
+// S5.6: the two rounds a hand-off owns, one per iteration, merged with
+// whatever else was scheduled rather than replacing it.
+implementing = null
+if (handoffTo !== null && handoffStage !== 'done') {
+  if (handoffStage === 'executor') {
+    implementing = handoffTo
+    plan = mergePlans(memberIds, planFromHandoff(memberIds, handoffTo), plan)
+    handoffStage = 'review'
+  } else {
+    plan = mergePlans(memberIds, planFromReview(memberIds, handoffTo), plan)
+    handoffStage = 'done'
+  }
+}
 
 if (plan.speakers.length === 0) {                 // nothing to schedule
   if (pending.length > 0) notice('noMentions')    // mention-only, nobody named
@@ -88,6 +102,8 @@ entry is recorded as an errored outcome and logged.
 | User message(s), `roundrobin` | every member, `position` order |
 | User message(s), `mention-only` | the mentioned members, `position` order |
 | The round that just ended | every member mentioned by its replies, minus self-mentions, minus non-members, minus `passed` repliers |
+| `handoff()`, first round | the chat's executor, alone, `inReplyTo: ['user']` — the chat's `mode` is not consulted |
+| `handoff()`, second round | every other member, in `position` order, `inReplyTo: [executorId]` |
 
 Each plan also carries `inReplyTo`: speaker id → who pulled them in (agent ids,
 or the literal `'user'`). It is passed to `runAgentTurn` and stored on the
@@ -127,6 +143,32 @@ the loop takes the pending list
 
 The list is taken **before** the round runs, so a message that lands during that
 round schedules the round after it.
+
+### A hand-off (S5.6)
+
+```
+chat.handoff
+  → ChatRunner.handoff({ chatId })
+      chats.get(chatId)                          // not_found before anything is written
+      chat.workdir  ?? throw validation('handoff_no_workdir')
+      executor = first member with role 'executor'
+                ?? throw validation('handoff_no_executor')
+      #running !== null → throw validation('handoff_run_active')
+      messages.create({ senderType: 'user', parts: [handoff notice], mentions: [executor.id] })
+      emit message.created
+      #handoffTo = executor.id; #start()
+  ← resolves with the stored message
+
+… the loop …
+  round 1: [executor]              (handoff: true on that turn's briefing)
+  round 2: [every other member]    (reviewing, fed by the executor's message)
+  round 3+: ordinary @ scheduling, capped by maxAutoRounds
+```
+
+The three refusals are `ValidationReason`s rather than bare `validation`s, and
+the renderer computes the **same three** from the chat record to decide whether
+to enable the button (`components/chat/handoff.ts`), in the same order, so the
+tooltip and the rejection can never name different rules.
 
 ### Stop
 
@@ -208,7 +250,12 @@ wrapper that only reads the `message.created` of each turn to learn its
 | `src/renderer/src/stores/run.test.ts` | The composer's resolved mentions reaching `chat.send`, and an empty list being omitted |
 | `src/main/orchestration/chat-runner.test.ts` (`describe('ChatRunner (usage, truncation and titles)')`) | S4.1–S4.3 through the handlers: `messages.usageSummary` summing per agent and pricing a known model, an empty summary and `not_found`; the `contextTruncated` notice appearing once per run with the agent and the count, and not appearing when the history fits; a title generated from a mock model's `doGenerate`, sanitised, falling back when the generator returns `null` or throws, never replacing a title the user set or set later, and never written when every turn failed; a trailing `[PASS]` leaving the status `done` while disappearing from the next speaker's prompt; and `chats.search` finding a chat by a word in one of its messages |
 | `e2e/polish.spec.ts` | Against a real local model: the header and member-row token counts, the automatic title replacing `New chat`, and the search box filtering the left column |
+| `src/main/orchestration/chat-runner.test.ts` (`describe('ChatRunner (hand to executor)')`) | S5.6, nine cases: the stored message (a `user` row carrying the `handoff` key and mentioning only the executor), the executor speaking alone in a `roundrobin` chat followed by one review round with the other two in `position` order and their `inReplyTo`, the extended briefing in the handed-over turn's prompt and the executor's answer in the reviewers' prompts, no review round when the executor is the only member, a reviewer's `@` scheduling another executor round whose prompt no longer carries the hand-off briefing until `maxAutoRounds` takes the floor back, a Stop inside the executor's tool call leaving `permissions.pending()` empty and nothing on disk, and the three refusals |
+| `src/main/orchestration/scheduling.test.ts` (S5.6 block) | `planFromHandoff` and `planFromReview`, including an executor that has left the chat and an executor that is the only member |
+| `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker`: the enabled case, the three refusals, a blank `workdir`, and the order the rules are applied in |
+| `src/renderer/src/stores/run.test.ts` (S5.6 block) | `handoff` calling `chat.handoff` with nothing but the id, and a refusal keeping its `details` so the composer can name the reason |
 | `e2e/orchestration.spec.ts` | Two real models: round-robin in round 1, parallel streaming both rows at once, `mention-only` answering with one member, and the `noMentions` notice |
+| `e2e/executor.spec.ts` | Offline: the hand-off button's `data-blocked` naming the rule that disabled it, and the backend refusing on the same rule. Behind the `qwen2.5:3b` guard: two participants plus an executor discuss, "Hand to executor" is clicked, the permission prompt is allowed, a file appears in the folder and a participant speaks again |
 
 ## Known limitations and TODOs
 
@@ -227,6 +274,13 @@ wrapper that only reads the `message.created` of each turn to learn its
 - **The title request costs one extra model call per chat**, on the first member's
   model. It is capped at 24 output tokens and 15 seconds, and it is skipped
   entirely once the title is not the default.
+- **`maxAutoRounds: 1` implements without a review.** The hand-off's two rounds
+  count towards the cap like any others, so a chat capped at one round stops
+  after the executor with the `maxRoundsReached` notice. Exempting them was
+  rejected (see `context.md`); the default is 3, where both rounds fit.
+- **A hand-off is refused while a run is active** rather than queued, and the
+  button is disabled in that state. A user who wants both has to wait or press
+  Stop.
 - **A run does not summarise itself.** With `maxAutoRounds` reached, the user
   gets a notice and has to read the rounds; PLAN's "ask an agent to summarise" is
   a later action.

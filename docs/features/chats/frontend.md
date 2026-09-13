@@ -9,6 +9,8 @@
 | `src/renderer/src/components/chat/message-list.tsx` | The virtualized scroller (react-virtuoso): `followOutput` only while at the bottom, the "jump to latest" pill, and the day separators |
 | `src/renderer/src/components/chat/transcript-rows.ts` | The transcript's pure transforms: `buildTranscriptRows` / `dayBucket` (`Message[]` → the flat row array the virtualizer renders) and, since S5.5, `collectDiffs`, `collectFileRefs`, `countDiffLines` and `formatFileRef` — the part-level cases a message row draws. Unit-tested |
 | `src/renderer/src/components/chat/message-item.tsx` | One message row: avatar + presence dot, header (name, model badge, round, "replying to @who", time), reasoning, tool cards, the S5.5 diff blocks and file-reference chips, body, streaming cursor, status hint. A `system` message takes the short branch: one centred dimmed line, no avatar and no name |
+| `src/renderer/src/components/chat/handoff-button.tsx` | "Hand to executor" (S5.6), between the permission stack and the composer: enabled only for an idle chat with a folder and an executor, and otherwise disabled with the reason in its `title` and in `data-blocked` |
+| `src/renderer/src/components/chat/handoff.ts` | `handoffBlocker({ workdir, members, running })` → the `ValidationReason` that disables the button, or `null`. The same three rules the backend applies, in the same order. Pure and unit-tested |
 | `src/renderer/src/components/chat/permission-card.tsx` | The executor's permission prompt (S5.5): one card per pending request, above the composer, with Allow / Always allow in this chat / Deny. Enter allows and Escape denies, handled on the card so the composer keeps Enter |
 | `src/renderer/src/components/chat/permission-input.ts` | `describePermissionInput`: what the card shows about a call — a command line **verbatim**, a path plus a capped content preview, the patch of an edit, or raw JSON. Pure and unit-tested |
 | `src/renderer/src/components/chat/diff-block.tsx` | One `DiffPart`: a collapsed header with the path and the `+`/`-` counts, opening onto `CodeBlock` in the `diff` language |
@@ -77,6 +79,7 @@ selector re-renders on every store write.
 | `invoke('system.pickFolder')` + `invoke('chats.update')` | "Choose…" in the Working directory row, through `chooseWorkdir` | The native modal, then the binding. A cancelled dialog writes nothing and leaves no error |
 | `invoke('chats.update')` | "Clear" in the Working directory row, through `setWorkdir(id, null)` | Unbinds the folder; the one path that needs no dialog |
 | `invoke('providers.list')` | `providers.load()` on mount | The provider name in the member picker |
+| `invoke('chat.handoff')` | The "Hand to executor" button, through `run.handoff(chatId)` | Stores the hand-off message and runs implement + review ([`orchestration`](../orchestration/frontend.md)). Refused with the same three reasons the button is disabled for, which the composer's error line then prints |
 | `invoke('chat.stop')` | The Stop button | Aborts the run — which also closes every open permission prompt as `aborted` |
 | `invoke('permission.reply')` | The permission card's three buttons, through `permissions.reply` | Releases the suspended tool call. A rejection (`not_found`) drops the card: the prompt is stale, not broken |
 | `subscribe(...)` | `startEventBridge()` in `main.tsx`, once at bootstrap | Fans `message.*`, `chat.*`, `run.*` and `presence.changed` into the stores |
@@ -102,7 +105,7 @@ Event handling is written once, in `lib/event-bridge.ts`:
 
 | State | What the user sees |
 |---|---|
-| idle | Composer enabled with a Send button; no Stop |
+| idle | Composer enabled with a Send button; no Stop. "Hand to executor" above it is enabled when the chat has a folder and an executor, and disabled — with the missing rule in its tooltip — when it does not |
 | loading | The list and the transcript are simply empty while the first call resolves |
 | streaming | The agent's row grows token by token with a blinking accent cursor, its presence dot is red, and Send is replaced by Stop. While *reasoning* is arriving and the text has not started, the reasoning block is auto-expanded and pulsing; it collapses again on the first text token, unless the user has toggled it by hand |
 | scrolled up | New messages no longer move the viewport; a floating "Jump to latest" pill appears and scrolls to the end |
@@ -151,7 +154,8 @@ New keys, all under the existing namespaces:
 | `chat.workdir`, `chat.workdirHint`, `chat.workdirNone`, `chat.workdirChoose`, `chat.workdirClear` | The Working directory row. The **path itself is never translated** — it is data, printed as it is stored |
 | `chat.executorTaken` | The picker's sub-line on a second executor |
 | `agents.executorBadge`, `agents.executorBadgeTitle` | The chip and its tooltip, shared with the Agents page — the copy belongs to the role, which `agents` owns |
-| `errors.workdir_not_absolute`, `errors.workdir_missing`, `errors.workdir_not_directory`, `errors.second_executor` | The four `ValidationReason` sentences, resolved by `translateFailure` |
+| `chat.handoff`, `chat.handoffTitle` | The "Hand to executor" button and its tooltip while it is enabled (S5.6) |
+| `errors.workdir_not_absolute`, `errors.workdir_missing`, `errors.workdir_not_directory`, `errors.second_executor`, `errors.handoff_no_workdir`, `errors.handoff_no_executor`, `errors.handoff_run_active` | The `ValidationReason` sentences, resolved by `translateFailure`. The last three are also the **disabled** hand-off button's tooltip: one set of words whether the rule is applied before the click or after it |
 | `chat.mentionAllHint` | The subtitle of the popover's `@all` row |
 | `chat.copy`, `chat.copied`, `chat.copyCode` | The code block's Copy button, its confirmed state and its accessible name |
 | `chat.toolRunning`, `chat.toolDone`, `chat.toolError`, `chat.toolResults`, `chat.toolExpand`, `chat.toolCollapse`, `chat.toolInput`, `chat.toolOutput` | The tool card |

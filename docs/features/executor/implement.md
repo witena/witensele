@@ -10,7 +10,7 @@ answerable.
 | Module | Owns |
 |---|---|
 | `paths.ts` | `resolveInWorkdir(workdir, path)` → `{ absolute, relative }`, and nothing else. Every path an executor tool touches goes through it |
-| `tools.ts` | The seven AI SDK tools, the constants that cap them, and `buildExecutorSection` (the prompt) |
+| `tools.ts` | The seven AI SDK tools, the constants that cap them, and `buildExecutorSection(workdir, handoff)` (the prompt, plus `HANDOFF_BRIEFING` for the turn a hand-off schedules) |
 | `permissions.ts` | `PermissionGate`: `ask` / `reply` / `pending` / `abortAll`, one promise per waiting prompt |
 
 | Renderer module (S5.5) | Owns |
@@ -31,6 +31,23 @@ it — the tool call is suspended inside a turn while the card is on screen — 
 executor and the chat has a folder, and if so it merges
 `buildExecutorTools({...})` into the `ToolSet`. The same function wraps the MCP
 `call` closure so a `sideEffects` server's tools ask first.
+
+**The hand-off briefing (S5.6).** `buildExecutorSection` takes a second
+argument, and `buildSystemPrompt` passes `AgentTurnOptions.handoff` straight
+into it. The flag is set by `ChatRunner` for exactly one turn — the executor's,
+in the round `chat.handoff` scheduled — and reaches nothing else in the turn:
+
+```
+ChatRunner.handoff → #loop (stage 'executor') → #runRound(… implementing = executorId)
+  → runAgentTurn({ …, handoff: agent.id === implementing })
+    → buildSystemPrompt(…, handoff) → buildExecutorSection(workdir, handoff)
+      → […the standing section…, HANDOFF_BRIEFING]
+```
+
+`HANDOFF_BRIEFING` is exported so a test can assert the prompt contains it, and
+so the *absence* of it can be asserted on the executor's **second** turn — the
+one a reviewer's `@` scheduled, which is an ordinary reply to a specific
+question rather than a fresh hand-off.
 
 ## Data flow
 
@@ -112,8 +129,12 @@ Renderer types: `PendingPermission`, `PermissionsState` (`stores/permissions.ts`
 
 Main-process types: `PermissionGate`, `PermissionRequest`, `PermissionOutcome`
 (`permissions.ts`); `ExecutorToolContext`, `PermissionDeniedError`,
-`EXECUTOR_TOOLS`, `GATED_EXECUTOR_TOOLS` (`tools.ts`); `ResolvedPath`
-(`paths.ts`); `executorWorkdir` (`agents/agent-turn.ts`).
+`EXECUTOR_TOOLS`, `GATED_EXECUTOR_TOOLS`, `HANDOFF_BRIEFING` (`tools.ts`);
+`ResolvedPath` (`paths.ts`); `executorWorkdir` and `AgentTurnOptions.handoff`
+(`agents/agent-turn.ts`).
+
+`chat.handoff` itself is [`orchestration`](../orchestration/implement.md)'s
+method; this feature contributes only the sentence the executor reads.
 
 ## Tests
 
@@ -130,7 +151,8 @@ Main-process types: `PermissionGate`, `PermissionRequest`, `PermissionOutcome`
 | `src/renderer/src/components/chat/permission-input.test.ts` | The verbatim command, the capped write preview, the empty file, the edit's patch, and both fallbacks to raw JSON |
 | `src/renderer/src/components/chat/tool-call.test.ts` (S5.5 block) | `write_file(path)`, `run_command(command)` flattened and capped, `search_files(query)`, an MCP tool of the same name keeping the generic preview, and a missing argument falling back |
 | `src/renderer/src/components/chat/transcript-rows.test.ts` | `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines`, `formatFileRef` |
-| `e2e/executor.spec.ts` | Offline: a chat with no executor shows no card. Behind the `qwen2.5:3b` guard: the card appears, nothing is on disk while it waits, Allow writes the file, the card goes away and the diff block appears and opens onto a `diff` code block |
+| `e2e/executor.spec.ts` | Offline: a chat with no executor shows no card, and the hand-off button carries `data-blocked` naming the rule that disabled it. Behind the `qwen2.5:3b` guard: the card appears, nothing is on disk while it waits, Allow writes the file, the card goes away and the diff block appears and opens onto a `diff` code block — and (S5.6) two participants plus an executor discuss, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again without anybody typing |
+| `src/main/orchestration/chat-runner.test.ts` (S5.6 block) | The briefing this feature contributes, asserted where it is used: the handed-over turn's prompt contains `HANDOFF_BRIEFING` and the folder, and the executor's next turn contains the folder but not the briefing. A Stop inside the handed-over turn leaves `ctx.permissions.pending()` empty and nothing on disk |
 
 `npm test`: 77 files, 1121 tests. `npm run typecheck` clean.
 

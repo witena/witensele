@@ -68,6 +68,8 @@
     "workdirNone": "Not set",
     "workdirChoose": "Choose…",
     "workdirClear": "Clear",
+    "handoff": "Hand to executor",
+    "handoffTitle": "Ask the executor to implement the conclusion above in this chat’s folder",
     "actions": {
       "title": "Actions",
       "summarize": "Ask an agent to summarise every point of view",
@@ -390,7 +392,10 @@
     "workdir_not_directory": "That path is a file, not a folder.",
     "second_executor": "A chat can have only one executor.",
     "oauth_unsupported_provider": "This provider cannot be signed into yet. Use an API key.",
-    "oauth_custom_base_url": "A provider that signs in cannot use a custom base URL."
+    "oauth_custom_base_url": "A provider that signs in cannot use a custom base URL.",
+    "handoff_no_workdir": "Choose a working directory for this chat before handing it over.",
+    "handoff_no_executor": "Add an executor to this chat before handing it over.",
+    "handoff_run_active": "This chat is still running. Wait for it, or press Stop."
   },
   "notices": {
     "agentSkipped": "{{agent}} did not respond and was skipped this round",
@@ -401,6 +406,7 @@
     "providerError": "The provider could not answer: {{message}}",
     "runFailed": "The run stopped after an internal error: {{message}}",
     "toolsUnsupported": "{{agent}}'s model cannot use tools, so this reply was written without them",
-    "contextTruncated": "{{agent}} could not fit the whole conversation in its context window, so the {{dropped}} oldest messages were left out of its view"
+    "contextTruncated": "{{agent}} could not fit the whole conversation in its context window, so the {{dropped}} oldest messages were left out of its view",
+    "handoff": "Handed to {{agent}}: implement what the group decided, then report what changed"
   }
 }

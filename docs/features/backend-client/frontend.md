@@ -81,6 +81,7 @@ follows.
 | `invoke('chats.*')`, `invoke('chats.members.list')` | Chat list and member panel, since S1.7 | Chat CRUD and reading the membership. `chats.members.set` gets its UI in S2.2 |
 | `invoke('messages.list')` | Chat view on open and when scrolling up | Initial page and history paging |
 | `invoke('chat.send' / 'chat.stop')` | Composer and Stop button | Starts and aborts a run |
+| `invoke('chat.handoff')` | The "Hand to executor" button (S5.6) | Starts the implement + review run. Its three `validation` refusals are read through `translateFailure(t, code, details)`, which is why the run store keeps `errorDetails` beside `errorCode` |
 
 Event handling worth writing down once:
 

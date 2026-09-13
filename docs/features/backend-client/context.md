@@ -29,6 +29,13 @@ only in the type system.
 - `src/shared/index.ts` — one import point for all of the above.
 - `src/shared/contracts.test.ts` — runtime and type-level tests over the contract.
 
+  The surface has grown three times since S1.1 declared it, and each addition
+  follows the same three steps: the method on `BackendApi`, its name in
+  `BACKEND_METHODS`, and a case in `contracts.test.ts` (S5.3
+  `providers.authStatus` / `login` / `logout`, S5.4 `permission.reply`, S5.6
+  `chat.handoff`). The compile-time `Assert` below makes the first two
+  inseparable.
+
 **The transport (S1.3)**
 
 - `src/main/events/bus.ts` — the Electron-free `EventBus` every service emits on.

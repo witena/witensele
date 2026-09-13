@@ -73,7 +73,8 @@ const EXPECTED_METHODS = [
   'messages.usageSummary',
   'permission.reply',
   'chat.send',
-  'chat.stop'
+  'chat.stop',
+  'chat.handoff'
 ]
 
 describe('BACKEND_METHODS', () => {
@@ -203,6 +204,15 @@ describe('type contracts', () => {
       requestId: string
       decision: PermissionDecision
     }>()
+  })
+
+  it('hands a chat to its executor with nothing but the chat id (S5.6)', () => {
+    // The executor, the folder and the review round are all decided in the
+    // backend from the chat record: a renderer that had to name the executor
+    // could name a different one than `executorWorkdir` attaches the tools to.
+    expectTypeOf<Parameters<BackendApi['chat.handoff']>[0]>().toEqualTypeOf<{ chatId: string }>()
+    // The stored hand-off message comes back, like `chat.send`'s.
+    expectTypeOf<ReturnType<BackendApi['chat.handoff']>>().toEqualTypeOf<Promise<Message>>()
   })
 
   it('returns an unsubscribe function from subscribe', () => {

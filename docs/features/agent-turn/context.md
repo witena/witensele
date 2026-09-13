@@ -58,7 +58,8 @@ does not throw, it just makes every answer slightly worse.
 | [`database`](../database/context.md) | `MessageRepository.create` / `update` / `listForContext` |
 | [`backend-client`](../backend-client/context.md) | The event bus and the `message.*` / `presence.changed` payloads |
 | [`i18n`](../i18n/context.md) | The *setting* only. The briefing is model-facing text, not UI copy, and does not live in the locale files |
-| [`executor`](../executor/context.md) | `buildExecutorTools`, `buildExecutorSection` and `ctx.permissions`, plus `Chat.workdir` and `Agent.role` for the rule that decides whether any of them applies |
+| [`executor`](../executor/context.md) | `buildExecutorTools`, `buildExecutorSection` (including S5.6's hand-off paragraph) and `ctx.permissions`, plus `Chat.workdir` and `Agent.role` for the rule that decides whether any of them applies |
+| [`orchestration`](../orchestration/context.md) | The caller. Since S5.6 it also passes `handoff: true` for the one turn a hand-off schedules — the only option that changes the prompt rather than the transcript |
 
 `orchestration` depends on this feature: `ChatRunner` calls `runAgentTurn` once
 per speaker and reads the returned status to decide how the run ends.
@@ -79,6 +80,7 @@ per speaker and reads the returned status to decide how the run ends.
 | The briefing exists in Chinese and English as **`.ts` files** | Locale files; one English briefing for everyone | It never reaches the renderer, so it has no i18n key; a Chinese-first model follows a Chinese prompt far more reliably. `briefing.zh-CN.ts` is the documented exception to the English-only rule |
 | The briefing's `[name]:` and `@name` examples use a **real member of this chat** | A placeholder like `@name` | A model copies the example it is given |
 | The briefing's **memory sentence is conditional** on the tools being attached (S3.3) | Always include it | A prompt that asks for a tool the model was not given is how a model starts describing tool calls in prose |
+| **`handoff` is an option of the turn, not a fact about the agent or the chat** (S5.6) | A column on the chat; an executor that always reads the hand-off briefing | It is true of exactly one turn. An executor asked a follow-up question by a reviewer is not being handed the discussion again, and a prompt that said so would make it start over instead of answering |
 | The **executor section is conditional on the same rule that attaches the tools** (S5.4), and sits between the briefing and the skills | Always include it for an `executor`; put it with the skills | Same reason as the memory sentence, and the section is protocol rather than reference material: a model running out of attention should lose the reference first. `executorWorkdir` is the one function both the prompt and the tool set ask |
 | Skills and memory come **after** the briefing in the prompt | Before it; interleaved | The briefing is how to behave, the other two are material to reach for. A model that runs out of attention should lose the reference material first, not the protocol |
 | A `skillName` that no longer resolves is **skipped silently** during a turn | Fail the turn; insert a notice | A moved folder must not silence an agent that could still answer. The agent editor is where it is reported, because that is where it can be fixed |

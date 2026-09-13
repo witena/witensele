@@ -14,7 +14,9 @@
  * the write returns the stored row and the `chat.updated` event re-renders both.
  *
  * The executor's permission prompts (S5.5) are drawn between the transcript and
- * the composer, one card per pending request, from `stores/permissions.ts`.
+ * the composer, one card per pending request, from `stores/permissions.ts`, and
+ * "Hand to executor" (S5.6) sits just below them, in the same column and for
+ * the same reason: both are answered where the user is already looking.
  *
  * Data comes from five stores and nothing is fetched here directly: `chats`,
  * `agents` and `providers` mirror the backend, `messages` holds the transcript,
@@ -41,6 +43,7 @@ import {
 import { ActionsCard } from '../components/chat/actions-card'
 import { ChatList } from '../components/chat/chat-list'
 import { Composer, type ComposerHandle } from '../components/chat/composer'
+import { HandoffButton } from '../components/chat/handoff-button'
 import { MemberPanel } from '../components/chat/member-panel'
 import { MessageList } from '../components/chat/message-list'
 import { PermissionCard } from '../components/chat/permission-card'
@@ -133,6 +136,7 @@ export function ChatsPage(): React.JSX.Element {
   const activeRun = useRunStore((state) => (selectedId ? state.activeByChat[selectedId] : undefined))
   const runError = useRunStore((state) => state.error)
   const runErrorCode = useRunStore((state) => state.errorCode)
+  const runErrorDetails = useRunStore((state) => state.errorDetails)
   const usage = useChatUsage(selectedId)
   // The executor's open permission prompts for this chat, oldest first. They sit
   // above the composer because that is where the answer is given, and because a
@@ -390,12 +394,24 @@ export function ChatsPage(): React.JSX.Element {
           </div>
         ) : null}
 
+        {/* "Hand to executor" (S5.6), directly above the composer: the moment
+            the user decides the discussion is over is the moment they are
+            looking at this corner. It is disabled, never hidden, when the chat
+            has no folder or no executor — the tooltip says which. */}
+        <HandoffButton
+          chatId={selectedId}
+          workdir={selected?.workdir}
+          members={members}
+          running={running}
+          onHandoff={(chatId) => void useRunStore.getState().handoff(chatId)}
+        />
+
         <Composer
           chatId={selectedId}
           handleRef={composer}
           members={members}
           running={running}
-          {...(runError ? { error: translateFailure(t, runErrorCode) } : {})}
+          {...(runError ? { error: translateFailure(t, runErrorCode, runErrorDetails) } : {})}
           onSend={(text, mentions) =>
             selectedId
               ? useRunStore.getState().send(selectedId, text, mentions)

@@ -8,16 +8,19 @@ None of these imports electron; `node:fs`, `node:path`, `node:child_process` and
 | File | Responsibility |
 |---|---|
 | `src/main/executor/paths.ts` | `resolveInWorkdir`, `realWorkdir`, `realPathOf`, `isInside`. The only place a path is turned into something the tools may touch |
-| `src/main/executor/tools.ts` | `buildExecutorTools` (the seven AI SDK tools), `buildExecutorSection` (the prompt), `runCommand` (the captured, killable child process), the caps, `GATED_EXECUTOR_TOOLS`, `PermissionDeniedError`, `unifiedDiff`, `cap` |
+| `src/main/executor/tools.ts` | `buildExecutorTools` (the seven AI SDK tools), `buildExecutorSection(workdir, handoff)` (the prompt) and `HANDOFF_BRIEFING` (the paragraph it appends for a hand-off, S5.6), `runCommand` (the captured, killable child process), the caps, `GATED_EXECUTOR_TOOLS`, `PermissionDeniedError`, `unifiedDiff`, `cap` |
 | `src/main/executor/permissions.ts` | `createPermissionGate`: `ask` / `reply` / `pending` / `abortAll`, the `allowAlways` set |
 | `src/main/handlers/permissions.ts` | The `permission.reply` handler: two validations, then `ctx.permissions.reply` |
 | `src/main/app-context.ts` | `AppContext.permissions`, built with `emit: ctx.events.emit`; `close()` calls `abortAll()` after `runners.stopAll()` |
 | `src/main/testing.ts` | The same gate for unit tests, with an injectable `newRequestId` so a suite can answer `request-1` |
-| `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, the executor section in `buildSystemPrompt`, and — S5.5 — `diffPartsFrom`, which turns the stored tool results into one `DiffPart` per written file |
+| `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, the executor section in `buildSystemPrompt` — extended by `AgentTurnOptions.handoff` (S5.6) — and, since S5.5, `diffPartsFrom`, which turns the stored tool results into one `DiffPart` per written file |
+| `src/main/orchestration/chat-runner.ts` | Not this feature's file, but the only caller that ever sets `handoff: true`: `ChatRunner.handoff` schedules the executor's round and passes the flag for that one turn ([`orchestration`](../orchestration/backend.md)) |
 
 ## Database
 
-None. This feature reads two columns other features own and writes nothing.
+None. This feature reads two columns other features own and writes nothing. The
+`user` message a hand-off stores is written by `ChatRunner`
+([`orchestration`](../orchestration/backend.md)), not here.
 
 | Table | Column | Type | Notes |
 |---|---|---|---|

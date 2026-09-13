@@ -9,11 +9,11 @@
 | File | Responsibility |
 |---|---|
 | `src/shared/mentions.ts` | `parseMentions` / `findMentions` / `splitMentions`: the `@Name` rule, shared with the renderer so the composer and the scheduler can never disagree |
-| `src/main/orchestration/scheduling.ts` | `planFromUserMessages`, `planFromReplies`, `mergePlans`, `reachedRoundLimit` — the pure "who speaks next" |
+| `src/main/orchestration/scheduling.ts` | `planFromUserMessages`, `planFromReplies`, `planFromHandoff`, `planFromReview`, `mergePlans`, `reachedRoundLimit` — the pure "who speaks next" |
 | `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`, and from S4.2 / S4.3 the `contextTruncated` notice and the automatic title) and `ChatRunnerRegistry` (the map on `AppContext`) |
 | `src/main/agents/title.ts` | `generateChatTitle` and its two pure halves, injected into the runner as `ChatRunnerOptions.generateTitle` so a test can replace it |
 | `src/main/app-context.ts` | Creates the registry and stops every runner in `close()` |
-| `src/main/handlers/chats.ts` | `chat.send` / `chat.stop` delegate to the registry; `chats.delete` calls `remove` first |
+| `src/main/handlers/chats.ts` | `chat.send` / `chat.stop` / `chat.handoff` delegate to the registry; `chats.delete` calls `remove` first |
 
 Neither class imports electron: a runner reaches the world only through
 `ctx.repos`, `ctx.events` and the injected `createModel` (CLAUDE.md rule #5).
@@ -35,6 +35,15 @@ One row per user message:
 | | `round` | `0`; rounds are 1-based and belong to the agents |
 | | `mentions` | the **effective** set: parsed from the text, unioned with the composer's explicit ids, intersected with the chat's members |
 
+…and one row per hand-off (S5.6), which is a **user** message too:
+
+| Column | Value |
+|---|---|
+| `sender_type` / `sender_id` | `user` / `ctx.userId` — the click is the user speaking |
+| `parts` | one `system-notice` part: `handoff { agent }`, the executor's name |
+| `status` / `round` | `done` / `0` |
+| `mentions` | the executor's id, alone |
+
 …and one row per system notice:
 
 | Column | Value |
@@ -55,6 +64,7 @@ None of its own; it is called by two of [`chats`](../chats/backend.md)'s:
 | Channel | Reaches |
 |---|---|
 | `chat.send` | `ctx.runners.send({ chatId, text, mentions })` |
+| `chat.handoff` | `ctx.runners.handoff({ chatId })` — the handler only checks that a `chatId` is a string; the folder, the executor and "is a run going" are facts about the run, and the runner is the only object that holds all three. It rejects with `validation` plus one of `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details` |
 | `chat.stop` | `ctx.runners.stop(chatId)` |
 | `chats.delete` | `ctx.runners.remove(chatId)` **before** the rows are deleted |
 
@@ -112,6 +122,33 @@ This is the part worth reading twice, because it is where a subtle bug would hid
   process, the barrier is a promise, and the bus is in-process (PLAN, "Reserved
   server capability"). A server version replaces `EventBus` and
   `MessageRepository`, not `ChatRunner`.
+
+## The hand-off, round by round (S5.6)
+
+`handoff()` validates, stores the message, sets `#handoffTo` and starts the loop.
+`#loop` **takes** that field once, before the first iteration, and then spends it
+over two rounds:
+
+| Iteration | Plan | `implementing` |
+|---|---|---|
+| 1 | `mergePlans(memberIds, planFromHandoff(memberIds, executorId), carried)` | the executor |
+| 2 | `mergePlans(memberIds, planFromReview(memberIds, executorId), carried)` | `null` |
+| 3+ | Ordinary `planFromReplies`, so a reviewer's `@Hands` schedules another executor round | `null` |
+
+Three details that are decisions:
+
+- **Taken, not read.** `#start`'s `finally` restarts the loop when a message
+  landed in the sliver where the run was ending; a field still holding the
+  executor id would hand the same chat over twice.
+- **Merged, not assigned.** A user message that arrived while the executor was
+  working is still answered — by the review round, alongside it.
+- **`implementing` is one agent for one round**, and it is the only thing that
+  sets `AgentTurnOptions.handoff`. A reviewer told to "implement the conclusion"
+  would be the wrong instruction, and so would an executor re-`@`-ed later.
+
+Everything else — Stop, the barrier, the cap, the offline filter, the truncation
+notice — applies unchanged, which is the reason the hand-off is two staged plans
+rather than a mode of its own.
 
 ## Two things the runner announces, and why it is the runner (S4.2, S4.3)
 

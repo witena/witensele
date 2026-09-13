@@ -105,6 +105,26 @@ The picker is the **explanation**; the handler is the **rule**. Disabling the ro
 is what stops the user wondering why a click did nothing, and the backend refusal
 is what makes the invariant true for a second window or a later HTTP client.
 
+### Handing the chat to its executor (S5.6)
+
+```
+HandoffButton                      // above the composer, below the permission stack
+  handoffBlocker({ workdir, members, running })
+    → 'handoff_no_workdir' | 'handoff_no_executor' | 'handoff_run_active' | null
+  disabled = blocker !== null
+  title    = blocker ? validationReasonMessage(t, blocker) : t('chat.handoffTitle')
+  click → run.handoff(chatId) → invoke('chat.handoff', { chatId })
+                                  → ChatRunner.handoff  (orchestration)
+  ← message.created (a user row carrying the `handoff` notice)
+  ← run.started / run.round … the executor, then everybody else
+```
+
+The button reads the three rules the backend applies, in the backend's order, so
+the tooltip on the disabled control and the sentence under the composer after a
+refusal are the same sentence. It is drawn for every selected chat and disabled
+rather than hidden; the reason also lands in `data-blocked` for the end-to-end
+spec, which must not assert on copy.
+
 ### Opening a chat
 
 ```
@@ -247,6 +267,7 @@ two input types next to them —
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is a message id |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` | Tokens and estimated cost, total and per agent, over the whole transcript |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written |
+| `chat.handoff` | `{ chatId }` | `Message` | S5.6. The stored hand-off row; the executor's round and the review round after it arrive as events. Refused with `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent |
 
 | Event | Payload | Emitted when |
@@ -269,6 +290,7 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/main/handlers/handlers.test.ts` | Every declared method has a handler; the ones still stubbed reject with `internal` |
 | `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection; `setWorkdir` binding and clearing, the rejection's `reason` kept in `errorDetails`, and `chooseWorkdir` writing nothing at all when the dialog is cancelled |
 | `src/renderer/src/lib/workdir.test.ts` | `folderName`: the last segment, trailing separators, Windows separators, the filesystem root, a bare name, a name with a dot or a space |
+| `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker` (S5.6): the enabled case, each of the three refusals, a blank `workdir`, and the order the rules are applied in when more than one is broken |
 | `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` and every `ValidationReason` resolving to distinct real copy; `validationReasonOf` narrowing a known reason and ignoring everything else; `translateFailure` preferring a reason only under `validation` |
 | `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
 | `src/renderer/src/stores/usage.test.ts` | Client-side aggregation: the total moving on `message.updated`, the per-agent split, a local provider costing nothing, an unknown model reporting no cost, and the page-vs-whole-transcript fallback to the backend |
@@ -278,7 +300,7 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
 | `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
-| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client. S5.5 adds the acceptance sentence: a chat with no executor shows no card (offline, always runs) and — behind the same `qwen2.5:3b` guard `mcp.spec.ts` uses — an executor asked for a file raises the card, nothing is on disk while it waits, Allow writes the file, the card disappears and the diff block appears and opens onto a `diff` code block |
+| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client. S5.5 adds the acceptance sentence: a chat with no executor shows no card (offline, always runs) and — behind the same `qwen2.5:3b` guard `mcp.spec.ts` uses — an executor asked for a file raises the card, nothing is on disk while it waits, Allow writes the file, the card disappears and the diff block appears and opens onto a `diff` code block. S5.6 adds two more: offline, the hand-off button is enabled with a folder and an executor and carries `data-blocked` naming the rule when either is missing (with the backend refusing on the same rule); behind the guard, two participants and an executor hold a short discussion, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again with nothing typed |
 | `src/renderer/src/components/chat/tool-call.test.ts` | `previewToolArgs`, `countToolResults` over the shapes a tool actually returns, `describeToolCall`'s three states, and `collectToolCalls` pairing by id rather than by position |
 | `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp), `buildTranscriptRows`' interleaving and key stability, and (S5.5) `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines` ignoring the `+++` / `---` headers and counting a concatenation of two patches, and `formatFileRef` with and without a line |
 | `src/renderer/src/stores/permissions.test.ts` | The permission store (S5.5): a request drawing a card, several ordered oldest first and split per chat, `reply` calling `permission.reply` without removing anything optimistically, `permission.resolved` dismissing the card for all four decisions including `aborted`, a stop clearing every open prompt, a `not_found` rejection dropping the stale card, a second answer while the first is in flight being ignored, and a deleted chat forgetting only its own |

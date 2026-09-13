@@ -10,7 +10,9 @@ import { describe, expect, it } from 'vitest'
 import {
   EMPTY_PLAN,
   mergePlans,
+  planFromHandoff,
   planFromReplies,
+  planFromReview,
   planFromUserMessages,
   reachedRoundLimit,
   USER_SOURCE
@@ -146,5 +148,40 @@ describe('reachedRoundLimit', () => {
   it('is false again after the counter is reset by a user message', () => {
     // The reset itself lives in the runner; this is the shape it relies on.
     expect(reachedRoundLimit(0, 3)).toBe(false)
+  })
+})
+
+describe('planFromHandoff (S5.6)', () => {
+  it('schedules the executor alone, replying to the user', () => {
+    expect(planFromHandoff(MEMBERS, 'b')).toEqual({
+      speakers: ['b'],
+      inReplyTo: { b: [USER_SOURCE] }
+    })
+  })
+
+  it('schedules nobody when the executor has left the chat', () => {
+    // The runner reads an empty plan as "nothing to do" and finishes the run,
+    // which is the right answer for a member removed between the click and the
+    // round boundary.
+    expect(planFromHandoff(MEMBERS, 'gone')).toEqual(EMPTY_PLAN)
+  })
+})
+
+describe('planFromReview (S5.6)', () => {
+  it('schedules everybody except the executor, in position order', () => {
+    expect(planFromReview(MEMBERS, 'b')).toEqual({
+      speakers: ['a', 'c'],
+      inReplyTo: { a: ['b'], c: ['b'] }
+    })
+  })
+
+  it('schedules nobody when the executor is the only member', () => {
+    expect(planFromReview(['b'], 'b')).toEqual(EMPTY_PLAN)
+  })
+
+  it('schedules every member when the executor is not one of them', () => {
+    // Defensive rather than expected: the runner only ever passes an executor it
+    // just resolved from the member list.
+    expect(planFromReview(MEMBERS, 'gone').speakers).toEqual(MEMBERS)
   })
 })

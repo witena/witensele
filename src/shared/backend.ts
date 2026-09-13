@@ -286,6 +286,20 @@ export interface BackendApi {
   'chat.send': (input: { chatId: string; text: string; mentions?: string[] }) => Promise<Message>
   /** Aborts the whole chain for this chat. Idempotent when nothing is running. */
   'chat.stop': (input: { chatId: string }) => Promise<void>
+  /**
+   * Hands the discussion to the chat's executor (S5.6).
+   *
+   * Persists a user message carrying the `notices.handoff` key and mentioning
+   * the executor, then runs the executor's turn and **one** review round in
+   * which the other members read what it changed. Resolves with that stored
+   * message as soon as the run is scheduled, exactly like `chat.send`.
+   *
+   * Rejects with `validation` and a `ValidationReason` in `details` when the
+   * chat has no working directory (`handoff_no_workdir`), no executor member
+   * (`handoff_no_executor`), or a run is already in flight
+   * (`handoff_run_active`) — the three states the button is disabled in.
+   */
+  'chat.handoff': (input: { chatId: string }) => Promise<Message>
 }
 
 /** The name of any backend method. */
@@ -367,7 +381,8 @@ export const BACKEND_METHODS = [
   'messages.usageSummary',
   'permission.reply',
   'chat.send',
-  'chat.stop'
+  'chat.stop',
+  'chat.handoff'
 ] as const satisfies readonly BackendMethod[]
 
 /** A method name that appears in `BACKEND_METHODS`. */

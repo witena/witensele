@@ -60,6 +60,7 @@ is the only thing that reads it. See
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` newest first | `validation` on an empty chat id or a non-positive limit; `not_found` for an unknown cursor |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` over the whole transcript | `validation` on an empty id, `not_found` for an unknown chat |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | `validation` for a non-string or blank text and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
+| `chat.handoff` | `{ chatId }` | `Message` (the stored hand-off row) | `validation` on an empty id; `not_found` for an unknown chat; `validation` plus one of `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details`. The handler checks only the id: the other three are facts about the **run**, and [`orchestration`](../orchestration/backend.md)'s `ChatRunner.handoff` is the only object that holds all of them |
 | `chat.stop` | `{ chatId }` | `void` | `validation` on an empty id; otherwise idempotent |
 
 ### Chat patch validation
@@ -114,6 +115,16 @@ chat cannot be born pointing at a path a later update would refuse.
 `ChatRunner` already re-reads the chat record every round (`repos.chats.get`), so
 `workdir` reaches the orchestrator with no new plumbing; nothing reads it yet,
 because attaching executor tools is S5.4.
+
+### Handing a chat to its executor (S5.6)
+
+`chat.handoff` is three lines in this module and the rest is
+[`orchestration`](../orchestration/backend.md)'s, which is the same division
+`chat.send` follows: this feature owns the chat record and its columns, and the
+runner owns what a run does with them. The three refusals are
+`ValidationReason`s for S5.2's reason — the seven `BackendErrorCode`s are a
+failure taxonomy, and "the request was rejected as invalid" cannot tell a user
+whether to pick a folder or to add a member.
 
 ### One executor per chat (S5.2)
 
