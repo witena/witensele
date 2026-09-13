@@ -540,7 +540,9 @@ describe('handlers/stubs', () => {
       // S5.3
       'providers.authStatus',
       'providers.login',
-      'providers.logout'
+      'providers.logout',
+      // S5.4
+      'permission.reply'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

@@ -97,15 +97,32 @@ set: save durable facts about the user or the project with `memory_save`. It is
 conditional because a prompt that asks for a tool the model was not given is how
 a model starts describing tool calls in prose.
 
+### The executor section (S5.4)
+
+`buildSystemPrompt` gained the chat, and inserts `buildExecutorSection(workdir)`
+between the briefing and the skills — protocol, not reference material — under
+exactly the condition that attaches the tools. It names the folder, lists the
+seven tools and what each is for, says which three pause for the user, and ends
+with the instruction that makes PLAN.md's review loop work: finish with a summary
+of every file changed and ask the others to review it.
+
 ### Tools attached to one turn
 
 `collectAgentTools` is the single place every tool passes through:
 
 | Source | When | Rule |
 |---|---|---|
-| The agent's MCP servers | The record exists and is enabled | A `sideEffects` server goes to an `executor` only (S3.1) |
+| The agent's MCP servers | The record exists and is enabled | A `sideEffects` server goes to an `executor` only (S3.1), and since S5.4 **every** call to one of its tools is confirmed through `ctx.permissions` first |
 | `read_skill`, `read_skill_file` | The agent has at least one skill that still exists on disk (S3.2) | Attached regardless of the side-effects rule: read-only, and confined to `userData/skills/` |
 | `memory_save`, `memory_search` | `agent.memoryEnabled` (S3.3) | Likewise: the only thing they can write is this agent's own notes folder |
+| The seven executor tools (S5.4) | `executorWorkdir(chat, agent, members)` is non-null | The opposite of an exception to the rule: `write_file`, `edit_file` and `run_command` are confirmed, and all seven are confined to the chat's folder ([`executor`](../executor/context.md)) |
+
+`executorWorkdir` is the attachment rule in one function, and it needs all three
+of its arguments: the agent's `role` must be `executor`, the chat must have a
+`workdir`, and the agent must be **the first `executor` in the member list** —
+`agents.update` can still promote a participant that is already a member (S5.2's
+recorded gap), and two writers in one folder is what PLAN.md's one-writer
+decision exists to prevent.
 
 The built-in tools have no `origins` entry, so their `tool-call` parts carry no
 `serverId` and the transcript draws the card with the bare tool name.
@@ -154,6 +171,7 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage` |
 | `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call, `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
 | `src/main/agents/agent-turn.test.ts` (S3.2 / S3.3 blocks) | The built-in tools end to end against a real skills folder and a real memory directory: the prompt carrying a skill's description but not its body, `read_skill` and `read_skill_file` answering, a traversal refused as an errored tool result, a missing skill skipped, `memory_save` writing the note **and** the index line, the index reaching the next prompt, the briefing's memory sentence appearing only when memory is on, and one agent unable to search another's notes |
+| `src/main/agents/agent-turn.test.ts` (S5.4 block) | A `MockLanguageModelV4` calling `write_file` in a chat bound to a real temporary folder: the seven tools offered and the folder in the prompt, a `permission.requested` carrying the path and the content, `allow` writing the file and storing a `tool-result` with the patch, `deny` writing nothing and storing a `tool-error`, `allowAlways` not asking a second time, a participant and a folderless chat getting no tools at all, the two-executor tie broken by position, and a read-only tool and a path that leaves the folder never asking |
 | `src/main/agents/context-budget.test.ts` | `estimateTokens` against ASCII, CJK and a real sentence (with a tolerance, because it is an approximation), and every `fitHistory` rule: nothing dropped when it fits, oldest first, the last user message protected, the note prepended once, the reserve and the system prompt both counted, and a window smaller than its own system prompt not looping |
 | `src/main/agents/title.test.ts` | `sanitizeTitle` (whitespace, quotes in both scripts, trailing punctuation, a `Title:` preamble, the 60-character cap, and the empty result that triggers the fallback) and `fallbackTitle` |
 | `src/shared/pass.test.ts` | `isPassOnly` versus `stripTrailingPass`: a bare token is an abstention and survives, a token after real content is a sign-off and goes |

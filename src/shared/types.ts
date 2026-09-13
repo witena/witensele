@@ -144,8 +144,9 @@ export interface AnthropicAuthStatus {
  * overwrite each other and nothing is reviewable, so exactly one writer plus a
  * diff-review loop is the shape. Two consequences are already enforced:
  * `collectAgentTools` attaches a `sideEffects` MCP server only to an `executor`
- * (S3.1), and a chat refuses a second `executor` member (S5.2). The executor's
- * own file, shell and git tools arrive in S5.3.
+ * (S3.1), and a chat refuses a second `executor` member (S5.2). Since S5.4 the
+ * executor also gets its own file, search, shell and git tools, confined to
+ * `Chat.workdir` and gated by the permission prompt (`docs/features/executor/`).
  */
 export type AgentRole = 'participant' | 'executor'
 
@@ -216,7 +217,11 @@ export interface McpServer extends EntityBase {
   enabled: boolean
   /**
    * Marks a server whose tools change the outside world (write files, send mail,
-   * push commits). Reserved for the permission prompt; the MVP only displays it.
+   * push commits).
+   *
+   * Two rules read it: `collectAgentTools` attaches such a server only to an
+   * `executor` agent (S3.1), and since S5.4 **every** call to one of its tools
+   * goes through the permission prompt before it runs.
    */
   sideEffects: boolean
 }
@@ -557,6 +562,31 @@ export interface MemorySearchHit {
   title: string
   /** A window of the matching text, for the model and for the UI. */
   snippet: string
+}
+
+/* -------------------------------------------------------------------------- */
+/* Executor permissions (S5.4)                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The three answers to a permission prompt.
+ *
+ * `allowAlways` is PLAN.md's "always allow in this chat": it runs the call and
+ * remembers the **chat + tool** pair, so every later call of that tool in that
+ * chat runs without asking again. It is deliberately not remembered per input —
+ * a user who has decided that this executor may run `write_file` in this chat
+ * has decided about the tool, not about one path — and deliberately not
+ * persisted: the memory lives for the life of the process, so closing the app is
+ * always a way back to being asked.
+ */
+export const PERMISSION_DECISIONS = ['allow', 'deny', 'allowAlways'] as const
+
+/** One of `allow`, `deny`, `allowAlways`. */
+export type PermissionDecision = (typeof PERMISSION_DECISIONS)[number]
+
+/** Narrows an unknown value to a decision, for the handler's validation. */
+export function isPermissionDecision(value: unknown): value is PermissionDecision {
+  return typeof value === 'string' && (PERMISSION_DECISIONS as readonly string[]).includes(value)
 }
 
 /* -------------------------------------------------------------------------- */

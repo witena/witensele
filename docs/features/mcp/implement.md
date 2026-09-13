@@ -44,7 +44,7 @@ store applies its own writes — the same rule `stores/agents.ts` follows.
 
 ```
 main  runAgentTurn
-      └ collectAgentTools(ctx, agent, { signal, toolTimeoutMs })
+      └ collectAgentTools(ctx, chat, agent, { signal, toolTimeoutMs, members })
           for each agent.mcpServerIds:
             record exists?  enabled?  (sideEffects → role === 'executor')?
             ctx.mcp.listTools(id)        → connects on first use
@@ -54,6 +54,8 @@ main  runAgentTurn
             → ToolCallPart { toolCallId, toolName, input, serverId, serverName }
             → messages.update(parts)   +  message.delta { kind: 'part' }
           the SDK runs `execute`
+            → sideEffects? → ctx.permissions.ask(...)       (S5.4: suspends here)
+                             denied / aborted → throw PermissionDeniedError
             → McpManager.callTool(id, name, args, { signal, timeoutMs })
             → client.callTool → { content, isError }
             → renderToolResult() → text     (isError → throw McpToolError)
@@ -107,7 +109,7 @@ method**: the gallery is bundled data and a prefilled draft goes through the sam
 | `src/main/mcp/tools.test.ts` | Sanitizing, the `${slug}__${tool}` key, the reverse map, the schema passed through untouched, `call` receiving the **original** name, text joining, the image summary, resources, `structuredContent`, `isError` → throw, and the first-wins collision rule |
 | `src/main/mcp/manager.test.ts` | Against a **real** in-process MCP server: discovery, one connection for concurrent callers, reconnection after a failure, a disabled server refused, `refresh` re-listing over the same connection, a tool call, `isError`, the timeout, the abort, an unknown tool, `testConnection` (success, pool untouched, unreachable, unconnectable), `disconnect`, the stderr buffer |
 | `src/main/handlers/mcp.test.ts` | Validation (duplicate names, stdio without a command, http without a valid URL, a non-http scheme), the merged-record patch rule, connection invalidation, the delete unbinding, probing a draft, `tools` and `log` |
-| `src/main/agents/agent-turn.test.ts` | The loop end to end: a `MockLanguageModelV4` that calls a tool then answers, against the in-process server — parts in order, `part` deltas before text, usage summed over two steps, a failed tool stored as an errored result, **the side-effects rule for a participant and for an executor**, a disabled server, the tools-unsupported retry and its once-per-chat notice, and an unreachable server that still lets the agent answer |
+| `src/main/agents/agent-turn.test.ts` | The loop end to end: a `MockLanguageModelV4` that calls a tool then answers, against the in-process server — parts in order, `part` deltas before text, usage summed over two steps, a failed tool stored as an errored result, **the side-effects rule for a participant and for an executor** (the executor case now answering the S5.4 prompt, plus a denial coming back as an errored tool result), a disabled server, the tools-unsupported retry and its once-per-chat notice, and an unreachable server that still lets the agent answer |
 | `src/renderer/src/components/settings/mcp-display.test.ts` | Status precedence and the endpoint line |
 | `src/renderer/src/components/settings/mcp-text.test.ts` | The line-list boxes: a trailing newline, a blank line and surrounding spaces survive the render after the keystroke; a variable name without `=` survives; the draft wins once another record is opened |
 | `src/renderer/src/components/chat/tool-call.test.ts` | The `serverName · toolName` label |

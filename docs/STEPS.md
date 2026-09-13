@@ -722,7 +722,7 @@ each), plus the `i18n` and `backend-client` documents that the two new error
 codes and the three new methods made out of date.
 
 
-### S5.4 Executor tools and the permission gate `[ ]`
+### S5.4 Executor tools and the permission gate `[x]` (2026-09-13)
 What: the built-in tools an executor uses on the chat's folder, and the prompt
 that runs before anything with side effects. Backend only; S5.5 builds the UI.
 - New feature `executor` (`docs/features/executor/`, README row). Code in
@@ -761,6 +761,97 @@ that runs before anything with side effects. Backend only; S5.5 builds the UI.
 Acceptance: the tests above; `npm run typecheck`; nothing under
 `src/main/executor/` imports electron. Docs: `docs/features/executor/` (new,
 all four) and `docs/features/agent-turn/` (all four).
+Done: `src/main/executor/` is three files that know nothing about each other's
+callers. `paths.ts` is `resolveInWorkdir(workdir, path) → { absolute, relative }`
+and the boundary is the whole module. It is **not** `skills/loader.ts`'s
+`resolveInside` with a different root: that function refuses every absolute path,
+which is right for a skill's bundled files and wrong for an executor that is told
+its folder in the briefing and reads absolute paths out of compiler output — so
+an absolute path inside the folder is resolved like any other and held to the
+same test. The case a shorter implementation gets wrong is the **write**:
+`existsSync` is false for a file that is about to be created, so realpathing the
+target proves nothing, and `realPathOf` climbs to the deepest existing ancestor,
+resolves *that*, and re-appends the missing tail. `workdir/link/new.txt` where
+`link` points at `/etc` is refused for that reason and has its own test. Every
+resolution starts from `realpathSync(workdir)`, so S5.2's acknowledged race — the
+folder can vanish between the picker and the first tool call — is closed by
+re-resolving rather than by trusting the earlier check.
+
+`tools.ts` is the seven tools plus `buildExecutorSection`. Four read
+(`read_file`, `list_dir`, `search_files`, `git_diff`) and run immediately; three
+change something (`write_file`, `edit_file`, `run_command`) and ask first, with
+`GATED_EXECUTOR_TOOLS` as the **actual** test rather than a comment — the `gate`
+wrapper checks membership, so moving a tool between the columns is one edit. A
+prompt per `read_file` was rejected outright: it trains the user to click Allow
+without looking, which is how a permission prompt stops being one. The tools
+return **objects**, not the rendered strings `mcp/tools.ts` produces, because two
+consumers want different things from one result — the model wants something to
+reason about, S5.5 wants `patch` — and JSON serves both. The diffs come from the
+`diff` package's `createPatch` (added to `dependencies`; its 4th and 5th
+parameters are file *headers*, the options object is the 6th). `edit_file`
+re-reads the file **after** the prompt and refuses if it changed, because writing
+the copy read before the prompt would silently revert an edit the user made while
+deciding. `run_command` spawns `/bin/sh -c` `detached`, so `process.kill(-pid)`
+takes the command's own children with it — `child.kill()` alone leaves a `sleep`
+behind that nothing can see — SIGTERM then SIGKILL after 2 s, on both the
+`toolTimeoutMs` budget and the turn's abort, and output is capped **as it
+arrives** rather than at the end. A non-zero exit is a returned result, not a
+throw: failing tests are the most useful thing the tool produces.
+
+`permissions.ts` is one promise per waiting prompt. A tool call is already an
+`await` inside `streamText`'s loop, so suspending it needs no state machine — the
+turn is simply not finished until the tool is — and several prompts can be open
+at once in a parallel round. `permission.resolved` is emitted **exactly once per
+`permission.requested`, on every path**, which is what lets S5.5 dismiss a card
+without knowing why it went away; `aborted` is that path for a stop. Two cases
+emit nothing at all rather than a card that dies in the same frame: a remembered
+`allowAlways`, and a signal that was already aborted when `ask` was called.
+`allowAlways` is keyed on **chat + tool** and is not persisted — PLAN.md's
+"always allow in this chat", and a grant that survived a restart would be a
+permission the user cannot see and does not remember giving. `permission.reply`
+answers `not_found` for an id nothing is waiting on (answered twice, or closed by
+a stop) and `validation` for a decision outside the union, deliberately **not**
+treating an unknown decision as `deny`: silently denying a call the user allowed
+is the worse of the two wrong answers, and the call stays pending.
+
+The attachment rule is `executorWorkdir(chat, agent, members)` in
+`agent-turn.ts`, and it is the single thing both `collectAgentTools` and
+`buildSystemPrompt` ask, so the prompt can never promise a tool the model was not
+given. It takes the member list because S5.2's **known gap** is real:
+`agents.update` can still promote a participant already sitting in a chat with an
+executor, so the chat's executor is the first `executor` in `position` order and
+the second one gets nothing. The MCP half of the rule moved into the `call`
+closure `collectAgentTools` builds rather than into `mcp/tools.ts`, which is pure
+and knows nothing about a chat — which also means the flag that decides whether
+an agent may *have* a tool and the flag that decides whether a call is
+*confirmed* are now read in one place from one record. That change made the
+existing `attaches the same server to an executor` case hang until the hard
+timeout, since nothing answered; it now subscribes a one-line "user" that
+replies, and gained a sibling proving a denial comes back as an errored tool
+result.
+
+A denied or cancelled call throws `PermissionDeniedError`, whose message the
+**model** reads on its next step ("The user declined to allow write_file… say
+what you wanted to do and why"). That is prompt content in the same class as an
+MCP server's error text, not backend-authored UI copy, so it is an English
+sentence rather than a `notices.*` key — and this step consequently adds **no
+locale keys at all**; the card's own copy lands with S5.5.
+
+Tests: `executor/paths.test.ts` (18) covers `..`, an absolute path outside, a
+symlink to a file and to a directory, a *new* file through a symlinked directory,
+an absolute path inside, a vanished workdir, and `isInside` on a sibling sharing
+a prefix; `executor/permissions.test.ts` (10) covers the five cases the step
+names plus the one-resolution-per-request invariant and `abortAll`;
+`executor/tools.test.ts` (36) drives all seven against a temp directory and a
+real `/bin/sh`, including the timeout kill, the abort kill and the output cap;
+`handlers/permissions.test.ts` (5) covers the handler's two refusals;
+`agent-turn.test.ts` gained a nine-case S5.4 block with a `MockLanguageModelV4`
+calling `write_file` — allow writes the file and stores a `tool-result` carrying
+the patch, deny stores a `tool-error` and writes nothing, `allowAlways` does not
+ask twice, a participant and a folderless chat get no tools, and the
+two-executor tie is broken by position. `npm test`: 75 files, 1078 tests.
+Docs in `docs/features/executor/` (new), `docs/features/agent-turn/`,
+`docs/features/mcp/` and `docs/features/backend-client/`.
 
 ### S5.5 Permission prompt, diff and file-ref rendering `[ ]`
 What: the renderer half of S5.4 — the user can answer the prompt, and what the
@@ -893,6 +984,32 @@ adds a line here in the same commit.
   key" and reuses the provider registry; it needs its own presets and a
   credential-source model per platform.
 
+### Executor safety and reach
+
+- **The shell is not sandboxed.** S5.4's `run_command` runs `/bin/sh -c` as the
+  user, with the user's environment and `PATH`; only `cwd` is confined, so
+  `cat ../../secret` *inside a command* is not stopped by `executor/paths.ts`.
+  The permission prompt is the entire boundary, which is why S5.5 must show the
+  command line verbatim and never summarised. A real sandbox — a container, a
+  restricted `PATH`, a seccomp profile, or delegating to a coding agent that has
+  one — is a step of its own, and it is the one item here that should be picked
+  up before the executor is recommended for an unfamiliar folder.
+- **No prompt timeout of its own.** A pending `permission.requested` is ended
+  only by a reply, by Stop, or by the turn's hard timeout, which then records the
+  turn as `skipped` rather than as "nobody answered". A prompt-specific timeout
+  with its own notice would read better.
+- **`allowAlways` is not visible or revocable.** It lives in a `Set` for the life
+  of the process, so a user who granted it cannot see what they granted or take
+  it back without quitting. A chat-settings row listing the grants, with a
+  "forget" button, is the obvious shape.
+- **`search_files` is a substring scan**, with a hard-coded prune list and no
+  regular expression or glob. Once `run_command` exists the executor can reach
+  for `rg` itself, so the question is whether the built-in should grow or go.
+- **`run_command` assumes `/bin/sh`**, which is correct for the macOS-only build
+  and needs a branch before any Windows or Linux packaging.
+- **Nothing reads the `patch` the write tools return yet.** S5.5 turns it into
+  `DiffPart`s; until then the diff exists only inside the tool result.
+
 ### Server and editor
 
 - **Server and multi-user** (PLAN "Reserved server capability"): lift the
@@ -917,3 +1034,7 @@ adds a line here in the same commit.
 - `providers`: replace the hand-written `fetchModels` per provider family
   with the SDK's own listing where one exists; Google's list endpoint
   authenticates with a query parameter.
+- `executor`: whether the permission prompt should be able to answer "allow,
+  but show me the diff first" for `write_file` — the tool computes the patch
+  only *after* the grant today, so the card previews the content it was given
+  rather than the diff (`edit_file` already sends the patch in its input).

@@ -4,7 +4,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]`. From S4.2 it also caps each replayed `tool-result` at `MAX_TOOL_RESULT_CHARS` (4 KB) and strips a trailing `[PASS]` from a reply that had real content |
 | `src/main/agents/context-budget.ts` | `estimateTokens` and `fitHistory`: the character-count estimate and the drop-oldest-first budget (S4.2). Pure; no database, no `AppContext` |
 | `src/main/agents/title.ts` | `sanitizeTitle`, `fallbackTitle` and `generateChatTitle` — the automatic chat title (S4.3). `ChatRunner` is what calls it; see [`orchestration`](../orchestration/backend.md) |
@@ -15,14 +15,21 @@
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, documented under [`chats`](../chats/backend.md) |
 
 None of them imports electron. `agent-turn.ts` reaches the outside world only
-through `ctx.repos`, `ctx.events`, `ctx.mcp`, `ctx.memory`, `ctx.userDataDir` and
-the injected model factory — all of them injected, which is what lets a turn with
-skills and memory be driven from vitest against a temporary directory.
+through `ctx.repos`, `ctx.events`, `ctx.mcp`, `ctx.memory`, `ctx.permissions`,
+`ctx.userDataDir` and the injected model factory — all of them injected, which is
+what lets a turn with skills, memory and an executor's tools be driven from
+vitest against a temporary directory.
 
 The prompt sections and the built-in tools themselves live with their features:
-`skills/tools.ts` ([`../skills/backend.md`](../skills/backend.md)) and
-`memory/tools.ts` ([`../memory/backend.md`](../memory/backend.md)). This file
-decides the **order** of the sections and **which** tools an agent gets.
+`skills/tools.ts` ([`../skills/backend.md`](../skills/backend.md)),
+`memory/tools.ts` ([`../memory/backend.md`](../memory/backend.md)) and
+`executor/tools.ts` ([`../executor/backend.md`](../executor/backend.md)). This
+file decides the **order** of the sections and **which** tools an agent gets.
+
+`buildSystemPrompt(ctx, chat, agent, members)` takes the chat since S5.4, because
+the executor section names the folder; `collectAgentTools(ctx, chat, agent, {
+signal, toolTimeoutMs, members })` takes it for the same reason plus the
+member list, which is how the chat's executor is picked deterministically.
 
 ## Database
 
@@ -57,6 +64,7 @@ None. This feature is called by `ChatRunner`, never by the transport.
 | `message.delta` | `{ delta: { kind: 'part', part } }` | A `tool-call` or `tool-result` part was appended (S3.1) |
 | `message.created` | the `agentSkipped` notice | The turn ended on the supervisor's hard timeout |
 | `message.created` | the `toolsUnsupported` notice | The provider rejected the tools and the turn was retried without them — once per chat per agent (S3.1) |
+| `permission.requested` / `permission.resolved` | see [`executor`](../executor/backend.md) | A gated tool suspends inside a turn and is released. Emitted by `ctx.permissions`, not by this file, but they are part of a turn's observable event stream |
 
 ## External dependencies
 

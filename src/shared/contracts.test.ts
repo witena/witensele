@@ -13,6 +13,7 @@ import {
   LOCAL_USER_ID,
   type Message,
   type MessagePart,
+  type PermissionDecision,
   type Provider
 } from '@shared/types'
 
@@ -70,6 +71,7 @@ const EXPECTED_METHODS = [
   'presence.retry',
   'messages.list',
   'messages.usageSummary',
+  'permission.reply',
   'chat.send',
   'chat.stop'
 ]
@@ -98,6 +100,7 @@ describe('BACKEND_METHODS', () => {
       'mcp',
       'memory',
       'messages',
+      'permission',
       'presence',
       'providers',
       'settings',
@@ -188,6 +191,18 @@ describe('type contracts', () => {
     type SystemNotice = Extract<MessagePart, { type: 'system-notice' }>
     expectTypeOf<SystemNotice['key']>().toBeString()
     expectTypeOf<SystemNotice>().not.toHaveProperty('text')
+  })
+
+  it('carries the executor permission prompt and its resolution (S5.4)', () => {
+    expectTypeOf<EventOf<'permission.requested'>['requestId']>().toBeString()
+    expectTypeOf<EventOf<'permission.requested'>['toolName']>().toBeString()
+    expectTypeOf<EventOf<'permission.resolved'>['decision']>().toEqualTypeOf<
+      PermissionDecision | 'aborted'
+    >()
+    expectTypeOf<Parameters<BackendApi['permission.reply']>[0]>().toEqualTypeOf<{
+      requestId: string
+      decision: PermissionDecision
+    }>()
   })
 
   it('returns an unsubscribe function from subscribe', () => {

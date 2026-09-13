@@ -21,6 +21,7 @@ import { createMcpManager, createSupervisor, MEMORY_DIR } from './app-context'
 import { createRepositories } from './db/repositories'
 import type { TestDatabase } from './db/testing'
 import { createEventBus } from './events/bus'
+import { createPermissionGate } from './executor/permissions'
 import type { McpManager, McpManagerOptions } from './mcp/manager'
 import { createMemoryStore } from './memory/store'
 import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat-runner'
@@ -59,6 +60,14 @@ export interface TestAppContextOptions {
    * on whether they had signed in.
    */
   anthropicCli?: AnthropicCli
+  /**
+   * Request ids for the `PermissionGate` (S5.4).
+   *
+   * A suite that answers a prompt has to know its id; injecting a counter is
+   * simpler than fishing the `permission.requested` event out of the array,
+   * and it makes the assertions readable (`request-1`).
+   */
+  newRequestId?: () => string
 }
 
 /**
@@ -111,10 +120,15 @@ export function createTestAppContext(
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
     memory: createMemoryStore(join(database.dir, MEMORY_DIR)),
+    permissions: createPermissionGate({
+      emit: (event) => bus.emit(event),
+      ...(options.newRequestId ? { newRequestId: options.newRequestId } : {})
+    }),
     anthropicCli: options.anthropicCli ?? absentAnthropicCli(),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close: () => {
       ctx.supervisor.stop()
+      ctx.permissions.abortAll()
       void ctx.mcp.closeAll().catch(() => undefined)
       database.cleanup()
     }

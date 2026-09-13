@@ -14,12 +14,13 @@
 | `src/shared/index.ts` | Single import point for the three above plus `version.ts` |
 | `src/main/events/bus.ts` | `EventBus` + `createEventBus()`. Services emit here; a listener that throws is logged and skipped so one broken window cannot abort a run |
 | `src/main/secrets.ts` | `SecretStore` + `createInsecureSecretStore()`, the base64 `plain:` fallback used when the OS has no key storage |
-| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `close`) and `createAppContext({ databasePath, secrets, userId?, events?, fetchImpl?, runner?, supervisor? })`. `close()` stops every run and the supervisor's loops before closing the database |
+| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `mcp`, `memory`, `permissions`, `anthropicCli`, `close`) and `createAppContext({ databasePath, userDataDir, secrets, userId?, events?, fetchImpl?, anthropicCli?, runner?, supervisor?, mcp? })`. `close()` stops every run, the supervisor's loops and every pending permission prompt before closing the database |
 | `src/main/handlers/types.ts` | `HandlerMap` — `BackendApi` with an `AppContext` threaded in front of each method's arguments — and `HandlerModule` (`Partial<HandlerMap>`) |
 | `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, and the `system.pickFolder` **stub** (see "The one electron exception") |
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
 | `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
+| `src/main/handlers/permissions.ts` | `permission.reply` — two validations over `ctx.permissions` (S5.4) |
 | `src/main/ipc-protocol.ts` | `IPC_INVOKE`, `IPC_EVENT`, `InvokeResponse`, `toBackendError`. Shared with preload, imports no electron |
 | `src/main/ipc/register.ts` | `registerIpc(ipcMain, ctx, handlers)` and `forwardEvents(events, getWindows)` |
 | `src/main/ipc/secret-store.ts` | `createElectronSecretStore()` over `safeStorage` |
@@ -99,6 +100,7 @@ Two channels carry everything:
 | `system.emitTestEvent` | `{ payload: string }` | `void` | `validation` when `payload` is not a string |
 | `settings.get` | none | `AppSettings` | — |
 | `settings.update` | `{ patch: AppSettingsPatch }` | `AppSettings` | `validation` when the patch is not an object or carries a key other than `language`, `theme`, `timeouts` |
+| `permission.reply` | `{ requestId, decision }` | `void` | `validation` for a blank id or a decision outside `PERMISSION_DECISIONS`; `not_found` when nothing is waiting on that id (S5.4 — see [`executor`](../executor/backend.md)) |
 | every other `BACKEND_METHODS` entry | see `implement.md` | see `implement.md` | `internal`: `Not implemented yet: <method> (see docs/STEPS.md)` |
 
 Failure rules the transport enforces:

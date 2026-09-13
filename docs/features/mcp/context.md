@@ -20,7 +20,8 @@ turn call them and show what came back.
 - Tool execution inside one agent turn, with a per-call timeout, the tool loop
   capped at `MAX_TOOL_STEPS`, and `tool-call` / `tool-result` message parts.
 - The **side-effects rule**: a server flagged `sideEffects` is attached to
-  `executor` agents only.
+  `executor` agents only — and, since S5.4, **every** call to one of its tools is
+  confirmed through the permission prompt before it runs.
 - Settings → MCP servers: CRUD, transport-specific form, test connection with the
   tool list, enable switch, stderr log.
 - The agent form's MCP checklist, bound to `agents.mcpServerIds`.
@@ -32,8 +33,8 @@ turn call them and show what came back.
 
 | Not here | Who owns it |
 |---|---|
-| Permission prompts before a tool runs | Post-MVP; `permission.requested` is reserved in `shared/events.ts` (PLAN, "Future extension") |
-| The executor agent itself | Post-MVP. This feature only **enforces** the rule that reserves side-effecting tools for it |
+| The permission prompt itself — the gate, the two `permission.*` events, `permission.reply` | [`executor`](../executor/context.md), S5.4 `[x]`. This feature supplies the `sideEffects` flag that decides *which* MCP calls are confirmed; the asking is the executor's |
+| The executor agent itself and its built-in file / shell / git tools | [`executor`](../executor/context.md), S5.4 `[x]`. This feature only **enforces** the rule that reserves side-effecting tools for it |
 | MCP **resources** and **prompts** | Not in the MVP. Only `tools/list` and `tools/call` are used |
 | Installing a server (running `npm i`, `uv tool install`, pulling an image) | Nobody. The gallery writes a command line; putting `npx` / `uvx` on `PATH` stays the user's job, and the tile says which runner it needs |
 | Keeping a registered server in step with its preset | Nobody. A preset is prefill, not a link: `McpServer` stores no `presetId`, so a package that moves is edited by hand (see "Open questions") |
@@ -73,6 +74,8 @@ their own tools to the same `ToolSet` through the same `collectAgentTools`.
 | stdio children inherit `process.env` | Inherit the SDK's `DEFAULT_INHERITED_ENV_VARS`; inherit nothing | `npx`, `uvx` and `docker` need `PATH`, `HOME`, `NODE_*` and proxy variables. A registered server already runs an arbitrary command by design, so there is nothing left to protect by stripping variables (see `backend.md`, "Security posture") |
 | stderr is kept in a **ring buffer** | Log to the app's stderr; drop it | "Could not connect" is not a diagnostic. The real reason (missing package, wrong path) is on the child's stderr and nowhere else |
 | The side-effects rule is enforced in `collectAgentTools` | Enforce in the handler; enforce in the UI | The UI explains it and the handler never sees a turn. The one place every tool must pass through is where the turn assembles them |
+| S5.4's **confirmation** is attached in the same place — the `call` closure `collectAgentTools` builds — rather than inside `mcp/tools.ts` | Ask inside `toAiTools`; ask inside `McpManager.callTool` | `tools.ts` is pure and knows nothing about a chat, and the manager is a connection pool. Attaching it at the same seam means the flag that decides *whether an agent may have a tool* and the flag that decides *whether a call is confirmed* are read in one place from one record |
+| **Every** tool of a flagged server asks, not just the ones whose names sound dangerous | Ask per tool name; let the server annotate its own tools | The flag is the server's own declaration that its tools change the world. This layer cannot tell `create_issue` from `list_issues`, and guessing wrong in that direction is silent |
 | A model that cannot use tools gets **one retry without them** | Fail the turn; never attach tools to small models | Answering without tools beats answering nothing, and which local models support tool calling cannot be known ahead of time |
 | Tool counts are fetched **on demand**, never on page load | Load every server's tools when settings opens | `mcp.tools` connects; a settings page that spawns six `npx` processes on open is a page that is wrong to open |
 | The arguments / environment boxes own their **raw text**; the draft stores the normalised list | Render the draft back into the box on every keystroke; normalise only on blur | The normalisers drop empty lines and `=`-less lines, so a round-trip erased the Enter that starts a second argument. Blur-only would leave the draft stale while Test and Save read it |

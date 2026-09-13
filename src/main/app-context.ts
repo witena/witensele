@@ -21,6 +21,8 @@ import type { Repositories } from './db/repositories'
 import { createRepositories } from './db/repositories'
 import type { EventBus } from './events/bus'
 import { createEventBus } from './events/bus'
+import type { PermissionGate } from './executor/permissions'
+import { createPermissionGate } from './executor/permissions'
 import { McpManager } from './mcp/manager'
 import type { McpManagerOptions } from './mcp/manager'
 import { createMemoryStore, type MemoryStore } from './memory/store'
@@ -184,6 +186,15 @@ export interface AppContext {
    */
   memory: MemoryStore
   /**
+   * The executor's permission prompt (S5.4).
+   *
+   * On the context for the same reason as `runners` and `supervisor`: a prompt
+   * outlives the IPC call that raised it — the tool call is suspended inside a
+   * turn while the user reads the card — and `permission.reply` has to reach the
+   * very gate that is holding that promise.
+   */
+  permissions: PermissionGate
+  /**
    * Outbound HTTP for handlers that talk to a provider's REST endpoint
    * (`providers.fetchModels`). Absent means the platform `fetch`; a test injects
    * its own so the suite never opens a socket, and a future server build can put
@@ -265,11 +276,13 @@ export function createAppContext(options: AppContextOptions): AppContext {
 
   let closed = false
 
+  const events = options.events ?? createEventBus()
+
   const ctx: AppContext = {
     db,
     userDataDir,
     repos,
-    events: options.events ?? createEventBus(),
+    events,
     secrets,
     userId: options.userId ?? LOCAL_USER_ID,
     // Replaced immediately below: the registry needs the finished context, and
@@ -279,6 +292,7 @@ export function createAppContext(options: AppContextOptions): AppContext {
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
     memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
+    permissions: createPermissionGate({ emit: (event) => events.emit(event) }),
     anthropicCli: options.anthropicCli ?? createAnthropicCli(),
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
@@ -288,6 +302,9 @@ export function createAppContext(options: AppContextOptions): AppContext {
       closed = true
       ctx.runners.stopAll()
       ctx.supervisor.stop()
+      // After `stopAll`, so a prompt whose turn is being aborted is closed by
+      // its own signal and this only catches whatever that missed.
+      ctx.permissions.abortAll()
       // Fire and forget: `close()` is synchronous because every caller of it is
       // (electron's `will-quit`, a test's `afterEach`), and a child process that
       // takes a moment to exit must not hold either of them up. The transport

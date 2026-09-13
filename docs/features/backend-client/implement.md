@@ -46,8 +46,8 @@ i18n `key` and `params` instead of a sentence.
 ### Events
 
 `BackendEvent` is one union covering message lifecycle, chat changes, presence,
-run progress, the reserved permission prompt, and `system.test` (the S1.3
-acceptance probe). `BackendEventType` is its `type` tag and
+run progress, the executor's permission prompt and its resolution (S5.4), and
+`system.test` (the S1.3 acceptance probe). `BackendEventType` is its `type` tag and
 `EventOf<'message.delta'>` narrows to a single member.
 
 ### Method names as data
@@ -244,7 +244,8 @@ rejects in the Electron-free layer *by design* is `system.pickFolder`; see
 | `run.started` | `{ chatId, round }` | A user message starts a run |
 | `run.round` | `{ chatId, round, speakers }` | A round begins, with its speaker ids in order |
 | `run.finished` | `{ chatId, reason }` | The run ends: `completed` / `stopped` / `max-rounds` / `error` |
-| `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | Reserved for the executor's confirmation prompt; nothing emits it yet |
+| `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | A gated executor or `sideEffects` MCP tool is about to run and the turn is suspended (S5.4) |
+| `permission.resolved` | `{ requestId, chatId, decision }` — a `PermissionDecision` or `'aborted'` | That prompt ended, however it ended. Exactly one per `permission.requested`, so a card can be dismissed without knowing why (S5.4) |
 | `system.test` | `{ payload }` | `system.emitTestEvent` was called — the only event emitted as of S1.3 |
 
 ## Tests

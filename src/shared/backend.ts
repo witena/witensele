@@ -35,6 +35,7 @@ import type {
   MemoryEntry,
   MemorySearchHit,
   Message,
+  PermissionDecision,
   Provider,
   ProviderInput,
   SkillDetail,
@@ -260,6 +261,22 @@ export interface BackendApi {
    */
   'messages.usageSummary': (input: { chatId: string }) => Promise<ChatUsageSummary>
 
+  /* -- executor permissions ----------------------------------------------- */
+
+  /**
+   * Answers one permission prompt (S5.4).
+   *
+   * `requestId` comes from a `permission.requested` event. The call resolves as
+   * soon as the waiting tool has been released; the tool's own result arrives in
+   * the transcript as usual. A `requestId` that is not pending — because the run
+   * was stopped, or because the same card was answered twice — rejects with
+   * `not_found`, which is the renderer's cue that the card is stale.
+   *
+   * `allowAlways` runs this call **and** remembers the chat + tool pair for the
+   * life of the process; see `PermissionDecision`.
+   */
+  'permission.reply': (input: { requestId: string; decision: PermissionDecision }) => Promise<void>
+
   /* -- running a chat ----------------------------------------------------- */
 
   /**
@@ -348,6 +365,7 @@ export const BACKEND_METHODS = [
   'presence.retry',
   'messages.list',
   'messages.usageSummary',
+  'permission.reply',
   'chat.send',
   'chat.stop'
 ] as const satisfies readonly BackendMethod[]

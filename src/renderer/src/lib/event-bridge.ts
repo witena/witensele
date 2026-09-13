@@ -63,8 +63,9 @@ export function applyBackendEvent(event: BackendEvent): void {
     case 'run.finished':
       useRunStore.getState().applyFinished(event.chatId)
       break
-    // `permission.requested` is reserved for the executor agent and `system.test`
-    // belongs to the Developer section, which subscribes to it itself.
+    // `permission.requested` / `permission.resolved` are the executor's prompt
+    // (S5.4); the store that draws the card and subscribes to them is S5.5's.
+    // `system.test` belongs to the Developer section, which subscribes itself.
     default:
       break
   }

@@ -8,7 +8,7 @@
 | `src/main/mcp/tools.ts` | Pure: naming (`${slug}__${tool}`), `jsonSchema()` wrapping, MCP result → text, `isError` → throw |
 | `src/main/mcp/testing.ts` | An in-process `McpServer` over `InMemoryTransport` for the suite. Not imported by production code |
 | `src/main/handlers/mcp.ts` | The seven `mcp.*` handlers: validation, connection invalidation, unbinding on delete |
-| `src/main/agents/agent-turn.ts` | `collectAgentTools` (the side-effects rule), the tool parts, the tools-unsupported fallback |
+| `src/main/agents/agent-turn.ts` | `collectAgentTools` (the side-effects rule, and since S5.4 the permission prompt wrapped around a flagged server's `call` closure), the tool parts, the tools-unsupported fallback |
 | `src/main/db/repositories/agents.ts` | Gained `removeMcpServer(serverId)` |
 | `src/main/app-context.ts` | `ctx.mcp`, built by `createMcpManager`; `closeAll()` from `ctx.close()` |
 

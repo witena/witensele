@@ -63,6 +63,16 @@
  * The side-effects rule lives in `collectAgentTools`: a server flagged
  * `sideEffects` is attached only to an `executor` agent. See its doc comment.
  *
+ * ## The executor and its permission prompt (S5.4)
+ *
+ * `collectAgentTools` also attaches the seven built-in executor tools
+ * (`executor/tools.ts`) — but only to **the** executor of a chat that has a
+ * `workdir`. `write_file`, `edit_file`, `run_command` and every tool of a
+ * `sideEffects` MCP server suspend inside `PermissionGate.ask` until the user
+ * answers `permission.reply`; a denial or a stop comes back as a `tool-error`
+ * part the model reads and can talk about. The whole feature is written up in
+ * `docs/features/executor/`.
+ *
  * ## Skills and memory (S3.2, S3.3)
  *
  * The same function also attaches the built-in tools. `read_skill` and
@@ -116,6 +126,11 @@ import type {
 } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { skillsDir } from '../app-context'
+import {
+  buildExecutorSection,
+  buildExecutorTools,
+  PermissionDeniedError
+} from '../executor/tools'
 import { toAiTools, type AgentTools, type ToolOrigin } from '../mcp/tools'
 import { buildMemorySection, buildMemoryTools } from '../memory/tools'
 import { scanSkills } from '../skills/loader'
@@ -303,14 +318,25 @@ export function enabledSkills(ctx: AppContext, agent: Agent): SkillMeta[] {
 
 /**
  * The system prompt, in the order `docs/PLAN.md` ("One agent turn") fixes: the
- * agent's own instructions, the group briefing, the enabled skills' names and
- * descriptions, then the whole memory index.
+ * agent's own instructions, the group briefing, the executor's folder and tools
+ * when it is one, the enabled skills' names and descriptions, then the whole
+ * memory index.
  *
  * Skills and memory come **after** the briefing because they are data the agent
  * may reach for, while the briefing is how it must behave; a model that runs out
- * of attention should lose the reference material first, not the protocol.
+ * of attention should lose the reference material first, not the protocol. The
+ * executor section sits between the two for the same reason: it is protocol —
+ * which folder, which tools, what to do when it is finished — and is only
+ * present when the tools it describes are actually attached, because a prompt
+ * that promises a tool the model was not given is how a model starts describing
+ * tool calls in prose.
  */
-export function buildSystemPrompt(ctx: AppContext, agent: Agent, members: Agent[]): string {
+export function buildSystemPrompt(
+  ctx: AppContext,
+  chat: Chat,
+  agent: Agent,
+  members: Agent[]
+): string {
   const language = resolveMainLanguage(ctx.repos.settings.get(ctx.userId).language)
   const briefing = buildGroupBriefing({
     language,
@@ -321,6 +347,10 @@ export function buildSystemPrompt(ctx: AppContext, agent: Agent, members: Agent[
 
   const sections = [agent.systemPrompt.trim(), briefing]
 
+  if (executorWorkdir(chat, agent, members)) {
+    sections.push(buildExecutorSection(chat.workdir as string))
+  }
+
   const skills = buildSkillsSection(enabledSkills(ctx, agent))
   if (skills.length > 0) sections.push(skills)
 
@@ -329,14 +359,54 @@ export function buildSystemPrompt(ctx: AppContext, agent: Agent, members: Agent[
   return sections.filter((section) => section.length > 0).join('\n\n')
 }
 
+/**
+ * The folder this agent may act on, or `null` — the single rule behind both the
+ * executor tools and the executor section of the prompt.
+ *
+ * Three conditions, all necessary:
+ *
+ * 1. **The agent's role is `executor`.** A participant never gets these tools,
+ *    whatever the chat says (PLAN.md: discussion agents are read-only).
+ * 2. **The chat has a `workdir`.** There is no default folder and no fallback to
+ *    the process's working directory: an executor in a chat nobody bound to a
+ *    folder simply has no file tools, which S5.2 chose over refusing the member.
+ * 3. **It is *the* executor of this chat** — the first `executor` in the member
+ *    list, which the runner passes in `position` order.
+ *
+ * The third condition exists because `chats.members.set` is not the only way to
+ * end up with two executors in one chat: `agents.update` can still *promote* a
+ * participant that is already a member, which S5.2 recorded as a known gap. Two
+ * agents writing into one folder is exactly what PLAN.md's one-writer decision
+ * exists to prevent, so the tie is broken deterministically here rather than
+ * left to whichever turn runs first.
+ */
+export function executorWorkdir(chat: Chat, agent: Agent, members: readonly Agent[]): string | null {
+  if (agent.role !== 'executor') return null
+  if (typeof chat.workdir !== 'string' || chat.workdir.trim().length === 0) return null
+  const first = members.find((member) => member.role === 'executor')
+  // `first` is undefined only when the caller passed a member list this agent is
+  // not in, which the runner never does; trusting the agent's own role then is
+  // the safer of the two answers, because the alternative silently disarms an
+  // executor the user is watching.
+  if (first && first.id !== agent.id) return null
+  return chat.workdir
+}
+
 /* -------------------------------------------------------------------------- */
 /* Tools                                                                       */
 /* -------------------------------------------------------------------------- */
 
-/** What `collectAgentTools` needs from the turn: its signal and its budget. */
+/** What `collectAgentTools` needs from the turn: its signal, its budget, its chat. */
 export interface CollectToolsOptions {
   signal: AbortSignal
   toolTimeoutMs: number
+  /**
+   * Everyone in the chat, in `position` order.
+   *
+   * Needed only to pick the chat's executor deterministically when the member
+   * list somehow holds two; see `executorWorkdir`.
+   */
+  members: readonly Agent[]
 }
 
 /**
@@ -360,12 +430,24 @@ export interface CollectToolsOptions {
  * answer from what it knows.
  *
  * On top of those, the **built-in** tools: `read_skill` / `read_skill_file` when
- * the agent has at least one skill that still exists (S3.2), and `memory_save` /
- * `memory_search` when its memory is on (S3.3). See the end of the function for
- * why the side-effects rule does not reach them.
+ * the agent has at least one skill that still exists (S3.2), `memory_save` /
+ * `memory_search` when its memory is on (S3.3), and the seven **executor** tools
+ * when `executorWorkdir` says this agent is the chat's executor and the chat has
+ * a folder (S5.4). See the end of the function for why the side-effects rule
+ * does not reach the first two families.
+ *
+ * ## Where the permission prompt is attached
+ *
+ * Here, not inside the tools: `mcp/tools.ts` is pure and knows nothing about a
+ * chat, and the executor tools ask through the gate they are handed. So the
+ * `call` closure this function builds for an MCP server checks `sideEffects` and
+ * asks first — which means the flag that decides *whether an agent may have a
+ * tool at all* and the flag that decides *whether a call is confirmed* are read
+ * in one place, from one record.
  */
 export async function collectAgentTools(
   ctx: AppContext,
+  chat: Chat,
   agent: Agent,
   options: CollectToolsOptions
 ): Promise<AgentTools> {
@@ -391,12 +473,25 @@ export async function collectAgentTools(
 
     try {
       const discovered = await ctx.mcp.listTools(serverId)
-      const wrapped = toAiTools(serverId, server.name, discovered, (toolName, args) =>
-        ctx.mcp.callTool(serverId, toolName, args, {
+      const wrapped = toAiTools(serverId, server.name, discovered, async (toolName, args) => {
+        // Every tool of a side-effecting server is confirmed, not only the ones
+        // whose name sounds dangerous: the server declared that its tools change
+        // the outside world and this layer cannot tell which of them do.
+        if (server.sideEffects) {
+          const outcome = await ctx.permissions.ask({
+            chatId: chat.id,
+            agentId: agent.id,
+            toolName,
+            input: args,
+            signal: options.signal
+          })
+          if (!outcome.allowed) throw new PermissionDeniedError(toolName, outcome.reason)
+        }
+        return await ctx.mcp.callTool(serverId, toolName, args, {
           signal: options.signal,
           timeoutMs: options.toolTimeoutMs
         })
-      )
+      })
       for (const [key, definition] of Object.entries(wrapped.tools)) {
         // Two servers whose names sanitize to the same slug would collide; the
         // first one keeps the key, which is at least stable across turns.
@@ -423,6 +518,25 @@ export async function collectAgentTools(
   }
   if (agent.memoryEnabled) {
     Object.assign(tools, buildMemoryTools(ctx.memory, agent.id))
+  }
+
+  // The executor's own file, search, shell and git tools (S5.4). Unlike the two
+  // families above, these *are* the side-effects rule rather than an exception
+  // to it: three of the seven go through `ctx.permissions` before they run, and
+  // all seven are confined to the chat's folder.
+  const workdir = executorWorkdir(chat, agent, options.members)
+  if (workdir) {
+    Object.assign(
+      tools,
+      buildExecutorTools({
+        workdir,
+        chatId: chat.id,
+        agentId: agent.id,
+        signal: options.signal,
+        timeoutMs: options.toolTimeoutMs,
+        permissions: ctx.permissions
+      })
+    )
   }
 
   return { tools, origins }
@@ -553,7 +667,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const agentsById = Object.fromEntries(members.map((member) => [member.id, member]))
     const origins = attached?.origins ?? {}
 
-    const system = buildSystemPrompt(ctx, agent, members)
+    const system = buildSystemPrompt(ctx, chat, agent, members)
     // Both history paths go through the budget: the sequential turn's fresh read
     // and the snapshot the runner took once for a parallel round. A long chat
     // overflows every speaker at the same moment, so exempting either one would
@@ -669,9 +783,10 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     if (turnSignal.aborted) throw new TurnAborted()
 
     const toolTimeoutMs = ctx.repos.settings.get(ctx.userId).timeouts.toolTimeoutMs
-    const attached = await collectAgentTools(ctx, agent, {
+    const attached = await collectAgentTools(ctx, chat, agent, {
       signal: turnSignal,
-      toolTimeoutMs
+      toolTimeoutMs,
+      members
     })
     const hasTools = Object.keys(attached.tools).length > 0
 

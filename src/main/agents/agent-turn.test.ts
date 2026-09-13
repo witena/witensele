@@ -9,7 +9,8 @@
  * usage — is exercised for real. A stub around `streamText` would prove none of
  * that, which is the whole reason this is an integration test.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -565,6 +566,14 @@ describe('runAgentTurn with MCP tools', () => {
   const turn = (model: MockLanguageModelV4) =>
     runAgentTurn({ ctx, chat, agent, members: [agent], round: 1, signal: new AbortController().signal, model })
 
+  /** Answers every permission prompt with `allow`. Returns the unsubscribe. */
+  const allowEveryPrompt = (): (() => void) =>
+    ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision: 'allow' })
+      }
+    })
+
   it('runs the tool and stores the call, the result and the answer in order', async () => {
     bind()
 
@@ -627,17 +636,40 @@ describe('runAgentTurn with MCP tools', () => {
     expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
   })
 
-  it('attaches the same server to an executor', async () => {
+  it('attaches the same server to an executor, and confirms every call (S5.4)', async () => {
     bind({ sideEffects: true, role: 'executor' })
     const model = toolThenAnswer()
+    // Nobody is at the keyboard in a unit test, so the answer is automatic; what
+    // is being asserted is that the call *waited* for one.
+    const stopAllowing = allowEveryPrompt()
 
-    await turn(model)
+    const result = await turn(model)
 
     expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
       'everything__echo',
       'everything__fail',
       'everything__slow'
     ])
+    const prompts = events.filter((event) => event.type === 'permission.requested')
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toMatchObject({ toolName: 'echo', input: { message: 'WITENA-42' } })
+    expect(result.message.parts[1]).toMatchObject({ type: 'tool-result', output: 'Echo: WITENA-42' })
+    stopAllowing()
+  })
+
+  it('returns a tool error the model can read when a side-effecting call is denied', async () => {
+    bind({ sideEffects: true, role: 'executor' })
+    const stopDenying = ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision: 'deny' })
+      }
+    })
+
+    const result = await turn(toolThenAnswer())
+
+    expect(result.message.parts[1]).toMatchObject({ type: 'tool-result', isError: true })
+    expect(String((result.message.parts[1] as { output: unknown }).output)).toMatch(/declined/)
+    stopDenying()
   })
 
   it('offers no tools at all when the server is disabled', async () => {
@@ -1033,5 +1065,263 @@ describe('runAgentTurn with skills and memory', () => {
         'A secret of Bob'
       )
     })
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.4: the executor's own tools and the permission prompt                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A whole turn of the executor, against a real temporary folder.
+ *
+ * The point of these cases is the seam the unit suites cannot reach: a model
+ * really asks for `write_file`, `collectAgentTools` really decides whether that
+ * agent may have it, the gate really suspends the turn inside `streamText`'s
+ * tool loop, and `permission.reply` really releases it. The "user" is an event
+ * subscriber that answers instantly — which is also why the denial case is
+ * worth having, since the turn has to survive being told no.
+ */
+describe('runAgentTurn with executor tools', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let agent: Agent
+  let chat: Chat
+  let workdir: string
+
+  /** A model that calls `toolName` with `input` once, then answers. */
+  function callThenAnswer(toolName: string, input: Record<string, unknown>): MockLanguageModelV4 {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                {
+                  type: 'tool-call',
+                  toolCallId: 'call-1',
+                  toolName,
+                  input: JSON.stringify(input)
+                },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks(['Done.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    const created = createTestAppContext(database)
+    ctx = created.ctx
+    events = created.events
+
+    workdir = mkdtempSync(join(tmpdir(), 'witena-turn-executor-'))
+    writeFileSync(join(workdir, 'README.md'), '# Project\n\nHello.\n', 'utf8')
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({
+        name: 'Ada',
+        providerId: provider.id,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Implementation', workdir }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'Add a NOTES.md.' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const turn = (model: MockLanguageModelV4, members: Agent[] = [agent]) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members,
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+
+  /** Answers every prompt with `decision`. Returns the unsubscribe. */
+  const answerEveryPrompt = (decision: 'allow' | 'deny' | 'allowAlways'): (() => void) =>
+    ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision })
+      }
+    })
+
+  const writeCall = (): MockLanguageModelV4 =>
+    callThenAnswer('write_file', { path: 'NOTES.md', content: '# Notes\n' })
+
+  it('offers the seven tools and names the folder in the prompt', async () => {
+    const stop = answerEveryPrompt('allow')
+    const model = writeCall()
+
+    await turn(model)
+
+    expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
+      'read_file',
+      'list_dir',
+      'search_files',
+      'write_file',
+      'edit_file',
+      'run_command',
+      'git_diff'
+    ])
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain(workdir)
+    stop()
+  })
+
+  it('asks before writing, and the file appears once the user allows', async () => {
+    const stop = answerEveryPrompt('allow')
+
+    const result = await turn(writeCall())
+
+    const prompts = events.filter((event) => event.type === 'permission.requested')
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toMatchObject({
+      chatId: chat.id,
+      agentId: agent.id,
+      toolName: 'write_file',
+      input: { path: 'NOTES.md', content: '# Notes\n' }
+    })
+    expect(events.filter((event) => event.type === 'permission.resolved')).toHaveLength(1)
+
+    expect(readFileSync(join(workdir, 'NOTES.md'), 'utf8')).toBe('# Notes\n')
+    expect(result.status).toBe('done')
+    expect(result.message.parts[0]).toMatchObject({ type: 'tool-call', toolName: 'write_file' })
+    const done = result.message.parts[1] as { type: string; isError?: boolean; output: unknown }
+    expect(done.type).toBe('tool-result')
+    expect(done.isError).toBeUndefined()
+    expect(done.output).toMatchObject({ path: 'NOTES.md', created: true })
+    expect(String((done.output as { patch: string }).patch)).toContain('+# Notes')
+    stop()
+  })
+
+  it('writes nothing and stores a tool error when the user denies', async () => {
+    const stop = answerEveryPrompt('deny')
+
+    const result = await turn(writeCall())
+
+    expect(existsSync(join(workdir, 'NOTES.md'))).toBe(false)
+    const failed = result.message.parts[1] as { type: string; isError?: boolean; output: unknown }
+    expect(failed).toMatchObject({ type: 'tool-result', isError: true })
+    expect(String(failed.output)).toMatch(/declined/)
+    // The turn itself is fine: the model was told no and answered anyway.
+    expect(result.status).toBe('done')
+    stop()
+  })
+
+  it('does not ask a second time after "always allow in this chat"', async () => {
+    const stop = answerEveryPrompt('allowAlways')
+
+    await turn(writeCall())
+    await turn(callThenAnswer('write_file', { path: 'MORE.md', content: 'more\n' }))
+
+    expect(events.filter((event) => event.type === 'permission.requested')).toHaveLength(1)
+    expect(readFileSync(join(workdir, 'MORE.md'), 'utf8')).toBe('more\n')
+    stop()
+  })
+
+  it('gives a participant in the same chat no executor tools at all', async () => {
+    agent = ctx.repos.agents.update(agent.id, { role: 'participant' }, ctx.userId)
+    const model = writeCall()
+
+    await turn(model)
+
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain(workdir)
+  })
+
+  it('gives an executor in a chat without a folder no executor tools', async () => {
+    chat = ctx.repos.chats.update(chat.id, { workdir: null }, ctx.userId)
+    const model = writeCall()
+
+    await turn(model)
+
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+  })
+
+  it('arms only the first executor when a chat somehow holds two', async () => {
+    // `agents.update` can still promote a participant that is already a member,
+    // which S5.2 recorded as a known gap: the tie is broken by `position`.
+    const second = ctx.repos.agents.create(
+      agentInput({
+        name: 'Bob',
+        providerId: agent.providerId,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      }),
+      ctx.userId
+    )
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    const members = [agent, second]
+    const stop = answerEveryPrompt('allow')
+
+    const first = writeCall()
+    await turn(first, members)
+    expect((first.doStreamCalls[0]?.tools ?? []).length).toBe(7)
+
+    const model = writeCall()
+    await runAgentTurn({
+      ctx,
+      chat,
+      agent: second,
+      members,
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+    stop()
+  })
+
+  it('does not confirm a read-only tool', async () => {
+    const result = await turn(callThenAnswer('read_file', { path: 'README.md' }))
+
+    expect(events.filter((event) => event.type === 'permission.requested')).toEqual([])
+    expect(result.message.parts[1]).toMatchObject({
+      type: 'tool-result',
+      output: { path: 'README.md', content: '# Project\n\nHello.\n' }
+    })
+  })
+
+  it('refuses a path that leaves the folder without asking the user', async () => {
+    const result = await turn(callThenAnswer('read_file', { path: '../../etc/passwd' }))
+
+    expect(events.filter((event) => event.type === 'permission.requested')).toEqual([])
+    const failed = result.message.parts[1] as { isError?: boolean; output: unknown }
+    expect(failed.isError).toBe(true)
+    expect(String(failed.output)).toMatch(/outside the working directory/)
   })
 })
