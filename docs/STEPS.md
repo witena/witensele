@@ -340,8 +340,35 @@ status stays `done` — the stored parts keep what the model actually wrote.
 `test-results/shots/polish.png`. Docs in `docs/features/{chats,agent-turn,
 orchestration,providers}/`.
 
-### S4.4 Packaging `[ ]`
+### S4.4 Packaging `[x]` (2026-09-13)
 Acceptance: electron-builder produces a macOS dmg; after installation the app launches and completes one conversation.
+Done: `electron-builder.yml` — `com.witena.app` / `Witena`, `files: [out/**,
+package.json]` (no `node_modules` entry: electron-builder appends the production
+tree itself), `asarUnpack` for `better-sqlite3` because **`dlopen` cannot read a
+`.node` out of an asar archive**, `extraResources: resources -> resources`, and a
+single unsigned `dmg` for `arm64` (`hardenedRuntime: false`, `identity: null` —
+explicitly null so the artifact does not silently pick up whatever identity is in
+the building machine's keychain). `bundledSkillsDir()` in `src/main/index.ts` now
+resolves `process.resourcesPath/resources/skills` when packaged, keeping the
+packaged tree a mirror of the repository so a later addition to `resources/`
+ships without another config edit. The migrations needed nothing: S1.2 inlined
+them with `import.meta.glob('?raw')`, so they are string literals inside
+`out/main/index.js`.
+
+The icon is original and drawn here: `build/icon.svg` (a rounded square in the
+accent `#d8a656` with a white stroked "W"), rasterised by **using the Electron
+binary as the SVG renderer** — no rasteriser is installed on this machine — then
+`sips` into `build/icon.iconset/` (gitignored) and `iconutil -c icns` into
+`build/icon.icns`. `npm run dist` / `dist:dir`; `npm run e2e:packaged` drives
+`e2e/packaged.spec.ts` through its own `playwright.packaged.config.ts` against
+the app copied off the mounted dmg (`WITENA_APP_PATH`), asserting the three
+things a checkout cannot vouch for: the shell renders out of the asar, the
+shipped skill is in Settings -> Skills, and one real Ollama reply completes —
+which is the strongest of the three, because it can only happen if the native
+module loaded and the migrations ran. `playwright.config.ts` gained a
+`testIgnore` for it and for `e2e/demo.record.ts`, the filmed product tour that
+produces `docs/assets/`; the repository `README.md` and an MIT `LICENSE` were
+added on top. Docs in `docs/features/packaging/`.
 
 ---
 

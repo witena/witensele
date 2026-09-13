@@ -11,3 +11,7 @@ playwright-report
 # Local-only Chinese copies of committed English docs
 *.zh.md
 CLAUDE.local.md
+
+# Intermediate iconset: build/icon.svg, icon.png and icon.icns are committed,
+# the ten sips-generated PNGs that produce the icns are not.
+build/icon.iconset

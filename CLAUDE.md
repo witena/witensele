@@ -43,7 +43,9 @@ src/
     index.html
     src/            # pages/, components/, stores/, locales/, lib/
   shared/           # types.ts, events.ts, backend.ts, mentions.ts, presets.ts, version.ts
-docs/               # PLAN.md, STEPS.md, README.md, features/<feature>/
+resources/          # Shipped with the build; seeded on first launch (skills/)
+build/              # Packaging inputs: icon.svg, icon.png, icon.icns
+docs/               # PLAN.md, STEPS.md, README.md, features/<feature>/, assets/
 ```
 
 Path alias `@shared/*` → `src/shared/*` works in main, preload and renderer.
@@ -127,7 +129,16 @@ are worked around:
 | `npm test` | Run the vitest suite once |
 | `npm run test:watch` | Run vitest in watch mode |
 | `npm run e2e` | Build, then run the Playwright Electron end-to-end harness in `e2e/` (no browser download needed) |
+| `npm run dist` | Build, then package a macOS arm64 dmg into `dist/` with electron-builder |
+| `npm run dist:dir` | The same without the dmg — `dist/mac-arm64/Witena.app` only, for iterating on the packaging config |
+| `npm run e2e:packaged` | Run `e2e/packaged.spec.ts` against a copy of the shipped `Witena.app` named by `WITENA_APP_PATH`. Not part of `npm run e2e` |
+| `npm run demo` | Record the README's product tour into `test-results/demo/`. Not part of `npm run e2e`; needs Ollama |
 | `npm install` | Install dependencies; `postinstall` rebuilds better-sqlite3 for Electron |
+
+`e2e/packaged.spec.ts` and `e2e/demo.record.ts` are named in
+`playwright.config.ts`'s `testIgnore` and have their own configs: one needs a dmg
+that has already been built and mounted, the other is a several-minute screen
+recording. See `docs/features/packaging/`.
 
 If Electron fails to start with `Error: Electron uninstall`, its binary was never
 downloaded: run `node node_modules/electron/install.js`.

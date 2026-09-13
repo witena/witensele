@@ -1,0 +1,33 @@
+<!--
+  Witena application icon.
+
+  An original mark, drawn from scratch for this repository: the accent colour
+  `#d8a656` (the `accent` token in `src/renderer/src/index.css`) as a rounded
+  square, with a white "W" stroked over it in the same round-joined geometry the
+  UI uses for its icons.
+
+  Rendered to `build/icon.png` (1024 px) and then to `build/icon.icns` — see
+  `docs/features/packaging/backend.md`, "Building the icon". The 64 px inset
+  leaves the padding macOS expects around an app icon, and the stroke is heavy
+  enough to survive the 16 px iconset variant.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8c17a" />
+      <stop offset="0.45" stop-color="#d8a656" />
+      <stop offset="1" stop-color="#b9832f" />
+    </linearGradient>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="208" ry="208" fill="url(#face)" />
+
+  <path
+    d="M 296 336 L 400 700 L 512 486 L 624 700 L 728 336"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="76"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

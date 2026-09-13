@@ -17,6 +17,9 @@ const isDev = !app.isPackaged
 /** File name of the SQLite database inside the userData directory. */
 const DATABASE_FILE = 'witena.db'
 
+/** The repository folder holding everything shipped beside the code. */
+const RESOURCES_DIR = 'resources'
+
 /** Folder of the skills shipped with the application, inside `resources/`. */
 const BUNDLED_SKILLS = 'skills'
 
@@ -25,14 +28,23 @@ const BUNDLED_SKILLS = 'skills'
  *
  * Two answers, because electron moves them: in development and in the
  * end-to-end harness the app runs from the repository, so they are under
- * `resources/`; a packaged build copies that folder into
- * `process.resourcesPath`. Resolved here rather than in the loader, because this
- * file is the only one allowed to ask electron where anything is.
+ * `<appPath>/resources/skills`; a packaged build copies the whole `resources`
+ * folder into `Witena.app/Contents/Resources/resources` (the `extraResources`
+ * entry in `electron-builder.yml`), which is `process.resourcesPath/resources`.
+ *
+ * The nested `resources/resources` looks redundant and is deliberate: keeping
+ * the folder's own name means the packaged tree mirrors the repository, so the
+ * relative path below `RESOURCES_DIR` is the same string in both builds and
+ * anything added to `resources/` later ships without another config edit.
+ *
+ * Resolved here rather than in the loader, because this file is the only one
+ * allowed to ask electron where anything is.
  */
 function bundledSkillsDir(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, BUNDLED_SKILLS)
-    : join(app.getAppPath(), 'resources', BUNDLED_SKILLS)
+  const root = app.isPackaged
+    ? join(process.resourcesPath, RESOURCES_DIR)
+    : join(app.getAppPath(), RESOURCES_DIR)
+  return join(root, BUNDLED_SKILLS)
 }
 
 /**

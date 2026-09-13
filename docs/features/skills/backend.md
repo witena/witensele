@@ -85,9 +85,15 @@ therefore not noticed until one of those, or until a restart.
 
 `seedSkills(sourceDir, skillsDir)` copies `resources/skills/*` into the library
 when the library holds nothing. `src/main/index.ts` resolves `sourceDir`:
-`app.getAppPath()/resources/skills` unpackaged, `process.resourcesPath/skills`
-when packaged. `e2e/skills-memory.spec.ts` depends on this: it asserts the
-shipped skill is present on a fresh temporary `userData`.
+`app.getAppPath()/resources/skills` unpackaged, and
+`process.resourcesPath/resources/skills` when packaged — S4.4's
+`extraResources: resources -> resources` keeps the folder's own name, so the
+packaged tree mirrors the repository and the path below it is the same string in
+both builds (see [`../packaging/backend.md`](../packaging/backend.md), "The
+resources path"). `e2e/skills-memory.spec.ts` depends on the unpackaged half: it
+asserts the shipped skill is present on a fresh temporary `userData`.
+`e2e/packaged.spec.ts` asserts the packaged half against the real bundle, which
+is the only way that path can be checked.
 
 ## The electron exception
 
