@@ -372,6 +372,229 @@ added on top. Docs in `docs/features/packaging/`.
 
 ---
 
-## Phase 5: Later (post-MVP, see "Future extension" in PLAN.md)
+## Phase 5: Executors and external systems (PLAN "Future extension", points 1–3)
 
-Connector gallery, executor agent with a working directory, VS Code open and extension, server and multi-user.
+The MVP is complete. This phase builds the three layers PLAN.md reserves
+interfaces for: the connector gallery, the executor agent, and opening files in
+the editor. Point 4 (server and multi-user) and the VS Code *extension* (the
+second half of point 3) stay out: the extension needs a backend reachable from
+outside Electron, which is the server work, so both move together to a later
+phase.
+
+Every step below follows the same rules as Phases 1–4 and they are repeated
+here because a step is handed to a fresh session: `docs/features/<feature>/`
+(all four documents) updated in the same commit as the code; a new feature is
+started from `docs/features/_template/` and gets a row in `docs/README.md`;
+every user-facing string is a key in **both** `en.json` and `zh-CN.json`;
+main-process text is a `SystemNoticePart` key; nothing outside
+`src/main/index.ts` and `src/main/ipc/` imports electron (the handler modules
+live in `src/main/handlers/`, the electron-only overlays in `src/main/ipc/`);
+`npm run typecheck` and `npm test` pass; everything committed is English; the
+step's marker here is flipped to `[x]` with the date in the same commit.
+
+### S5.1 Connector gallery `[ ]`
+What: a preset table of common MCP servers and a picker that prefills the MCP
+editor from one, so "add the GitHub server" is one click plus a token rather
+than a command typed from memory.
+- `src/shared/mcp-presets.ts`, shaped like `src/shared/presets.ts`: static data,
+  no electron, no node. `McpPreset { id, name, transport, command?, args?,
+  env?, url?, sideEffects, docsUrl, requires? }`. `env` lists the variables the
+  server needs with **empty** values (`GITHUB_PERSONAL_ACCESS_TOKEN: ''`), so
+  the environment box opens showing `KEY=` lines to fill in. `requires` names
+  the runner the command needs (`npx`, `uvx`, `docker`) for the card hint.
+  Presets, at least: `everything` (demo, read-only), `filesystem` (side
+  effects; one path argument the user edits), `git` via `uvx mcp-server-git`
+  (side effects), `github` (side effects, token), `fetch` via `uvx
+  mcp-server-fetch` (read-only), `brave-search` (read-only, key),
+  `sequential-thinking` (read-only), `slack` (side effects, token), `notion`
+  (side effects, token), `playwright` (`@playwright/mcp`, side effects). Names
+  are brand names and are not translated; each preset's one-line description
+  is `settings.mcp.presets.<id>` in both locale files.
+- Settings → MCP servers → "Add server" opens the editor with a preset grid
+  above the form (reuse or generalise `components/settings/preset-grid.tsx`;
+  a "Custom" tile is the blank form). Picking a tile calls a new store action
+  `applyPreset(id)` that replaces the draft's transport, command, args, env,
+  url and `sideEffects` and keeps the name if the user already typed one,
+  otherwise uses the preset id. Each tile shows a read-only / side-effects
+  badge and the `requires` hint; the editor keeps working exactly as before
+  once a tile is picked. The gallery is not shown when editing a saved server.
+- Unit tests: ids unique; every preset has a description key in both locale
+  files (extend the pattern of `i18n/locales.test.ts` rather than duplicating
+  it); stdio presets have a command and http presets a URL; `applyPreset`
+  keeps a typed name and sets `sideEffects` from the preset.
+- e2e: in `e2e/mcp.spec.ts`, register `everything` **through the gallery**
+  (tile → Test → tools listed → Save) instead of typing the command; keep the
+  typed-Enter assertion on the arguments box.
+Acceptance: picking "GitHub" yields a stdio draft running `npx -y
+@modelcontextprotocol/server-github` with `GITHUB_PERSONAL_ACCESS_TOKEN=` in the
+environment box and the side-effects switch on; picking "Fetch" leaves it off;
+the tests above pass. Docs: `docs/features/mcp/` (all four).
+
+### S5.2 Executor role and the chat working directory `[ ]`
+What: make the two reserved fields real. `agents.role = 'executor'` becomes a
+first-class choice with an explanation, and a chat can be bound to a local
+folder.
+- `Chat.workdir`: `ChatPatch` accepts `workdir: string | null`. The `chats.update`
+  handler validates it (absolute; exists; is a directory; `validation` error
+  code otherwise, checked with `node:fs` — allowed in handlers) and the runner
+  reads it from the chat record. A chat settings row "Working directory" with
+  "Choose…" (`system.pickFolder`, which already exists) and "Clear"; the chat
+  header shows the folder's basename as a chip with the full path in `title`.
+- One executor per chat: adding a second executor member is refused by the
+  member handler (`validation`, key `notices.secondExecutor` or an error code
+  the renderer translates — follow how member errors are surfaced today) and
+  the member picker greys the candidate with a hint. A chat with an executor
+  member but no `workdir` is allowed; S5.3 simply attaches no executor tools.
+- Agent editor: the existing role control gets the PLAN.md explanation inline
+  (discussion agents are read-only; one executor writes, with confirmation)
+  and the agent list, member rows and message headers show an "executor"
+  badge. `agents.mcpServerIds` and the side-effects checklist keep their
+  current behaviour.
+- Unit tests: `chats.update` workdir validation (relative path, missing path, a
+  file), the second-executor refusal, the chats store patch; renderer display
+  helpers for the badge and the chip.
+- e2e: `e2e/members.spec.ts` (or a new `executor.spec.ts`) creates an executor
+  agent, adds it to a chat, sees the badge, and sees a second executor refused.
+  The folder picker is native and is not driven; set `workdir` through the
+  backend client in the test and assert the chip.
+Acceptance: a chat shows its folder chip after `chats.update({ workdir })`; an
+invalid path is refused with a translated error; two executors cannot join one
+chat. Docs: `docs/features/chats/` and `docs/features/agents/` (all four each).
+
+### S5.3 Executor tools and the permission gate `[ ]`
+What: the built-in tools an executor uses on the chat's folder, and the prompt
+that runs before anything with side effects. Backend only; S5.4 builds the UI.
+- New feature `executor` (`docs/features/executor/`, README row). Code in
+  `src/main/executor/`: `paths.ts` (confinement: resolve against `workdir`,
+  refuse `..` escapes and symlinks whose realpath leaves the folder),
+  `tools.ts` (AI SDK tools: `read_file`, `list_dir`, `search_files`,
+  `write_file`, `edit_file` — exact-string replace —, `run_command` with
+  `cwd = workdir`, a timeout from `settings.timeouts.toolTimeoutMs`, output
+  capped and truncated with a marker, and `git_diff`), and `permissions.ts`.
+  `write_file` and `edit_file` return the unified diff of what they changed
+  (add the `diff` package; do not hand-roll a diff) so S5.4 can post it.
+- `PermissionGate`: `ask({ chatId, agentId, toolName, input, signal })` emits
+  the reserved `permission.requested` event and resolves when
+  `permission.reply({ requestId, decision })` arrives with `allow`, `deny` or
+  `allowAlways` (remembered per chat + tool for the life of the process, as
+  PLAN.md's "always allow in this chat"). Add `permission.reply` to
+  `BackendApi`, `BACKEND_METHODS` and `shared/contracts.test.ts`, and a
+  `permission.resolved` event so the renderer can dismiss a prompt the run
+  cancelled. Stop aborts pending prompts through the turn's signal; a denied
+  or aborted call returns a tool error the model reads ("the user declined").
+- Which calls prompt: `write_file`, `edit_file`, `run_command`, and every tool
+  of an MCP server flagged `sideEffects` (the flag's reserved purpose in
+  `schema.ts`). `read_file`, `list_dir`, `search_files`, `git_diff` do not.
+- `collectAgentTools` gains the chat (it needs `workdir`): executor tools are
+  attached only when `agent.role === 'executor'` **and** the chat has a
+  `workdir`; a participant never gets them, whatever the chat says. The
+  executor's system prompt gets a briefing: the folder, the tools, and the
+  instruction to finish with a summary of what changed and to ask for review.
+- Unit tests: confinement (`../x`, an absolute path outside, a symlink out),
+  each tool against a temp directory, the gate (allow, deny, always, abort by
+  signal, an unknown `requestId`), and `agent-turn.test.ts` with a
+  `MockLanguageModel` that calls `write_file`: a `permission.requested` event,
+  a reply of `allow` writes the file and the turn ends with a `tool-result`;
+  `deny` ends with a `tool-error`; a participant with the same chat gets no
+  executor tools.
+Acceptance: the tests above; `npm run typecheck`; nothing under
+`src/main/executor/` imports electron. Docs: `docs/features/executor/` (new,
+all four) and `docs/features/agent-turn/` (all four).
+
+### S5.4 Permission prompt, diff and file-ref rendering `[ ]`
+What: the renderer half of S5.3 — the user can answer the prompt, and what the
+executor changed is visible in the transcript.
+- `stores/permissions.ts`: pending requests keyed by `requestId`, filled from
+  `permission.requested`, cleared by `permission.resolved`; `reply(requestId,
+  decision)` calls `permission.reply`. A `PermissionCard` above the composer
+  (one per pending request, oldest first) shows the agent, the tool, a readable
+  rendering of the input (path and a preview for a write, the command line for
+  `run_command`, raw JSON otherwise) and three buttons: Allow, Always allow in
+  this chat, Deny. Enter allows, Escape denies. The card disappears on
+  `permission.resolved` however the request ended.
+- After an executor turn, the backend appends one `DiffPart` per file the turn
+  wrote (from the diffs S5.3's tools return; several writes to one file are
+  concatenated in order) to the executor's message. `message-item.tsx` renders
+  a `DiffPart` as a collapsible block headed by the path, using the existing
+  `code-block.tsx` with the `diff` language; `transcript-rows.ts` learns the
+  part. A `FileRefPart` renders as a `path:line` chip; in this step it copies
+  the path on click (S5.6 makes it open the editor).
+- Tool cards for the executor tools get readable labels (`write_file(path)`,
+  `run_command(cmd)`) through `tool-call.ts`.
+- Unit tests: the permissions store (request, resolve, reply, stop clears),
+  `transcript-rows` with `diff` and `file-ref` parts, the tool-call labels.
+- e2e: `e2e/executor.spec.ts` — with `qwen2.5:3b` on Ollama (the same guard as
+  `mcp.spec.ts`), an executor bound to a temp folder is asked to create a file;
+  the prompt card appears, Allow is clicked, the file exists on disk and a diff
+  block is in the transcript. Without the model the spec asserts only that a
+  chat without an executor shows no card.
+Acceptance: the flow above end to end with a real local model; the tests
+above. Docs: `docs/features/executor/` and `docs/features/chats/` (all four
+each).
+
+### S5.5 Hand to executor and the review loop `[ ]`
+What: PLAN.md's workflow — discuss → "hand to executor" → it implements the
+group's conclusion → posts what changed → the others review.
+- A "Hand to executor" action in the chat (next to the composer, or in the
+  header; pick the one that reads best with the existing `actions-card.tsx`),
+  enabled only when the run is idle, the chat has a `workdir` and an executor
+  member. It calls a new `chat.handoff({ chatId })` (add to `BackendApi`,
+  `BACKEND_METHODS`, `contracts.test.ts`).
+- `ChatRunner.handoff`: persists a user message that carries a
+  `notices.handoff` system-notice part and mentions the executor only; runs the
+  executor's turn; then schedules **one** review round in which every
+  participant member speaks (roundrobin order, regardless of the chat's
+  `mode`), fed by the executor's message and its diffs; then the normal `@`
+  mechanics apply, so the executor can be re-@'d to iterate and
+  `maxAutoRounds` still caps the chain. Stop works at every point.
+- The executor's briefing (S5.3) is extended for a handoff: implement the
+  conclusion of the discussion above, do not re-open the debate, report
+  changes with paths.
+- Unit tests in `chat-runner.test.ts`: the handoff message and its mentions;
+  the executor speaks first and alone; exactly one review round follows with
+  the participants; no review round when there are no participants; Stop
+  during the executor's turn ends the run and leaves no pending permission.
+- e2e: extend `e2e/executor.spec.ts` under the same model guard: two agents
+  plus an executor, a short discussion, "Hand to executor", a file appears, a
+  participant's review message follows.
+Acceptance: the tests above; the button is disabled without a folder or an
+executor and enabled with both. Docs: `docs/features/orchestration/`,
+`docs/features/executor/` and `docs/features/chats/` (all four each).
+
+### S5.6 Open in editor `[ ]`
+What: PLAN.md point 3, step one — file paths and diffs in a message open in
+the user's editor. New feature `editor` (`docs/features/editor/`, README row).
+- Settings → Developer gains an "Editor" block: `vscode` (default, opens
+  `vscode://file/<path>:<line>`), `cursor` (`cursor://file/...`), or `custom`
+  with a command template (`{path}` and `{line}` placeholders, default
+  `code -g {path}:{line}`). `AppSettings.editor` with a default in
+  `DEFAULT_APP_SETTINGS`; settings migration is additive.
+- `system.openInEditor({ path, line? })`: the URL schemes need
+  `shell.openExternal`, which is electron, so the real implementation is an
+  overlay in `src/main/ipc/` exactly like `dialogs.ts`, and
+  `handlers/system.ts` declares the method and rejects with a clear code. The
+  custom command is spawned from the Electron-free handler (`node:child_process`
+  is allowed there). The path must be absolute and, when the chat has a
+  `workdir`, inside it; otherwise the call is refused.
+- Rendering: `FileRefPart` chips open the editor on click; the `DiffPart`
+  header path is clickable; a pure `components/chat/file-refs.ts` finds
+  `path:line` and `path` tokens in agent text that resolve inside the chat's
+  `workdir` (relative or absolute) and `markdown.tsx` renders them as the same
+  chip. Tool cards for `read_file` / `write_file` / `edit_file` get an "open"
+  icon.
+- Unit tests: the settings default and patch, the command-template expansion
+  (quoting a path with spaces), the path detector (inside the folder, outside,
+  a URL, a version number like `1.2:3` that is not a path), the refusal of a
+  path outside `workdir`.
+- e2e: the editor cannot be observed; assert that a `file-ref` chip is rendered
+  for a seeded message and that clicking it calls the backend once (stub
+  `system.openInEditor` through the developer settings test hook if one
+  exists, otherwise skip the click).
+Acceptance: with VS Code installed, clicking a chip in a chat bound to a folder
+opens that file at that line; the tests above. Docs: `docs/features/editor/`
+(new, all four), `docs/features/chats/` (all four).
+
+## Phase 6: Later
+
+Server and multi-user (PLAN "Reserved server capability"), and the VS Code
+extension that embeds the chat panel over that server backend.
