@@ -3,11 +3,10 @@ import { BACKEND_METHODS, type BackendMethod } from '@shared/backend'
 import type { BackendEvent } from '@shared/events'
 import { DEFAULT_APP_SETTINGS, LOCAL_USER_ID, type ProviderInput } from '@shared/types'
 import type { AppContext } from '../app-context'
-import { createEventBus } from '../events/bus'
-import { createInsecureSecretStore, type SecretStore } from '../secrets'
-import { createRepositories } from '../db/repositories'
 import { createTestDatabase, type TestDatabase } from '../db/testing'
+import { createInsecureSecretStore } from '../secrets'
 import type { FetchImpl } from '../providers/discovery'
+import { createTestAppContext, type TestAppContext } from '../testing'
 import { buildHandlers } from './index'
 
 /**
@@ -15,33 +14,12 @@ import { buildHandlers } from './index'
  * file, an in-process bus and the insecure secret store. Handlers take the
  * context as their first argument precisely so this is possible without electron.
  *
- * The repositories are rebuilt here rather than reused from the fixture so that
- * `encrypt` and `decrypt` are two halves of the *same* store: `providers.*` write
- * ciphertext through the repository and read it back through `ctx.secrets`, and a
- * fixture whose `encrypt` came from somewhere else would never round-trip.
+ * The builder itself moved to `src/main/testing.ts` in S1.7, where the
+ * `ChatRunner` and `AgentTurn` suites use the same one; this wrapper keeps the
+ * positional `fetchImpl` argument the provider cases below read well with.
  */
-function createTestContext(
-  database: TestDatabase,
-  fetchImpl?: FetchImpl
-): { ctx: AppContext; events: BackendEvent[]; secrets: SecretStore } {
-  const bus = createEventBus()
-  const events: BackendEvent[] = []
-  bus.subscribe((event) => events.push(event))
-  const secrets = createInsecureSecretStore()
-
-  return {
-    ctx: {
-      db: database.handle,
-      repos: createRepositories(database.handle.db, { encrypt: (plain) => secrets.encrypt(plain) }),
-      events: bus,
-      secrets,
-      userId: LOCAL_USER_ID,
-      ...(fetchImpl ? { fetchImpl } : {}),
-      close: () => database.cleanup()
-    },
-    events,
-    secrets
-  }
+function createTestContext(database: TestDatabase, fetchImpl?: FetchImpl): TestAppContext {
+  return createTestAppContext(database, { ...(fetchImpl ? { fetchImpl } : {}) })
 }
 
 describe('handlers/buildHandlers', () => {
@@ -69,11 +47,11 @@ describe('handlers/buildHandlers', () => {
   })
 
   it('rejects with internal and a pointer to STEPS.md for a method that is not implemented yet', async () => {
-    const unimplemented: BackendMethod = 'chats.list'
+    const unimplemented: BackendMethod = 'agents.create'
 
-    await expect(handlers[unimplemented](ctx)).rejects.toMatchObject({
+    await expect(handlers[unimplemented](ctx, { input: {} as never })).rejects.toMatchObject({
       code: 'internal',
-      message: 'Not implemented yet: chats.list (see docs/STEPS.md)'
+      message: 'Not implemented yet: agents.create (see docs/STEPS.md)'
     })
   })
 
@@ -341,7 +319,19 @@ describe('handlers/stubs', () => {
       'providers.update',
       'providers.delete',
       'providers.fetchModels',
-      'providers.testConnection'
+      'providers.testConnection',
+      // S1.7
+      'agents.list',
+      'chats.list',
+      'chats.get',
+      'chats.create',
+      'chats.update',
+      'chats.delete',
+      'chats.members.list',
+      'chats.members.set',
+      'messages.list',
+      'chat.send',
+      'chat.stop'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

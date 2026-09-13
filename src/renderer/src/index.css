@@ -30,6 +30,14 @@
   --color-accent: #d8a656;
   --color-accent-hover: #e6b96f;
 
+  /*
+   * The human's monogram tile in the message list and the member panel. The
+   * agents' colours are data (each record stores its own `avatar.color`); the
+   * user has no record, so its pair is a token like every other literal colour.
+   */
+  --color-avatar-user: #2f4a3e;
+  --color-avatar-user-fg: #9fd8b8;
+
   /* Presence / status */
   --color-presence-available: #5fbf7a;
   --color-presence-working: #e05c5c;

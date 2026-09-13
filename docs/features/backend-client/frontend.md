@@ -1,10 +1,11 @@
 # backend-client — Frontend
 
-> Status: S1.3 implemented the renderer half, S1.4 added the first store and
-> S1.5 replaced `App.tsx` with the real shell. `src/renderer/src/lib/backend.ts`
-> exists and works; the remaining zustand stores below still arrive with the
-> feature steps that own them. The smoke widgets now live in Settings ->
-> Developer (`pages/settings/developer-section.tsx`).
+> Status: S1.3 implemented the renderer half, S1.4 added the first store, S1.5
+> replaced `App.tsx` with the real shell, and **S1.7 added the event bridge plus
+> four more stores** (`chats`, `messages`, `run`, `presence`, `agents`).
+> `src/renderer/src/lib/backend.ts` exists and works; the stores still missing
+> arrive with the feature steps that own them. The smoke widgets now live in
+> Settings -> Developer (`pages/settings/developer-section.tsx`).
 
 ## Pages and components
 
@@ -14,7 +15,8 @@
 | `src/renderer/src/lib/backend.ts` | The Electron implementation — wraps the preload bridge, unwraps the response envelope, rebuilds the error. The **only** renderer file allowed to touch `window.witena` |
 | `src/renderer/src/pages/settings/developer-section.tsx` | The smoke surface that exercises both directions, translated in S1.4 and moved here from `App.tsx` in S1.5. A deliberate test surface, not product UI |
 | `src/renderer/src/lib/backend-provider.ts` | S1.4: `getBackend()` / `setBackend()`. The injection point stores use instead of importing the singleton, so a store is testable in plain Node with a fake client. It replaced the planned `backendContext.tsx` — the bootstrap needs the client *before* the React tree exists, which a context cannot provide |
-| `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, the rest from S1.7 |
+| `src/renderer/src/lib/event-bridge.ts` | S1.7: the **single** `subscribe` call for the whole renderer, started by `main.tsx` before the first render. `applyBackendEvent(event)` is its exported reducer, which the store tests drive directly |
+| `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, `stores/providers.ts` in S1.6, and `chats` / `messages` / `run` / `presence` / `agents` in S1.7 |
 
 Rule (CLAUDE.md #6): components call store actions, stores call `BackendClient`,
 and only `lib/backend.ts` knows a transport exists. A component that imports
@@ -45,16 +47,17 @@ const stop = backend.subscribeTo('system.test', (event) => …)
 
 ## State
 
-Only `settings` exists so far (S1.4, see [`../i18n/frontend.md`](../i18n/frontend.md)).
-The intended split for the rest, so they land consistently:
+`settings` landed in S1.4, `providers` in S1.6, and the five chat stores in S1.7
+(see [`../chats/frontend.md`](../chats/frontend.md)). The split, so the ones still
+missing land consistently:
 
 | Store | Field | Type | Meaning |
 |---|---|---|---|
 | `chats` | `chats` | `Chat[]` | Backend-owned mirror; replaced by `chats.list`, patched by `chat.updated` / `chat.deleted` |
-| `chats` | `activeChatId` | `string \| null` | Local UI state only |
-| `messages` | `byChatId` | `Record<string, Message[]>` | Backend-owned; loaded by `messages.list`, then mutated by the three `message.*` events |
-| `messages` | `streamingIds` | `Set<string>` | Derived locally from message status; drives the cursor |
-| `run` | `byChatId` | `Record<string, { round: number; speakers: string[] } \| null>` | Backend-owned; set by `run.*` events, drives the Stop button |
+| `chats` | `selectedId` | `string \| null` | Local UI state only (named `selectedId`, not `activeChatId`, as shipped in S1.7) |
+| `chats` | `membersByChat` | `Record<string, string[]>` | Backend-owned; member agent ids in speaking order |
+| `messages` | `byChat` | `Record<string, Message[]>` | Backend-owned, **oldest first**; loaded by `messages.list`, then mutated by the three `message.*` events |
+| `run` | `activeByChat` | `Record<string, { round: number; speakers: string[] }>` | Backend-owned; set by `run.*` events, drives the Stop button. Absent, rather than `null`, when the chat is idle |
 | `presence` | `byChatAgent` | `Record<string, AgentPresence>` | Backend-owned; replaced by `presence.changed`, drives the dots |
 | `agents` / `providers` / `settings` | records | `Agent[]` / `Provider[]` / `AppSettings` | Backend-owned mirrors of their list methods |
 
@@ -70,11 +73,11 @@ follows.
 | `invoke('system.emitTestEvent', { payload })` | The Developer section's button | Proves the push direction |
 | `subscribeTo('system.test', …)` | `DeveloperSection` effect | Renders the last payload received |
 | `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher | Language, theme, timeouts |
-| `subscribe(…)` | Once at app start, from the module that fans events into the stores (deferred) | Fans every `BackendEvent` out to the stores; the returned function unsubscribes on unmount |
+| `subscribe(…)` | `startEventBridge()` in `main.tsx`, once at app start (S1.7) | Fans every `BackendEvent` out to the stores. It is deliberately never unsubscribed: the bridge lives as long as the window, so no event can be lost between the first `list` call and the first render |
 | `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test |
 | `invoke('agents.*')` | Agents page | CRUD for the configuration form |
 | `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, skill import, memory viewer |
-| `invoke('chats.*')`, `invoke('chats.members.set')` | Chat list and member panel | Chat CRUD and membership ordering |
+| `invoke('chats.*')`, `invoke('chats.members.list')` | Chat list and member panel, since S1.7 | Chat CRUD and reading the membership. `chats.members.set` gets its UI in S2.2 |
 | `invoke('messages.list')` | Chat view on open and when scrolling up | Initial page and history paging |
 | `invoke('chat.send' / 'chat.stop')` | Composer and Stop button | Starts and aborts a run |
 
@@ -86,7 +89,12 @@ Event handling worth writing down once:
   replace the message from a delta.
 - `message.updated` → replace the message wholesale; this is authoritative for
   status, usage and error.
+- `run.started` / `run.round` → set the chat's run state, which is what shows the
+  Stop button. **Never** set it from the local `send()` call: a message sent
+  during an active run is queued by the backend and starts no second run.
 - `run.finished` → clear the run state for that chat and re-enable the composer.
+- `chat.updated` → upsert by id and re-sort by `updatedAt`; `chat.deleted` → drop
+  the chat together with its transcript, its presences and its run state.
 - `presence.changed` → update the dot in the member panel and on that agent's
   message avatars (the dot shows the agent's *current* state, not the state at
   send time).

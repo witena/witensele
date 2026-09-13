@@ -78,6 +78,6 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
   same) but it is a real difference from the artboards; a custom title bar strip
   spanning the full width is the alternative if it ever looks wrong with data in
   the columns.
-- The "New chat", "New agent" and "Add member" buttons are rendered `disabled`
+- "New chat" became live in S1.7; "New agent" and "Add member" are still rendered `disabled`
   because they have nothing to do yet, which reads as dimmer than the mockup's
-  accent. They light up in S1.7 / S2.1 / S2.2.
+  accent. They light up in S2.1 and S2.2.

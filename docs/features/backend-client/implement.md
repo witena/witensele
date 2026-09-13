@@ -211,6 +211,7 @@ Naming conventions the whole app follows:
 | `skills.list` / `skills.import` | — / `{ sourcePath }` | `SkillMeta[]` / `SkillMeta` | |
 | `memory.list` / `read` / `write` | `{ agentId }` / `{ agentId, path }` / `{ agentId, path, content }` | `MemoryEntry[]` / `{ path, content }` / `MemoryEntry` | `path` is relative to the agent's memory directory; `MEMORY.md` is the index |
 | `chats.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Chat[]` / `Chat` / `Chat` / `Chat` / `void` | `chats.create` takes a partial input; defaults come from `DEFAULT_CHAT_SETTINGS` |
+| `chats.members.list` | `{ chatId }` | `ChatMember[]` | **Added in S1.7**: the contract had a setter but no getter, and both chat columns read the membership |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the whole list; array order becomes `position` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is an exclusive message-id cursor |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | Resolves with the stored user message; agent output arrives as events |

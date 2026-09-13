@@ -1,6 +1,7 @@
 {
   "common": {
     "appName": "Witena",
+    "you": "You",
     "ok": "OK",
     "cancel": "Cancel",
     "save": "Save",
@@ -22,11 +23,19 @@
     "today": "Today",
     "yesterday": "Yesterday",
     "earlier": "Earlier",
+    "memberCount": "{{members}} members",
+    "chatOptions": "Chat options",
+    "rename": "Rename",
+    "renameChat": "Rename chat",
+    "deleteChat": "Delete chat",
+    "deleteConfirm": "Click again to confirm",
     "noChatSelected": "No chat selected",
     "emptyChatsTitle": "No chats yet",
     "emptyChatsDescription": "Create one to start a discussion.",
     "emptyConversationTitle": "Nothing here yet",
     "emptyConversationDescription": "Create a chat, invite a few agents and ask them a question.",
+    "emptyMessagesTitle": "No messages yet",
+    "emptyMessagesDescription": "Send the first message to start the discussion.",
     "members": "Members",
     "emptyMembersTitle": "No members yet",
     "emptyMembersDescription": "Add agents from your library so they can discuss.",
@@ -53,7 +62,10 @@
     "round": "Round {{round}}",
     "replyingTo": "Replying to @{{name}}",
     "passed": "Passed",
-    "skipped": "Skipped"
+    "skipped": "Skipped",
+    "reasoning": "Reasoning",
+    "stopped": "Stopped",
+    "failed": "The reply failed"
   },
   "agents": {
     "title": "Agents",

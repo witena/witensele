@@ -112,8 +112,24 @@ S1.5 was the first step to render most of `nav`, `chat`, `agents` and `settings`
 and it added the copy the shell needed (empty states, orchestration labels,
 section placeholders) rather than only consuming what was here. It also removed
 the ninth namespace, `smoke`: its screen became Settings -> Developer and its
-strings are the `settings.developer.*` subtree now. The rest of `chat` and
-`agents` still waits for S1.7–S2.5.
+strings are the `settings.developer.*` subtree now.
+
+S1.7 filled in the rest of `chat`: `memberCount` (whose placeholder is
+`{{members}}`, **not** `count` — see the trap in
+[frontend.md](./frontend.md)), the row menu's `chatOptions` / `rename` /
+`renameChat` / `deleteChat` / `deleteConfirm`, `emptyMessagesTitle` /
+`emptyMessagesDescription`, `reasoning`, and the two `error` hints `stopped` and
+`failed`; plus `common.you`, which is both the user's name in the transcript and
+the source of their avatar monogram. `presence.*` and the `notices.*` renderer are
+now actually rendered rather than only defined. `agents` still waits for S2.1.
+
+One thing S1.7 deliberately did **not** put in the locale files: the group
+briefing sent to models. It exists in both languages as
+`src/main/agents/briefing.en.ts` and `briefing.zh-CN.ts`, because it is a prompt
+rather than UI copy — it never reaches the renderer, so it has no key and is
+translated at authoring time, not at display time. That makes `briefing.zh-CN.ts`
+the one `.ts` file allowed to contain Chinese; see
+[`../agent-turn/backend.md`](../agent-turn/backend.md).
 
 ## Tests
 

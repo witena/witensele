@@ -94,6 +94,14 @@ Pitfalls, every one of them hit while writing this step:
 - **The SDK has no "list models" call.** `/models` is spoken by hand in
   `discovery.ts`.
 
+The *streaming* half of the SDK — `streamText`, `fullStream`, the `text-delta` /
+`reasoning-delta` / `finish` / `abort` / `error` part shapes, `LanguageModelUsage`
+and `MockLanguageModelV4.doStream` — is used by `agent-turn` and documented with
+its own pitfalls in [`../agent-turn/backend.md`](../agent-turn/backend.md). The
+one that bites hardest: a `text-delta` carries `text` at the `ai` level and
+`delta` at the provider level, so a mock written from the `fullStream` shape
+streams nothing.
+
 ### The `/models` endpoints
 
 | Type | Request | Ids from |

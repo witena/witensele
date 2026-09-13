@@ -104,8 +104,16 @@ Screenshots land in `$WITENA_SHOTS_DIR` (default: `test-results/shots`, gitignor
   it) the next time the spec is touched.
 - **Group settings are not persisted.** Local `useState` in `ChatsPage`; S2.2
   replaces it with the chat's `ChatSettings`.
-- **Nothing renders a `PresenceDot` yet.** The component and its token mapping
-  exist so S2.4 has nothing to design; the member panel is empty until S2.2.
+- ~~**Nothing renders a `PresenceDot` yet.**~~ S1.7 renders it in two places: on
+  every agent message avatar and in the member panel, driven by
+  `stores/presence.ts`. Only `working` and `available` are emitted until S2.4
+  adds the supervisor. One layout note learnt there: an `Avatar` inside a flex row
+  needs `self-start`, or the wrapper stretches to the row's height and the
+  overlaid dot — positioned against its bottom edge — floats away from it.
+- **Two tokens were added in S1.7**: `--color-avatar-user` and
+  `--color-avatar-user-fg`, the human's monogram tile from the mockup. Agent
+  avatar colours are *data* (each record stores its own), but the user has no
+  record, so its pair is a token like every other literal colour.
 - **`Avatar` has no image or emoji variant.** `AgentAvatar` is a union with one
   member today; the component takes text and colours directly rather than the
   whole record, which is the change to make when a second variant appears.

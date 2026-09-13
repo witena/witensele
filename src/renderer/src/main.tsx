@@ -15,12 +15,18 @@ import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
 import App from './App'
 import { getNavigatorLanguage, initI18n, resolveLanguage } from './i18n'
+import { startEventBridge } from './lib/event-bridge'
 import { useSettingsStore } from './stores/settings'
 import './index.css'
 
 async function bootstrap(): Promise<void> {
   const container = document.getElementById('root')
   if (!container) throw new Error('root container not found')
+
+  // Before anything else, and deliberately never unsubscribed: the bridge lives
+  // as long as the window, so no event can be lost between the first `list` call
+  // and the first render (see `lib/event-bridge.ts`).
+  startEventBridge()
 
   // `load` never rejects: a backend failure leaves `settings` null and we fall
   // back to the system language rather than refusing to start.
