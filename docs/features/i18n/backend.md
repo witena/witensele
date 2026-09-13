@@ -84,7 +84,7 @@ The same principle covers failures: `BackendError.code` is the machine-readable
 class the renderer maps to an `errors.<code>` key, and `BackendError.message` is
 developer detail for logs that is never rendered.
 
-S5.2 added a narrower identifier for the same reason. The seven codes are a
+S5.2 added a narrower identifier for the same reason. The codes are a
 failure *taxonomy*, and "the request was rejected as invalid" is the right
 sentence almost everywhere because the control that sent the request is on
 screen saying what it wanted — but not when the user picked a folder that is not
@@ -92,6 +92,20 @@ a folder, or added a member the chat cannot hold. Those refusals carry a
 `ValidationReason` (`src/shared/types.ts`) in `BackendError.details`, which the
 renderer maps to an `errors.<reason>` key exactly as it maps a code. It is still
 an identifier, never a sentence: the backend does not know the UI language.
+
+S5.3 used the *other* half of the same choice, and the line between them is worth
+keeping: a `ValidationReason` narrows the refusal of one request and is only read
+when the code is `validation`, so the two `oauth_*` refusals of the provider form
+are reasons — while "the Anthropic CLI is not installed" is also raised while
+building a model for a chat turn, which is nobody's form, so `ant_missing` and
+`ant_not_logged_in` are codes. The same rule applies to the next one: if only the
+sender of this request can be wrong, it is a reason; if the *machine* is in that
+state, it is a code.
+
+One more thing the backend deliberately does not send: a **formatted date**. The
+sign-in panel's "valid until" line is built in the renderer from the epoch
+milliseconds in `AnthropicAuthStatus`, for the same reason as everything above —
+the main process does not know the active language.
 
 ## Prompts are not UI copy — and are still bilingual (S1.7)
 

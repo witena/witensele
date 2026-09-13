@@ -51,6 +51,7 @@ those screens:
 | Messages are ordered by `seq`, not by their timestamp | In parallel speaking mode the transcript order is stable and identical on every reload, even for replies persisted in the same millisecond |
 | `messages.list` pages with `before` as an exclusive cursor | Scrolling up loads older pages with no repeated and no skipped message |
 | An API key is stored encrypted and never returned | The provider form shows a "key is set" state rather than a masked value, and re-saving without touching the field keeps the existing key |
+| A provider row can store **no credential at all** (`auth = 'oauth'`, S5.3) | The card says "signed in" instead of "no key", and the editor shows the sign-in panel where the key field was. There is nothing to encrypt: the Anthropic CLI owns the token and this layer never sees one |
 
 ## Copy and i18n
 

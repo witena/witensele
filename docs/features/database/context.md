@@ -14,7 +14,10 @@ handlers (S1.3 onwards), `ChatRunner` and `AgentTurn`.
 
 ## Scope
 
-- `src/main/db/schema.ts` — the drizzle definition of all seven tables.
+- `src/main/db/schema.ts` — the drizzle definition of all seven tables. Columns
+  are added by later steps (S2.3's `messages.in_reply_to`, S5.3's
+  `providers.auth`), always through a generated migration, never by editing one
+  that has shipped.
 - `src/main/db/migrations/` — generated SQL plus drizzle-kit's `meta/` snapshot,
   and `drizzle.config.ts` at the repository root that produces them.
 - `src/main/db/migrate.ts` — the migrator, which applies the SQL that was
@@ -68,6 +71,7 @@ messages) and `../mcp/`.
 | Settings are one JSON blob per user | A column per setting; a key/value table | Adding a setting then needs no migration, and reads merge over `DEFAULT_APP_SETTINGS` so an old row is still complete |
 | Cascading foreign keys for `chat_members` and `messages` | Delete by hand in the repository | One statement cannot forget a table. It does require `PRAGMA foreign_keys = ON`, which `openDatabase` sets and a test asserts |
 | `''` means "clear this column" in patches | A separate `{ clear: [...] }` field; `null` in the patch | `exactOptionalPropertyTypes` and JSON transport both blur absent versus `undefined`, and the `apiKey` contract in `shared/backend.ts` already uses `''` for "clear". The same rule now applies to `baseUrl`, `presetId`, `command`, `url` and `error` |
+| A new column is nullable with no default, and the *meaning* of `NULL` lives in the shared types (S5.3's `providers.auth`) | `NOT NULL DEFAULT 'apiKey'`; a data migration that fills every row | SQLite adds a nullable column in place, so the upgrade is instant and a row written by an older build stays readable. Putting the default in the column as well as in `providerAuth()` would be two statements of the same fact, and the one in SQL cannot be changed later without another migration |
 
 ## Open questions
 

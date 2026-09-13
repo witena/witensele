@@ -28,7 +28,8 @@ export interface ProviderRepository {
   /**
    * Patch semantics for `apiKey`: absent keeps the stored key, `''` clears it,
    * any other string replaces it with `encrypt(value)`. `baseUrl` and `presetId`
-   * follow the same shape, with `''` meaning "clear".
+   * follow the same shape, with `''` meaning "clear". `auth` is a union and has
+   * no "clear" spelling: absent keeps it, `'apiKey'` puts it back.
    */
   update(id: string, patch: Partial<ProviderInput>, userId?: UserId): Provider
   delete(id: string, userId?: UserId): void
@@ -50,7 +51,8 @@ function toProvider(row: ProviderRow): Provider {
     ...optional('baseUrl', row.baseUrl),
     ...optional('presetId', row.presetId),
     models: row.models,
-    hasApiKey: row.apiKeyEncrypted !== null && row.apiKeyEncrypted.length > 0
+    hasApiKey: row.apiKeyEncrypted !== null && row.apiKeyEncrypted.length > 0,
+    ...optional('auth', row.auth)
   }
 }
 
@@ -91,6 +93,7 @@ export function createProviderRepository(db: DrizzleDb, encrypt: Encrypt): Provi
         presetId: nullable(input.presetId),
         models: input.models,
         apiKeyEncrypted: input.apiKey ? encrypt(input.apiKey) : null,
+        auth: nullable(input.auth),
         createdAt: timestamp,
         updatedAt: timestamp
       }
@@ -106,6 +109,10 @@ export function createProviderRepository(db: DrizzleDb, encrypt: Encrypt): Provi
       if (patch.models !== undefined) next.models = patch.models
       if (patch.baseUrl !== undefined) next.baseUrl = patch.baseUrl === '' ? null : patch.baseUrl
       if (patch.presetId !== undefined) next.presetId = patch.presetId === '' ? null : patch.presetId
+      // `auth` is a closed union, so there is no `''` spelling of "clear it":
+      // the way back to key authentication is `auth: 'apiKey'`, which is what
+      // the editor's control sends.
+      if (patch.auth !== undefined) next.auth = patch.auth
       if (patch.apiKey !== undefined) {
         next.apiKeyEncrypted = patch.apiKey === '' ? null : encrypt(patch.apiKey)
       }

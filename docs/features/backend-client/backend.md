@@ -118,6 +118,11 @@ Failure rules the transport enforces:
 - `providers.testConnection` and `mcp.testConnection` **resolve** with an
   `ok: false` result instead of rejecting: a failed connection test is an expected
   answer, not an exception. *(Planned with S1.6 / S3.1.)*
+- `providers.authStatus` resolves with a *state* for both of the conditions the
+  sign-in panel exists to show — `not-installed` and `signed-out` — for the same
+  reason (S5.3). The two `ant_*` codes are kept for the calls that had to make
+  the machine do something and could not: `providers.login`, `providers.logout`,
+  and saving a provider that authenticates with an account.
 
 ## Events emitted
 

@@ -20,6 +20,7 @@ import type {
   Agent,
   AgentInput,
   AgentPresence,
+  AnthropicAuthStatus,
   AppSettings,
   AppSettingsPatch,
   Chat,
@@ -113,6 +114,22 @@ export interface BackendApi {
     provider: ProviderRef
     modelId?: string
   }) => Promise<ConnectionTestResult>
+  /**
+   * Whether the Anthropic CLI is installed and logged in, and as whom (S5.3).
+   *
+   * Never rejects for either of the two states the panel exists to show — "not
+   * installed" and "signed out" are values, not failures — so the editor can
+   * render them without an error path.
+   */
+  'providers.authStatus': () => Promise<AnthropicAuthStatus>
+  /**
+   * Runs `ant auth login`, which opens the system browser itself, and resolves
+   * with the resulting status when the CLI exits. Rejects `ant_missing` when
+   * there is no binary to run.
+   */
+  'providers.login': () => Promise<AnthropicAuthStatus>
+  /** Runs `ant auth logout` and resolves with the resulting status. */
+  'providers.logout': () => Promise<AnthropicAuthStatus>
 
   /* -- agents ------------------------------------------------------------- */
 
@@ -295,6 +312,9 @@ export const BACKEND_METHODS = [
   'providers.delete',
   'providers.fetchModels',
   'providers.testConnection',
+  'providers.authStatus',
+  'providers.login',
+  'providers.logout',
   'agents.list',
   'agents.get',
   'agents.create',

@@ -38,10 +38,14 @@ export function removeUserDataDir(directory: string): void {
  * Launches the built app against `userDataDir` and waits for its first window.
  *
  * Passing the same directory twice is how a spec restarts the app and asserts
- * that something was persisted.
+ * that something was persisted. `env` adds to (or overrides) the inherited
+ * environment: S5.3's sign-in spec launches with `WITENA_ANT_BIN` pointing at
+ * nothing, which is the only way to get a run where the Anthropic CLI is
+ * definitively absent on a machine that has it installed.
  */
 export async function launchWitena(
-  userDataDir: string
+  userDataDir: string,
+  env: Record<string, string> = {}
 ): Promise<{ app: ElectronApplication; window: Page }> {
   if (!existsSync(mainEntry)) {
     throw new Error(`${mainEntry} is missing. Run "npm run build" first, or use "npm run e2e".`)
@@ -50,7 +54,7 @@ export async function launchWitena(
   const app = await electron.launch({
     args: ['.'],
     cwd: repoRoot,
-    env: { ...process.env, [USER_DATA_ENV]: userDataDir }
+    env: { ...process.env, [USER_DATA_ENV]: userDataDir, ...env }
   })
 
   return { app, window: await app.firstWindow() }
@@ -61,6 +65,7 @@ export interface LocaleFile {
   nav: Record<string, string>
   chat: Record<string, string>
   agents: Record<string, string>
+  errors: Record<string, string>
   settings: {
     title: string
     sections: Record<string, string>

@@ -122,6 +122,7 @@ import { scanSkills } from '../skills/loader'
 import { buildSkillsSection, buildSkillTools } from '../skills/tools'
 import { isTimeoutAbort, TIMEOUT_ERROR } from '../presence/abort-reasons'
 import type { TurnOutcome } from '../presence/supervisor'
+import { modelOptions } from '../app-context'
 import { createLanguageModel } from '../providers/registry'
 import { resolveProvider } from '../providers/resolve'
 import { buildGroupBriefing, resolveMainLanguage, toBriefingMember } from './briefing'
@@ -165,9 +166,19 @@ function outcomeOf(status: MessageStatus, aborted: boolean): TurnOutcome {
 /** Builds the model client for an agent. Injected by tests; defaults to the registry. */
 export type CreateModel = (ctx: AppContext, agent: Agent) => LanguageModel
 
-/** The default: resolve the provider (decrypting its key) and build the adapter. */
+/**
+ * The default: resolve the provider (decrypting its key) and build the adapter.
+ *
+ * `modelOptions(ctx)` carries the Anthropic CLI, which is what a provider in
+ * sign-in mode needs to mint a token for this turn (S5.3). A provider on an API
+ * key never touches it.
+ */
 export const createModelFromRegistry: CreateModel = (ctx, agent) =>
-  createLanguageModel(resolveProvider(ctx, { id: agent.providerId }), agent.modelId)
+  createLanguageModel(
+    resolveProvider(ctx, { id: agent.providerId }),
+    agent.modelId,
+    modelOptions(ctx)
+  )
 
 export interface AgentTurnOptions {
   ctx: AppContext

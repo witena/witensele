@@ -9,15 +9,20 @@
 | `src/main/providers/resolve.ts` | `ProviderRef` → `ResolvedProvider`. The **only** place a stored key is decrypted |
 | `src/main/providers/registry.ts` | `ResolvedProvider` + model id → an AI SDK `LanguageModel` |
 | `src/main/providers/discovery.ts` | `fetchModels` (raw `/models`) and `testConnection` (`generateText`) |
+| `src/main/providers/anthropic-cli.ts` | **S5.3.** The `ant` wrapper: binary resolution, `status`, `login`, `logout`, `accessToken` and the token cache. The only module in the app that holds an access token |
 | `src/main/handlers/providers.ts` | The seven `providers.*` methods; validation lives here and nowhere else |
-| `src/main/app-context.ts` | Gained an optional `fetchImpl` so a test can inject HTTP |
+| `src/main/app-context.ts` | Gained an optional `fetchImpl` so a test can inject HTTP, and (S5.3) `anthropicCli` plus the `modelOptions` / `providerFetch` readers |
 
 None of them imports electron (CLAUDE.md rule #5). `resolve.ts` takes an
 `AppContext` by type only; the secret store arrives through it as an interface.
+`anthropic-cli.ts` imports `node:child_process`, `node:fs`, `node:os` and
+`node:path`, which the rule says nothing about — it is about electron, and the
+main process already spawns stdio MCP servers.
 
 ## Database
 
-No migration. S1.2 created the table this step finally uses:
+S1.2 created the table; S5.3 added one column
+(`0002_mysterious_madelyne_pryor.sql`, `ALTER TABLE providers ADD auth text`).
 
 | Column | Type | Notes |
 |---|---|---|
@@ -29,6 +34,7 @@ No migration. S1.2 created the table this step finally uses:
 | `preset_id` | text null | Which `PROVIDER_PRESETS` entry it came from; drives the logo, the key requirement and the local-server placeholder |
 | `models` | json | `string[]`, preset seed or `/models` answer |
 | `api_key_encrypted` | text null | **Ciphertext only.** Mapped to `Provider.hasApiKey`, never to a value |
+| `auth` | text null | `apiKey \| oauth` (S5.3). Null means `apiKey`; read it through `providerAuth()`. An `oauth` row stores **no credential at all** |
 | `created_at` / `updated_at` | integer | Epoch milliseconds |
 
 Key handling is split on purpose: `ProviderRepository` takes an injected
@@ -43,11 +49,14 @@ keeps the stored key, `''` clears it, any other string replaces it.
 |---|---|---|---|
 | `providers.list` | — | `Provider[]`, oldest first | — |
 | `providers.get` | `{ id }` | `Provider` | non-empty id; `not_found` otherwise |
-| `providers.create` | `{ input: ProviderInput }` | `Provider` | name non-empty; known `type`; `models` an array of strings; `openai-compatible` needs `baseUrl`; a key is required when `providerRequiresApiKey` says so |
-| `providers.update` | `{ id, patch }` | `Provider` | the same checks, applied only to the fields present. The key requirement is **not** re-checked: clearing a key is a deliberate operation |
+| `providers.create` | `{ input: ProviderInput }` | `Provider` | name non-empty; known `type`; `models` an array of strings; `openai-compatible` needs `baseUrl`; a key is required when `providerRequiresApiKey` says so; and (S5.3) `auth` must be one of the two modes, `oauth` only on `anthropic` (`oauth_unsupported_provider`) with no `baseUrl` (`oauth_custom_base_url`), with the CLI actually signed in (`ant_missing` / `ant_not_logged_in`) |
+| `providers.update` | `{ id, patch }` | `Provider` | the same checks, applied only to the fields present. The key requirement is **not** re-checked: clearing a key is a deliberate operation. The `auth` rules *are* checked against the **stored row merged with the patch**, because `{ auth: 'oauth' }` alone says nothing about the type it lands on |
 | `providers.delete` | `{ id }` | `void` | non-empty id |
 | `providers.fetchModels` | `{ provider: ProviderRef }` | `string[]` | the ref must be `{ id }` or `{ draft }`; rejects `provider_error` with `details.status` |
 | `providers.testConnection` | `{ provider: ProviderRef, modelId? }` | `ConnectionTestResult` | never rejects; a failed probe is a value |
+| `providers.authStatus` | — | `AnthropicAuthStatus` | never rejects: `not-installed` and `signed-out` are states |
+| `providers.login` | — | `AnthropicAuthStatus` | rejects `ant_missing` with no binary, `ant_not_logged_in` for a flow the user abandoned |
+| `providers.logout` | — | `AnthropicAuthStatus` | rejects `ant_missing` only; "there was nothing to log out of" is the state the caller asked for |
 
 No event is emitted. Provider changes are the answer to the call that made them,
 and the store updates from that answer; nothing else in the app is watching.
@@ -193,7 +202,62 @@ provider rather than "something went wrong inside the app".
 inject a `MockLanguageModelV4` and let the **real** `generateText` run, so the
 option names above are proven by the suite rather than by review.
 
+### The Anthropic CLI (`ant`), S5.3
+
+Verified against `ant` 1.32.0 on macOS. Install:
+`brew install anthropics/tap/ant`, then
+`xattr -d com.apple.quarantine "$(brew --prefix)/bin/ant"`.
+
+| Command | What it does |
+|---|---|
+| `ant auth print-credentials` | Prints JSON and **refreshes the token when it is near expiry**; exits non-zero when no profile is logged in |
+| `ant auth print-credentials --access-token` | The bare token, no JSON |
+| `ant auth login` | Opens the system browser itself and exits when the flow finishes |
+| `ant auth logout` | Removes the active profile |
+
+`print-credentials` prints exactly these keys: `version`, `type`
+(`oauth_token`), `access_token`, `expires_at` (**unix seconds**),
+`refresh_token`, `scope`, `organization_uuid`, `organization_name`,
+`account_email`, `workspace_id`, `workspace_name`. Four of them plus a converted
+`expires_at` become `AnthropicAuthStatus`; the two token fields never leave the
+module.
+
+Things that will bite anyone changing this file:
+
+- **`ant auth status` is prose.** The global `--format json` flag does not change
+  that subcommand's output, so nothing parses it. `print-credentials` is the
+  status *and* the token, in one call whose failure already means "not logged in".
+- **A packaged app does not inherit the shell `PATH`.** `launchd` gives it a
+  minimal one, so `spawn('ant')` cannot find a Homebrew install.
+  `resolveAntBinary` walks `PATH` and then `/opt/homebrew/bin`, `/usr/local/bin`
+  and `$HOME/go/bin`. `WITENA_ANT_BIN` replaces the whole search with one
+  absolute path — an escape hatch for an unusual install, and what the
+  end-to-end spec uses to produce a machine where `ant` is definitively absent.
+- **`stdout` is a credential.** It is parsed and dropped; only `stderr` is ever
+  quoted into an error message, trimmed to 200 characters. A test asserts that a
+  command which prints a token *and* fails leaks nothing.
+- **The request headers are not optional.** An account token needs
+  `Authorization: Bearer <token>` **and** `anthropic-beta: oauth-2025-04-20`, and
+  must not carry `x-api-key` at all. `oauthFetch` deletes the key header, sets the
+  bearer and *merges* the beta flag into whatever the SDK already asked for
+  (comma-separated) rather than overwriting it.
+- **`createAnthropic({ apiKey: '' })` is deliberate.** Omitting `apiKey` makes the
+  adapter look for `ANTHROPIC_API_KEY` in the environment and throw; the empty
+  value it puts in `x-api-key` is deleted by the wrapper before the request
+  leaves.
+- **The token cache honours the CLI's own `expires_at`**, minus 60 seconds. A
+  credential printed without one is not cached at all.
+
+Deviation from the S5.3 text worth knowing: the step says to fetch the token
+with `--access-token`. This module uses the JSON form for both the status and the
+token, because it is the call that carries `expires_at` — which the cache rule
+needs — and using the bare flag as well would mean two child processes per cache
+miss for one fact. The bare flag is still what a human should use at a prompt.
+
 ### `SecretStore`
+
+**Untouched by S5.3**: a provider that signs in stores no secret, so the sign-in
+path never reaches this store at all.
 
 `safeStorage` in the app (`src/main/ipc/secret-store.ts`), the base64
 `plain:` fallback in tests and on a machine with no OS key storage. The fallback

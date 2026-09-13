@@ -28,7 +28,11 @@ import { ChatRunnerRegistry } from './orchestration/chat-runner'
 import type { ChatRunnerOptions } from './orchestration/chat-runner'
 import { AgentSupervisor } from './presence/supervisor'
 import type { AgentSupervisorOptions, PresenceTimeouts } from './presence/supervisor'
+import type { AnthropicCli } from './providers/anthropic-cli'
+import { createAnthropicCli } from './providers/anthropic-cli'
 import { fetchModels, type FetchImpl } from './providers/discovery'
+import { createProviderFetch } from './providers/registry'
+import type { ModelOptions, ResolvedProvider } from './providers/registry'
 import { resolveProvider } from './providers/resolve'
 import type { SecretStore } from './secrets'
 
@@ -77,10 +81,31 @@ export async function probeAgentProvider(ctx: AppContext, agentId: string): Prom
   try {
     const agent = ctx.repos.agents.get(agentId, ctx.userId)
     const resolved = resolveProvider(ctx, { id: agent.providerId })
-    await fetchModels(resolved, ctx.fetchImpl ?? globalThis.fetch)
+    // Through the provider's own `fetch`, so a signed-in provider is probed with
+    // its account token rather than with the key it does not have.
+    await fetchModels(resolved, providerFetch(ctx, resolved))
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * The `fetch` a provider's REST calls go through, given this context.
+ *
+ * One line in three places (`probeAgentProvider` here, `providers.fetchModels`
+ * and the connection probe in the handler) rather than three spellings of
+ * "…unless it signs in, in which case wrap it".
+ */
+export function providerFetch(ctx: AppContext, provider: ResolvedProvider): FetchImpl {
+  return createProviderFetch(provider, modelOptions(ctx))
+}
+
+/** The capabilities the model layer takes by injection, read off the context. */
+export function modelOptions(ctx: AppContext): ModelOptions {
+  return {
+    anthropicCli: ctx.anthropicCli,
+    ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {})
   }
 }
 
@@ -165,6 +190,14 @@ export interface AppContext {
    * a proxy-aware implementation here without touching a handler.
    */
   fetchImpl?: FetchImpl
+  /**
+   * The Anthropic CLI wrapper behind "Sign in with Anthropic" (S5.3).
+   *
+   * On the context because it owns the in-memory access-token cache and because
+   * a test must be able to replace it with a stub: it is the one capability that
+   * spawns a process the user installed themselves.
+   */
+  anthropicCli: AnthropicCli
   /** Releases the database. Safe to call more than once. */
   close(): void
 }
@@ -181,6 +214,8 @@ export interface AppContextOptions {
   events?: EventBus
   /** Injectable outbound HTTP; omitted, handlers use the platform `fetch`. */
   fetchImpl?: FetchImpl
+  /** Injectable Anthropic CLI; omitted, the real `ant`-spawning implementation. */
+  anthropicCli?: AnthropicCli
   /** Passed through to every `ChatRunner`; a test injects its own `createModel`. */
   runner?: ChatRunnerOptions
   /** Clock, intervals and provider probe of the `AgentSupervisor`. */
@@ -244,6 +279,7 @@ export function createAppContext(options: AppContextOptions): AppContext {
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
     memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
+    anthropicCli: options.anthropicCli ?? createAnthropicCli(),
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),

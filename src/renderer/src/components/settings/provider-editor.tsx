@@ -19,16 +19,24 @@
  * - **Delete confirms with a second click**, not a modal. A modal needs focus
  *   management and an escape route the shell does not have yet (S4.x); a latch
  *   that resets after a few seconds is honest and costs nothing.
+ * - **The Authentication control is rendered for the three first-party types
+ *   only** (S5.3), and is disabled with a hint for the two that have no sign-in
+ *   flow yet. An `openai-compatible` endpoint has no account to sign in to at
+ *   all, so it gets no control rather than a disabled one — a control that can
+ *   never become available is noise.
  */
 import clsx from 'clsx'
 import { Check, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderRef } from '@shared/backend'
-import { getPreset } from '@shared/presets'
-import { Button, Chip, Field, Input, Select, Spinner } from '../ui'
-import { translateError } from '../../i18n/errors'
+import { getPreset, providerAuth } from '@shared/presets'
+import type { ProviderAuth } from '@shared/types'
+import { Button, Chip, Field, Input, SegmentedControl, Select, Spinner } from '../ui'
+import { translateError, translateFailure } from '../../i18n/errors'
 import { useProvidersStore } from '../../stores/providers'
+import { AnthropicSignIn } from './anthropic-sign-in'
+import { authControl } from './provider-display'
 import { PresetGrid } from './preset-grid'
 
 /** How long the delete latch stays armed before it forgets it was clicked. */
@@ -47,6 +55,7 @@ export function ProviderEditor(): React.JSX.Element | null {
   const saving = useProvidersStore((state) => state.saving)
   const error = useProvidersStore((state) => state.error)
   const errorCode = useProvidersStore((state) => state.errorCode)
+  const errorDetails = useProvidersStore((state) => state.errorDetails)
 
   const [newModel, setNewModel] = useState('')
   const [addingModel, setAddingModel] = useState(false)
@@ -87,6 +96,10 @@ export function ProviderEditor(): React.JSX.Element | null {
   const result = testResults[selectedId ?? 'draft']
   const ref: ProviderRef = { draft }
 
+  const auth = providerAuth(draft)
+  // The two first-party types that will gain a sign-in later keep the control,
+  // greyed: "not yet" and "never" are different statements and the hint says so.
+  const { shown: showsAuthControl, available: authAvailable } = authControl(draft.type)
   const needsBaseUrl = draft.type === 'openai-compatible'
   const hasBaseUrl = Boolean(draft.baseUrl?.trim())
   const canProbe = !needsBaseUrl || hasBaseUrl
@@ -136,35 +149,66 @@ export function ProviderEditor(): React.JSX.Element | null {
         />
       </Field>
 
-      <Field
-        label={t('settings.providers.apiKey')}
-        hint={t('settings.providers.apiKeyHint')}
-        htmlFor="provider-api-key"
-        layout="column"
-      >
-        <Input
-          id="provider-api-key"
-          data-testid="provider-api-key-input"
-          type="password"
-          autoComplete="off"
-          className="font-mono text-[12px]"
-          value={draft.apiKey ?? ''}
-          placeholder={
-            // Only a *local* preset can honestly say a key is pointless. `custom`
-            // also declares `requiresApiKey: false`, but that means "we cannot
-            // know", and a key is usually exactly what such an endpoint wants.
-            preset?.local
-              ? t('settings.providers.apiKeyNotNeeded')
-              : t('settings.providers.apiKeyPlaceholder')
-          }
-          onChange={(event) => store().patchDraft({ apiKey: event.target.value })}
-        />
-        {showStoredKeyHint ? (
-          <p data-testid="provider-api-key-stored" className="text-[11px] text-fg-faint">
-            {t('settings.providers.apiKeyStored')}
-          </p>
-        ) : null}
-      </Field>
+      {showsAuthControl ? (
+        <Field
+          label={t('settings.providers.auth')}
+          hint={authAvailable ? undefined : t('settings.providers.authUnavailable')}
+          layout="column"
+        >
+          <SegmentedControl<ProviderAuth>
+            className="max-w-md"
+            value={auth}
+            disabled={!authAvailable}
+            onChange={(next) => store().patchDraft({ auth: next })}
+            options={[
+              {
+                value: 'apiKey',
+                label: t('settings.providers.authApiKey'),
+                testId: 'provider-auth-apiKey'
+              },
+              {
+                value: 'oauth',
+                label: t('settings.providers.authSignIn'),
+                testId: 'provider-auth-oauth'
+              }
+            ]}
+          />
+        </Field>
+      ) : null}
+
+      {auth === 'oauth' ? (
+        <AnthropicSignIn />
+      ) : (
+        <Field
+          label={t('settings.providers.apiKey')}
+          hint={t('settings.providers.apiKeyHint')}
+          htmlFor="provider-api-key"
+          layout="column"
+        >
+          <Input
+            id="provider-api-key"
+            data-testid="provider-api-key-input"
+            type="password"
+            autoComplete="off"
+            className="font-mono text-[12px]"
+            value={draft.apiKey ?? ''}
+            placeholder={
+              // Only a *local* preset can honestly say a key is pointless. `custom`
+              // also declares `requiresApiKey: false`, but that means "we cannot
+              // know", and a key is usually exactly what such an endpoint wants.
+              preset?.local
+                ? t('settings.providers.apiKeyNotNeeded')
+                : t('settings.providers.apiKeyPlaceholder')
+            }
+            onChange={(event) => store().patchDraft({ apiKey: event.target.value })}
+          />
+          {showStoredKeyHint ? (
+            <p data-testid="provider-api-key-stored" className="text-[11px] text-fg-faint">
+              {t('settings.providers.apiKeyStored')}
+            </p>
+          ) : null}
+        </Field>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between gap-3">
@@ -269,8 +313,12 @@ export function ProviderEditor(): React.JSX.Element | null {
       ) : null}
 
       {error ? (
-        <p data-testid="provider-error" className="text-xs text-danger">
-          <span>{translateError(t, { code: errorCode ?? 'internal', message: error })}</span>{' '}
+        <p
+          data-testid="provider-error"
+          data-error-code={errorCode ?? 'internal'}
+          className="text-xs text-danger"
+        >
+          <span>{translateFailure(t, errorCode, errorDetails)}</span>{' '}
           <span className="font-mono text-[11px] text-fg-faint">{error}</span>
         </p>
       ) : null}

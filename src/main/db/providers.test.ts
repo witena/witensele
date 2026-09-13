@@ -83,6 +83,30 @@ describe('db/repositories/providers', () => {
     expect('presetId' in cleared).toBe(false)
   })
 
+  it('stores the authentication mode, absent meaning the API key (S5.3)', () => {
+    const keyed = database.repos.providers.create(providerInput({ apiKey: 'sk-secret' }))
+    // A row written before the column existed reads as "no auth field", which
+    // `providerAuth()` resolves to `apiKey`. Absent, not `null`, not `'apiKey'`.
+    expect('auth' in keyed).toBe(false)
+
+    const signedIn = database.repos.providers.create({
+      type: 'anthropic',
+      name: 'Anthropic',
+      models: ['claude-sonnet-4-5'],
+      auth: 'oauth'
+    })
+    expect(signedIn.auth).toBe('oauth')
+    expect(signedIn.hasApiKey).toBe(false)
+
+    // It survives a close and reopen like every other column.
+    expect(database.repos.providers.get(signedIn.id).auth).toBe('oauth')
+
+    // There is no `''` spelling of "clear": the way back is the other mode.
+    expect(database.repos.providers.update(signedIn.id, { name: 'Renamed' }).auth).toBe('oauth')
+    expect('auth' in database.repos.providers.update(signedIn.id, { auth: 'apiKey' })).toBe(true)
+    expect(database.repos.providers.get(signedIn.id).auth).toBe('apiKey')
+  })
+
   it('scopes every read by userId and throws not_found otherwise', () => {
     const mine = database.repos.providers.create(providerInput(), 'user-a')
     database.repos.providers.create(providerInput({ name: 'Theirs' }), 'user-b')

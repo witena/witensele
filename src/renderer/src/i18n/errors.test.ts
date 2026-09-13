@@ -26,7 +26,9 @@ const CODES: BackendErrorCode[] = [
   'mcp_error',
   'aborted',
   'unauthorized',
-  'internal'
+  'internal',
+  'ant_missing',
+  'ant_not_logged_in'
 ]
 
 /** Resolves a key against the English tree, the way i18next would. */

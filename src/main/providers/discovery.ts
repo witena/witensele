@@ -28,10 +28,15 @@ import { generateText, type LanguageModel } from 'ai'
 import type { ConnectionTestResult } from '@shared/types'
 import { BackendFailure, isBackendFailure } from '../errors'
 import { toBackendError } from '../ipc-protocol'
-import { createLanguageModel, type ResolvedProvider } from './registry'
+import { createLanguageModel, type FetchImpl, type ResolvedProvider } from './registry'
 
-/** The `fetch` shape this module needs; injected so tests never hit the network. */
-export type FetchImpl = typeof globalThis.fetch
+/**
+ * The `fetch` shape this module needs; injected so tests never hit the network.
+ *
+ * Declared in `registry.ts` and re-exported here because S5.3's OAuth wrapper is
+ * a `fetch` *and* a model-construction concern, and the type has to be one type.
+ */
+export type { FetchImpl } from './registry'
 
 /** Budget for one `/models` request. Long enough for a cold cloud endpoint. */
 export const FETCH_MODELS_TIMEOUT_MS = 10_000

@@ -20,6 +20,13 @@
  * `ValidationReason` identifier in `BackendError.details`, and
  * `validationReasonMessage` translates it with the same literal-`switch`
  * discipline.
+ *
+ * S5.3 used both halves, and the line between them is the one to keep: the two
+ * refusals of the provider form (`oauth_unsupported_provider`,
+ * `oauth_custom_base_url`) are reasons, because they narrow the refusal of one
+ * request — while `ant_missing` and `ant_not_logged_in` are codes, because they
+ * describe the state of a tool on the user's machine and are raised while
+ * building a model for a chat turn as well as while validating a form.
  */
 import type { BackendError, BackendErrorCode, ValidationReason } from '@shared/types'
 import { VALIDATION_REASONS } from '@shared/types'
@@ -44,6 +51,10 @@ export function errorMessage(t: TranslateFn, code: BackendErrorCode): string {
       return t('errors.unauthorized')
     case 'internal':
       return t('errors.internal')
+    case 'ant_missing':
+      return t('errors.ant_missing')
+    case 'ant_not_logged_in':
+      return t('errors.ant_not_logged_in')
   }
 }
 
@@ -61,6 +72,10 @@ export function validationReasonMessage(t: TranslateFn, reason: ValidationReason
       return t('errors.workdir_not_directory')
     case 'second_executor':
       return t('errors.second_executor')
+    case 'oauth_unsupported_provider':
+      return t('errors.oauth_unsupported_provider')
+    case 'oauth_custom_base_url':
+      return t('errors.oauth_custom_base_url')
   }
 }
 

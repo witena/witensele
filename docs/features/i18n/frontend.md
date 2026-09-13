@@ -108,6 +108,13 @@ Things the guards will refuse: an English sentence in `zh-CN.json`, any CJK in
 `en.json`, an empty value, a key that exists in one file only, a key that no
 locale file defines, and a literal in JSX.
 
+One thing they are *not* meant to refuse: a value that is genuinely the same in
+both languages. A shell command (S5.3's `brew install anthropics/tap/ant`) is
+data, so it is a constant in `@shared/presets` rendered inside `{…}` — braces are
+invisible to the JSX scan — rather than a key that would have to be duplicated
+identically in both files and then drift. The same rule already covers a working
+directory path and a model id.
+
 ## Accessibility and keyboard
 
 - `<html lang>` is set during bootstrap and updated on every `languageChanged`,

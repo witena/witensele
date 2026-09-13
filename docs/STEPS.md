@@ -567,7 +567,7 @@ refusals with their reasons, and a restart. The native picker is not driven,
 which the file says in its header. `e2e/members.spec.ts` needed no change and
 still passes. Docs in `docs/features/{chats,agents,i18n}/`.
 
-### S5.3 Anthropic sign-in `[ ]`
+### S5.3 Anthropic sign-in `[x]` (2026-09-13)
 What: an Anthropic provider can authenticate with the user's Anthropic account
 instead of an API key. Closed-source providers gain an authentication mode;
 open-source and local providers keep API keys only. This step implements the
@@ -637,6 +637,90 @@ provider in sign-in mode passes Test connection, fetches the model list and
 completes a chat turn with no key stored; without `ant` the editor explains
 what to install; the tests above pass. Docs: `docs/features/providers/` and
 `docs/features/database/` (all four each).
+Done: `ProviderAuth` is a **field on the provider**, not a fifth `ProviderType`.
+The endpoint, the model list and the adapter are identical either way — only the
+headers differ — so a new type would have forked `registry.ts`, `discovery.ts`,
+the preset table and the logo rules to express one boolean. The column is
+nullable with no default (`0002_mysterious_madelyne_pryor.sql`, one `ALTER TABLE
+… ADD auth text`), and the meaning of `NULL` lives in `providerAuth()` in
+`shared/presets.ts` rather than in SQL: `NOT NULL DEFAULT 'apiKey'` would have
+rewritten every row *and* stated the same fact in two places. `providerRequiresApiKey`
+answers `false` for an `oauth` provider, which is what makes the form saveable
+with the key field gone.
+
+`src/main/providers/anthropic-cli.ts` is the only module in the app that ever
+holds a token, and it holds one for as long as the CLI says it is valid, minus
+sixty seconds. **Witena stores no credential of its own**: `SecretStore` is
+untouched, no column holds a token, and `ant auth logout` signs Witena out too,
+because there was never a second copy. Two deliberate readings of the step. First,
+the status is derived from `ant auth print-credentials` — the step's own
+instruction, because `ant auth status` prints prose and its `--format json` flag
+does not apply to that subcommand — and **the same call also supplies the token**,
+rather than a second spawn of `--access-token`: it is the call that carries
+`expires_at`, which the cache rule needs, so using both would mean two child
+processes per cache miss for one fact. Second, `not-installed` and `signed-out`
+are **states, not rejections**: they are the ordinary condition of a machine that
+has never used the CLI and the panel exists to render them, so `providers.authStatus`
+never rejects and the two new `BackendErrorCode`s (`ant_missing`,
+`ant_not_logged_in`) are reserved for calls that had to *do* something —
+`providers.login`, `providers.logout`, and Save. That split is also why those two
+are codes while the form's two refusals (`oauth_unsupported_provider`,
+`oauth_custom_base_url`) are S5.2 `ValidationReason`s: a reason narrows the
+refusal of one request, a code describes the state of the machine.
+
+`oauthFetch` is one wrapper used by both paths, which is the only way the beta
+flag cannot be forgotten in one of them: it deletes `x-api-key` (the API refuses
+a request carrying both), sets `Authorization: Bearer`, and **merges**
+`oauth-2025-04-20` into `anthropic-beta` rather than assigning it, because the
+SDK sets that header itself for other features. `createAnthropic({ apiKey: '' })`
+is deliberate — omitting `apiKey` makes the adapter hunt for `ANTHROPIC_API_KEY`
+and throw — and the empty header it produces is deleted before the request
+leaves. The token is fetched **per request** through the injected `AnthropicCli`,
+so a model instance built once and used for an hour keeps working. Binary
+resolution walks `PATH` and then `/opt/homebrew/bin`, `/usr/local/bin` and
+`$HOME/go/bin`, because a packaged Electron app is launched by `launchd` with a
+minimal `PATH` and cannot see a Homebrew install; `WITENA_ANT_BIN` replaces the
+whole search with one absolute path.
+
+Save refuses a provider the CLI cannot authenticate, on `create` and on `update`,
+and the `auth` rules are checked against the **stored row merged with the patch** —
+`{ auth: 'oauth' }` alone says nothing about the type it lands on. The editor
+renders the Authentication control for the three first-party types only: live for
+Anthropic, disabled with a hint for OpenAI and Google ("not yet" and "never" are
+different statements), and absent for `openai-compatible`, which is somebody
+else's URL with no account behind it. In sign-in mode the panel **replaces** the
+key field; the install command is printed as data, not as copy, exactly like a
+working directory path. The card's badge is neutral rather than green: the record
+says this provider signs in, which is not a claim that the login still works —
+only a probe can make that claim, and it then shows "Connected".
+
+Tests: `anthropic-cli.test.ts` drives the **real** implementation against a fake
+`ant` — an executable script first on the injected `PATH` — covering resolution,
+all three states, the cache expiring early and being dropped on logout, a
+non-zero exit, output that is not JSON, and the rule that `stdout` (the token)
+never reaches an error message while `stderr` does. `registry.test.ts` pins the
+wrapper's three header edits and inspects the headers of a real `doGenerate`;
+`handlers.test.ts` covers the two reasoned refusals, both `ant_*` refusals of
+Save, and the merged check on update; `provider-display.test.ts` tests the
+editor's mode switch as `authControl`, which is how a decision made in JSX stays
+testable in a suite with no DOM. `e2e/providers.spec.ts` relaunches the app with
+`WITENA_ANT_BIN` pointing at nothing — the only way to get a machine with no
+`ant` on a developer machine that has one — and drives everything except the
+browser flow itself.
+
+**Verified against the real API**, with the developer's own `ant auth login`:
+the status reads back (organisation, account, workspace, expiry), and
+`providers.fetchModels` returns the live list of 11 models through the wrapper,
+which proves the header rewriting end to end. A generation is refused by the API
+with `Your credit balance is too low…` — HTTP 400 `invalid_request_error`, an
+account-balance answer rather than an authentication one, and the identical
+refusal comes back from a bare `curl` with the same headers. So the acceptance
+sentence "completes a chat turn with no key stored" is **unverified for want of
+API credit on that account**, not for want of code; it is recorded in the Phase 6
+backlog. Docs: `docs/features/providers/` and `docs/features/database/` (all four
+each), plus the `i18n` and `backend-client` documents that the two new error
+codes and the three new methods made out of date.
+
 
 ### S5.4 Executor tools and the permission gate `[ ]`
 What: the built-in tools an executor uses on the chat's folder, and the prompt
@@ -791,6 +875,17 @@ adds a line here in the same commit.
   bills the project that owns the OAuth client (the developer's), while
   Vertex AI bills the user's own project through `x-goog-user-project`. Decide
   which before building; the user needs a GCP project with billing either way.
+- **A chat turn through a signed-in provider, on an account with API credit.**
+  S5.3 proved the headers as far as the API accepts them — `/v1/models` answers
+  200 through the OAuth wrapper — but the account used for verification has no
+  credit, so `/v1/messages` is refused with `invalid_request_error` ("your credit
+  balance is too low") for a bare `curl` as well as through the app. Run the
+  acceptance sentence again on a funded account before treating the generation
+  path as proven.
+- **Several logins, or a second vendor's CLI.** `providers.authStatus` takes no
+  argument because `ant` has one active profile, so the status is a fact about
+  the machine. Supporting profiles, or OpenAI's and Google's own CLIs, means
+  naming which login a provider uses and a picker to choose it.
 - **Cloud-platform providers.** Claude on Vertex AI and Amazon Bedrock, GPT on
   Azure, authenticated with the platform's own credentials or SSO rather than
   a vendor key (`@ai-sdk/google-vertex`, `@ai-sdk/amazon-bedrock`,

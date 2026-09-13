@@ -9,7 +9,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod, ProviderRef } from '@shared/backend'
-import type { ConnectionTestResult, Provider, ProviderInput } from '@shared/types'
+import type {
+  AnthropicAuthStatus,
+  ConnectionTestResult,
+  Provider,
+  ProviderInput
+} from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import { resetBackend, setBackend } from '../lib/backend-provider'
 import { DRAFT_TEST_KEY, useProvidersStore } from './providers'
@@ -26,6 +31,7 @@ interface Fake {
   keys: () => Record<string, string>
   setModels: (models: string[]) => void
   setTestResult: (result: ConnectionTestResult) => void
+  setAuthStatus: (status: AnthropicAuthStatus) => void
   fail: (error: Error | null) => void
 }
 
@@ -39,6 +45,7 @@ function fakeBackend(initial: Provider[] = []): Fake {
   )
   let models: string[] = []
   let testResult: ConnectionTestResult = { ok: true, latencyMs: 12, model: 'gpt-4o' }
+  let authStatus: AnthropicAuthStatus = { state: 'signed-out' }
   let failure: Error | null = null
   let nextId = 1
 
@@ -93,6 +100,15 @@ function fakeBackend(initial: Provider[] = []): Fake {
       }
       if (method === 'providers.fetchModels') return models
       if (method === 'providers.testConnection') return testResult
+      if (method === 'providers.authStatus') return authStatus
+      if (method === 'providers.login') {
+        authStatus = { state: 'signed-in', accountEmail: 'person@example.com' }
+        return authStatus
+      }
+      if (method === 'providers.logout') {
+        authStatus = { state: 'signed-out' }
+        return authStatus
+      }
 
       throw new Error(`unexpected method ${method}`)
     }) as BackendClient['invoke'],
@@ -109,6 +125,9 @@ function fakeBackend(initial: Provider[] = []): Fake {
     },
     setTestResult: (next) => {
       testResult = next
+    },
+    setAuthStatus: (next) => {
+      authStatus = next
     },
     fail: (error) => {
       failure = error
@@ -145,7 +164,10 @@ beforeEach(() => {
     testResults: {},
     testing: false,
     fetchingModels: false,
-    saving: false
+    saving: false,
+    authStatus: null,
+    authBusy: false,
+    authErrorCode: undefined
   })
 })
 
@@ -443,5 +465,94 @@ describe('testConnection', () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
     expect(state().testing).toBe(false)
+  })
+})
+
+/**
+ * The sign-in half (S5.3).
+ *
+ * The three states are values the panel renders, so the store's job is only to
+ * hold the latest answer and never to leave a spinner running. The fake's login
+ * flips its own state, which is what proves the store re-reads rather than
+ * assuming.
+ */
+describe('sign-in', () => {
+  it('reads the CLI status', async () => {
+    const backend = fakeBackend()
+    backend.setAuthStatus({ state: 'not-installed' })
+    setBackend(backend.client)
+
+    await expect(state().loadAuthStatus()).resolves.toEqual({ state: 'not-installed' })
+    expect(state().authStatus).toEqual({ state: 'not-installed' })
+    expect(state().authErrorCode).toBeUndefined()
+  })
+
+  it('signs in and keeps the resulting status', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await state().signIn()
+
+    expect(state().authStatus).toMatchObject({ state: 'signed-in' })
+    expect(state().authBusy).toBe(false)
+    expect(backend.calls.map((call) => call.method)).toEqual(['providers.login'])
+  })
+
+  it('signs out and keeps the resulting status', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await state().signIn()
+
+    await state().signOut()
+
+    expect(state().authStatus).toEqual({ state: 'signed-out' })
+    expect(state().authBusy).toBe(false)
+  })
+
+  it('records a refused sign-in and asks the CLI what actually happened', async () => {
+    const backend = fakeBackend()
+    backend.setAuthStatus({ state: 'not-installed' })
+    setBackend(backend.client)
+    backend.fail(new Error('ant is missing'))
+
+    await state().signIn()
+
+    // Not a rejection: the panel keeps its shape and gains an error line.
+    expect(state().authErrorCode).toBe('internal')
+    expect(state().authBusy).toBe(false)
+  })
+
+  it('never leaves a transport failure looking like an install', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    backend.fail(new Error('bridge is down'))
+
+    await expect(state().loadAuthStatus()).resolves.toEqual({ state: 'not-installed' })
+    expect(state().authErrorCode).toBe('internal')
+  })
+})
+
+describe('the draft carries the authentication mode', () => {
+  it('round-trips it from a stored provider', async () => {
+    const backend = fakeBackend([
+      stored({ id: 'p9', type: 'anthropic', name: 'Claude', auth: 'oauth', hasApiKey: false })
+    ])
+    setBackend(backend.client)
+    await state().load()
+
+    state().startEdit('p9')
+    expect(state().draft?.auth).toBe('oauth')
+
+    state().patchDraft({ auth: 'apiKey' })
+    expect(state().draft?.auth).toBe('apiKey')
+  })
+
+  it('leaves it absent for a provider that never had one', async () => {
+    const backend = fakeBackend([stored()])
+    setBackend(backend.client)
+    await state().load()
+
+    state().startEdit('p1')
+    expect(state().draft && 'auth' in state().draft!).toBe(false)
   })
 })

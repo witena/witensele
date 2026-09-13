@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BACKEND_METHODS, type BackendMethod } from '@shared/backend'
 import type { BackendEvent } from '@shared/events'
-import { DEFAULT_APP_SETTINGS, LOCAL_USER_ID, type ProviderInput } from '@shared/types'
+import {
+  DEFAULT_APP_SETTINGS,
+  LOCAL_USER_ID,
+  type AnthropicAuthState,
+  type AnthropicAuthStatus,
+  type ProviderInput
+} from '@shared/types'
 import type { AppContext } from '../app-context'
 import { createTestDatabase, type TestDatabase } from '../db/testing'
 import { createInsecureSecretStore } from '../secrets'
@@ -243,6 +249,162 @@ describe('handlers/buildHandlers', () => {
       })
     })
 
+    /* -- sign-in mode (S5.3) --------------------------------------------- */
+
+    /** An Anthropic provider that authenticates with the user's account. */
+    const signedInProvider: ProviderInput = {
+      type: 'anthropic',
+      name: 'Claude',
+      presetId: 'anthropic',
+      models: ['claude-sonnet-4-5'],
+      auth: 'oauth'
+    }
+
+    /** A context whose CLI reports a logged-in profile, spawning nothing. */
+    function withCli(state: AnthropicAuthState): AppContext {
+      const status = (): Promise<AnthropicAuthStatus> => Promise.resolve({ state })
+      return {
+        ...ctx,
+        anthropicCli: {
+          status,
+          login: status,
+          logout: status,
+          accessToken: () => Promise.resolve('oat-token')
+        }
+      }
+    }
+
+    it('saves a provider that signs in with no key at all', async () => {
+      const created = await handlers['providers.create'](withCli('signed-in'), {
+        input: signedInProvider
+      })
+
+      expect(created).toMatchObject({ auth: 'oauth', hasApiKey: false })
+      expect(ctx.repos.providers.getApiKeyCiphertext(created.id, ctx.userId)).toBeNull()
+    })
+
+    it('refuses to sign in with a provider type that has no flow yet', async () => {
+      await expect(
+        handlers['providers.create'](withCli('signed-in'), {
+          input: { ...signedInProvider, type: 'openai', name: 'OpenAI', presetId: 'openai' }
+        })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'oauth_unsupported_provider' }
+      })
+    })
+
+    it('refuses to point an account credential at a custom endpoint', async () => {
+      await expect(
+        handlers['providers.create'](withCli('signed-in'), {
+          input: { ...signedInProvider, baseUrl: 'https://proxy.example.com' }
+        })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'oauth_custom_base_url' }
+      })
+    })
+
+    it('rejects an authentication mode that is not one of the two', async () => {
+      await expect(
+        handlers['providers.create'](ctx, {
+          input: { ...signedInProvider, auth: 'magic' as never }
+        })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('refuses to save a sign-in provider when the CLI is missing or signed out', async () => {
+      await expect(
+        handlers['providers.create'](withCli('not-installed'), { input: signedInProvider })
+      ).rejects.toMatchObject({ code: 'ant_missing' })
+
+      await expect(
+        handlers['providers.create'](withCli('signed-out'), { input: signedInProvider })
+      ).rejects.toMatchObject({ code: 'ant_not_logged_in' })
+
+      await expect(handlers['providers.list'](ctx)).resolves.toEqual([])
+    })
+
+    it('checks the merged record on update, not the patch alone', async () => {
+      const keyed = await handlers['providers.create'](ctx, {
+        input: {
+          type: 'openai',
+          name: 'OpenAI',
+          presetId: 'openai',
+          models: ['gpt-4o'],
+          apiKey: 'sk-openai'
+        }
+      })
+
+      // `{ auth: 'oauth' }` says nothing on its own; the stored type refuses it.
+      await expect(
+        handlers['providers.update'](withCli('signed-in'), {
+          id: keyed.id,
+          patch: { auth: 'oauth' }
+        })
+      ).rejects.toMatchObject({ details: { reason: 'oauth_unsupported_provider' } })
+
+      const anthropic = await handlers['providers.create'](ctx, {
+        input: { type: 'anthropic', name: 'Claude', models: [], apiKey: 'sk-ant' }
+      })
+      const switched = await handlers['providers.update'](withCli('signed-in'), {
+        id: anthropic.id,
+        patch: { auth: 'oauth' }
+      })
+
+      expect(switched.auth).toBe('oauth')
+    })
+
+    it('reads the model list with a bearer token and no key header', async () => {
+      const seen: Record<string, string>[] = []
+      const fetchImpl: FetchImpl = (_input, init) => {
+        const headers: Record<string, string> = {}
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value
+        })
+        seen.push(headers)
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: 'claude-sonnet-4-5' }] }), { status: 200 })
+        )
+      }
+
+      await expect(
+        handlers['providers.fetchModels'](
+          { ...withCli('signed-in'), fetchImpl },
+          { provider: { draft: signedInProvider } }
+        )
+      ).resolves.toEqual(['claude-sonnet-4-5'])
+
+      expect(seen[0]?.['authorization']).toBe('Bearer oat-token')
+      expect(seen[0]?.['x-api-key']).toBeUndefined()
+      expect(seen[0]?.['anthropic-beta']).toContain('oauth-2025-04-20')
+      expect(seen[0]?.['anthropic-version']).toBe('2023-06-01')
+    })
+
+    it('answers the three auth methods straight from the CLI', async () => {
+      const signedIn = withCli('signed-in')
+
+      await expect(handlers['providers.authStatus'](signedIn)).resolves.toEqual({
+        state: 'signed-in'
+      })
+      await expect(handlers['providers.login'](signedIn)).resolves.toEqual({ state: 'signed-in' })
+      await expect(handlers['providers.logout'](withCli('signed-out'))).resolves.toEqual({
+        state: 'signed-out'
+      })
+    })
+
+    it('answers "not installed" as a status, but refuses to run a sign-in', async () => {
+      // The default test context has no CLI at all, which is the state of a
+      // machine that never installed one. Asking *about* it is fine; asking it
+      // to do something is the failure the panel's error line shows.
+      await expect(handlers['providers.authStatus'](ctx)).resolves.toEqual({
+        state: 'not-installed'
+      })
+      await expect(handlers['providers.login'](ctx)).rejects.toMatchObject({
+        code: 'ant_missing'
+      })
+    })
+
     it('scopes every read to the context user', async () => {
       const created = await handlers['providers.create'](ctx, { input: deepseek })
       const other: AppContext = { ...ctx, userId: 'someone-else' }
@@ -374,7 +536,11 @@ describe('handlers/stubs', () => {
       'memory.search',
       // S4.1, S4.3
       'chats.search',
-      'messages.usageSummary'
+      'messages.usageSummary',
+      // S5.3
+      'providers.authStatus',
+      'providers.login',
+      'providers.logout'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

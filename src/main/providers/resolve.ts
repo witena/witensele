@@ -46,6 +46,9 @@ function fromDraft(draft: ProviderInput, userId: string): ResolvedProvider {
     ...(draft.presetId ? { presetId: draft.presetId } : {}),
     models: Array.isArray(draft.models) ? draft.models : [],
     hasApiKey: Boolean(draft.apiKey),
+    // Carried through so a draft in sign-in mode is probed the way it will be
+    // used: "Test connection" before Save is the whole point of a draft ref.
+    ...(draft.auth ? { auth: draft.auth } : {}),
     ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
   }
 }

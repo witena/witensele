@@ -207,6 +207,7 @@ Naming conventions the whole app follows:
 | `providers.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Provider[]` / `Provider` / `Provider` / `Provider` / `void` | Omitting `apiKey` in a patch keeps the stored key; `''` clears it |
 | `providers.fetchModels` | `{ provider: ProviderRef }` | `string[]` | `ProviderRef` is `{ id }` or `{ draft }`, so an unsaved form can fetch |
 | `providers.testConnection` | `{ provider: ProviderRef }` | `ConnectionTestResult` | Result object, not a rejection: a failed test is a normal outcome |
+| `providers.authStatus` / `login` / `logout` | — | `AnthropicAuthStatus` | S5.3. The status carries the account, organisation, workspace and expiry — **never a token**. `authStatus` never rejects, because "not installed" and "signed out" are states; `login` and `logout` reject `ant_missing` when there is no CLI to run |
 | `agents.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Agent[]` / `Agent` / `Agent` / `Agent` / `void` | |
 | `mcp.list` / `create` / `update` / `delete` | — / `{ input }` / `{ id, patch }` / `{ id }` | `McpServer[]` / `McpServer` / `McpServer` / `void` | |
 | `mcp.testConnection` | `{ id }` | `McpConnectionTestResult` | Success also returns `toolNames` |

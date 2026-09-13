@@ -45,6 +45,11 @@ export const providers = sqliteTable('providers', {
   presetId: text('preset_id'),
   models: text('models', { mode: 'json' }).$type<string[]>().notNull(),
   apiKeyEncrypted: text('api_key_encrypted'),
+  // Nullable rather than `notNull().default('apiKey')`: every row written before
+  // S5.3 has no value, and "absent means apiKey" is already the rule the shared
+  // type states (`providerAuth()` in `shared/presets.ts`). A default would make
+  // the same fact true in two places and disagree the day the default changes.
+  auth: text('auth', { enum: ['apiKey', 'oauth'] }),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull()
 })

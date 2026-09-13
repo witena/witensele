@@ -25,6 +25,8 @@ import type { McpManager, McpManagerOptions } from './mcp/manager'
 import { createMemoryStore } from './memory/store'
 import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat-runner'
 import type { AgentSupervisor } from './presence/supervisor'
+import type { AnthropicCli } from './providers/anthropic-cli'
+import { antMissing } from './providers/anthropic-cli'
 import type { FetchImpl } from './providers/discovery'
 import { createInsecureSecretStore, type SecretStore } from './secrets'
 
@@ -50,6 +52,32 @@ export interface TestAppContextOptions {
    * `npx` download, and a deterministic tool list.
    */
   mcp?: Omit<McpManagerOptions, 'getServer'>
+  /**
+   * The Anthropic CLI (S5.3). Defaults to `absentAnthropicCli()`, which reports
+   * "not installed" and spawns nothing: a unit test must never run a binary that
+   * happens to be on the developer's machine, or the suite's result would depend
+   * on whether they had signed in.
+   */
+  anthropicCli?: AnthropicCli
+}
+
+/**
+ * A CLI that is not there.
+ *
+ * The default for every test context, and the honest baseline: `ant` is
+ * software the user installs separately, so "absent" is the state the suite
+ * should assume unless it is the thing under test.
+ */
+export function absentAnthropicCli(): AnthropicCli {
+  // Exactly what the real implementation does with no binary to run: `status`
+  // answers with a state, everything that would have to *execute* rejects.
+  const missing = (): Promise<never> => Promise.reject(antMissing())
+  return {
+    status: () => Promise.resolve({ state: 'not-installed' }),
+    login: missing,
+    logout: missing,
+    accessToken: missing
+  }
 }
 
 export interface TestAppContext {
@@ -83,6 +111,7 @@ export function createTestAppContext(
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
     memory: createMemoryStore(join(database.dir, MEMORY_DIR)),
+    anthropicCli: options.anthropicCli ?? absentAnthropicCli(),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close: () => {
       ctx.supervisor.stop()

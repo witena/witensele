@@ -74,7 +74,7 @@ follows.
 | `subscribeTo('system.test', …)` | `DeveloperSection` effect | Renders the last payload received |
 | `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher | Language, theme, timeouts |
 | `subscribe(…)` | `startEventBridge()` in `main.tsx`, once at app start (S1.7) | Fans every `BackendEvent` out to the stores. It is deliberately never unsubscribed: the bridge lives as long as the window, so no event can be lost between the first `list` call and the first render |
-| `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test |
+| `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test, and (S5.3) the Anthropic CLI's sign-in status, login and logout |
 | `invoke('agents.*')` | Agents page | CRUD for the configuration form |
 | `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, the skills library, the per-agent memory panel |
 | `invoke('system.pickFolder')` | `stores/skills.ts`, behind "Import folder" | The native folder dialog. Resolves `null` when the user cancels, which the store treats as a non-event rather than an error — the only method whose implementation is Electron-specific (S3.2) |

@@ -5,7 +5,16 @@
  * a screen.
  */
 import { describe, expect, it } from 'vitest'
-import { PROVIDER_PRESETS, getPreset, isLocalPreset, type ProviderPreset } from './presets'
+import {
+  ANT_INSTALL_COMMAND,
+  PROVIDER_PRESETS,
+  getPreset,
+  isLocalPreset,
+  providerAuth,
+  providerRequiresApiKey,
+  supportsOAuth,
+  type ProviderPreset
+} from './presets'
 
 const byId = (id: string): ProviderPreset => {
   const preset = getPreset(id)
@@ -116,5 +125,45 @@ describe('getPreset / isLocalPreset', () => {
     expect(isLocalPreset('lmstudio')).toBe(true)
     expect(isLocalPreset('deepseek')).toBe(false)
     expect(isLocalPreset(undefined)).toBe(false)
+  })
+})
+
+/**
+ * The three questions asked of a provider's authentication (S5.3).
+ *
+ * `providerRequiresApiKey` is the one the backend enforces and the card renders,
+ * so the case that matters is the new one: a provider that signs in needs no key
+ * and must not be flagged as missing one.
+ */
+describe('providerAuth / supportsOAuth / providerRequiresApiKey', () => {
+  it('defaults to the API key, which is what every pre-S5.3 row holds', () => {
+    expect(providerAuth({})).toBe('apiKey')
+    expect(providerAuth({ auth: undefined })).toBe('apiKey')
+    expect(providerAuth({ auth: 'oauth' })).toBe('oauth')
+  })
+
+  it('names Anthropic as the only type that can be signed into today', () => {
+    expect(supportsOAuth('anthropic')).toBe(true)
+    expect(supportsOAuth('openai')).toBe(false)
+    expect(supportsOAuth('google')).toBe(false)
+    expect(supportsOAuth('openai-compatible')).toBe(false)
+  })
+
+  it('requires no key from a provider that signs in', () => {
+    expect(providerRequiresApiKey({ type: 'anthropic', presetId: 'anthropic' })).toBe(true)
+    expect(
+      providerRequiresApiKey({ type: 'anthropic', presetId: 'anthropic', auth: 'oauth' })
+    ).toBe(false)
+  })
+
+  it('keeps every other answer exactly as it was', () => {
+    expect(providerRequiresApiKey({ type: 'openai-compatible', presetId: 'ollama' })).toBe(false)
+    expect(providerRequiresApiKey({ type: 'openai-compatible', presetId: 'deepseek' })).toBe(true)
+    expect(providerRequiresApiKey({ type: 'openai-compatible' })).toBe(false)
+    expect(providerRequiresApiKey({ type: 'google' })).toBe(true)
+  })
+
+  it('ships the install command as data, not as copy', () => {
+    expect(ANT_INSTALL_COMMAND).toBe('brew install anthropics/tap/ant')
   })
 })

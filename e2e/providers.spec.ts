@@ -1,8 +1,8 @@
 /**
  * The S1.6 acceptance test: a provider can be added, probed, saved and found
- * again after a restart.
+ * again after a restart — plus S5.3's sign-in mode at the end of the file.
  *
- * Two flows, deliberately different in what they touch:
+ * Three flows, deliberately different in what they touch:
  *
  * 1. **Ollama**, which is the only provider that can be probed for real without a
  *    secret — it runs on localhost and needs no key. The spec checks whether
@@ -13,6 +13,9 @@
  * 2. **The `custom` preset**, entirely offline: a fake endpoint and a fake key,
  *    saved and reopened, to prove the write-only key contract — the key never
  *    comes back, and the form says one is stored instead of showing a fake value.
+ * 3. **Sign-in mode with no `ant` installed** (S5.3), which relaunches the app
+ *    with `WITENA_ANT_BIN` pointing at nothing. The browser flow itself is not
+ *    driven; the panel, the install command and the refused Save are.
  *
  * The UI is pinned to Chinese and the window to 1440×900, like `ui-shell.spec.ts`,
  * so `providers.png` is comparable with the settings artboard. Every assertion is
@@ -215,4 +218,58 @@ test('clearing a key puts the card back into the "no key" state', async () => {
   await window.getByTestId('provider-save').click()
 
   await expect(card.getByTestId('provider-card-status')).toHaveAttribute('data-status', 'no-key')
+})
+
+/**
+ * S5.3: sign-in mode on a machine where the Anthropic CLI is not installed.
+ *
+ * The app is relaunched with `WITENA_ANT_BIN` pointing at a path that does not
+ * exist, which is the only way to get that state on a developer machine that
+ * has `ant` — the resolver would otherwise find it in `/opt/homebrew/bin` even
+ * with an empty `PATH`, exactly as it is meant to.
+ *
+ * The sign-in click itself is deliberately **not** driven: it opens a real
+ * browser and needs an account. What is driven is everything around it — the
+ * mode switch, the panel's state, the install command, and the refusal to save a
+ * provider that could not possibly authenticate.
+ */
+test('sign-in mode explains what to install when `ant` is absent', async () => {
+  await app?.close()
+  ;({ app, window } = await launchWitena(userDataDir, {
+    WITENA_ANT_BIN: join(userDataDir, 'no-such-ant')
+  }))
+  await prepare()
+  await openProviderSettings(window)
+
+  const before = await window.getByTestId('provider-card').count()
+
+  await window.getByTestId('providers-add').click()
+  await window.getByTestId('preset-anthropic').click()
+  await window.getByTestId('provider-auth-oauth').click()
+
+  // The key field is replaced by the panel, not hidden beside it.
+  await expect(window.getByTestId('provider-api-key-input')).toHaveCount(0)
+  await expect(window.getByTestId('provider-sign-in')).toHaveAttribute(
+    'data-auth-state',
+    'not-installed'
+  )
+  // The install command is data, printed verbatim in both languages.
+  await expect(window.getByTestId('provider-ant-install')).toHaveText(
+    'brew install anthropics/tap/ant'
+  )
+
+  await window.getByTestId('provider-save').click()
+
+  const error = window.getByTestId('provider-error')
+  await expect(error).toHaveAttribute('data-error-code', 'ant_missing')
+  // Translated copy, not the backend's developer message.
+  await expect(error).toContainText(zhCN.errors['ant_missing'] as string)
+
+  // Nothing was stored: a provider that cannot authenticate is not a provider.
+  await expect(window.getByTestId('provider-card')).toHaveCount(before)
+
+  // Switching back to the key field leaves the editor exactly as it was.
+  await window.getByTestId('provider-auth-apiKey').click()
+  await expect(window.getByTestId('provider-sign-in')).toHaveCount(0)
+  await expect(window.getByTestId('provider-api-key-input')).toBeVisible()
 })

@@ -104,6 +104,11 @@ through `BackendClient`.
 - `providers.fetchModels` / `providers.testConnection` accept either a saved id
   or an unsaved draft (`ProviderRef`). If the settings form ends up always
   saving first, the `draft` half can be dropped.
+- The three `providers.auth*` methods (S5.3) take no argument because `ant` has
+  one active profile and Witena stores no credential of its own. A build that
+  supported several logins, or a second vendor's CLI, would have to name which
+  one — most likely `{ provider: ProviderType }` — and the status would stop
+  being a fact about the machine.
 - `InvokeResponse` is written twice: once in `src/main/ipc-protocol.ts` for main
   and preload, once in `src/preload/index.d.ts` for the renderer, because the
   renderer's TypeScript project may not pull files out of `src/main/`. If a third

@@ -48,6 +48,24 @@ export interface EntityBase {
 export type ProviderType = 'anthropic' | 'openai' | 'google' | 'openai-compatible'
 
 /**
+ * How a provider proves who it is (S5.3).
+ *
+ * `apiKey` is the original and the default: a secret the user pastes, encrypted
+ * by the `SecretStore`. `oauth` means "use the account the user is already
+ * signed in to", which Witena delegates entirely to the vendor's own CLI — it
+ * stores **no token of its own**, so signing out of the CLI signs Witena out too.
+ *
+ * Only `anthropic` implements `oauth` today. The field is shared rather than
+ * derived from the type because OpenAI and Google are expected to gain their own
+ * sign-in later (see "Phase 6: Backlog" in `docs/STEPS.md`), and an Anthropic
+ * provider may legitimately stay on a key.
+ */
+export type ProviderAuth = 'apiKey' | 'oauth'
+
+/** Every authentication mode, for validation and for the editor's control. */
+export const PROVIDER_AUTH_MODES = ['apiKey', 'oauth'] as const
+
+/**
  * A configured model provider. Deliberately has no key field: the encrypted key
  * lives in the backend's `SecretStore` and only its presence is reported here.
  */
@@ -62,6 +80,12 @@ export interface Provider extends EntityBase {
   models: string[]
   /** True when a key is stored for this provider. The key itself never leaves main. */
   hasApiKey: boolean
+  /**
+   * Absent means `apiKey`, which is what every row written before S5.3 holds.
+   * Read it through `providerAuth()` in `shared/presets.ts` rather than
+   * comparing it by hand, so the default lives in one place.
+   */
+  auth?: ProviderAuth
 }
 
 /**
@@ -78,6 +102,33 @@ export interface ProviderInput {
   presetId?: string
   models: string[]
   apiKey?: string
+  /** Absent means `apiKey`. `oauth` is accepted only for `type: 'anthropic'`. */
+  auth?: ProviderAuth
+}
+
+/**
+ * What the renderer is told about the Anthropic CLI's login state.
+ *
+ * Deliberately **no token**: `access_token` and `refresh_token` never leave the
+ * main process, so nothing that crosses IPC — or lands in a renderer heap
+ * snapshot — can carry a credential. What is left is what the sign-in panel has
+ * to say: which account and workspace the user is signed in as, and when the
+ * current credential expires.
+ *
+ * `not-installed` is a first-class answer rather than an error, because "the
+ * `ant` binary is not on this machine" is the ordinary state of a machine that
+ * has never used it, and the panel's job is to say so and print the install
+ * command.
+ */
+export type AnthropicAuthState = 'signed-in' | 'signed-out' | 'not-installed'
+
+export interface AnthropicAuthStatus {
+  state: AnthropicAuthState
+  organizationName?: string
+  accountEmail?: string
+  workspaceName?: string
+  /** Epoch **milliseconds** when the current credential expires. */
+  expiresAt?: number
 }
 
 /* -------------------------------------------------------------------------- */
@@ -516,6 +567,11 @@ export interface MemorySearchHit {
  * Machine-readable failure classes. The renderer switches on `code` to pick an
  * i18n key; `message` is for logs and developer-facing detail, not UI copy.
  * `unauthorized` is reserved for the server version and unused locally.
+ *
+ * The two `ant_*` codes are classes rather than `ValidationReason`s on purpose:
+ * they describe the state of a **tool on the user's machine**, not a malformed
+ * request, and they are raised by the provider layer (a model being built for a
+ * chat turn) as well as by a handler validating a form.
  */
 export type BackendErrorCode =
   | 'not_found'
@@ -525,6 +581,10 @@ export type BackendErrorCode =
   | 'aborted'
   | 'unauthorized'
   | 'internal'
+  /** The Anthropic CLI (`ant`) is not installed, or not where it was expected. */
+  | 'ant_missing'
+  /** `ant` is installed but no profile is logged in (`ant auth login`). */
+  | 'ant_not_logged_in'
 
 /** Serializable error shape: an `Error` cannot survive the transport intact. */
 export interface BackendError {
@@ -539,9 +599,10 @@ export interface BackendError {
  * `BackendErrorCode` is deliberately coarse — seven classes for the whole
  * product — and "the request was rejected as invalid" is the right answer for
  * almost every one of them, because the control that sent the request is right
- * there saying what it wanted. These four are the exceptions: the user picked a
- * folder and it turned out not to be one, or added a member the chat cannot
- * hold, and the generic sentence would leave them guessing.
+ * there saying what it wanted. These are the exceptions: the user picked a
+ * folder and it turned out not to be one, added a member the chat cannot hold,
+ * or asked for a sign-in mode this provider cannot have, and the generic
+ * sentence would leave them guessing.
  *
  * A reason travels in `BackendError.details` as `{ reason }`, so it is an
  * **identifier the renderer translates**, never a sentence the backend wrote
@@ -553,7 +614,11 @@ export const VALIDATION_REASONS = [
   'workdir_not_absolute',
   'workdir_missing',
   'workdir_not_directory',
-  'second_executor'
+  'second_executor',
+  /** `auth: 'oauth'` on a provider type that has no sign-in flow yet. */
+  'oauth_unsupported_provider',
+  /** `auth: 'oauth'` together with a custom base URL, which cannot be signed into. */
+  'oauth_custom_base_url'
 ] as const
 
 export type ValidationReason = (typeof VALIDATION_REASONS)[number]
