@@ -21,6 +21,12 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
   panel), `AgentsPage` (list / editor), `SettingsPage` (section nav / content).
 - The primitives under `components/ui/` and the layout helpers under
   `components/layout/`.
+- **The two palettes and the appearance setting (S5.8).** The dark tokens
+  from the mockup are the base; a light palette overrides all of them under
+  `:root[data-theme='light']`, and `lib/theme.ts` decides which one is
+  stamped. The three-segment control in Appearance & language, the window's
+  first-frame colour and the title-bar traffic lights are the same setting
+  seen from three places.
 - The language switch, which is the one piece of real behaviour on the page: the
   quick toggle at the bottom of the settings nav and the select in Appearance &
   language, both writing the setting S1.4 already persists.
@@ -38,7 +44,7 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
 | Message rendering, tool cards, `@` autocomplete | S2.5 |
 | Live presence dots | S2.4 (`presence`) — the `PresenceDot` component exists, nothing feeds it yet |
 | The Data & backup settings section | S4.x — it renders an empty state naming the step. Providers (S1.6), MCP servers (S3.1), Skills (S3.2), Appearance & language (S1.5), Timeouts & heartbeat (S2.4) and Developer have content |
-| A light theme | Not planned. `AppSettings.theme` has one value; the tokens make it a swap if that changes |
+| ~~A light theme~~ | **Shipped in S5.8**, and it was the swap this row predicted: one override block in `index.css` plus `data-theme` on `<html>`. No component changed |
 
 The group-settings controls in the member panel are the one grey area: they are
 rendered, they work, and they are **local state only**. A `ChatSettings` write
@@ -65,6 +71,10 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | Native `<select>`, styled | A custom listbox | The OS draws the popup: keyboard navigation, type-ahead, VoiceOver and edge-of-screen behaviour come free. The mockup's control is a value-plus-chevron pill anyway |
 | `presenceColorClass` as an exported pure function | Inline `switch` inside the component | The state → token mapping is the only logic in the file; pulling it out makes it testable with no jsdom and no React, and totality over `PresenceState` is enforced by the compiler and the test together |
 | Class names written out in full, never interpolated | `` `bg-presence-${state}` `` | Tailwind scans source text. An interpolated class compiles and then renders transparent |
+| One attribute on `<html>` switches the theme (S5.8) | A React context with a `theme` value; a `dark:` variant on every utility; two stylesheets | A utility already compiles to `var(--color-…)`, so redefining the variables repaints everything that is mounted, everything that is not, and everything a later step adds. A context would have to be consumed to matter, and `dark:` doubles every class in the app |
+| The light palette keeps each dark step's contrast, and *darkens* the accent (S5.8) | Invert the lightness of every token; keep the amber accent | Inversion puts the rail above the panels and turns a 1.9:1 amber into body text on white. Roles, not lightness, are what the palette encodes |
+| `'system'` is stored as itself and resolved at use (S5.8) | Resolve once and store `light` / `dark` | Exactly the language decision from S1.4. A machine that flips at sunset should take the app with it |
+| Avatar and provider-logo colours stay dark in both themes (S5.8) | A second palette keyed by theme | They are **data** — an agent's `avatar.color` is a stored row — so theming them means rewriting records. A dark tile with a light monogram reads as a brand chip on white |
 | `drag-region` / `no-drag` as `@utility` in `index.css` | Tailwind arbitrary properties `[-webkit-app-region:drag]`, inline styles | The leading `-` of the vendor prefix collides with Tailwind's negative-value syntax, and `WebkitAppRegion` is not in React's `CSSProperties` |
 | The smoke widgets moved to Settings → Developer rather than deleted | Delete them; keep a hidden debug route | `smoke.spec.ts` and `i18n.spec.ts` are the only end-to-end proof the transport works, and nothing else is observable until S1.7. A visible settings section is cheaper than a hidden one and survives being forgotten |
 | `smoke.*` strings moved under `settings.developer.*` | Keep the `smoke` namespace | The namespace belonged to a screen that no longer exists. `locales.test.ts`'s `EXPECTED_NAMESPACES` was updated with it, which is the deliberate decision its comment asks for |
@@ -72,6 +82,12 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | The leftmost column headers sit 32px from the top, not 14px | Keep the mockup's 14px; use a custom title bar | macOS draws the traffic lights over the top-left of the content. The mockup has no window chrome to design around; something had to give (see [frontend.md](./frontend.md)) |
 
 ## Open questions
+
+- The light theme has not been seen on the screens that only exist while a
+  run is in progress (a streaming message, a tool card, an error, the four
+  presence dots together). They use no colour of their own, so the risk is a
+  step that is too subtle rather than an unreadable screen — recorded under
+  "Appearance" in Phase 6 of STEPS.md.
 
 - The 32px traffic-light inset makes the leftmost column header sit lower than
   the 52px page header next to it. It is defensible (Slack and Discord do the

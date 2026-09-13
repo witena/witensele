@@ -211,7 +211,8 @@ Naming conventions the whole app follows:
 | `agents.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Agent[]` / `Agent` / `Agent` / `Agent` / `void` | |
 | `mcp.list` / `create` / `update` / `delete` | — / `{ input }` / `{ id, patch }` / `{ id }` | `McpServer[]` / `McpServer` / `McpServer` / `void` | |
 | `mcp.testConnection` | `{ id }` | `McpConnectionTestResult` | Success also returns `toolNames` |
-| `system.pickFolder` | — | `string \| null` | **S3.2**; the one method implemented in `src/main/ipc/` because it needs a window. `null` means the user cancelled, which is not an error |
+| `system.pickFolder` | — | `string \| null` | **S3.2**; one of the two methods implemented in `src/main/ipc/` because they need a window. `null` means the user cancelled, which is not an error |
+| `system.applyTheme` | `{ theme }` | `void` | **S5.8**; the other one. A notification, not a write — the setting is stored by `settings.update` — so it carries no state and its caller ignores a rejection. `validation` for a theme outside `THEME_SETTINGS` |
 | `skills.list` | — | `{ skills: SkillMeta[]; warnings: SkillWarning[] }` | S3.2. The warnings name folders that look like a skill and could not be used |
 | `skills.import` | `{ sourcePath, overwrite? }` | `SkillMeta` | S3.2; refuses an existing folder name unless `overwrite` |
 | `skills.read` / `skills.delete` | `{ name }` | `SkillDetail` / `void` | **Added in S3.2** |
@@ -230,9 +231,9 @@ As of **S3.3 every declared method is implemented.** The stub mechanism stays �
 `{ code: 'internal', message: 'Not implemented yet: <method> (see docs/STEPS.md)' }`,
 and `handlers.test.ts` asserts the builder directly rather than through a method
 that happens to be missing — so the next method added to `BackendApi` before its
-step lands still rejects with a pointer instead of crashing. The one method that
-rejects in the Electron-free layer *by design* is `system.pickFolder`; see
-[`backend.md`](./backend.md).
+step lands still rejects with a pointer instead of crashing. The two methods that
+reject in the Electron-free layer *by design* are `system.pickFolder` and
+`system.applyTheme`; see [`backend.md`](./backend.md).
 
 | Event | Payload | Emitted when |
 |---|---|---|
@@ -271,10 +272,13 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   implemented handlers check their own payload and reject with
   `code: 'validation'`; zod arrives with the first domain that needs a real
   schema.
-- **`system.pickFolder` is the one method that is not transport-agnostic.** It
-  is declared here, stubbed in the handler layer and implemented in
-  `src/main/ipc/dialogs.ts`; a server build has to answer it some other way (an
-  upload, or a path field). Everything else moves across untouched.
+- **`system.pickFolder` and `system.applyTheme` are the two methods that are
+  not transport-agnostic.** Both are declared here, stubbed in the handler
+  layer and implemented in `src/main/ipc/` (`dialogs.ts`, `theme.ts`); a server
+  build has to answer the first some other way (an upload, or a path field) and
+  simply leaves the second rejecting — a browser tab has no window chrome to
+  tint, and the page itself is themed by `data-theme` either way. Everything
+  else moves across untouched.
 - **No backpressure or replay.** Events are fire-and-forget and go to every open
   window. A renderer that was not listening during a run recovers by calling
   `messages.list`, not by replaying events.

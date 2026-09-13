@@ -26,6 +26,7 @@ const EXPECTED_METHODS = [
   'system.ping',
   'system.emitTestEvent',
   'system.pickFolder',
+  'system.applyTheme',
   'settings.get',
   'settings.update',
   'providers.list',
@@ -137,10 +138,12 @@ describe('defaults', () => {
     expect(DEFAULT_CHAT_SETTINGS.hardTimeoutMs).toBeUndefined()
   })
 
-  it('follows the system language on a fresh installation', () => {
+  it('follows the system language and appearance on a fresh installation', () => {
     expect(DEFAULT_APP_SETTINGS).toEqual({
       language: 'system',
-      theme: 'dark',
+      // S5.8: `theme` used to be the single value `dark`. A stored `'dark'` still
+      // means dark; only a *fresh* installation now follows the machine.
+      theme: 'system',
       timeouts: {
         stallTimeoutMs: 30000,
         hardTimeoutMs: 120000,

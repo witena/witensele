@@ -103,7 +103,7 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 | `nav` | The three navigation rail entries |
 | `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, and since S5.5 the executor's permission card, the diff block and the file-reference chip |
 | `agents` | Agent list and configuration form labels |
-| `settings` | Section names, the language switcher's own copy, the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` |
+| `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` |
 | `presence` | The four presence states |
 | `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`). `errors.test.ts` asserts the namespace holds **exactly** the codes plus the reasons, in both directions, so a code added to the shared union without copy fails there rather than on screen (S5.3 added two of each; S5.6 three more reasons, for the hand-off's three refusals) |
 | `notices` | Backend-authored notices — the keys `SystemNoticePart.key` may take |
@@ -130,6 +130,14 @@ rather than UI copy — it never reaches the renderer, so it has no key and is
 translated at authoring time, not at display time. That makes `briefing.zh-CN.ts`
 the one `.ts` file allowed to contain Chinese; see
 [`../agent-turn/backend.md`](../agent-turn/backend.md).
+
+S5.8 added five `settings.theme*` keys next to the language ones, and nothing
+else: the theme is an attribute on `<html>`, so the only translated text it
+owns is the three segment labels and one hint. `themeSystem` is worded
+identically to `languageSystem` in both files on purpose — it is the same
+promise about the same machine — which is also why `locales.test.ts`'s rule
+that a `zh-CN` value must differ from its English one has an exception list it
+did not need here (both Chinese values are real translations).
 
 ## Tests
 

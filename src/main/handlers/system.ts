@@ -22,6 +22,18 @@ import type { HandlerModule } from './types'
 export const PICK_FOLDER_UNAVAILABLE =
   'system.pickFolder needs a window: it is implemented in src/main/ipc/dialogs.ts and registered by registerIpc'
 
+/**
+ * The same arrangement for the second window-system method (S5.8).
+ *
+ * `system.applyTheme` tints what the renderer cannot paint — the traffic lights
+ * of `titleBarStyle: 'hiddenInset'` and the native dialogs — which is
+ * `nativeTheme.themeSource` and therefore electron. The page itself needs
+ * nothing from this call: `data-theme` on `<html>` repaints the whole UI, so a
+ * build that rejects here is a correct build with slightly wrong window chrome.
+ */
+export const APPLY_THEME_UNAVAILABLE =
+  'system.applyTheme needs a window: it is implemented in src/main/ipc/theme.ts and registered by registerIpc'
+
 export const systemHandlers: HandlerModule = {
   'system.ping': async () => 'pong',
 
@@ -36,5 +48,9 @@ export const systemHandlers: HandlerModule = {
 
   'system.pickFolder': async () => {
     throw new BackendFailure('internal', PICK_FOLDER_UNAVAILABLE)
+  },
+
+  'system.applyTheme': async () => {
+    throw new BackendFailure('internal', APPLY_THEME_UNAVAILABLE)
   }
 }

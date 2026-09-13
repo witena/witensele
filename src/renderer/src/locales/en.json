@@ -358,6 +358,11 @@
     "languageSystemShort": "System",
     "languageZhShort": "Chinese",
     "languageEnShort": "English",
+    "theme": "Appearance",
+    "themeSystem": "Follow the system",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeHint": "Follow the system switches with the operating system while the app is running.",
     "developer": {
       "backend": "backend:",
       "languageSetting": "language setting:",

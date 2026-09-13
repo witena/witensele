@@ -4,6 +4,7 @@ import type { BackendEvent } from '@shared/events'
 import {
   DEFAULT_APP_SETTINGS,
   LOCAL_USER_ID,
+  THEME_SETTINGS,
   type AnthropicAuthState,
   type AnthropicAuthStatus,
   type ProviderInput
@@ -114,6 +115,24 @@ describe('handlers/buildHandlers', () => {
       await expect(
         handlers['settings.update'](ctx, { patch: null as never })
       ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('stores each of the three themes', async () => {
+      for (const theme of THEME_SETTINGS) {
+        const updated = await handlers['settings.update'](ctx, { patch: { theme } })
+        expect(updated.theme).toBe(theme)
+      }
+    })
+
+    it('rejects a theme that is not one of them', async () => {
+      // The one setting whose *value* is validated (S5.8): a stored `'sepia'`
+      // would resolve to light and leave the user with a theme no control in the
+      // app explains.
+      await expect(
+        handlers['settings.update'](ctx, { patch: { theme: 'sepia' as never } })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
     })
 
     it('rejects unknown keys instead of storing them', async () => {
@@ -476,10 +495,11 @@ describe('handlers/buildHandlers', () => {
 
 describe('handlers/stubs', () => {
   /**
-   * What is left is `system.pickFolder`, which is declared here and implemented
-   * in `src/main/ipc/dialogs.ts` because it is the one method that needs a
-   * window. Outside the Electron transport it must reject rather than resolve
-   * `null`, which would look to the renderer like the user cancelling.
+   * What is left is the two methods that need a window: `system.pickFolder`,
+   * implemented in `src/main/ipc/dialogs.ts`, and `system.applyTheme` (S5.8), in
+   * `src/main/ipc/theme.ts`. Outside the Electron transport both must reject
+   * rather than resolve — `null` would look to the renderer like the user
+   * cancelling, and a silent `undefined` like window chrome that was tinted.
    */
   it('every method the Electron-free layer cannot implement rejects rather than resolving undefined', async () => {
     const handlers = buildHandlers()

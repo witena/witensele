@@ -72,12 +72,13 @@ follows.
 | `invoke('system.ping')` | `DeveloperSection` on mount (S1.3 smoke widgets) | Proves the bridge is alive end to end |
 | `invoke('system.emitTestEvent', { payload })` | The Developer section's button | Proves the push direction |
 | `subscribeTo('system.test', …)` | `DeveloperSection` effect | Renders the last payload received |
-| `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher | Language, theme, timeouts |
+| `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher, `setTheme()` from the appearance control (S5.8) | Language, theme, timeouts |
 | `subscribe(…)` | `startEventBridge()` in `main.tsx`, once at app start (S1.7) | Fans every `BackendEvent` out to the stores. It is deliberately never unsubscribed: the bridge lives as long as the window, so no event can be lost between the first `list` call and the first render |
 | `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test, and (S5.3) the Anthropic CLI's sign-in status, login and logout |
 | `invoke('agents.*')` | Agents page | CRUD for the configuration form |
 | `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, the skills library, the per-agent memory panel |
-| `invoke('system.pickFolder')` | `stores/skills.ts`, behind "Import folder" | The native folder dialog. Resolves `null` when the user cancels, which the store treats as a non-event rather than an error — the only method whose implementation is Electron-specific (S3.2) |
+| `invoke('system.pickFolder')` | `stores/skills.ts`, behind "Import folder" | The native folder dialog. Resolves `null` when the user cancels, which the store treats as a non-event rather than an error — one of the two methods whose implementation is Electron-specific (S3.2) |
+| `invoke('system.applyTheme', { theme })` | `stores/settings.ts`, after a successful `settings.update` | Tints the title bar and the native dialogs (S5.8). The other Electron-specific method, and the only call in the app whose rejection is deliberately ignored: the page is already repainted, and a transport without a window must not fail the setting |
 | `invoke('chats.*')`, `invoke('chats.members.list')` | Chat list and member panel, since S1.7 | Chat CRUD and reading the membership. `chats.members.set` gets its UI in S2.2 |
 | `invoke('messages.list')` | Chat view on open and when scrolling up | Initial page and history paging |
 | `invoke('chat.send' / 'chat.stop')` | Composer and Stop button | Starts and aborts a run |

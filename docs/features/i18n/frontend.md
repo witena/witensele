@@ -15,7 +15,7 @@ This feature is almost entirely frontend: the backend only stores a string (see
 | `src/renderer/src/lib/backend-provider.ts` | `getBackend()` / `setBackend()` — the injection point that keeps stores testable in plain Node |
 | `src/renderer/src/main.tsx` | Bootstrap: load settings → resolve → `initI18n` → set `<html lang>` → render inside `I18nextProvider` |
 | `src/renderer/src/pages/settings-page.tsx` | S1.5: the language quick toggle at the bottom of the settings nav (`lang-system` / `lang-zh-CN` / `lang-en`) |
-| `src/renderer/src/pages/settings/appearance-section.tsx` | S1.5: the same setting again as a `Select`, under Settings -> Appearance & language |
+| `src/renderer/src/pages/settings/appearance-section.tsx` | S1.5: the same setting again as a `Select`, under Settings -> Appearance & language. S5.8 put the appearance `SegmentedControl` above it, built the same way: a handler module, a stored `'system'`, no local state |
 | `src/renderer/src/pages/settings/language.ts` | S1.5: `applyLanguageSetting` — the single handler both controls call; it puts a failed write into the store's `error` field |
 | `src/renderer/src/App.tsx` | S1.5: a composition root only. The smoke screen it used to hold is now Settings -> Developer |
 | `src/renderer/index.html` | `lang="en"` as the pre-bootstrap default; the bootstrap overwrites it |
@@ -67,7 +67,7 @@ rule #6).
 
 | State | What the user sees |
 |---|---|
-| idle | The UI in the active language; in the settings nav the current choice is highlighted with `aria-pressed`, and the Appearance select shows the same value |
+| idle | The UI in the active language; in the settings nav the current choice is highlighted with `aria-pressed`, and the Appearance select shows the same value. The appearance control above it highlights the stored *setting* (S5.8) — `System` stays pressed while the machine decides what is painted, exactly as the language toggle does |
 | loading | Nothing — the dark page background. The bootstrap resolves the language before creating the React root, so there is no frame of raw keys and no language flicker |
 | streaming | n/a |
 | empty | n/a |

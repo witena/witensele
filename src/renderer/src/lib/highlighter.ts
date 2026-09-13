@@ -26,15 +26,25 @@ import type { HighlighterCore } from 'shiki/core'
 import { SHIKI_LANGUAGE, type CodeLanguage } from '../components/chat/code-language'
 
 /**
- * The theme.
+ * The themes — plural since S5.8.
  *
  * `vitesse-dark` over `github-dark-default`: its background (`#121212`) and its
  * warm, low-saturation palette sit on the app's `--color-bg-elevated` without
  * the blue cast GitHub's dark theme brings into an otherwise warm-grey UI. The
  * block paints its own background from the token anyway; only the token colours
- * come from here.
+ * come from here. `vitesse-light` is its counterpart, which keeps the hues
+ * recognisable across a theme switch instead of changing the colour of a keyword.
+ *
+ * Both are requested **at once**, with `defaultColor: false`, which makes shiki
+ * write `--shiki-light` and `--shiki-dark` custom properties onto every token
+ * span instead of a literal `color`; the two rules at the bottom of `index.css`
+ * choose between them from `data-theme`. The alternative — re-highlighting every
+ * block when the theme changes — would mean a second pass over a transcript that
+ * can hold hundreds of them, each one flickering back to plain text while its
+ * grammar re-runs, and it would have to reach into `components/chat/` to do it.
+ * A CSS variable costs nothing and switches instantly.
  */
-const THEME = 'vitesse-dark'
+const THEMES = { light: 'vitesse-light', dark: 'vitesse-dark' } as const
 
 /**
  * One static import per grammar, so the bundler can split them.
@@ -65,13 +75,15 @@ const loaded = new Map<CodeLanguage, Promise<void>>()
 
 async function getHighlighter(): Promise<HighlighterCore> {
   highlighter ??= (async () => {
-    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme] = await Promise.all([
-      import('shiki/core'),
-      import('shiki/engine/javascript'),
-      import('shiki/themes/vitesse-dark.mjs')
-    ])
+    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, dark, light] =
+      await Promise.all([
+        import('shiki/core'),
+        import('shiki/engine/javascript'),
+        import('shiki/themes/vitesse-dark.mjs'),
+        import('shiki/themes/vitesse-light.mjs')
+      ])
     return createHighlighterCore({
-      themes: [theme.default],
+      themes: [dark.default, light.default],
       langs: [],
       engine: createJavaScriptRegexEngine()
     })
@@ -102,7 +114,15 @@ export async function highlightCode(code: string, language: CodeLanguage): Promi
   try {
     const core = await getHighlighter()
     await ensureLanguage(core, language)
-    return core.codeToHtml(code, { lang: SHIKI_LANGUAGE[language], theme: THEME })
+    return core.codeToHtml(code, {
+      lang: SHIKI_LANGUAGE[language],
+      themes: THEMES,
+      // No `color` on the spans at all: the two CSS variables are the output, and
+      // `index.css` picks one. With a default colour the dark one would be baked
+      // in and the light theme would only apply to the blocks rendered after the
+      // switch.
+      defaultColor: false
+    })
   } catch {
     // A grammar that fails to load is a missing colour, never a missing message.
     return null

@@ -44,6 +44,13 @@ unknown value would be corrected on read by `resolveLanguage`'s fallback rather
 than corrupt anything. Add a runtime check here if a non-TypeScript client ever
 appears.
 
+S5.8 made `theme` the exception: `assertPatch` checks it against
+`THEME_SETTINGS` and refuses anything else with `validation`. The asymmetry is
+deliberate and is about the *consequence*, not the source — an unknown language
+falls back to English, which is visible and recoverable, while an unknown theme
+resolves to light and leaves the user looking at an appearance no control in
+the app accounts for.
+
 ## Events emitted
 
 None. A settings change has one origin — the single window that made it — so

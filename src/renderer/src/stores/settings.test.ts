@@ -43,10 +43,12 @@ function fakeBackend(initial: AppSettings = DEFAULT_APP_SETTINGS): {
         stored = {
           ...stored,
           ...(patch.language !== undefined ? { language: patch.language } : {}),
+          ...(patch.theme !== undefined ? { theme: patch.theme } : {}),
           timeouts: { ...stored.timeouts, ...patch.timeouts }
         }
         return stored
       }
+      if (method === 'system.applyTheme') return undefined
       throw new Error(`unexpected method ${method}`)
     }) as BackendClient['invoke'],
     subscribe: () => () => {}
@@ -64,6 +66,26 @@ function fakeBackend(initial: AppSettings = DEFAULT_APP_SETTINGS): {
 
 function resetStore(): void {
   useSettingsStore.setState({ settings: null, status: 'idle', error: undefined })
+}
+
+/**
+ * `setTheme` stamps `data-theme` on the document element, so the store needs one
+ * — in plain Node, where there is none. Two globals are enough (S5.8); see
+ * `lib/theme.test.ts` for the same fakes driving the theme module itself.
+ */
+function stubDocument(): () => string | undefined {
+  const attributes = new Map<string, string>()
+  vi.stubGlobal('document', {
+    documentElement: {
+      setAttribute: (name: string, value: string) => attributes.set(name, value)
+    }
+  })
+  vi.stubGlobal('matchMedia', () => ({
+    matches: true,
+    addEventListener: () => {},
+    removeEventListener: () => {}
+  }))
+  return () => attributes.get('data-theme')
 }
 
 beforeEach(() => {
@@ -154,6 +176,63 @@ describe('setLanguage', () => {
     const pending = useSettingsStore.getState().setLanguage('zh-CN')
     // The click must not wait for a round trip to highlight the new choice.
     expect(useSettingsStore.getState().settings?.language).toBe('zh-CN')
+    await pending
+  })
+})
+
+describe('setTheme', () => {
+  it('sends the patch, stores the answer and repaints the window', async () => {
+    const theme = stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setTheme('light')
+
+    expect(backend.calls.map((call) => call.method)).toContain('settings.update')
+    expect(backend.stored().theme).toBe('light')
+    expect(useSettingsStore.getState().settings?.theme).toBe('light')
+    expect(theme()).toBe('light')
+  })
+
+  it('tells the main process, which owns the window chrome', async () => {
+    stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setTheme('dark')
+
+    expect(backend.calls.at(-1)).toEqual({
+      method: 'system.applyTheme',
+      input: { theme: 'dark' }
+    })
+  })
+
+  it('resolves "system" through the machine without storing the resolved value', async () => {
+    // The fake `matchMedia` reports dark, so the *painted* theme is dark while
+    // the *setting* stays `system` — the same split as `language`.
+    const theme = stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setTheme('system')
+
+    expect(backend.stored().theme).toBe('system')
+    expect(theme()).toBe('dark')
+  })
+
+  it('repaints before the backend answers', async () => {
+    const theme = stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    const pending = useSettingsStore.getState().setTheme('light')
+    // A click that repaints the whole window must not wait for a round trip.
+    expect(theme()).toBe('light')
+    expect(useSettingsStore.getState().settings?.theme).toBe('light')
     await pending
   })
 })

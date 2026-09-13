@@ -5,6 +5,14 @@
  * `static` keeps every token in the output even when no utility references it,
  * so tokens can also be used through plain `var(--color-*)` in inline styles.
  * Components must use these semantic tokens instead of literal color values.
+ *
+ * The dark palette below is the base, and the light palette in
+ * `:root[data-theme='light']` overrides every one of its `--color-*` tokens
+ * (S5.8). That is the whole light theme: no component branches on the theme and
+ * no utility class is written twice, because a utility compiles to
+ * `var(--color-…)` and the variable is what changes. A token added to the block
+ * below therefore has to be added to the override too — `lib/theme.test.ts`
+ * fails when one is missing, so a new colour cannot silently stay dark.
  */
 @theme static {
   /* Surfaces */
@@ -64,6 +72,80 @@
 }
 
 /*
+ * The light palette (S5.8).
+ *
+ * Same tokens, same roles, same *steps*: each foreground here has at least the
+ * contrast against its surface that its dark counterpart has (`fg-faint` is
+ * 4.05:1 on `bg-base` against the dark one's 3.37:1), so a screen that was
+ * readable stays readable. Three things are not a plain inversion:
+ *
+ * - **The accent is darkened, not lightened.** `#d8a656` is a 1.9:1 amber on
+ *   white — unusable as text and unusable behind `text-bg-base`. `#92600f` keeps
+ *   the hue and reaches 4.9:1 on `bg-base` and 5.4:1 on white, and `bg-accent`
+ *   with `text-bg-base` on it is AA in both directions.
+ * - **The rail is the *darker* surface in both themes.** In the dark palette the
+ *   rail is below the base and panels are above it; in light the panels go up to
+ *   near-white and the rail keeps a warmer tint, so the chrome stays recessed and
+ *   the reading surfaces stay clean. Inverting lightness literally would have put
+ *   the rail on top.
+ * - **The presence hues stay recognisable.** Green / red / amber / grey, each
+ *   darkened just enough to read as a dot on a near-white panel (>= 3:1).
+ *
+ * `color-scheme` is set alongside, so the scrollbars, the text selection, the
+ * focus rings and every native control the shell embeds (`<select>`, the number
+ * inputs in Timeouts) follow the theme instead of staying dark on a light page.
+ */
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --color-bg-base: #f7f4ef;
+  --color-bg-panel: #fffdfa;
+  --color-bg-rail: #efeae1;
+  --color-bg-elevated: #ffffff;
+  --color-bg-hover: #e7e0d4;
+  --color-bg-muted: #eee8dd;
+
+  /* Borders */
+  --color-border: #e3dcd0;
+  --color-border-strong: #d2c9ba;
+
+  /* Foreground */
+  --color-fg: #1f1d1a;
+  --color-fg-secondary: #332f2a;
+  --color-fg-muted: #4d483f;
+  --color-fg-dim: #6b655a;
+  --color-fg-faint: #7d776b;
+
+  /* Accent */
+  --color-accent: #92600f;
+  --color-accent-hover: #744b07;
+
+  /* The human's monogram tile: the same green, read as a tint rather than a slab. */
+  --color-avatar-user: #d3e8dc;
+  --color-avatar-user-fg: #1d5a40;
+
+  /* Presence / status */
+  --color-presence-available: #3f9e5c;
+  --color-presence-working: #c94a4a;
+  --color-presence-away: #b0761c;
+  --color-presence-offline: #8a857b;
+  --color-danger: #b23b3b;
+
+  /* Status pills: a darkened foreground on a pale tint of its own hue. */
+  --color-status-ok: #1b7040;
+  --color-status-ok-surface: #d9efe1;
+  --color-status-warn: #8a5a10;
+  --color-status-warn-surface: #f8e8cb;
+  --color-status-idle: #665f55;
+  --color-status-idle-surface: #e9e2d6;
+}
+
+/*
  * Window chrome. The macOS window uses `titleBarStyle: 'hiddenInset'`, so there
  * is no system title bar to drag: the app has to nominate its own draggable
  * surfaces (the navigation rail and the 52px page headers) and opt every control
@@ -95,4 +177,27 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
+}
+
+/*
+ * Syntax highlighting, both ways (S5.8).
+ *
+ * `lib/highlighter.ts` asks shiki for **two** themes at once, which makes it
+ * write `--shiki-light` and `--shiki-dark` onto every token span instead of a
+ * literal `color`. Picking between them is this rule, so switching the theme
+ * recolours every code block already on screen with no re-highlight, no second
+ * pass over a message list that may hold hundreds of them, and no flicker in a
+ * block that is still streaming.
+ *
+ * Dark is the unqualified rule because the app paints dark until the stored
+ * setting has been resolved.
+ */
+.shiki,
+.shiki span {
+  color: var(--shiki-dark);
+}
+
+:root[data-theme='light'] .shiki,
+:root[data-theme='light'] .shiki span {
+  color: var(--shiki-light);
 }
