@@ -103,7 +103,7 @@ of the name, uppercased, when the user did not type one.
   `agent-turn` starts honouring it when a provider that supports it is wired up.
 - **The role is real but half-used.** It already gates the `sideEffects` MCP
   checklist (S3.1) and the "one executor per chat" rule (S5.2); the executor's
-  own file, shell and git tools arrive in S5.3, so an `executor` in a chat with
+  own file, shell and git tools arrive in S5.4, so an `executor` in a chat with
   no `workdir` behaves exactly like a participant today.
 - Promoting an agent to `executor` is not refused when it is already in a chat
   that has one. See [`../chats/backend.md`](../chats/backend.md).

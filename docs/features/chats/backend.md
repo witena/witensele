@@ -97,23 +97,23 @@ the panel shows `chat.noMembersHint`.
 `ChatPatch.workdir` is `string | null`, and `assertWorkdir` checks it against the
 **real filesystem** rather than merely parsing it: absolute, `statSync`
 succeeds, and the result `isDirectory()`. The path is a security boundary and
-not a label — every file the executor resolves in S5.3 is resolved inside it,
+not a label — every file the executor resolves in S5.4 is resolved inside it,
 and a folder that does not exist cannot confine anything.
 
 `statSync` follows symlinks on purpose. A symlink to a directory is a perfectly
 good working directory; the confinement check that matters (a path *inside* the
-folder whose realpath leaves it) is per file and belongs to S5.3.
+folder whose realpath leaves it) is per file and belongs to S5.4.
 
 There is a race that cannot be closed here: the folder can be deleted between
 this check and the first tool call. That is what makes it a check and not a
-guarantee, and why S5.3 resolves every path again at the moment of use.
+guarantee, and why S5.4 resolves every path again at the moment of use.
 
 The same rules run on `chats.create`, because `assertChatPatch` is shared — a
 chat cannot be born pointing at a path a later update would refuse.
 
 `ChatRunner` already re-reads the chat record every round (`repos.chats.get`), so
 `workdir` reaches the orchestrator with no new plumbing; nothing reads it yet,
-because attaching executor tools is S5.3.
+because attaching executor tools is S5.4.
 
 ### One executor per chat (S5.2)
 
@@ -129,7 +129,7 @@ single call is consequently fine: that list holds one.
 
 **Known gap:** `agents.update` can promote a `participant` that is already in a
 chat with an executor, which reaches the same forbidden state by another door.
-The refusal was scoped to the member handler by S5.2; S5.3 must therefore pick a
+The refusal was scoped to the member handler by S5.2; S5.4 must therefore pick a
 chat's executor deterministically (first `executor` in `position` order) rather
 than assuming the set has exactly one.
 

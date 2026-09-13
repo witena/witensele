@@ -322,7 +322,7 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   in `context.md`.
 - **`workdir` is written but not yet read.** `ChatRunner` re-reads the chat record
   every round, so the field reaches the orchestrator already; attaching the
-  executor's tools to it is S5.3.
+  executor's tools to it is S5.4.
 - **The one-executor rule is enforced on membership only.** Promoting an agent
   to `executor` while it is already in a chat that has one is not refused; see
   the known gap in `backend.md`.

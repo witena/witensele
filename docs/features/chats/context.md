@@ -49,7 +49,7 @@ can hold a real conversation and still holds it after a restart.
 | The presence state machine, the heartbeat, the two timeouts and the Retry button | [`presence`](../presence/context.md). This feature owns the `ChatSettings` fields that override the budgets, and the rows the dots are drawn on |
 | Generating the title itself | [`orchestration`](../orchestration/context.md) — `ChatRunner` writes it after the first run (S4.3); this feature owns the field, the rename and the list row |
 | The `executor` **role** itself — the control, the badge's copy, what the role means | [`agents`](../agents/context.md). This feature owns the *membership* rule and the surfaces that draw the badge |
-| The executor's file, shell and git tools, and the permission prompt | S5.3 and S5.4 (`docs/features/executor/`). This feature owns the folder the tools will be confined to, and nothing more |
+| The executor's file, shell and git tools, and the permission prompt | S5.4 and S5.5 (`docs/features/executor/`). This feature owns the folder the tools will be confined to, and nothing more |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
 | Virtualized message list, upward paging | S2.5 |
 
@@ -72,8 +72,8 @@ the next round boundary rather than mid-turn.
 
 | Decision | Alternatives considered | Why this one |
 |---|---|---|
-| `workdir` is checked against the **real filesystem**, not merely parsed | Store whatever string arrives and fail at the first tool call | The path is a boundary, not a label: S5.3 resolves every executor path inside it. A folder that is not there confines nothing, and "the write failed" three screens later is a far worse answer than "that folder does not exist" at the moment it is picked |
-| A chat with an `executor` member and **no** `workdir` is allowed | Refuse the member until a folder is bound | Configuration order is the user's. S5.3 simply attaches no executor tools, which is the same outcome with none of the ordering rules |
+| `workdir` is checked against the **real filesystem**, not merely parsed | Store whatever string arrives and fail at the first tool call | The path is a boundary, not a label: S5.4 resolves every executor path inside it. A folder that is not there confines nothing, and "the write failed" three screens later is a far worse answer than "that folder does not exist" at the moment it is picked |
+| A chat with an `executor` member and **no** `workdir` is allowed | Refuse the member until a folder is bound | Configuration order is the user's. S5.4 simply attaches no executor tools, which is the same outcome with none of the ordering rules |
 | The second-executor refusal lives in `chats.members.set` | Refuse it in `agents.update`; enforce it when tools are attached | `members.set` replaces the whole list and is the only place that sees the resulting set, so it is the only place the rule can be *checked* rather than guessed. The cost is the promotion gap recorded in `backend.md` |
 | A refused `workdir` or member carries a `ValidationReason` in `details` | One more `BackendErrorCode` each; a generic `validation` line | The seven codes are a failure *taxonomy*, not a message catalogue, and four new ones would dilute it. A reason is an identifier the renderer translates, which is the same contract `SystemNoticePart` already uses for stored text |
 | The workdir failure is shown in the left column's `chats-error` line, like every other chats-store failure | A dedicated error line under the Working directory row | One store, one error field, one place it is rendered. A second surface for one field would be the first exception in a screen that has had none, and the reason sentence is now specific enough to be read anywhere |

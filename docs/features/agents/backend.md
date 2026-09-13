@@ -52,7 +52,7 @@ agent may keep its name):
   integer. Absent means "the provider's default" and is always valid.
 - `role`: `participant` or `executor`. **Both are written by the UI from S5.2**;
   the role decides whether `collectAgentTools` attaches a `sideEffects` MCP
-  server (S3.1), and whether S5.3 attaches the executor's own tools.
+  server (S3.1), and whether S5.4 attaches the executor's own tools.
 - `memoryEnabled`: a boolean. From S3.3 it is what `agent-turn` reads to decide
   whether to attach `memory_save` / `memory_search` and inject the `MEMORY.md`
   index; turning it off leaves every file in place.
@@ -101,6 +101,6 @@ agents *through* a chat, which `chat.updated` already covers.
   (`assertOneExecutor`, see [`../chats/backend.md`](../chats/backend.md)). The
   consequence is a known gap: `agents.update` will happily promote a
   `participant` that is already in a chat with an executor, which reaches the
-  forbidden state by another door. S5.3 must therefore pick a chat's executor
+  forbidden state by another door. S5.4 must therefore pick a chat's executor
   deterministically — the first `executor` in `position` order — rather than
   assuming the set has exactly one.

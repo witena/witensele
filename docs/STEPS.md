@@ -376,7 +376,8 @@ added on top. Docs in `docs/features/packaging/`.
 
 The MVP is complete. This phase builds the three layers PLAN.md reserves
 interfaces for: the connector gallery, the executor agent, and opening files in
-the editor. Point 4 (server and multi-user) and the VS Code *extension* (the
+the editor — plus one step (S5.3) that was added while the phase was under
+way: signing in to Anthropic instead of pasting a key. Point 4 (server and multi-user) and the VS Code *extension* (the
 second half of point 3) stay out: the extension needs a backend reachable from
 outside Electron, which is the server work, so both move together to a later
 phase.
@@ -475,7 +476,7 @@ folder.
   member handler (`validation`, key `notices.secondExecutor` or an error code
   the renderer translates — follow how member errors are surfaced today) and
   the member picker greys the candidate with a hint. A chat with an executor
-  member but no `workdir` is allowed; S5.3 simply attaches no executor tools.
+  member but no `workdir` is allowed; S5.4 simply attaches no executor tools.
 - Agent editor: the existing role control gets the PLAN.md explanation inline
   (discussion agents are read-only; one executor writes, with confirmation)
   and the agent list, member rows and message headers show an "executor"
@@ -497,13 +498,13 @@ absolute, `statSync` succeeds, `isDirectory()` — which is why that module now
 reads `node:fs` and `node:path` (rule #5 is about electron, not about Node).
 `statSync` follows symlinks on purpose: a symlink to a directory is a perfectly
 good working directory, and the check that matters — a path *inside* the folder
-whose realpath leaves it — is per file and belongs to S5.3. The race is
+whose realpath leaves it — is per file and belongs to S5.4. The race is
 acknowledged rather than closed: the folder can vanish between the check and the
-first tool call, which is why S5.3 resolves every path again at use. The same
+first tool call, which is why S5.4 resolves every path again at use. The same
 rules run on `chats.create`, because `assertChatPatch` is shared. Nothing new
 was needed in the runner: `ChatRunner` already re-reads the chat record every
 round, so `workdir` reaches the orchestrator with no plumbing at all, and
-attaching tools to it is S5.3's job rather than dead code written early.
+attaching tools to it is S5.4's job rather than dead code written early.
 
 `assertOneExecutor` refuses a member list holding two `executor` agents, on both
 `chats.members.set` and `chats.create`. It lives where membership is **written**
@@ -511,7 +512,7 @@ because `members.set` replaces the whole list and is therefore the only place
 that can see the resulting set — which also makes swapping one executor for
 another in a single call correctly legal. The **known gap** is recorded rather
 than papered over: `agents.update` can still *promote* a participant that is
-already in a chat with an executor, so S5.3 must pick a chat's executor
+already in a chat with an executor, so S5.4 must pick a chat's executor
 deterministically (first `executor` in `position` order) instead of assuming the
 set has exactly one.
 
@@ -566,9 +567,80 @@ refusals with their reasons, and a restart. The native picker is not driven,
 which the file says in its header. `e2e/members.spec.ts` needed no change and
 still passes. Docs in `docs/features/{chats,agents,i18n}/`.
 
-### S5.3 Executor tools and the permission gate `[ ]`
+### S5.3 Anthropic sign-in `[ ]`
+What: an Anthropic provider can authenticate with the user's Anthropic account
+instead of an API key. Closed-source providers gain an authentication mode;
+open-source and local providers keep API keys only. This step implements the
+mode for Anthropic; OpenAI and Google get the field and a disabled control,
+and their sign-in flows are left for a later step once their programs allow it.
+- **Mechanism: delegate to the official Anthropic CLI (`ant`).** `ant auth
+  login` runs the OAuth flow in the system browser and stores a profile under
+  `~/.config/anthropic/` (`$ANTHROPIC_CONFIG_DIR` when set); `ant auth
+  print-credentials --access-token` prints a short-lived access token and
+  refreshes it when needed; `ant auth status` reports the active credential
+  source and workspace; `ant auth logout` clears the profile. Witena stores
+  **no token of its own** — the CLI owns the credentials — so `SecretStore` is
+  untouched. Requests made with such a token carry `Authorization: Bearer
+  <token>` and the header `anthropic-beta: oauth-2025-04-20`, and must **not**
+  carry `x-api-key`. Install on macOS: `brew install anthropics/tap/ant` then
+  `xattr -d com.apple.quarantine "$(brew --prefix)/bin/ant"`.
+- `ProviderInput.auth: 'apiKey' | 'oauth'` (default `'apiKey'`), a new
+  nullable `auth` column on `providers` through an additive migration (follow
+  `docs/features/database/`), and validation: `oauth` is accepted only for
+  `type === 'anthropic'` with no custom `baseUrl`, and an `oauth` provider is
+  valid without a key. `providerRequiresApiKey` returns false for it.
+- `src/main/providers/anthropic-cli.ts` (Electron-free, `node:child_process`
+  allowed): an `AnthropicCli` interface injected into the registry —
+  `status()`, `login()`, `logout()`, `accessToken()` — with the real
+  implementation spawning `ant`. A missing binary (`ENOENT`) maps to a new
+  `BackendErrorCode` `ant_missing`; a profile that is not logged in maps to
+  `ant_not_logged_in`. **Derive the status from `ant auth print-credentials`
+  with no flags**, which prints JSON (`type`, `access_token`, `expires_at`
+  as unix seconds, `refresh_token`, `scope`, `organization_uuid`,
+  `organization_name`, `account_email`, `workspace_id`, `workspace_name`) and
+  fails when no profile is logged in; never parse the text of `ant auth
+  status` (its `--format json` flag does not apply to that command, verified
+  on `ant` 1.32.0). Keep the token fields inside the main process: the status
+  sent to the renderer carries `organizationName`, `accountEmail`,
+  `workspaceName` and `expiresAt` only. Tokens are fetched per model
+  construction through `--access-token` and cached in memory until 60 seconds
+  before `expires_at`.
+- Model construction (`providers/registry.ts`): for an `oauth` provider,
+  `createAnthropic({ apiKey: '', fetch })` where `fetch` is a wrapper that
+  deletes `x-api-key`, sets `Authorization: Bearer <token>` and merges
+  `oauth-2025-04-20` into `anthropic-beta`. `providers.fetchModels` and
+  `providers.testConnection` go through the same wrapper.
+- Backend methods `providers.authStatus()`, `providers.login()` (resolves when
+  the CLI exits; the CLI opens the browser itself) and `providers.logout()`,
+  added to `BackendApi`, `BACKEND_METHODS` and `shared/contracts.test.ts`.
+- Provider editor: an "Authentication" `SegmentedControl` (API key / Sign in
+  with Anthropic), rendered only for the Anthropic type, disabled with a hint
+  for OpenAI and Google, absent for everything else. In sign-in mode the key
+  field is replaced by a panel with the status line (signed in as
+  `<workspace>` / not signed in / `ant` not installed, with the install
+  command shown in monospace), "Sign in" and "Sign out" buttons and a spinner
+  while the CLI runs. Test connection and Fetch models keep working. The
+  provider card shows a "signed in" badge instead of the key indicator.
+- Unit tests: the fetch wrapper (headers replaced, `x-api-key` removed,
+  existing `anthropic-beta` merged); `anthropic-cli.ts` against a **fake
+  `ant`** — a temporary executable script placed first on `PATH` — covering
+  missing binary, logged in, not logged in, `print-credentials` and a failing
+  exit; validation (`oauth` rejected for OpenAI, accepted without a key for
+  Anthropic); the registry building an `oauth` model; the providers store and
+  the editor's mode switch.
+- e2e: `e2e/providers.spec.ts` gains a case with `ant` absent from `PATH`
+  (launch with a PATH that lacks it): the sign-in panel shows the
+  "not installed" state and Save is refused with a translated error; the
+  sign-in click itself is not driven (it needs a browser and an account).
+Acceptance: with `ant` installed and `ant auth login` done, an Anthropic
+provider in sign-in mode passes Test connection, fetches the model list and
+completes a chat turn with no key stored; without `ant` the editor explains
+what to install; the tests above pass. Docs: `docs/features/providers/` and
+`docs/features/database/` (all four each).
+
+### S5.4 Executor tools and the permission gate `[ ]`
 What: the built-in tools an executor uses on the chat's folder, and the prompt
-that runs before anything with side effects. Backend only; S5.4 builds the UI.
+that runs before anything with side effects. Backend only; S5.5 builds the UI.
 - New feature `executor` (`docs/features/executor/`, README row). Code in
   `src/main/executor/`: `paths.ts` (confinement: resolve against `workdir`,
   refuse `..` escapes and symlinks whose realpath leaves the folder),
@@ -577,7 +649,7 @@ that runs before anything with side effects. Backend only; S5.4 builds the UI.
   `cwd = workdir`, a timeout from `settings.timeouts.toolTimeoutMs`, output
   capped and truncated with a marker, and `git_diff`), and `permissions.ts`.
   `write_file` and `edit_file` return the unified diff of what they changed
-  (add the `diff` package; do not hand-roll a diff) so S5.4 can post it.
+  (add the `diff` package; do not hand-roll a diff) so S5.5 can post it.
 - `PermissionGate`: `ask({ chatId, agentId, toolName, input, signal })` emits
   the reserved `permission.requested` event and resolves when
   `permission.reply({ requestId, decision })` arrives with `allow`, `deny` or
@@ -606,8 +678,8 @@ Acceptance: the tests above; `npm run typecheck`; nothing under
 `src/main/executor/` imports electron. Docs: `docs/features/executor/` (new,
 all four) and `docs/features/agent-turn/` (all four).
 
-### S5.4 Permission prompt, diff and file-ref rendering `[ ]`
-What: the renderer half of S5.3 — the user can answer the prompt, and what the
+### S5.5 Permission prompt, diff and file-ref rendering `[ ]`
+What: the renderer half of S5.4 — the user can answer the prompt, and what the
 executor changed is visible in the transcript.
 - `stores/permissions.ts`: pending requests keyed by `requestId`, filled from
   `permission.requested`, cleared by `permission.resolved`; `reply(requestId,
@@ -618,12 +690,12 @@ executor changed is visible in the transcript.
   this chat, Deny. Enter allows, Escape denies. The card disappears on
   `permission.resolved` however the request ended.
 - After an executor turn, the backend appends one `DiffPart` per file the turn
-  wrote (from the diffs S5.3's tools return; several writes to one file are
+  wrote (from the diffs S5.4's tools return; several writes to one file are
   concatenated in order) to the executor's message. `message-item.tsx` renders
   a `DiffPart` as a collapsible block headed by the path, using the existing
   `code-block.tsx` with the `diff` language; `transcript-rows.ts` learns the
   part. A `FileRefPart` renders as a `path:line` chip; in this step it copies
-  the path on click (S5.6 makes it open the editor).
+  the path on click (S5.7 makes it open the editor).
 - Tool cards for the executor tools get readable labels (`write_file(path)`,
   `run_command(cmd)`) through `tool-call.ts`.
 - Unit tests: the permissions store (request, resolve, reply, stop clears),
@@ -637,7 +709,7 @@ Acceptance: the flow above end to end with a real local model; the tests
 above. Docs: `docs/features/executor/` and `docs/features/chats/` (all four
 each).
 
-### S5.5 Hand to executor and the review loop `[ ]`
+### S5.6 Hand to executor and the review loop `[ ]`
 What: PLAN.md's workflow — discuss → "hand to executor" → it implements the
 group's conclusion → posts what changed → the others review.
 - A "Hand to executor" action in the chat (next to the composer, or in the
@@ -652,7 +724,7 @@ group's conclusion → posts what changed → the others review.
   `mode`), fed by the executor's message and its diffs; then the normal `@`
   mechanics apply, so the executor can be re-@'d to iterate and
   `maxAutoRounds` still caps the chain. Stop works at every point.
-- The executor's briefing (S5.3) is extended for a handoff: implement the
+- The executor's briefing (S5.4) is extended for a handoff: implement the
   conclusion of the discussion above, do not re-open the debate, report
   changes with paths.
 - Unit tests in `chat-runner.test.ts`: the handoff message and its mentions;
@@ -666,7 +738,7 @@ Acceptance: the tests above; the button is disabled without a folder or an
 executor and enabled with both. Docs: `docs/features/orchestration/`,
 `docs/features/executor/` and `docs/features/chats/` (all four each).
 
-### S5.6 Open in editor `[ ]`
+### S5.7 Open in editor `[ ]`
 What: PLAN.md point 3, step one — file paths and diffs in a message open in
 the user's editor. New feature `editor` (`docs/features/editor/`, README row).
 - Settings → Developer gains an "Editor" block: `vscode` (default, opens
@@ -699,7 +771,54 @@ Acceptance: with VS Code installed, clicking a chip in a chat bound to a folder
 opens that file at that line; the tests above. Docs: `docs/features/editor/`
 (new, all four), `docs/features/chats/` (all four).
 
-## Phase 6: Later
+## Phase 6: Backlog (decided, not yet scheduled)
 
-Server and multi-user (PLAN "Reserved server capability"), and the VS Code
-extension that embeds the chat panel over that server backend.
+Everything below is agreed work that is deliberately **not** in Phase 5. Each
+item becomes a numbered step, with acceptance criteria in the Phase 5 shape,
+when it is picked up; until then the order here is a suggestion, not a
+commitment. A Phase 5 step that leaves something unverified or out of scope
+adds a line here in the same commit.
+
+### Provider authentication beyond Anthropic
+
+- **OpenAI sign-in.** "Sign in with ChatGPT" is a gated program for
+  third-party apps; the Codex CLI's own ChatGPT login is not licensed for
+  reuse. S5.3 ships the `auth` field and a disabled control for OpenAI; enable
+  it once program access exists, using the same `auth: 'oauth'` shape and a
+  provider-specific fetch wrapper. Verify the policy at implementation time.
+- **Google sign-in.** Standard OAuth 2.0 with PKCE and a loopback redirect is
+  technically straightforward, but billing decides the design: the Gemini API
+  bills the project that owns the OAuth client (the developer's), while
+  Vertex AI bills the user's own project through `x-goog-user-project`. Decide
+  which before building; the user needs a GCP project with billing either way.
+- **Cloud-platform providers.** Claude on Vertex AI and Amazon Bedrock, GPT on
+  Azure, authenticated with the platform's own credentials or SSO rather than
+  a vendor key (`@ai-sdk/google-vertex`, `@ai-sdk/amazon-bedrock`,
+  `@ai-sdk/azure`). This is the enterprise route to "closed models without a
+  key" and reuses the provider registry; it needs its own presets and a
+  credential-source model per platform.
+
+### Server and editor
+
+- **Server and multi-user** (PLAN "Reserved server capability"): lift the
+  main-process business logic into a Node server, swap the `BackendClient`
+  implementation for HTTP + WebSocket, real `userId`s, a server-side
+  `SecretStore`, and — only if several server instances or worker processes
+  exist — an `EventBus` / `MessageRepository` implementation over Redis
+  Streams, Postgres LISTEN/NOTIFY or NATS.
+- **VS Code extension** embedding the chat panel over that server backend
+  (PLAN "Future extension", point 3, step two). Depends on the item above.
+
+### Open questions carried from the feature documents
+
+- `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
+  per agent instead of all-or-nothing; tune `MAX_TOOL_STEPS = 8` on a real
+  multi-step task; render `McpPreset.docsUrl`; record the README tour through
+  the connector gallery (`e2e/demo.record.ts` still types the command).
+- `memory`: pruning, deduplication, search with stemming or synonyms, and
+  validation of the index on write.
+- `skills`: a filesystem watcher for `SKILL.md` edited outside the app, and a
+  per-skill file allowlist for `read_skill_file`.
+- `providers`: replace the hand-written `fetchModels` per provider family
+  with the SDK's own listing where one exists; Google's list endpoint
+  authenticates with a query parameter.

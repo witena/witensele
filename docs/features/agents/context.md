@@ -43,7 +43,7 @@ the name is an **identifier the models will type**, not a label.
 | Registering and probing MCP servers | `mcp` (S3.1 `[x]`). The agent form's **checklist** is here; the registry, the connections and the side-effects rule are there |
 | The memory files, the tools and the prompt section | [`memory`](../memory/context.md) (S3.3 `[x]`). The **toggle and the panel** are here; the store, the tools and the format are there |
 | Which chat an executor may join, and the chat's working directory | [`chats`](../chats/context.md) (S5.2). The role lives here; the "one executor per chat" rule and the folder live there, because both are properties of a chat |
-| The executor's file, shell and git tools, and the permission prompt before each change | S5.3 and S5.4 (`docs/features/executor/`) |
+| The executor's file, shell and git tools, and the permission prompt before each change | S5.4 and S5.5 (`docs/features/executor/`) |
 | Searching or grouping the agent list | Not planned for the MVP |
 
 As of S3.3 the editor's right column is complete: all three blocks — Skills, MCP
