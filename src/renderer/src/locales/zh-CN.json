@@ -20,6 +20,8 @@
   "chat": {
     "newChat": "新建对话",
     "searchChats": "搜索对话",
+    "searchEmptyTitle": "没有匹配的会话",
+    "searchEmptyDescription": "换个词试试，或清空搜索框。",
     "today": "今天",
     "yesterday": "昨天",
     "earlier": "更早",
@@ -45,6 +47,7 @@
     "removeMember": "移出这个对话",
     "noMembersHint": "至少添加一位智能体。",
     "memberUsage": "—",
+    "memberUsageTitle": "该智能体在本会话中用掉的 token",
     "reorderMember": "拖拽调整发言顺序",
     "groupSettings": "群设置",
     "mode": "编排模式",
@@ -73,6 +76,11 @@
     "round": "第 {{round}} 轮",
     "replyingTo": "回复 {{names}}",
     "runStatus": "第 {{round}} 轮 · {{speakers}} 发言中",
+    "usage": "{{tokens}} 个 token",
+    "usageWithCost": "{{tokens}} 个 token · {{cost}}",
+    "usageTitle": "本会话已用 token 与估算费用",
+    "messageUsage": "输入 {{input}} · 输出 {{output}}",
+    "messageUsageWithCost": "输入 {{input}} · 输出 {{output}} · {{cost}}",
     "passed": "已弃权",
     "skipped": "已跳过",
     "reasoning": "思考过程",
@@ -330,6 +338,7 @@
     "maxRoundsReached": "已达到 {{max}} 轮自动讨论的上限，发送消息可继续。",
     "providerError": "服务商未能作答：{{message}}",
     "runFailed": "出现内部错误，本次运行已中止：{{message}}",
-    "toolsUnsupported": "{{agent}} 的模型不支持工具调用,这条回复没有使用工具"
+    "toolsUnsupported": "{{agent}} 的模型不支持工具调用,这条回复没有使用工具",
+    "contextTruncated": "{{agent}} 的上下文窗口装不下整段对话，最早的 {{dropped}} 条消息已从它的视野中省略"
   }
 }

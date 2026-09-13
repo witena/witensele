@@ -25,6 +25,7 @@
  *        aborted                           → finish `stopped`
  *        every speaker errored             → finish `error`
  *        plan = mentions of the round that just ended
+ *      title the chat, if it is still called `New chat`
  *      emit run.finished { reason }
  * ```
  *
@@ -62,6 +63,13 @@
  *   asked instead of timing out once per round. A round that has nobody left to
  *   ask finishes `completed` with the `allOffline` notice rather than in silence.
  *
+ * - **Two things are announced by the runner rather than by the turn** (S4.2,
+ *   S4.3), because both are facts about a *run* and `AgentTurn` does not know one
+ *   is happening: the `contextTruncated` notice, stored once per run per agent
+ *   from the `droppedMessages` each turn reports, and the automatic title, which
+ *   replaces `New chat` once the run has produced one finished agent reply. See
+ *   `#noticeTruncation` and `#maybeTitle`.
+ *
  * No electron here (CLAUDE.md rule #5): the runner takes an `AppContext` and
  * reaches the outside world only through `ctx.repos` and `ctx.events`.
  */
@@ -69,7 +77,19 @@ import type { BackendEvent, RunFinishReason } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
 import type { Agent, Chat, Message } from '@shared/types'
 import type { AppContext } from '../app-context'
-import { runAgentTurn, type AgentTurnResult, type CreateModel } from '../agents/agent-turn'
+import {
+  createModelFromRegistry,
+  runAgentTurn,
+  type AgentTurnResult,
+  type CreateModel
+} from '../agents/agent-turn'
+import {
+  fallbackTitle,
+  generateChatTitle,
+  sanitizeTitle,
+  type GenerateTitle
+} from '../agents/title'
+import { DEFAULT_CHAT_TITLE } from '../db/repositories'
 import { validation } from '../errors'
 import {
   EMPTY_PLAN,
@@ -85,6 +105,8 @@ export const NOTICE_NO_MENTIONS = 'noMentions'
 export const NOTICE_MAX_ROUNDS = 'maxRoundsReached'
 export const NOTICE_RUN_FAILED = 'runFailed'
 export const NOTICE_ALL_OFFLINE = 'allOffline'
+/** Stored once per run per agent when `fitHistory` had to drop messages (S4.2). */
+export const NOTICE_CONTEXT_TRUNCATED = 'contextTruncated'
 
 /** One turn that is in flight right now. Read by the tests and by S2.4. */
 export interface ActiveTurn {
@@ -118,6 +140,12 @@ export interface ChatSendInput {
 export interface ChatRunnerOptions {
   /** Injected by tests so no provider is built. Defaults to the registry. */
   createModel?: CreateModel
+  /**
+   * How a chat with the default title gets named (S4.3). Injected by tests so
+   * the whole path can be asserted without a provider; defaults to
+   * `generateChatTitle`, which asks the first member's own model.
+   */
+  generateTitle?: GenerateTitle
 }
 
 /** What one finished turn contributes to the next round. */
@@ -146,6 +174,17 @@ export class ChatRunner {
    * transcript; this list only records that they have not been *scheduled* yet.
    */
   #pending: Message[] = []
+  /**
+   * Agents this run has already told the user about a truncated context for.
+   *
+   * Per **run**, not per round and not per chat: a conversation long enough to
+   * overflow overflows again on every round for the rest of its life, and a
+   * notice per round would bury the discussion under the same sentence. Per chat
+   * would be the other extreme — a user who comes back the next day and asks
+   * something else deserves to be told again that the agent cannot see the
+   * beginning any more.
+   */
+  #truncationNoticed = new Set<string>()
 
   constructor(ctx: AppContext, chatId: string, options: ChatRunnerOptions = {}) {
     this.#ctx = ctx
@@ -266,6 +305,7 @@ export class ChatRunner {
     this.#controller = controller
     this.#startedAt = Date.now()
     this.#round = 0
+    this.#truncationNoticed.clear()
 
     let started = false
     let reason: RunFinishReason = 'completed'
@@ -349,6 +389,7 @@ export class ChatRunner {
           .map((id) => members.find((member) => member.id === id))
           .filter((member): member is Agent => member !== undefined)
         const outcomes = await this.#runRound(chat, members, speakers, plan, controller.signal)
+        this.#noticeTruncation(chat, members, outcomes)
 
         if (controller.signal.aborted || outcomes.some((outcome) => outcome.result.aborted)) {
           reason = 'stopped'
@@ -382,6 +423,11 @@ export class ChatRunner {
       // failure on the next iteration.
       this.#pending = []
     }
+
+    // Before `run.finished`, so a renderer that reloads the list on that event
+    // already has the new title, and after everything else, so the title is
+    // written from a finished transcript rather than from a half-streamed one.
+    if (started) await this.#maybeTitle(controller.signal)
 
     this.#emit({ type: 'run.finished', chatId: this.chatId, reason })
   }
@@ -469,12 +515,104 @@ export class ChatRunner {
           result: {
             message: { mentions: [] } as unknown as Message,
             status: 'error',
-            aborted: signal.aborted
+            aborted: signal.aborted,
+            droppedMessages: 0
           }
         })
       }
     }
     return outcomes
+  }
+
+  /**
+   * Tells the user, once per run per agent, that an agent could not see the whole
+   * conversation (S4.2).
+   *
+   * The turn itself only *reports* the number it dropped (`droppedMessages`);
+   * storing the notice is the runner's job because only the runner knows a run is
+   * under way and can dedupe across its rounds.
+   */
+  #noticeTruncation(chat: Chat, members: Agent[], outcomes: TurnOutcome[]): void {
+    for (const outcome of outcomes) {
+      if (outcome.result.droppedMessages <= 0) continue
+      if (this.#truncationNoticed.has(outcome.agentId)) continue
+      this.#truncationNoticed.add(outcome.agentId)
+      const agent = members.find((member) => member.id === outcome.agentId)
+      this.#notice(chat, NOTICE_CONTEXT_TRUNCATED, {
+        agent: agent?.name ?? outcome.agentId,
+        dropped: outcome.result.droppedMessages
+      })
+    }
+  }
+
+  /**
+   * Names a chat that is still called `New chat`, once the run produced a real
+   * answer (S4.3).
+   *
+   * Everything about this is deliberately conservative:
+   *
+   * - **Only the default title is replaced.** A chat the user renamed, or one
+   *   created with a title, is never touched. The comparison is the whole
+   *   mechanism; there is no "generated" flag to keep in sync.
+   * - **Only after a `done` agent message exists.** A run that errored, was
+   *   stopped or in which everyone passed has nothing worth naming, and a title
+   *   generated from an error would stick forever.
+   * - **Never fatal.** The model call is already error-swallowing
+   *   (`generateChatTitle`), and the fallback — the first words of the question —
+   *   means the chat always ends up with something better than `New chat`.
+   * - **Silent when the chat is gone.** A chat deleted while the run was
+   *   unwinding makes the write throw; nobody is waiting for the title.
+   */
+  async #maybeTitle(signal: AbortSignal): Promise<void> {
+    let chat: Chat
+    try {
+      chat = this.#ctx.repos.chats.get(this.chatId, this.#ctx.userId)
+    } catch {
+      return
+    }
+    if (chat.title !== DEFAULT_CHAT_TITLE) return
+
+    const transcript = this.#ctx.repos.messages.listForContext(this.chatId, this.#ctx.userId)
+    const question = transcript.find((message) => message.senderType === 'user')
+    const reply = transcript.find(
+      (message) => message.senderType === 'agent' && message.status === 'done'
+    )
+    if (!question || !reply) return
+
+    const questionText = textOf(question)
+    const fallback = fallbackTitle(questionText)
+    let title = fallback
+
+    const members = this.#members(chat)
+    const first = members[0]
+    if (first) {
+      try {
+        const generate = this.#options.generateTitle ?? generateChatTitle
+        const model = (this.#options.createModel ?? createModelFromRegistry)(this.#ctx, first)
+        const generated = await generate({
+          model,
+          question: questionText,
+          reply: textOf(reply),
+          signal
+        })
+        const clean = generated === null ? '' : sanitizeTitle(generated)
+        if (clean.length > 0) title = clean
+      } catch (error) {
+        // Building the model can throw (a provider deleted mid-run); the
+        // fallback title is already in hand.
+        console.debug(`[witena] could not build a model to title ${this.chatId}: ${describe(error)}`)
+      }
+    }
+
+    if (title.length === 0 || title === chat.title) return
+    try {
+      this.#emit({
+        type: 'chat.updated',
+        chat: this.#ctx.repos.chats.update(chat.id, { title }, this.#ctx.userId)
+      })
+    } catch (error) {
+      console.debug(`[witena] could not store a title for ${this.chatId}: ${describe(error)}`)
+    }
   }
 
   /** Empties the pending list and returns what was in it. */
@@ -542,6 +680,15 @@ function effectiveMentions(
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** The concatenated text of a message's `text` parts; what the titler is shown. */
+function textOf(message: Message): string {
+  return message.parts
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+    .trim()
 }
 
 /**

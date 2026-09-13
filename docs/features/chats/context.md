@@ -41,7 +41,7 @@ can hold a real conversation and still holds it after a restart.
 | What one agent does during its turn | `agent-turn` |
 | Creating and editing agents | [`agents`](../agents/context.md) (S2.1) |
 | The presence state machine, the heartbeat, the two timeouts and the Retry button | [`presence`](../presence/context.md). This feature owns the `ChatSettings` fields that override the budgets, and the rows the dots are drawn on |
-| Search in the chat list, generated titles | S4.3 |
+| Generating the title itself | [`orchestration`](../orchestration/context.md) — `ChatRunner` writes it after the first run (S4.3); this feature owns the field, the rename and the list row |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
 | Virtualized message list, upward paging | S2.5 |
 

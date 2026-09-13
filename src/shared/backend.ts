@@ -15,6 +15,7 @@
  * - Rejections carry a `BackendError`; the renderer switches on `code`.
  */
 import type { BackendEvent, BackendEventType, EventOf } from './events'
+import type { ChatUsageSummary } from './usage'
 import type {
   Agent,
   AgentInput,
@@ -189,6 +190,20 @@ export interface BackendApi {
   /** `settings` is merged field by field; see `ChatPatch`. */
   'chats.update': (input: { id: string; patch: ChatPatch }) => Promise<Chat>
   'chats.delete': (input: { id: string }) => Promise<void>
+  /**
+   * Ids of the chats whose title or any message text matches `query`, newest
+   * chat first, capped at `CHAT_SEARCH_LIMIT`.
+   *
+   * Ids rather than `Chat[]`: the renderer already mirrors every chat, so the
+   * left column only needs to know **which** of the rows it is holding survive
+   * the filter. Sending the rows again would duplicate state that a
+   * `chat.updated` event could have changed in between, and the list would then
+   * show two versions of the same chat depending on whether a search was active.
+   *
+   * A blank query returns every chat, so the caller never has to special-case
+   * "the user cleared the box".
+   */
+  'chats.search': (input: { query: string }) => Promise<string[]>
   /** The chat's members ordered by `position`. Read by the member panel. */
   'chats.members.list': (input: { chatId: string }) => Promise<ChatMember[]>
   /** Replaces the whole member list; array order becomes `ChatMember.position`. */
@@ -216,6 +231,17 @@ export interface BackendApi {
 
   /** Newest first. `before` is a message id used as an exclusive cursor. */
   'messages.list': (input: { chatId: string; before?: string; limit?: number }) => Promise<Message[]>
+  /**
+   * Token totals and estimated cost for a whole chat, per agent and overall.
+   *
+   * Computed over **every** stored message, not over the page the renderer is
+   * holding, which is why it exists at all: a long chat's header must not report
+   * only the last hundred messages. The renderer asks once when a chat is opened
+   * and then recomputes the same summary locally from `message.updated` (see
+   * `summarizeUsage` in `src/shared/usage.ts`, which both sides share) rather
+   * than calling this again after every turn.
+   */
+  'messages.usageSummary': (input: { chatId: string }) => Promise<ChatUsageSummary>
 
   /* -- running a chat ----------------------------------------------------- */
 
@@ -295,11 +321,13 @@ export const BACKEND_METHODS = [
   'chats.create',
   'chats.update',
   'chats.delete',
+  'chats.search',
   'chats.members.list',
   'chats.members.set',
   'presence.list',
   'presence.retry',
   'messages.list',
+  'messages.usageSummary',
   'chat.send',
   'chat.stop'
 ] as const satisfies readonly BackendMethod[]

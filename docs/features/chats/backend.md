@@ -4,7 +4,9 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/handlers/chats.ts` | The nine `chats.*` / `messages.list` / `chat.*` methods: validation (including every `ChatSettings` field), the member list a chat is born with, stopping the run on delete, and the `chat.*` events |
+| `src/main/handlers/chats.ts` | The `chats.*` / `messages.*` / `chat.*` methods: validation (including every `ChatSettings` field), the member list a chat is born with, stopping the run on delete, the `chat.*` events, plus `chats.search` and `messages.usageSummary` (S4.1, S4.3) |
+| `src/shared/pricing.ts` | The model price table, `estimateCost`, `contextWindowFor` and the `formatTokens` / `formatCost` helpers. Shared, because the renderer prices the same numbers; see [`providers`](../providers/backend.md) for how to edit the table |
+| `src/shared/usage.ts` | `summarizeUsage`: the one copy of the per-chat / per-agent arithmetic, run by this handler over the database and by `stores/usage.ts` over the transcript in the store |
 | `src/main/handlers/agents.ts` | The five `agents.*` methods; see [`agents`](../agents/backend.md) |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent(ctx)`: one "Assistant" bound to the first provider that has a model, reached only while the agents table is empty |
 | `src/main/db/repositories/chats.ts` | `list` ordered by `updatedAt`, `setMembers` in one transaction, and `listChatIdsForAgent` (added in S2.1) |
@@ -25,7 +27,7 @@ is the only thing that reads it. See
 | Table | Column | Type | Notes |
 |---|---|---|---|
 | `chats` | `id`, `user_id` | text | UUID primary key, scoped by user |
-| | `title` | text | `New chat` until renamed; S4.3 generates one |
+| | `title` | text | `New chat` until it is renamed, or until `ChatRunner` generates one after the first run (S4.3) |
 | | `workdir` | text null | Reserved for the executor agent; always `null` |
 | | `settings` | json | `ChatSettings`; written by the member panel's group-settings block, merged field by field |
 | | `created_at` / `updated_at` | integer | Epoch ms. `updated_at` is bumped by every message insert, which is what floats an active chat to the top |
@@ -51,7 +53,9 @@ is the only thing that reads it. See
 | `chats.delete` | `{ id }` | `void` | `not_found`. Stops the run **before** deleting |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` by `position` | `validation`, `not_found` |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | `validation` for a non-array or a duplicate agent; `not_found` for an unknown agent, checked before anything is written. An **empty** array is valid: it is how the last member is removed |
+| `chats.search` | `{ query }` | `string[]` chat ids, newest first, capped at `CHAT_SEARCH_LIMIT` (200) | `validation` when `query` is not a string. A blank query is **not** an error: it means "no filter" and returns every chat |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` newest first | `validation` on an empty chat id or a non-positive limit; `not_found` for an unknown cursor |
+| `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` over the whole transcript | `validation` on an empty id, `not_found` for an unknown chat |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | `validation` for a non-string or blank text and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
 | `chat.stop` | `{ chatId }` | `void` | `validation` on an empty id; otherwise idempotent |
 
@@ -83,6 +87,45 @@ A chat with no members refuses `chat.send` with `validation('chat has no
 members')`, checked in `ChatRunner.send` before the user's message is persisted.
 The composer stays enabled (the fix is one click away in the member panel) and
 the panel shows `chat.noMembersHint`.
+
+### Searching chats (S4.3)
+
+`chats.search` delegates to `ChatRepository.search`, which is two stages on
+purpose:
+
+1. **SQL narrows.** One `LIKE` over `chats.title` and one over `messages.parts`.
+   `parts` is a JSON column, so SQL can only match the serialized blob — which is
+   fast and deliberately *over*-matches: the word `text` appears in every part's
+   own `type` field, and a tool name or a notice key would hit too.
+2. **JavaScript decides.** Every row the blob scan returned is parsed and only
+   its `text` parts are checked, case-insensitively. The blob scan is what keeps
+   this half from having to deserialize every message in the database.
+
+`escapeLike` escapes `%`, `_` and the backslash itself, and the query is issued
+with `ESCAPE '\\'`. Without it, searching for `50%` would match every chat and
+`a_b` would match `axb` — silently, and looking like a broken search rather than
+like a query that meant something else. Results are re-read through `chats`
+ordered by `updated_at` so they arrive in the same order as `chats.list`, which
+is what lets the left column keep its Today / Yesterday / Earlier grouping while
+a filter is on.
+
+### Usage and cost (S4.1)
+
+`messages.usageSummary` runs `summarizeUsage` (`src/shared/usage.ts`) over
+`listForContext`, supplying a lookup from agent id to `{ modelId, presetId }`
+built from the agents and providers repositories and memoized per call. An agent
+or provider the user has since deleted resolves to `undefined`: its tokens stay
+in the total and its cost is reported as unknown, which is the honest answer.
+
+Only messages that carry a `usage` object count — the provider reports it once,
+at the end of a turn — and every terminal status counts, `error` included: a turn
+the user stopped halfway still billed for what it had generated.
+
+The **renderer does not call this per turn.** It reads it once when a chat is
+opened, because the summary covers the whole transcript while the messages store
+holds a page of it, and recomputes the same function locally on every
+`message.updated`. Both sides therefore run identical arithmetic and cannot
+drift.
 
 ## Events emitted
 

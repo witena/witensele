@@ -18,7 +18,7 @@
  * | `createAnthropic` | `@ai-sdk/anthropic` 4.0.53 | `apiKey`, `baseURL` |
  * | `createOpenAI` | `@ai-sdk/openai` 4.0.66 | `apiKey`, `baseURL` |
  * | `createGoogleGenerativeAI` | `@ai-sdk/google` 4.0.69 | `apiKey`, `baseURL` |
- * | `createOpenAICompatible` | `@ai-sdk/openai-compatible` 3.0.48 | `name` (**required**), `baseURL` (**required**), `apiKey` |
+ * | `createOpenAICompatible` | `@ai-sdk/openai-compatible` 3.0.48 | `name` (**required**), `baseURL` (**required**), `apiKey`, `includeUsage` |
  *
  * Two spellings that are easy to get wrong: the option is `baseURL` (capital URL)
  * while our stored field is `baseUrl`, and `createOpenAICompatible` takes a
@@ -127,6 +127,14 @@ export function createLanguageModel(provider: ResolvedProvider, modelId: string)
       return createOpenAICompatible<string, string, string, string>({
         name: compatibleName(provider),
         baseURL: baseUrl,
+        // Without this the adapter omits `stream_options: { include_usage: true }`
+        // and an OpenAI-compatible endpoint streams **no usage at all** — the
+        // `finish` part arrives with zeroes and S4.1's token counts stay empty
+        // for every Chinese provider, OpenRouter, Ollama and LM Studio, which is
+        // most of the preset list. The first-party Anthropic / OpenAI / Google
+        // adapters report usage without being asked. A server that does not
+        // understand the field ignores it.
+        includeUsage: true,
         ...(effectiveKey ? { apiKey: effectiveKey } : {})
       }).languageModel(modelId)
     }

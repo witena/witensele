@@ -20,11 +20,15 @@ import type {
   RunFinishedEvent,
   RunRoundEvent
 } from '@shared/events'
+import { PASS_TOKEN } from '@shared/pass'
 import type { Agent, Chat, Message, SystemNoticePart } from '@shared/types'
+import { toModelMessages } from '../agents/history'
 import type { AppContext } from '../app-context'
 import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
+import { DEFAULT_CHAT_TITLE } from '../db/repositories'
 import { buildHandlers } from '../handlers'
 import { createTestAppContext } from '../testing'
+import { NOTICE_CONTEXT_TRUNCATED, type ChatRunnerOptions } from './chat-runner'
 
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
 type StreamPart = StreamResult extends { stream: ReadableStream<infer Part> } ? Part : never
@@ -962,3 +966,276 @@ function firstText(message: Message): string {
   const part = message.parts[0]
   return part && part.type === 'text' ? part.text : ''
 }
+
+/* -------------------------------------------------------------------------- */
+/* S4.1 / S4.2 / S4.3                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** A model that answers one whole message when `generateText` asks it to. */
+function titling(title: string): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    provider: 'mock',
+    modelId: 'mock-model',
+    doStream: async () => ({ stream: simulateReadableStream({ chunks: textChunks(['An answer.']) }) }),
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: title }],
+      finishReason: { unified: 'stop', raw: 'stop' },
+      usage: USAGE,
+      warnings: []
+    })
+  })
+}
+
+describe('ChatRunner (usage, truncation and titles)', () => {
+  const handlers = buildHandlers()
+
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let ada: Agent
+  let bob: Agent
+  let chat: Chat
+  let model: MockLanguageModelV4
+
+  /** Builds a context whose runner uses `model` and the given title generator. */
+  async function start(options: {
+    generateTitle?: ChatRunnerOptions['generateTitle']
+    title?: string
+  } = {}): Promise<void> {
+    database = createTestDatabase()
+    model = mockModel(textChunks(['An answer.']))
+    const created = createTestAppContext(database, {
+      runner: {
+        createModel: () => model,
+        ...(options.generateTitle ? { generateTitle: options.generateTitle } : {})
+      }
+    })
+    ctx = created.ctx
+    events = created.events
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    ada = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    bob = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = await handlers['chats.create'](ctx, {
+      input: {
+        ...(options.title ? { title: options.title } : {}),
+        memberAgentIds: [ada.id]
+      }
+    })
+    events.length = 0
+  }
+
+  afterEach(() => {
+    ctx.close()
+  })
+
+  const settle = () => ctx.runners.for(chat.id).whenIdle()
+
+  /* -- S4.1 --------------------------------------------------------------- */
+
+  it('sums usage over the whole chat and splits it per agent', async () => {
+    await start({ generateTitle: async () => null })
+    await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, bob.id] })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
+    await settle()
+
+    const summary = await handlers['messages.usageSummary'](ctx, { chatId: chat.id })
+
+    // Two agents, one turn each, both reporting the same mock usage.
+    expect(summary.perAgent[ada.id]).toMatchObject({ turns: 1 })
+    expect(summary.perAgent[bob.id]).toMatchObject({ turns: 1 })
+    expect(summary.total.inputTokens).toBe(
+      (summary.perAgent[ada.id]?.usage.inputTokens ?? 0) +
+        (summary.perAgent[bob.id]?.usage.inputTokens ?? 0)
+    )
+    expect(summary.total.totalTokens).toBeGreaterThan(0)
+    // `deepseek-chat` is in the price table, so there is a number rather than null.
+    expect(summary.cost).toBeGreaterThan(0)
+  })
+
+  it('reports an empty summary for a chat that has not spoken', async () => {
+    await start({ generateTitle: async () => null })
+
+    await expect(handlers['messages.usageSummary'](ctx, { chatId: chat.id })).resolves.toEqual({
+      total: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      cost: null,
+      perAgent: {}
+    })
+  })
+
+  it('rejects a usage summary for a chat that does not exist', async () => {
+    await start({ generateTitle: async () => null })
+
+    await expect(
+      handlers['messages.usageSummary'](ctx, { chatId: 'nope' })
+    ).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  /* -- S4.2 --------------------------------------------------------------- */
+
+  it('stores a contextTruncated notice once per run when history had to be dropped', async () => {
+    await start({ generateTitle: async () => null })
+    // The agent's own `maxTokens` is what `fitHistory` reserves, so an output
+    // reserve just under `deepseek-chat`'s 65_536 window leaves no room for any
+    // history at all — which is the overflow case without a megabyte of fixture.
+    ctx.repos.agents.update(ada.id, { params: { maxTokens: 65_500 } }, ctx.userId)
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'First question' })
+    await settle()
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Second question' })
+    await settle()
+
+    const truncated = noticeKeys(ctx, chat).filter((key) => key === NOTICE_CONTEXT_TRUNCATED)
+    expect(truncated.length).toBeGreaterThan(0)
+    const params = noticeParams(ctx, chat, NOTICE_CONTEXT_TRUNCATED)
+    expect(params?.['agent']).toBe('Ada')
+    expect(Number(params?.['dropped'])).toBeGreaterThan(0)
+    // One per run, not one per round: two runs, at most two notices.
+    expect(truncated.length).toBeLessThanOrEqual(2)
+  })
+
+  it('stores no truncation notice for a conversation that fits', async () => {
+    await start({ generateTitle: async () => null })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
+    await settle()
+
+    expect(noticeKeys(ctx, chat)).not.toContain(NOTICE_CONTEXT_TRUNCATED)
+  })
+
+  /* -- S4.3 --------------------------------------------------------------- */
+
+  it('names a chat after the first exchange, using the model', async () => {
+    await start()
+    model = titling('Retry budget tradeoffs')
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What retry budget should we use?' })
+    await settle()
+
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe('Retry budget tradeoffs')
+    // The renderer learns about it the same way it learns about a rename.
+    const updated = events.filter((event) => event.type === 'chat.updated')
+    expect(updated.at(-1)).toMatchObject({ chat: { title: 'Retry budget tradeoffs' } })
+  })
+
+  it('sanitises whatever the model answered', async () => {
+    await start({ generateTitle: async () => '  "Retry budget tradeoffs."  ' })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What retry budget?' })
+    await settle()
+
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe('Retry budget tradeoffs')
+  })
+
+  it('falls back to the first words of the question when the model gives nothing', async () => {
+    await start({ generateTitle: async () => null })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What retry budget should we use?' })
+    await settle()
+
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe('What retry budget should we use?')
+  })
+
+  it('falls back rather than failing when the title request throws', async () => {
+    await start({
+      generateTitle: async () => {
+        throw new Error('provider exploded')
+      }
+    })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What retry budget?' })
+    await settle()
+
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe('What retry budget?')
+  })
+
+  it('never retitles a chat the user named', async () => {
+    await start({ title: 'My own title', generateTitle: async () => 'Something generated' })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
+    await settle()
+
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe('My own title')
+  })
+
+  it('never retitles a chat the user renamed after the first run', async () => {
+    await start({ generateTitle: async () => 'Generated once' })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
+    await settle()
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe('Generated once')
+
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { title: 'Renamed by hand' } })
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Again' })
+    await settle()
+
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe('Renamed by hand')
+  })
+
+  it('leaves the default title alone when every turn failed', async () => {
+    await start({ generateTitle: async () => 'Should not be used' })
+    model = failing()
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
+    await settle()
+
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).title).toBe(DEFAULT_CHAT_TITLE)
+  })
+
+  it('keeps status done and strips the marker from history when a reply ends with [PASS]', async () => {
+    await start({ generateTitle: async () => null })
+    model = mockModel(textChunks([`Use exponential backoff. ${PASS_TOKEN}`]))
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What should we do?' })
+    await settle()
+
+    const reply = ctx.repos.messages
+      .listForContext(chat.id, ctx.userId)
+      .find((message) => message.senderType === 'agent') as Message
+    expect(reply.status).toBe('done')
+    // The stored parts keep exactly what the model wrote…
+    expect(firstText(reply)).toContain(PASS_TOKEN)
+    // …and the prompt the next speaker sees does not.
+    const view = toModelMessages({
+      self: bob,
+      agentsById: { [ada.id]: ada, [bob.id]: bob },
+      messages: ctx.repos.messages.listForContext(chat.id, ctx.userId)
+    })
+    expect(JSON.stringify(view)).not.toContain(PASS_TOKEN)
+    expect(JSON.stringify(view)).toContain('Use exponential backoff.')
+  })
+
+  /* -- chats.search ------------------------------------------------------- */
+
+  it('finds a chat by a word in one of its messages', async () => {
+    await start({ generateTitle: async () => null })
+    const other = await handlers['chats.create'](ctx, {
+      input: { title: 'Other', memberAgentIds: [ada.id] }
+    })
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Tell me about a zebra' })
+    await settle()
+
+    await expect(handlers['chats.search'](ctx, { query: 'zebra' })).resolves.toEqual([chat.id])
+    await expect(handlers['chats.search'](ctx, { query: '' })).resolves.toEqual(
+      expect.arrayContaining([chat.id, other.id])
+    )
+  })
+
+  it('rejects a search with no query string', async () => {
+    await start({ generateTitle: async () => null })
+
+    // Cast: the contract requires a string, and the point of the case is what
+    // happens when a caller that is not the typed client sends something else.
+    await expect(
+      handlers['chats.search'](ctx, {} as { query: string })
+    ).rejects.toMatchObject({ code: 'validation' })
+  })
+})

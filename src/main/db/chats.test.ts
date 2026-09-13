@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CHAT_SETTINGS, LOCAL_USER_ID } from '@shared/types'
 import { BackendFailure } from '../errors'
-import { DEFAULT_CHAT_TITLE } from './repositories'
+import { CHAT_SEARCH_LIMIT, DEFAULT_CHAT_TITLE, escapeLike } from './repositories'
 import { agentInput, createTestDatabase, messageInput, tick, type TestDatabase } from './testing'
 
 describe('db/repositories/chats', () => {
@@ -119,5 +119,101 @@ describe('db/repositories/chats', () => {
     expect(() => database.repos.chats.delete('nope')).toThrowError(BackendFailure)
     expect(() => database.repos.chats.setMembers('user-b', mine.id, [])).toThrowError(BackendFailure)
     expect(() => database.repos.chats.listMembers('nope')).toThrowError(BackendFailure)
+  })
+
+  describe('search', () => {
+    it('matches a chat by its title, case-insensitively', () => {
+      const zebra = database.repos.chats.create({ title: 'Zebra migration' })
+      database.repos.chats.create({ title: 'Retry budget' })
+
+      expect(database.repos.chats.search('zebra')).toEqual([zebra.id])
+      expect(database.repos.chats.search('ZEBRA')).toEqual([zebra.id])
+    })
+
+    it('matches a chat by the text of any of its messages', () => {
+      const withWord = database.repos.chats.create({ title: 'First' })
+      const without = database.repos.chats.create({ title: 'Second' })
+      database.repos.messages.create(messageInput(withWord.id, { parts: [{ type: 'text', text: 'What about a zebra?' }] }))
+      database.repos.messages.create(messageInput(without.id, { parts: [{ type: 'text', text: 'Nothing striped here.' }] }))
+
+      expect(database.repos.chats.search('zebra')).toEqual([withWord.id])
+    })
+
+    it('returns a chat once even when several of its messages match', () => {
+      const chat = database.repos.chats.create({ title: 'Zebra' })
+      database.repos.messages.create(messageInput(chat.id, { parts: [{ type: 'text', text: 'zebra one' }] }))
+      database.repos.messages.create(messageInput(chat.id, { parts: [{ type: 'text', text: 'zebra two' }] }))
+
+      expect(database.repos.chats.search('zebra')).toEqual([chat.id])
+    })
+
+    it('ignores anything that is not a text part, so a part type is not a hit', () => {
+      const chat = database.repos.chats.create({ title: 'Tools' })
+      database.repos.messages.create(
+        messageInput(chat.id, {
+          senderType: 'agent',
+          senderId: 'agent-1',
+          parts: [
+            { type: 'tool-call', toolCallId: 'c1', toolName: 'zebra_lookup', input: {} },
+            { type: 'tool-result', toolCallId: 'c1', output: 'striped' }
+          ]
+        })
+      )
+
+      // The serialized JSON contains both words; only `text` parts count.
+      expect(database.repos.chats.search('zebra')).toEqual([])
+      expect(database.repos.chats.search('striped')).toEqual([])
+      expect(database.repos.chats.search('text')).toEqual([])
+    })
+
+    it('treats % and _ as literals rather than as wildcards', () => {
+      const literal = database.repos.chats.create({ title: 'Down 50% on retries' })
+      database.repos.chats.create({ title: 'Nothing to do with it' })
+
+      expect(database.repos.chats.search('50%')).toEqual([literal.id])
+      // A bare wildcard matches the one title that literally contains it, not
+      // every chat in the database — which is what an unescaped `%` would do.
+      expect(database.repos.chats.search('%')).toEqual([literal.id])
+      expect(database.repos.chats.search('_')).toEqual([])
+    })
+
+    it('escapes the escape character itself', () => {
+      expect(escapeLike('a\\b')).toBe('a\\\\b')
+      expect(escapeLike('50%_')).toBe('50\\%\\_')
+      expect(escapeLike('plain')).toBe('plain')
+    })
+
+    it('returns every chat, newest first, for a blank query', () => {
+      const first = database.repos.chats.create({ title: 'First' })
+      tick()
+      const second = database.repos.chats.create({ title: 'Second' })
+
+      expect(database.repos.chats.search('')).toEqual([second.id, first.id])
+      expect(database.repos.chats.search('   ')).toEqual([second.id, first.id])
+    })
+
+    it('orders hits newest updatedAt first, exactly like list', () => {
+      const first = database.repos.chats.create({ title: 'Zebra one' })
+      tick()
+      const second = database.repos.chats.create({ title: 'Zebra two' })
+
+      expect(database.repos.chats.search('zebra')).toEqual([second.id, first.id])
+    })
+
+    it('is scoped by userId', () => {
+      const mine = database.repos.chats.create({ title: 'Zebra' }, 'user-a')
+      database.repos.chats.create({ title: 'Zebra' }, 'user-b')
+
+      expect(database.repos.chats.search('zebra', 'user-a')).toEqual([mine.id])
+    })
+
+    it('caps the result at CHAT_SEARCH_LIMIT', () => {
+      expect(CHAT_SEARCH_LIMIT).toBeGreaterThan(0)
+      for (let index = 0; index < 5; index += 1) {
+        database.repos.chats.create({ title: `Zebra ${index}` })
+      }
+
+      expect(database.repos.chats.search('zebra').length).toBeLessThanOrEqual(CHAT_SEARCH_LIMIT)
+    })
   })
 })

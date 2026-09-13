@@ -55,6 +55,16 @@ export function applyDeltaToParts(parts: MessagePart[], delta: MessageDelta): Me
 export interface MessagesState {
   /** Backend-owned mirror, oldest first, keyed by chat id. */
   byChat: Record<string, Message[]>
+  /**
+   * True when `byChat[chatId]` is the **whole** transcript rather than a page of
+   * it — the first page came back shorter than `MESSAGE_PAGE_SIZE`.
+   *
+   * `stores/usage.ts` is what needs it: a chat total recomputed from a page
+   * would silently report only the recent half of a long conversation, so the
+   * usage store recomputes locally when this is true and asks the backend again
+   * when it is not.
+   */
+  complete: Record<string, boolean>
   status: Record<string, MessagesStatus>
   error?: string | undefined
   errorCode?: BackendErrorCode | undefined
@@ -78,6 +88,7 @@ function upsert(messages: Message[], message: Message): Message[] {
 
 export const useMessagesStore = create<MessagesState>()((set) => ({
   byChat: {},
+  complete: {},
   status: {},
   error: undefined,
   errorCode: undefined,
@@ -93,6 +104,8 @@ export const useMessagesStore = create<MessagesState>()((set) => ({
       // oldest first, so the reversal happens once, here.
       set((state) => ({
         byChat: { ...state.byChat, [chatId]: [...page].reverse() },
+        // A full page means there may be older messages behind the cursor.
+        complete: { ...state.complete, [chatId]: page.length < MESSAGE_PAGE_SIZE },
         status: { ...state.status, [chatId]: 'ready' },
         error: undefined,
         errorCode: undefined
@@ -110,7 +123,8 @@ export const useMessagesStore = create<MessagesState>()((set) => ({
     set((state) => {
       const { [chatId]: _messages, ...byChat } = state.byChat
       const { [chatId]: _status, ...status } = state.status
-      return { byChat, status }
+      const { [chatId]: _complete, ...complete } = state.complete
+      return { byChat, complete, status }
     })
   },
 

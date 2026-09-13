@@ -5,6 +5,7 @@
 | File | Responsibility |
 |---|---|
 | `src/shared/presets.ts` | The preset table and the three questions asked of it. Shared, not main-only: the renderer imports it directly |
+| `src/shared/pricing.ts` | The **model price table** plus `estimateCost`, `contextWindowFor`, `formatTokens` and `formatCost` (S4.1, S4.2). Shared for the same reason as the presets, and edited by hand — see "Editing the price table" below |
 | `src/main/providers/resolve.ts` | `ProviderRef` → `ResolvedProvider`. The **only** place a stored key is decrypted |
 | `src/main/providers/registry.ts` | `ResolvedProvider` + model id → an AI SDK `LanguageModel` |
 | `src/main/providers/discovery.ts` | `fetchModels` (raw `/models`) and `testConnection` (`generateText`) |
@@ -63,7 +64,7 @@ Verified against the installed type definitions
 | `createAnthropic` | `@ai-sdk/anthropic` | 4.0.53 | `apiKey`, `baseURL` |
 | `createOpenAI` | `@ai-sdk/openai` | 4.0.66 | `apiKey`, `baseURL` |
 | `createGoogleGenerativeAI` | `@ai-sdk/google` | 4.0.69 | `apiKey`, `baseURL` (exported as an alias of `createGoogle`) |
-| `createOpenAICompatible` | `@ai-sdk/openai-compatible` | 3.0.48 | `name` (**required**), `baseURL` (**required**), `apiKey` |
+| `createOpenAICompatible` | `@ai-sdk/openai-compatible` | 3.0.48 | `name` (**required**), `baseURL` (**required**), `apiKey`, `includeUsage` |
 | `generateText` | `ai` | 7.0.99 | `model`, `prompt`, `maxOutputTokens`, `abortSignal`; the result's `text` is read |
 | `MockLanguageModelV4` | `ai/test` | 7.0.99 | `provider`, `modelId`, `doGenerate` |
 
@@ -93,6 +94,14 @@ Pitfalls, every one of them hit while writing this step:
   speaks Chat Completions belongs behind `openai-compatible` anyway.
 - **The SDK has no "list models" call.** `/models` is spoken by hand in
   `discovery.ts`.
+- **`includeUsage: true` is not optional if you want token counts.** Without it
+  the compatible adapter omits `stream_options: { include_usage: true }` and an
+  OpenAI-compatible endpoint streams **no usage at all**: the `finish` part
+  arrives with zeroes. That is most of the preset list — every Chinese provider,
+  OpenRouter, Ollama and LM Studio — so S4.1's token counts were empty for all of
+  them until the flag went in. The first-party Anthropic / OpenAI / Google
+  adapters report usage without being asked, and a server that does not
+  understand the field ignores it.
 
 The *streaming* half of the SDK — `streamText`, `fullStream`, the `text-delta` /
 `reasoning-delta` / `finish` / `abort` / `error` part shapes, `LanguageModelUsage`
@@ -101,6 +110,44 @@ its own pitfalls in [`../agent-turn/backend.md`](../agent-turn/backend.md). The
 one that bites hardest: a `text-delta` carries `text` at the `ai` level and
 `delta` at the provider level, so a mock written from the `fullStream` shape
 streams nothing.
+
+### Editing the price table (S4.1)
+
+`MODEL_PRICING` in `src/shared/pricing.ts` is a checked-in list of **approximate
+USD list prices as of 2026-09**, per million tokens, plus each model's context
+window. There is no API that serves a price list — every vendor publishes one as
+a web page — so this is a table, and keeping it current is a hand edit:
+
+```ts
+{ match: /claude.*sonnet/i, inputPerMTok: 3, outputPerMTok: 15, contextWindow: 200_000 }
+```
+
+Rules to keep in mind when editing it:
+
+- **Order matters.** Rows are matched first-hit-wins, so a specific row must come
+  before the general one it shares a prefix with (`gpt-4o-mini` before `gpt-4o`,
+  `glm-4.5-air` before `glm-4.5`). `pricing.test.ts` asserts exactly that for the
+  pairs that exist today; add a case when you add a pair.
+- **`match` is a regular expression over the whole model id**, case-insensitively,
+  because the same model reaches us under several spellings
+  (`claude-sonnet-4-5`, `anthropic/claude-sonnet-4` through OpenRouter,
+  `Qwen/Qwen3-235B-A22B` through SiliconFlow). A plain string matches as a
+  case-insensitive substring.
+- **A model that is not in the table is not a bug.** `estimateCost` returns
+  `null`, `contextWindowFor` falls back to a deliberately small
+  `DEFAULT_CONTEXT_WINDOW` (32 768), and every surface prints the token count
+  without a price rather than inventing one.
+- **Nothing else has to change.** The table is read by `estimateCost` (the chat
+  header, the member rows, the per-message tooltip) and by `contextWindowFor`
+  (S4.2's history budget). Prices are ignored entirely for a provider created
+  from a `local` preset — Ollama and LM Studio cost nothing, whatever the model
+  is called — which is why cost estimation takes `{ modelId, presetId }` rather
+  than a model id alone.
+
+The figures deliberately ignore cache reads, batch discounts, long-context
+surcharges and promotional rates. A figure that is roughly right is what makes
+`$0.04` a useful signal about which agent is expensive; the alternative is no
+figure at all.
 
 ### The `/models` endpoints
 

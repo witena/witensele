@@ -9,7 +9,13 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Message, MessagePart, MessageStatus, SenderType } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
-import { DEFAULT_USER_NAME, SYSTEM_SENDER_NAME, toModelMessages } from './history'
+import { PASS_TOKEN } from '@shared/pass'
+import {
+  DEFAULT_USER_NAME,
+  MAX_TOOL_RESULT_CHARS,
+  SYSTEM_SENDER_NAME,
+  toModelMessages
+} from './history'
 
 function agent(id: string, name: string): Agent {
   return {
@@ -247,5 +253,64 @@ describe('toModelMessages', () => {
       { role: 'user', content: `[${DEFAULT_USER_NAME}]: Question.\n\n[Ada]: Ada answers.` },
       { role: 'assistant', content: 'Bob answers.' }
     ])
+  })
+
+  it('replays a tool result but not the call that asked for it', () => {
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [
+        message('agent', ada.id, [
+          { type: 'tool-call', toolCallId: 'c1', toolName: 'echo', input: { text: 'hi' } },
+          { type: 'tool-result', toolCallId: 'c1', output: 'hi' },
+          { type: 'text', text: 'The tool says hi.' }
+        ])
+      ]
+    })
+
+    const content = String(result[0]?.content)
+    expect(content).toContain('[tool result] hi')
+    expect(content).toContain('The tool says hi.')
+    // The arguments are not replayed: the answer is the part worth keeping.
+    expect(content).not.toContain('"text":"hi"')
+  })
+
+  it('caps a large tool result so one blob cannot fill every later prompt', () => {
+    const huge = 'x'.repeat(MAX_TOOL_RESULT_CHARS * 3)
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [
+        message('agent', ada.id, [{ type: 'tool-result', toolCallId: 'c1', output: huge }])
+      ]
+    })
+
+    const content = String(result[0]?.content)
+    expect(content.length).toBeLessThan(huge.length)
+    expect(content).toContain('[truncated]')
+  })
+
+  it('marks a failed tool result as an error rather than as an answer', () => {
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [
+        message('agent', ada.id, [
+          { type: 'tool-result', toolCallId: 'c1', output: 'boom', isError: true }
+        ])
+      ]
+    })
+
+    expect(String(result[0]?.content)).toContain('[tool error] boom')
+  })
+
+  it('strips a trailing [PASS] from a reply that had something to say', () => {
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [message('agent', ada.id, text(`Use exponential backoff. ${PASS_TOKEN}`))]
+    })
+
+    expect(result).toEqual([{ role: 'user', content: '[Ada]: Use exponential backoff.' }])
   })
 })

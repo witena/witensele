@@ -96,6 +96,7 @@ immediately and is answered from the next round. See the decision table in
 | `notices.runFailed` | An internal failure, with `{{message}}` |
 | `notices.agentSkipped` | Written by `agent-turn` when the hard timeout skipped a member; see [`presence`](../presence/frontend.md) |
 | `notices.allOffline` | Written by the runner when every speaker of a round is offline |
+| `notices.contextTruncated` | Written once per run per agent when `fitHistory` had to drop messages, with `{{agent}}` and `{{dropped}}` (S4.2) |
 | `notices.runStopped` | Reserved; Stop writes no notice, because the interrupted row already says so |
 
 ## Accessibility and keyboard

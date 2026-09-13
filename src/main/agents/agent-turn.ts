@@ -72,6 +72,18 @@
  * enabled skill (progressive disclosure — never a body), and the whole
  * `MEMORY.md` index capped at `MEMORY_PROMPT_MAX_BYTES`.
  *
+ * ## Context budget (S4.2)
+ *
+ * The transcript is run through `fitHistory` before it is sent: the oldest
+ * messages are dropped until the estimated prompt fits
+ * `contextWindowFor(agent.modelId)` minus the agent's own output reserve
+ * (`params.maxTokens`, or `DEFAULT_OUTPUT_RESERVE`). Both history paths go
+ * through it — the sequential turn's fresh read and the snapshot a parallel round
+ * shares — and the number dropped is returned as `droppedMessages` so
+ * `ChatRunner` can announce it once per run rather than once per round. The
+ * algorithm, and why the estimate is a character count rather than a tokenizer,
+ * is in `context-budget.ts`.
+ *
  * ## AI SDK v7 names used here
  *
  * Verified against `node_modules/ai/dist/index.d.ts` (ai 7.0.99); the full table
@@ -87,6 +99,8 @@
 import { stepCountIs, streamText, type LanguageModel, type LanguageModelUsage, type ToolSet } from 'ai'
 import type { BackendEvent } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
+import { isPassOnly } from '@shared/pass'
+import { contextWindowFor } from '@shared/pricing'
 import type {
   Agent,
   Chat,
@@ -110,7 +124,8 @@ import { isTimeoutAbort, TIMEOUT_ERROR } from '../presence/abort-reasons'
 import type { TurnOutcome } from '../presence/supervisor'
 import { createLanguageModel } from '../providers/registry'
 import { resolveProvider } from '../providers/resolve'
-import { buildGroupBriefing, PASS_TOKEN, resolveMainLanguage, toBriefingMember } from './briefing'
+import { buildGroupBriefing, resolveMainLanguage, toBriefingMember } from './briefing'
+import { DEFAULT_OUTPUT_RESERVE, fitHistory } from './context-budget'
 import { toModelMessages } from './history'
 
 /** Partial text is written to the database at least this often, in milliseconds. */
@@ -194,6 +209,16 @@ export interface AgentTurnResult {
   status: MessageStatus
   /** True when the turn ended because `signal` was aborted. */
   aborted: boolean
+  /**
+   * How many of the oldest history messages `fitHistory` had to leave out of
+   * this turn's prompt. `0` in every chat short enough to fit.
+   *
+   * Reported rather than announced here: the user-visible `contextTruncated`
+   * notice belongs to the **run**, and `ChatRunner` is the only object that
+   * knows a run is under way, so it is the one that stores the notice — once per
+   * run per agent rather than once per round.
+   */
+  droppedMessages: number
 }
 
 /** `LanguageModelUsage` (numbers or `undefined`) → the stored `Usage`. */
@@ -472,6 +497,8 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   let aborted = false
   /** Set when the turn had to drop its tools; drives the notice below. */
   let toolsUnsupported = false
+  /** How many history messages the context budget removed; reported to the runner. */
+  let droppedMessages = 0
 
   let lastFlushAt = Date.now()
   let deltasSinceFlush = 0
@@ -515,14 +542,35 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const agentsById = Object.fromEntries(members.map((member) => [member.id, member]))
     const origins = attached?.origins ?? {}
 
-    const result = streamText({
-      model,
-      system: buildSystemPrompt(ctx, agent, members),
+    const system = buildSystemPrompt(ctx, agent, members)
+    // Both history paths go through the budget: the sequential turn's fresh read
+    // and the snapshot the runner took once for a parallel round. A long chat
+    // overflows every speaker at the same moment, so exempting either one would
+    // mean half the round failing where the other half was trimmed.
+    const budgeted = fitHistory({
+      system,
       messages: toModelMessages({
         self: agent,
         agentsById,
         messages: options.history ?? ctx.repos.messages.listForContext(chat.id, ctx.userId)
       }),
+      contextWindow: contextWindowFor(agent.modelId),
+      reserveForOutput: agent.params.maxTokens ?? DEFAULT_OUTPUT_RESERVE
+    })
+    if (budgeted.droppedCount > 0) {
+      // Reported once per attempt; the retry-without-tools path re-runs this and
+      // would otherwise double the count the runner announces.
+      droppedMessages = budgeted.droppedCount
+      console.info(
+        `[witena] ${agent.name}: dropped ${budgeted.droppedCount} history messages to fit ` +
+          `${agent.modelId} (~${budgeted.estimatedTokens} tokens of ${contextWindowFor(agent.modelId)})`
+      )
+    }
+
+    const result = streamText({
+      model,
+      system,
+      messages: budgeted.messages,
       abortSignal: turnSignal,
       ...(attached && Object.keys(attached.tools).length > 0
         ? { tools: attached.tools, stopWhen: stepCountIs(MAX_TOOL_STEPS) }
@@ -647,7 +695,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     ? 'skipped'
     : aborted || failure
       ? 'error'
-      : text === PASS_TOKEN
+      : // Only a reply that is *nothing but* the token abstains. A model that
+        // answered and then signed the answer off with `[PASS]` stays `done`;
+        // the trailing marker is stripped where the text is read, never from
+        // the stored parts (see `@shared/pass`).
+        isPassOnly(text)
         ? 'passed'
         : 'done'
   const error = timedOut ? TIMEOUT_ERROR : aborted ? ABORTED_ERROR : failure
@@ -724,7 +776,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     // A timeout is *not* reported as an abort: the round barrier reads this flag
     // to decide whether the user stopped the run, and one skipped agent must
     // leave the others' answers and the next round alone.
-    return { message, status, aborted: aborted && !timedOut }
+    return { message, status, aborted: aborted && !timedOut, droppedMessages }
   } finally {
     ctx.supervisor.endTurn({
       chatId: chat.id,

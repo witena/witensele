@@ -58,8 +58,18 @@ export interface BriefingInput {
 /** The shape both language modules implement. */
 export type BriefingBuilder = (input: BriefingInput) => string
 
-/** Token an agent replies with to abstain from a round. Identical in both languages. */
-export const PASS_TOKEN = '[PASS]'
+/**
+ * Token an agent replies with to abstain from a round. Identical in both
+ * languages, and re-exported here so the two briefing modules keep importing it
+ * from the file that teaches it.
+ *
+ * It is **defined** in `@shared/pass` because the renderer needs the same
+ * literal: S4.3 strips a trailing `[PASS]` from a reply that has real content in
+ * front of it, and that rule has to read identically on both sides of the IPC
+ * boundary. See that module's header for why the marker is stripped at display
+ * time rather than at persist time.
+ */
+export { PASS_TOKEN } from '@shared/pass'
 
 /** Reduces an `Agent` record to what the briefing needs. */
 export function toBriefingMember(agent: Agent): BriefingMember {

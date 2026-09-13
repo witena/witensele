@@ -35,6 +35,10 @@ that owns the `AbortController` the Stop button reaches.
   (`runFailed`).
 - `RunState` through `ChatRunnerRegistry.getState(chatId)`: the round, its
   speakers, the turns in flight and the pending user messages.
+- **The `contextTruncated` notice** (S4.2): the turn measures, the runner tells,
+  once per run per agent.
+- **The automatic chat title** (S4.3): after the first run that produced a
+  finished reply, and only while the title is still the default.
 
 ## What S2.4 added
 

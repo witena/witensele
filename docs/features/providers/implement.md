@@ -92,6 +92,7 @@ Shared-contract changes made by this step:
 
 | File | Covers |
 |---|---|
+| `src/shared/pricing.test.ts` | The price table's shape (positive prices and windows), the specific-before-general match order, matching a vendor-prefixed id, `estimateCost` (linear, `null` for an unknown model, `0` for a local preset), `contextWindowFor`'s fallback, and both formatters |
 | `src/shared/presets.test.ts` | Unique ids; every OpenAI-compatible preset except `custom` has a base URL; local presets require no key, ship no models and point at localhost; hosted presets are https and seeded; `getPreset` / `isLocalPreset` edge cases |
 | `src/main/providers/registry.test.ts` | A model is constructed for all four types and reports the right `provider` / `modelId`; the compatible name comes from the preset id and falls back to a slug; an empty model id and a base-URL-less compatible provider are rejected; a keyless local provider still builds |
 | `src/main/providers/discovery.test.ts` | `fetchModels` for all four families with a fake `fetch` (URL, headers, id extraction, sorting, `/v1` not doubled); HTTP 401 and 404 → `provider_error` with the status; a 10 s timeout; an unreachable host. `testConnection` through the **real** `generateText` with `MockLanguageModelV4`, plus the failure, timeout, no-model and "keep the deliberate error code" paths |
@@ -109,6 +110,10 @@ are structured objects rather than a string and three numbers.
 
 ## Known limitations and TODOs
 
+- **The price table goes stale.** It is a hand-maintained estimate (see
+  [backend.md](./backend.md), "Editing the price table"); a vendor that reprices
+  is a one-line edit here and nothing else. A model the table does not know
+  reports tokens and no price, which is the honest failure mode.
 - **The probe result is lost on restart** by design (see
   [context.md](./context.md)), so every card starts as `untested`. S2.4's periodic
   provider probe is what will keep those dots meaningful.

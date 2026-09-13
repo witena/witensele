@@ -9,8 +9,9 @@
  * than on whatever was open when the app crashed.
  *
  * `groupChats` lives here rather than in the component because it is the one
- * piece of the column with logic worth testing, and because the same grouping
- * will be reused by the search results in S4.3.
+ * piece of the column with logic worth testing, and because the search results
+ * (S4.3) reuse it: filtering hides rows, it never regroups them, so a filtered
+ * column still reads Today / Yesterday / Earlier.
  */
 import { create } from 'zustand'
 import type { BackendErrorCode, Chat, ChatSettings } from '@shared/types'
@@ -96,6 +97,16 @@ export interface ChatsState {
   errorCode?: BackendErrorCode | undefined
   /** The chat the conversation column is showing. Local UI state. */
   selectedId: string | null
+  /** What the left column's search box holds, trimmed. `''` means no filter. */
+  searchQuery: string
+  /**
+   * Ids the current query matched, or `null` when there is no query.
+   *
+   * `null` rather than "every id" so the list can tell "not filtered" from
+   * "filtered, and everything happens to match" — the second needs the empty
+   * state when it turns up nothing, the first never does.
+   */
+  matchIds: string[] | null
 
   /** Reads the list and every chat's members. Never rejects. */
   load: () => Promise<void>
@@ -116,6 +127,15 @@ export interface ChatsState {
   updateSettings: (chatId: string, patch: Partial<ChatSettings>) => Promise<void>
   remove: (id: string) => Promise<void>
   select: (id: string | null) => void
+  /**
+   * Runs `chats.search` and stores what it matched. Never rejects.
+   *
+   * The **debounce lives in the page**, not here: the store is a mirror of the
+   * backend and a timer inside it would be state the tests cannot see. A blank
+   * query short-circuits without an IPC call, because clearing the box is the
+   * most common keystroke of all.
+   */
+  search: (query: string) => Promise<void>
 
   /** Event handlers, called by `lib/event-bridge.ts`. Upserts by id. */
   applyUpdated: (chat: Chat) => void
@@ -129,6 +149,8 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
   error: undefined,
   errorCode: undefined,
   selectedId: null,
+  searchQuery: '',
+  matchIds: null,
 
   async load() {
     set({ status: 'loading', error: undefined, errorCode: undefined })
@@ -232,6 +254,22 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
 
   select(id) {
     set({ selectedId: id })
+  },
+
+  async search(query) {
+    const trimmed = query.trim()
+    if (trimmed.length === 0) {
+      set({ searchQuery: '', matchIds: null })
+      return
+    }
+    set({ searchQuery: trimmed })
+    try {
+      const matchIds = await getBackend().invoke('chats.search', { query: trimmed })
+      // A slower answer to an earlier query must not overwrite a newer one.
+      if (get().searchQuery === trimmed) set({ matchIds })
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause), matchIds: [] })
+    }
   },
 
   applyUpdated(chat) {

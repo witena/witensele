@@ -371,7 +371,10 @@ describe('handlers/stubs', () => {
       'memory.read',
       'memory.write',
       'memory.delete',
-      'memory.search'
+      'memory.search',
+      // S4.1, S4.3
+      'chats.search',
+      'messages.usageSummary'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

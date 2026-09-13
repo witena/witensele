@@ -40,8 +40,8 @@ does not throw, it just makes every answer slightly worse.
 | Tool **definitions**: the MCP pool, `read_skill` / `read_skill_file`, `memory_save` / `memory_search` | [`mcp`](../mcp/context.md) (S3.1), [`skills`](../skills/context.md) (S3.2), [`memory`](../memory/context.md) (S3.3). The turn calls `ctx.mcp`, `buildSkillTools` and `buildMemoryTools`; the `stopWhen` loop, the tool message parts and **which of them an agent gets** are here |
 | The content of the skills and memory prompt sections | `skills` and `memory` build the text; the turn decides the order and whether to include them |
 | Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
-| Context overflow and truncation | S4.2 |
-| Cost accounting on top of the stored `Usage` | S4.1 |
+| Announcing that a context was truncated, and naming the chat | [`orchestration`](../orchestration/context.md). The turn *measures* (`fitHistory`, `droppedMessages`) and the runner *tells*, because both are facts about a run |
+| Displaying or pricing the stored `Usage` | [`chats`](../chats/context.md) and `src/shared/pricing.ts`. The turn records what the provider reported and nothing else |
 
 ## Dependencies
 

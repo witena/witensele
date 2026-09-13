@@ -10,7 +10,8 @@
 |---|---|
 | `src/shared/mentions.ts` | `parseMentions` / `findMentions` / `splitMentions`: the `@Name` rule, shared with the renderer so the composer and the scheduler can never disagree |
 | `src/main/orchestration/scheduling.ts` | `planFromUserMessages`, `planFromReplies`, `mergePlans`, `reachedRoundLimit` — the pure "who speaks next" |
-| `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`) and `ChatRunnerRegistry` (the map on `AppContext`) |
+| `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`, and from S4.2 / S4.3 the `contextTruncated` notice and the automatic title) and `ChatRunnerRegistry` (the map on `AppContext`) |
+| `src/main/agents/title.ts` | `generateChatTitle` and its two pure halves, injected into the runner as `ChatRunnerOptions.generateTitle` so a test can replace it |
 | `src/main/app-context.ts` | Creates the registry and stops every runner in `close()` |
 | `src/main/handlers/chats.ts` | `chat.send` / `chat.stop` delegate to the registry; `chats.delete` calls `remove` first |
 
@@ -66,6 +67,9 @@ None of its own; it is called by two of [`chats`](../chats/backend.md)'s:
 | `run.round` | `{ chatId, round, speakers }` | Each round begins |
 | `run.finished` | `{ chatId, reason }` | Once per run: `completed` \| `stopped` \| `max-rounds` \| `error` |
 
+`chat.updated` is also emitted once per run when the automatic title lands; the
+`chats` feature owns the field and the list row that redraws.
+
 The `message.delta`, `message.updated` and `presence.changed` events inside a run
 come from [`agent-turn`](../agent-turn/backend.md). The runner wraps each turn's
 `onEvent` to record that turn's `messageId` in `RunState.activeTurns` and then
@@ -108,6 +112,46 @@ This is the part worth reading twice, because it is where a subtle bug would hid
   process, the barrier is a promise, and the bus is in-process (PLAN, "Reserved
   server capability"). A server version replaces `EventBus` and
   `MessageRepository`, not `ChatRunner`.
+
+## Two things the runner announces, and why it is the runner (S4.2, S4.3)
+
+Both are facts about a **run**, and `AgentTurn` does not know one is happening.
+
+### `contextTruncated`
+
+`runAgentTurn` runs its history through `fitHistory`
+([`../agent-turn/implement.md`](../agent-turn/implement.md)) and reports
+`droppedMessages` in its result. `#noticeTruncation` turns a non-zero count into
+one `system-notice` with `{ agent, dropped }` — **once per run per agent**, held
+in a `Set` that `#loop` clears when a run starts.
+
+Per round would bury the discussion under the same sentence, because a chat long
+enough to overflow overflows again on every round for the rest of its life. Per
+chat would be the other extreme: a user who comes back the next day and asks
+something else deserves to be told again that the agent cannot see the beginning
+any more.
+
+### The automatic title
+
+`#maybeTitle` runs after the loop and **before** `run.finished`, so a renderer
+that reloads on that event already has the new title. It does nothing unless all
+of these hold:
+
+1. The chat's title is still exactly `DEFAULT_CHAT_TITLE`. That comparison is the
+   whole mechanism — there is no "was this generated" flag to keep in sync, and no
+   way for the feature to overwrite something a human typed.
+2. The transcript holds a user message **and** an agent message with status
+   `done`. A run that errored, was stopped, or in which everyone passed has
+   nothing worth naming.
+
+It then builds the **first member's** model through the same injected
+`createModel` the turns use and calls `generateTitle` (default
+`generateChatTitle`): one `generateText` with `maxOutputTokens: 24`, a 15 second
+budget, chained to the run's own signal so Stop abandons it too. Every failure is
+swallowed — a title is a convenience — and the fallback is the first 40
+characters of the user's question, so the chat always ends up with something
+better than `New chat`. The result is sanitised (`sanitizeTitle`), persisted
+through `ChatRepository.update` and broadcast as `chat.updated`.
 
 ## External dependencies
 
