@@ -41,12 +41,13 @@ the same commit as the code they describe.
 
 ## Feature index
 
-None of these exist yet; the links point at the paths they will occupy. The step
-in STEPS.md that creates each feature is listed so the order is obvious.
+Only the features whose step is marked done in STEPS.md have their documents
+written; for the rest the links point at the paths they will occupy. The step in
+STEPS.md that creates each feature is listed so the order is obvious.
 
 | Feature | One-line description | Step | Documents |
 |---|---|---|---|
-| `backend-client` | The `BackendClient` abstraction, shared types and typed events that keep the renderer independent of Electron IPC | S1.1, S1.3 | [context](./features/backend-client/context.md) · [implement](./features/backend-client/implement.md) · [frontend](./features/backend-client/frontend.md) · [backend](./features/backend-client/backend.md) |
+| `backend-client` | The `BackendClient` abstraction, shared types and typed events that keep the renderer independent of Electron IPC — written in S1.1, implemented over Electron IPC in S1.3 | S1.1 `[x]`, S1.3 | [context](./features/backend-client/context.md) · [implement](./features/backend-client/implement.md) · [frontend](./features/backend-client/frontend.md) · [backend](./features/backend-client/backend.md) |
 | `ui-shell` | Navigation rail, the three page shells and the three-column dark layout from the mockup | S1.5 | [context](./features/ui-shell/context.md) · [implement](./features/ui-shell/implement.md) · [frontend](./features/ui-shell/frontend.md) · [backend](./features/ui-shell/backend.md) |
 | `providers` | Model provider records, presets, encrypted API keys, model-list fetching and AI SDK model construction | S1.6 | [context](./features/providers/context.md) · [implement](./features/providers/implement.md) · [frontend](./features/providers/frontend.md) · [backend](./features/providers/backend.md) |
 | `chats` | Chat CRUD, the chat list, per-chat settings and message persistence | S1.7, S2.2 | [context](./features/chats/context.md) · [implement](./features/chats/implement.md) · [frontend](./features/chats/frontend.md) · [backend](./features/chats/backend.md) |

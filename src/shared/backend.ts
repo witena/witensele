@@ -1,0 +1,218 @@
+/**
+ * The single seam between the renderer and everything behind it.
+ *
+ * The renderer imports nothing but `BackendClient`: no `window.witena`, no
+ * `ipcRenderer`, no electron. S1.3 implements this interface over Electron IPC;
+ * a later server version implements it over HTTP + WebSocket, and no page code
+ * changes. A VS Code extension can reuse the same renderer for the same reason.
+ *
+ * Conventions:
+ * - Method names are `namespace.method` strings, so the preload bridge can
+ *   register one IPC channel per name from `BACKEND_METHODS` with no hand-written
+ *   list per domain.
+ * - Every method takes **at most one object argument** (`{ id }`, `{ chatId }`),
+ *   so a new field is a non-breaking change at every layer.
+ * - Rejections carry a `BackendError`; the renderer switches on `code`.
+ */
+import type { BackendEvent, BackendEventType, EventOf } from './events'
+import type {
+  Agent,
+  AgentInput,
+  AppSettings,
+  AppSettingsPatch,
+  Chat,
+  ChatInput,
+  ChatMember,
+  ConnectionTestResult,
+  McpConnectionTestResult,
+  McpServer,
+  McpServerInput,
+  MemoryEntry,
+  Message,
+  Provider,
+  ProviderInput,
+  SkillMeta
+} from './types'
+
+/**
+ * Either a saved provider or an unsaved draft from the "add provider" form, so
+ * the model list can be fetched before the provider is created.
+ */
+export type ProviderRef = { id: string } | { draft: ProviderInput }
+
+/**
+ * Every request/response method the backend exposes.
+ *
+ * The full MVP surface is declared here from the start so the renderer can be
+ * written against the finished contract. Only `system.ping` and
+ * `system.emitTestEvent` are implemented in S1.3; the rest land with their own
+ * steps (see `docs/STEPS.md`) and reject with `internal` until then.
+ */
+export interface BackendApi {
+  /* -- system ------------------------------------------------------------- */
+
+  /** Liveness probe. Used by the S1.3 acceptance test. */
+  'system.ping': () => Promise<'pong'>
+  /** Asks the backend to push one `system.test` event back. S1.3 test hook only. */
+  'system.emitTestEvent': (input: { payload: string }) => Promise<void>
+
+  /* -- settings ----------------------------------------------------------- */
+
+  'settings.get': () => Promise<AppSettings>
+  /** Shallow merge; `timeouts` merges field by field. Returns the stored result. */
+  'settings.update': (input: { patch: AppSettingsPatch }) => Promise<AppSettings>
+
+  /* -- providers ---------------------------------------------------------- */
+
+  'providers.list': () => Promise<Provider[]>
+  'providers.get': (input: { id: string }) => Promise<Provider>
+  'providers.create': (input: { input: ProviderInput }) => Promise<Provider>
+  /** Omitting `apiKey` in the patch keeps the stored key; `''` clears it. */
+  'providers.update': (input: { id: string; patch: Partial<ProviderInput> }) => Promise<Provider>
+  'providers.delete': (input: { id: string }) => Promise<void>
+  /** Reads the provider's `/models` endpoint; does not persist the result. */
+  'providers.fetchModels': (input: { provider: ProviderRef }) => Promise<string[]>
+  'providers.testConnection': (input: { provider: ProviderRef }) => Promise<ConnectionTestResult>
+
+  /* -- agents ------------------------------------------------------------- */
+
+  'agents.list': () => Promise<Agent[]>
+  'agents.get': (input: { id: string }) => Promise<Agent>
+  'agents.create': (input: { input: AgentInput }) => Promise<Agent>
+  'agents.update': (input: { id: string; patch: Partial<AgentInput> }) => Promise<Agent>
+  'agents.delete': (input: { id: string }) => Promise<void>
+
+  /* -- MCP servers -------------------------------------------------------- */
+
+  'mcp.list': () => Promise<McpServer[]>
+  'mcp.create': (input: { input: McpServerInput }) => Promise<McpServer>
+  'mcp.update': (input: { id: string; patch: Partial<McpServerInput> }) => Promise<McpServer>
+  'mcp.delete': (input: { id: string }) => Promise<void>
+  /** Connects, lists tools, disconnects. Never leaves the probe connection open. */
+  'mcp.testConnection': (input: { id: string }) => Promise<McpConnectionTestResult>
+
+  /* -- skills ------------------------------------------------------------- */
+
+  'skills.list': () => Promise<SkillMeta[]>
+  /** Copies a skill folder into `userData/skills/` and returns its parsed header. */
+  'skills.import': (input: { sourcePath: string }) => Promise<SkillMeta>
+
+  /* -- memory (one markdown directory per agent) -------------------------- */
+
+  'memory.list': (input: { agentId: string }) => Promise<MemoryEntry[]>
+  /** `path` is relative to the agent's memory directory; `MEMORY.md` is the index. */
+  'memory.read': (input: { agentId: string; path: string }) => Promise<{ path: string; content: string }>
+  'memory.write': (input: { agentId: string; path: string; content: string }) => Promise<MemoryEntry>
+
+  /* -- chats -------------------------------------------------------------- */
+
+  'chats.list': () => Promise<Chat[]>
+  'chats.get': (input: { id: string }) => Promise<Chat>
+  'chats.create': (input: { input: Partial<ChatInput> }) => Promise<Chat>
+  'chats.update': (input: { id: string; patch: Partial<ChatInput> }) => Promise<Chat>
+  'chats.delete': (input: { id: string }) => Promise<void>
+  /** Replaces the whole member list; array order becomes `ChatMember.position`. */
+  'chats.members.set': (input: { chatId: string; agentIds: string[] }) => Promise<ChatMember[]>
+
+  /* -- messages ----------------------------------------------------------- */
+
+  /** Newest first. `before` is a message id used as an exclusive cursor. */
+  'messages.list': (input: { chatId: string; before?: string; limit?: number }) => Promise<Message[]>
+
+  /* -- running a chat ----------------------------------------------------- */
+
+  /**
+   * Persists the user message and starts a run. Resolves with the stored user
+   * message as soon as the run is scheduled; agent output arrives as events.
+   */
+  'chat.send': (input: { chatId: string; text: string; mentions?: string[] }) => Promise<Message>
+  /** Aborts the whole chain for this chat. Idempotent when nothing is running. */
+  'chat.stop': (input: { chatId: string }) => Promise<void>
+}
+
+/** The name of any backend method. */
+export type BackendMethod = keyof BackendApi
+
+/**
+ * The transport-agnostic client the renderer depends on.
+ *
+ * `invoke` is one request/response call; `subscribe` is the push channel. There
+ * is nothing else — anything a page needs must be expressible as one of the two.
+ */
+export interface BackendClient {
+  /** Calls a backend method. Rejects with a `BackendError`. */
+  invoke<M extends BackendMethod>(
+    method: M,
+    ...args: Parameters<BackendApi[M]>
+  ): ReturnType<BackendApi[M]>
+
+  /** Subscribes to every backend event. Returns the unsubscribe function. */
+  subscribe(listener: (event: BackendEvent) => void): () => void
+
+  /** Convenience filter over `subscribe`. Returns the unsubscribe function. */
+  subscribeTo?<T extends BackendEventType>(type: T, listener: (event: EventOf<T>) => void): () => void
+}
+
+/**
+ * Every method name as data, for the layers that must iterate them: the preload
+ * bridge exposes one channel per entry and the main process asserts that each has
+ * a handler. Kept in sync with `BackendApi` by the compile-time check below.
+ */
+export const BACKEND_METHODS = [
+  'system.ping',
+  'system.emitTestEvent',
+  'settings.get',
+  'settings.update',
+  'providers.list',
+  'providers.get',
+  'providers.create',
+  'providers.update',
+  'providers.delete',
+  'providers.fetchModels',
+  'providers.testConnection',
+  'agents.list',
+  'agents.get',
+  'agents.create',
+  'agents.update',
+  'agents.delete',
+  'mcp.list',
+  'mcp.create',
+  'mcp.update',
+  'mcp.delete',
+  'mcp.testConnection',
+  'skills.list',
+  'skills.import',
+  'memory.list',
+  'memory.read',
+  'memory.write',
+  'chats.list',
+  'chats.get',
+  'chats.create',
+  'chats.update',
+  'chats.delete',
+  'chats.members.set',
+  'messages.list',
+  'chat.send',
+  'chat.stop'
+] as const satisfies readonly BackendMethod[]
+
+/** A method name that appears in `BACKEND_METHODS`. */
+type ListedBackendMethod = (typeof BACKEND_METHODS)[number]
+
+type Assert<T extends true> = T
+
+/**
+ * Compile-time proof that `BACKEND_METHODS` and `keyof BackendApi` are the same
+ * set. `satisfies` above rejects a name that is not a method; this rejects a
+ * method that was added to `BackendApi` and not to the array.
+ */
+export type BackendMethodsAreExhaustive = Assert<
+  [Exclude<BackendMethod, ListedBackendMethod>, Exclude<ListedBackendMethod, BackendMethod>] extends [never, never]
+    ? true
+    : false
+>
+
+/** Narrows a value to a known method name at runtime (used by the IPC registry). */
+export function isBackendMethod(value: unknown): value is BackendMethod {
+  return typeof value === 'string' && (BACKEND_METHODS as readonly string[]).includes(value)
+}

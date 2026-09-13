@@ -30,7 +30,7 @@ Acceptance: `git log` has commits; the GitHub repository's main branch shows the
 
 ## Phase 1: Skeleton (PLAN milestone 1)
 
-### S1.1 Shared contracts `[ ]`
+### S1.1 Shared contracts `[x]` (2026-09-13)
 What: `src/shared/types.ts` (domain types), `events.ts` (typed events), `backend.ts` (BackendClient interface).
 Acceptance: typecheck passes; the four docs under `docs/features/backend-client/` are written.
 

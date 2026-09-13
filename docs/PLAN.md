@@ -158,6 +158,7 @@ The MVP runs entirely locally, but is written under these constraints so that a 
 - Streaming output, state changes and presence changes are all typed events (`shared/events.ts`) rather than scattered IPC channels, so they can be forwarded over WebSocket unchanged.
 - Business logic in the main process (ChatRunner, AgentTurn, MCPManager, memory) never imports Electron APIs; it depends only on injected storage and an event bus, so it can move to a Node server as a block.
 - API key access goes through a `SecretStore` interface: Electron `safeStorage` in the MVP, backend secret management in the server version.
+- Concurrency and messaging middleware: the MVP needs none. All agent concurrency lives inside the single main process (parallel turns are concurrent promises, the round barrier is `Promise.all`), SQLite has one writer, and events reach the renderer through an in-process bus. Business logic depends only on two injected interfaces, `EventBus` and `MessageRepository`. Redis Streams / pub-sub (or Postgres LISTEN/NOTIFY, NATS) become relevant only in the server version when there are multiple server instances or agent workers in separate processes; at that point they are alternative implementations of those two interfaces, not a change to ChatRunner.
 
 ## Test gate
 
