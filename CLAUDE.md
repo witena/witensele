@@ -75,7 +75,8 @@ These are not style preferences. A change that breaks one of them is not done.
    English strings inside components. Both `zh-CN.json` and `en.json` are updated
    together — a test asserts their key sets are identical. User-visible text
    produced by the main process (system messages, errors) is sent as a message key
-   plus parameters and translated in the renderer.
+   plus parameters and translated in the renderer. See "Adding a user-facing
+   string" below for the procedure and the two guard tests that enforce it.
 
 5. **Main-process business logic must not import electron.** Only
    `src/main/index.ts` and `src/main/ipc/` may. Everything else (ChatRunner,
@@ -88,6 +89,33 @@ These are not style preferences. A change that breaks one of them is not done.
    `ipcRenderer` or anything Electron-specific directly. The current
    implementation is backed by Electron IPC; swapping in HTTP + WebSocket must not
    require touching page code.
+
+## Adding a user-facing string
+
+Details and the full key tree are in `docs/features/i18n/`. The short version:
+
+1. **Add the key to both locale files.** `src/renderer/src/locales/en.json` and
+   `zh-CN.json`, in the same position in the tree. The top-level keys are the
+   namespaces: `common`, `nav`, `chat`, `agents`, `settings`, `presence`,
+   `notices`. `zh-CN.json` is the only file in the repository that may contain
+   Chinese; `en.json` may not contain any.
+2. **Render it with `t()`.** `const { t } = useTranslation()`, then
+   `{t('chat.send')}`. Interpolate with `{{name}}` in the JSON and
+   `t('chat.round', { round })` in the component; the placeholder names must
+   match in both files.
+3. **Main-process text is never a string.** Emit a `SystemNoticePart`
+   (`{ type: 'system-notice', key, params }`) with a key under `notices.*` and
+   render it with `translateNotice` from `src/renderer/src/i18n/notices.ts`. The
+   backend does not know the UI language, and a stored sentence would be frozen
+   in the language that was active when it was written.
+
+Two tests in `npm test` enforce this, and both are meant to be read before they
+are worked around:
+
+| Test | Fails when |
+|---|---|
+| `src/renderer/src/i18n/locales.test.ts` | The two files' key trees differ, a value is empty, `en.json` contains CJK, a `zh-CN.json` value is still English, or the `{{placeholders}}` do not match |
+| `src/renderer/src/i18n/used-keys.test.ts` | A literal `t('…')` names a key `en.json` does not define, or a `.tsx` file has a hard-coded JSX text node. It is a documented text-scanning heuristic, not a compiler — read its header before extending it |
 
 ## Commands
 

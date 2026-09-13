@@ -1,0 +1,97 @@
+{
+  "common": {
+    "appName": "Witena",
+    "ok": "确定",
+    "cancel": "取消",
+    "save": "保存",
+    "delete": "删除",
+    "add": "添加",
+    "search": "搜索",
+    "loading": "加载中…",
+    "error": "出错了"
+  },
+  "nav": {
+    "chats": "对话",
+    "agents": "智能体",
+    "settings": "设置"
+  },
+  "chat": {
+    "newChat": "新建对话",
+    "searchChats": "搜索对话",
+    "today": "今天",
+    "yesterday": "昨天",
+    "earlier": "更早",
+    "members": "成员",
+    "groupSettings": "群设置",
+    "composerPlaceholder": "输入消息，用 @ 点名某位成员。",
+    "send": "发送",
+    "stop": "停止",
+    "round": "第 {{round}} 轮",
+    "replyingTo": "回复 @{{name}}",
+    "passed": "已弃权",
+    "skipped": "已跳过"
+  },
+  "agents": {
+    "title": "智能体",
+    "newAgent": "新建智能体",
+    "searchAgents": "搜索智能体",
+    "empty": "还没有智能体，先创建一个再开始讨论。",
+    "name": "名称",
+    "description": "描述",
+    "systemPrompt": "系统提示词",
+    "provider": "服务商",
+    "model": "模型",
+    "parameters": "参数",
+    "temperature": "温度",
+    "maxTokens": "最大生成长度",
+    "skills": "技能",
+    "mcpServers": "MCP 服务器",
+    "memory": "记忆"
+  },
+  "settings": {
+    "title": "设置",
+    "sections": {
+      "providers": "服务商",
+      "mcp": "MCP 服务器",
+      "skills": "技能",
+      "timeouts": "超时",
+      "appearanceLanguage": "外观与语言",
+      "dataBackup": "数据与备份"
+    },
+    "language": "语言",
+    "languageSystem": "跟随系统",
+    "languageZh": "简体中文",
+    "languageEn": "English"
+  },
+  "presence": {
+    "available": "空闲",
+    "working": "工作中",
+    "away": "离开",
+    "offline": "离线"
+  },
+  "errors": {
+    "not_found": "该内容已不存在。",
+    "validation": "请求无效，已被拒绝。",
+    "provider_error": "模型服务商返回了错误。",
+    "mcp_error": "MCP 服务器返回了错误。",
+    "aborted": "请求已取消。",
+    "unauthorized": "没有权限执行该操作。",
+    "internal": "应用内部出错了。"
+  },
+  "notices": {
+    "agentSkipped": "{{agent}} 本轮没有响应，已被跳过",
+    "runStopped": "本次运行已停止",
+    "maxRoundsReached": "已达到 {{max}} 轮自动讨论的上限，发送消息可继续。",
+    "providerError": "服务商未能作答：{{message}}"
+  },
+  "smoke": {
+    "title": "Witena · 后端连通性自检",
+    "backend": "后端：",
+    "language": "语言设置：",
+    "resolvedLanguage": "当前语言：",
+    "lastEvent": "最近事件：",
+    "emitTestEvent": "发送测试事件",
+    "pending": "…",
+    "noEvent": "—"
+  }
+}

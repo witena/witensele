@@ -1,9 +1,9 @@
 # backend-client — Frontend
 
-> Status: S1.3 implemented the renderer half. `src/renderer/src/lib/backend.ts`
-> exists and works; the zustand stores below still arrive with the feature steps
-> that own them. `App.tsx` currently holds a throwaway smoke screen that S1.5
-> replaces.
+> Status: S1.3 implemented the renderer half and S1.4 added the first store.
+> `src/renderer/src/lib/backend.ts` exists and works; the remaining zustand
+> stores below still arrive with the feature steps that own them. `App.tsx`
+> currently holds a throwaway smoke screen that S1.5 replaces.
 
 ## Pages and components
 
@@ -11,9 +11,9 @@
 |---|---|
 | `src/shared/backend.ts` | The `BackendClient` interface every renderer file depends on |
 | `src/renderer/src/lib/backend.ts` | The Electron implementation — wraps the preload bridge, unwraps the response envelope, rebuilds the error. The **only** renderer file allowed to touch `window.witena` |
-| `src/renderer/src/App.tsx` | S1.3 only: the smoke screen that exercises both directions. Replaced by the real shell in S1.5 |
-| `src/renderer/src/lib/backendContext.tsx` | *Deferred*: a React context that injects the client so pages can be tested against a fake. Lands with the first store (S1.5 / S1.7); until then modules import the `backend` singleton |
-| `src/renderer/src/stores/*.ts` | S1.7 onwards: the zustand stores that call `invoke` and reduce events; no component calls the client directly |
+| `src/renderer/src/App.tsx` | Temporary: the smoke screen that exercises both directions, translated in S1.4. Replaced by the real shell in S1.5 |
+| `src/renderer/src/lib/backend-provider.ts` | S1.4: `getBackend()` / `setBackend()`. The injection point stores use instead of importing the singleton, so a store is testable in plain Node with a fake client. It replaced the planned `backendContext.tsx` — the bootstrap needs the client *before* the React tree exists, which a context cannot provide |
+| `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, the rest from S1.7 |
 
 Rule (CLAUDE.md #6): components call store actions, stores call `BackendClient`,
 and only `lib/backend.ts` knows a transport exists. A component that imports
@@ -44,7 +44,8 @@ const stop = backend.subscribeTo('system.test', (event) => …)
 
 ## State
 
-Not implemented yet. The intended split, so the stores land consistently:
+Only `settings` exists so far (S1.4, see [`../i18n/frontend.md`](../i18n/frontend.md)).
+The intended split for the rest, so they land consistently:
 
 | Store | Field | Type | Meaning |
 |---|---|---|---|
@@ -67,8 +68,8 @@ follows.
 | `invoke('system.ping')` | `App.tsx` on mount (S1.3 smoke screen) | Proves the bridge is alive end to end |
 | `invoke('system.emitTestEvent', { payload })` | The smoke screen's button | Proves the push direction |
 | `subscribeTo('system.test', …)` | `App.tsx` effect | Renders the last payload received |
-| `invoke('settings.get' / 'settings.update')` | The smoke screen today, the settings page from S1.4 | Language, theme, timeouts |
-| `subscribe(…)` | Once at app start, in the backend context provider (deferred) | Fans every `BackendEvent` out to the stores; the returned function unsubscribes on unmount |
+| `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher | Language, theme, timeouts |
+| `subscribe(…)` | Once at app start, from the module that fans events into the stores (deferred) | Fans every `BackendEvent` out to the stores; the returned function unsubscribes on unmount |
 | `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test |
 | `invoke('agents.*')` | Agents page | CRUD for the configuration form |
 | `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, skill import, memory viewer |
@@ -91,9 +92,11 @@ Event handling worth writing down once:
 
 ## Interaction states
 
-The S1.3 smoke screen shows `…` until `system.ping` and `settings.get` resolve,
-`—` until the first `system.test` event arrives, and the raw error message under
-`data-testid="error"` if either call rejects. It is a test surface, not a design.
+The smoke screen shows `…` until `system.ping` resolves, `—` until the first
+`system.test` event arrives, and the raw error message under
+`data-testid="error"` if a call rejects. Settings are no longer fetched there:
+S1.4 moved them into `stores/settings.ts`, which the bootstrap loads before the
+first render. It is a test surface, not a design.
 
 The states the real UI implements:
 
@@ -112,14 +115,15 @@ This feature adds no permanent user-facing copy, but it fixes how copy reaches
 the renderer:
 
 - `SystemNoticePart` carries `key` + `params`; the renderer calls
-  `t(part.key, part.params)`. The backend never sends a sentence.
-- `BackendError.code` maps to `errors.<code>` in the locale files;
-  `BackendError.message` is for logs only and is never rendered.
+  `translateNotice(t, part)`, which resolves `notices.<key>`
+  (`src/renderer/src/i18n/notices.ts`). The backend never sends a sentence.
+- `BackendError.code` maps to `errors.<code>` in the locale files, added to both
+  in S1.4; `BackendError.message` is for logs only and is never rendered.
 
-The literals in the S1.3 smoke screen (`backend:`, `language:`, `last event:`,
-`Emit test event`) are the one deliberate exception; the file carries a
-`TODO(S1.4): i18n` comment and is deleted in S1.5. Both `zh-CN.json` and
-`en.json` gain the error keys together in S1.4.
+S1.4 removed the last exception: the smoke screen's literals now live under
+`smoke.*` in both locale files and the `TODO(S1.4): i18n` comment is gone. The
+whole `smoke` namespace disappears with the screen in S1.5. See
+[`../i18n/frontend.md`](../i18n/frontend.md).
 
 ## Accessibility and keyboard
 
@@ -128,6 +132,8 @@ backend text arrives as keys rather than strings, screen-reader output follows
 the UI language automatically, and no message rendered from a stored
 `system-notice` can become stale in the wrong language after a language switch.
 
-The smoke screen's `data-testid` attributes (`ping`, `language`, `last-event`,
-`emit-test-event`, `error`) exist for Playwright; the real UI is located by role
-and accessible name instead.
+The smoke screen's `data-testid` attributes (`smoke-title`, `ping`, `language`,
+`resolved-language`, `last-event`, `emit-test-event`, `lang-system`, `lang-zh-CN`,
+`lang-en`, `error`) exist for Playwright; the real UI is located by role and
+accessible name instead. Each testid wraps a **value only**, never its translated
+label, so the assertions do not depend on the active language.

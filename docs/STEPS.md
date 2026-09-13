@@ -47,7 +47,7 @@ Acceptance:
 - `npm run typecheck`, `npm test`, `npm run build` and `npm run e2e` pass
 - Nothing outside `src/main/index.ts` and `src/main/ipc/` imports electron
 
-### S1.4 i18n `[ ]`
+### S1.4 i18n `[x]` (2026-09-13)
 What: i18next + react-i18next, `locales/zh-CN.json` and `en.json`, language persisted in the settings table, follows the system language on first launch.
 Acceptance:
 - Unit test: both locale files have identical key sets

@@ -264,8 +264,12 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   and preload, and in `src/preload/index.d.ts` for the renderer, whose TypeScript
   project may not include files from `src/main/`. The two must be edited
   together; a mismatch surfaces as a type error in `lib/backend.ts`.
-- **The `backend` singleton is imported directly.** A React context that injects a
-  fake client is deferred to the step that introduces the first store (S1.5 /
-  S1.7); until then tests use `createElectronBackendClient(fakeBridge)`.
-- **The smoke UI in `App.tsx` is throwaway.** It carries plain English literals
-  and a `TODO(S1.4): i18n`; S1.5 replaces the file entirely.
+- **Injection is a module singleton, not React context.** S1.4 added
+  `src/renderer/src/lib/backend-provider.ts` (`getBackend()` / `setBackend()`)
+  instead of the planned context: the bootstrap loads settings *before* the React
+  tree exists, so a provider component could not supply the client to it. Tests
+  swap in a fake with `setBackend`; tests of the client itself still use
+  `createElectronBackendClient(fakeBridge)`.
+- **The smoke UI in `App.tsx` is throwaway.** S1.4 moved its copy into the
+  `smoke.*` locale namespace, so it no longer breaks the i18n rule; S1.5 replaces
+  the file, and that namespace, entirely.
