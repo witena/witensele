@@ -10,7 +10,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import {
+  expect,
+  _electron as electron,
+  type ElectronApplication,
+  type Page
+} from '@playwright/test'
 
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -96,4 +101,41 @@ export async function openDeveloperSettings(window: Page): Promise<void> {
 export async function openProviderSettings(window: Page): Promise<void> {
   await window.getByTestId('nav-settings').click()
   await window.getByTestId('settings-section-providers').click()
+}
+
+/**
+ * Opens the Agents page.
+ *
+ * Trivial today, but every S2.1 spec starts with it and the rail is exactly the
+ * kind of thing a later step moves; one helper is one edit rather than three.
+ */
+export async function openAgents(window: Page): Promise<void> {
+  await window.getByTestId('nav-agents').click()
+  await expect(window.getByTestId('page-agents')).toBeVisible()
+}
+
+/**
+ * Adds the local Ollama provider with the given model ids typed in by hand.
+ *
+ * Deliberately **not** "fetch from /models": that path is `providers.spec.ts`'s
+ * subject, it needs a running Ollama, and a developer machine's fetched list can
+ * contain a 40 GB model that a later probe would then try to load. Typing the ids
+ * keeps the agent specs offline — they never send a prompt, they only need an
+ * agent that *has* a provider and a model.
+ */
+export async function addOllamaProvider(window: Page, models: string[]): Promise<void> {
+  await openProviderSettings(window)
+  await window.getByTestId('providers-add').click()
+  await window.getByTestId('preset-ollama').click()
+  for (const model of models) await addProviderModel(window, model)
+  await window.getByTestId('provider-save').click()
+  await expect(window.getByTestId('provider-card')).toHaveCount(1)
+}
+
+/** Types one more model id into the provider editor that is currently open. */
+export async function addProviderModel(window: Page, model: string): Promise<void> {
+  await window.getByTestId('provider-add-model').click()
+  await window.getByTestId('provider-add-model-input').fill(model)
+  await window.getByTestId('provider-add-model-input').press('Enter')
+  await expect(window.getByTestId('provider-model-chip').filter({ hasText: model })).toHaveCount(1)
 }

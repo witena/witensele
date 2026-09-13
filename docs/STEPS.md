@@ -87,13 +87,33 @@ file when localhost:11434 does not answer. Docs in `docs/features/{chats,agent-t
 
 ## Phase 2: Multi-agent (PLAN milestone 2)
 
-### S2.1 Agents CRUD and configuration page `[ ]`
+### S2.1 Agents CRUD and configuration page `[x]` (2026-09-13)
 What: agents table CRUD; configuration page with basic info, provider and model dropdowns, parameters, system prompt; list page.
 Acceptance: create 3 agents on different providers, they survive a restart; unit tests for CRUD.
+Done: `agents.get/create/update/delete` in `src/main/handlers/agents.ts`, with the
+name rules S2.3 will resolve `@mentions` against (non-empty, no `@`, unique
+case-insensitively), an existing `providerId`, a non-empty `modelId` and bounded
+`params`; deletion stops the runs of every chat the agent was in and emits one
+`chat.updated` each. `stores/agents.ts` grew to full CRUD plus the editor draft
+(`selectedId` / `mode` / `draft` / `dirty`) and `validateDraft`. The page is
+`pages/agents-page.tsx` with `components/agents/{agent-list,agent-editor,agent-display}`,
+built to the `Agents.dc.html` artboard; Skills, MCP servers and the memory body
+are empty states naming S3.2, S3.1 and S3.3. `e2e/agents.spec.ts` drives the whole
+screen offline. Docs in `docs/features/agents/`.
 
-### S2.2 Chat members and chat settings `[ ]`
+### S2.2 Chat members and chat settings `[x]` (2026-09-13)
 What: chat_members add / remove / reorder; member panel on the right; chat settings (mode, sequential / parallel, max rounds, timeouts).
 Acceptance: agents can be added to, removed from and reordered within a chat; chat settings persist.
+Done: `chats.create` takes `memberAgentIds` (`ChatCreateInput`) and only falls back
+to `ensureDefaultAgent` while the agents table is empty; `chats.update` takes a
+`ChatPatch` whose `settings` is merged field by field and fully validated;
+`chats.members.set` checks every agent and emits `chat.updated`; `chat.send`
+rejects a chat with no members before storing anything. The member panel gained
+the add popover, remove, native HTML5 drag reordering (`lib/reorder.ts`) and the
+usage placeholder, and the group-settings block writes straight through to
+`chats.update`. `e2e/members.spec.ts` covers add, reorder across a restart,
+remove, the settings and the empty-membership refusal. Docs updated in
+`docs/features/chats/`.
 
 ### S2.3 Orchestration engine `[ ]`
 What: full ChatRunner: roundrobin / mention-only, sequential / parallel, @parsing, PASS, maxAutoRounds, barrier, stop; history transform (name prefixes, role mapping, merging consecutive messages).

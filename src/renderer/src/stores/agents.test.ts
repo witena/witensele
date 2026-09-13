@@ -1,0 +1,298 @@
+/**
+ * The agents store against a fake `BackendClient`.
+ *
+ * Same approach as `providers.test.ts`: no jsdom, no React, no Electron. Two
+ * things are worth proving here and are hard to see by reading the store —
+ * **the draft lifecycle** (open, edit, save, reopen; `dirty` going true and back
+ * to false; a create turning into an edit of the row it produced) and
+ * **`validateDraft`**, which is what disables Save and must agree with the
+ * backend's own rules in `src/main/handlers/agents.ts`.
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { BackendClient, BackendMethod } from '@shared/backend'
+import type { Agent, AgentInput } from '@shared/types'
+import { LOCAL_USER_ID } from '@shared/types'
+import { resetBackend, setBackend } from '../lib/backend-provider'
+import {
+  draftFromAgent,
+  duplicateName,
+  emptyAgentDraft,
+  isDraftValid,
+  useAgentsStore,
+  validateDraft
+} from './agents'
+
+interface Call {
+  method: BackendMethod
+  input: unknown
+}
+
+function agentFrom(id: string, input: AgentInput): Agent {
+  return { id, userId: LOCAL_USER_ID, createdAt: 0, updatedAt: 0, ...input }
+}
+
+function validDraft(overrides: Partial<AgentInput> = {}): AgentInput {
+  return { ...emptyAgentDraft(), name: 'Ada', providerId: 'p1', modelId: 'gpt-4o', ...overrides }
+}
+
+function fakeBackend(initial: Agent[] = []): { client: BackendClient; calls: Call[] } {
+  const calls: Call[] = []
+  let rows = [...initial]
+  let nextId = 1
+
+  const client: BackendClient = {
+    invoke: (async (method: BackendMethod, input: unknown) => {
+      calls.push({ method, input })
+      if (method === 'agents.list') return rows
+      if (method === 'agents.create') {
+        const created = agentFrom(`a${nextId++}`, (input as { input: AgentInput }).input)
+        rows = [...rows, created]
+        return created
+      }
+      if (method === 'agents.update') {
+        const { id, patch } = input as { id: string; patch: Partial<AgentInput> }
+        const updated = { ...(rows.find((row) => row.id === id) as Agent), ...patch }
+        rows = rows.map((row) => (row.id === id ? updated : row))
+        return updated
+      }
+      if (method === 'agents.delete') {
+        rows = rows.filter((row) => row.id !== (input as { id: string }).id)
+        return undefined
+      }
+      throw new Error(`unexpected method ${method}`)
+    }) as BackendClient['invoke'],
+    subscribe: () => () => undefined
+  }
+
+  return { client, calls }
+}
+
+/** The store is a module singleton; every test starts from the same blank slate. */
+function resetStore(): void {
+  useAgentsStore.setState({
+    agents: [],
+    status: 'idle',
+    error: undefined,
+    errorCode: undefined,
+    selectedId: null,
+    mode: 'idle',
+    draft: null,
+    dirty: false,
+    saving: false
+  })
+}
+
+describe('validateDraft', () => {
+  it('accepts a complete draft', () => {
+    expect(validateDraft(validDraft(), [], null)).toEqual({})
+    expect(isDraftValid(validateDraft(validDraft(), [], null))).toBe(true)
+  })
+
+  it('reports an empty or whitespace-only name', () => {
+    expect(validateDraft(validDraft({ name: '' }), [], null).name).toBe('required')
+    expect(validateDraft(validDraft({ name: '   ' }), [], null).name).toBe('required')
+  })
+
+  it('reports a name containing @, which would break an @mention', () => {
+    expect(validateDraft(validDraft({ name: 'Ada@work' }), [], null).name).toBe('at')
+  })
+
+  it('reports a name another agent holds, ignoring case, but not the agent itself', () => {
+    const ada = agentFrom('a1', validDraft({ name: 'Ada' }))
+
+    expect(validateDraft(validDraft({ name: 'ada' }), [ada], null).name).toBe('taken')
+    expect(validateDraft(validDraft({ name: 'Ada' }), [ada], 'a1').name).toBeUndefined()
+  })
+
+  it('reports a missing provider and a missing model', () => {
+    const errors = validateDraft(validDraft({ providerId: '', modelId: ' ' }), [], null)
+
+    expect(errors).toEqual({ providerId: 'required', modelId: 'required' })
+  })
+
+  it('reports parameters outside the range the backend accepts', () => {
+    expect(validateDraft(validDraft({ params: { temperature: 2.1 } }), [], null).temperature).toBe(
+      'range'
+    )
+    expect(validateDraft(validDraft({ params: { temperature: -1 } }), [], null).temperature).toBe(
+      'range'
+    )
+    expect(validateDraft(validDraft({ params: { maxTokens: 0 } }), [], null).maxTokens).toBe('range')
+    expect(validateDraft(validDraft({ params: { maxTokens: 1.5 } }), [], null).maxTokens).toBe(
+      'range'
+    )
+    // Absent is not invalid: both fields mean "the provider's default".
+    expect(validateDraft(validDraft({ params: {} }), [], null)).toEqual({})
+  })
+})
+
+describe('duplicateName', () => {
+  it('appends the suffix, then a number until the name is free', () => {
+    expect(duplicateName('Architect', [])).toBe('Architect copy')
+    expect(duplicateName('Architect', ['Architect copy'])).toBe('Architect copy 2')
+    expect(duplicateName('Architect', ['architect copy', 'Architect copy 2'])).toBe(
+      'Architect copy 3'
+    )
+  })
+})
+
+describe('agents store', () => {
+  afterEach(() => {
+    resetBackend()
+    resetStore()
+  })
+
+  beforeEach(() => {
+    resetStore()
+  })
+
+  it('loads the list', async () => {
+    const ada = agentFrom('a1', validDraft())
+    setBackend(fakeBackend([ada]).client)
+
+    await useAgentsStore.getState().load()
+
+    expect(useAgentsStore.getState().agents).toEqual([ada])
+    expect(useAgentsStore.getState().status).toBe('ready')
+  })
+
+  it('opens a create draft that is dirty but not yet valid', () => {
+    setBackend(fakeBackend().client)
+
+    useAgentsStore.getState().startCreate()
+
+    const state = useAgentsStore.getState()
+    expect(state.mode).toBe('create')
+    expect(state.selectedId).toBeNull()
+    expect(state.dirty).toBe(true)
+    expect(isDraftValid(state.draftErrors())).toBe(false)
+  })
+
+  it('turns a saved create into an edit of the row it produced', async () => {
+    const { client, calls } = fakeBackend()
+    setBackend(client)
+
+    useAgentsStore.getState().startCreate()
+    useAgentsStore.getState().patchDraft({ name: 'Ada', providerId: 'p1', modelId: 'gpt-4o' })
+    const created = await useAgentsStore.getState().saveDraft()
+
+    expect(created).toMatchObject({ id: 'a1', name: 'Ada' })
+    const state = useAgentsStore.getState()
+    expect(state.mode).toBe('edit')
+    expect(state.selectedId).toBe('a1')
+    expect(state.dirty).toBe(false)
+    expect(state.agents).toHaveLength(1)
+    expect(calls.map((call) => call.method)).toEqual(['agents.create'])
+  })
+
+  it('derives the avatar monogram from the name when none was typed', async () => {
+    setBackend(fakeBackend().client)
+
+    useAgentsStore.getState().startCreate()
+    useAgentsStore.getState().patchDraft({ name: 'reviewer', providerId: 'p1', modelId: 'm' })
+    const created = await useAgentsStore.getState().saveDraft()
+
+    expect(created?.avatar.text).toBe('R')
+  })
+
+  it('goes dirty on a change and clean again after saving', async () => {
+    const ada = agentFrom('a1', validDraft())
+    setBackend(fakeBackend([ada]).client)
+    await useAgentsStore.getState().load()
+
+    useAgentsStore.getState().startEdit('a1')
+    expect(useAgentsStore.getState().dirty).toBe(false)
+
+    useAgentsStore.getState().patchDraft({ description: 'Systems thinker' })
+    expect(useAgentsStore.getState().dirty).toBe(true)
+
+    await useAgentsStore.getState().saveDraft()
+    expect(useAgentsStore.getState().dirty).toBe(false)
+    expect(useAgentsStore.getState().agents[0]?.description).toBe('Systems thinker')
+  })
+
+  it('goes clean again when a change is typed back to the stored value', async () => {
+    const ada = agentFrom('a1', validDraft({ description: 'first' }))
+    setBackend(fakeBackend([ada]).client)
+    await useAgentsStore.getState().load()
+
+    useAgentsStore.getState().startEdit('a1')
+    useAgentsStore.getState().patchDraft({ description: 'second' })
+    useAgentsStore.getState().patchDraft({ description: 'first' })
+
+    expect(useAgentsStore.getState().dirty).toBe(false)
+  })
+
+  it('refuses to save an invalid draft without calling the backend', async () => {
+    const { client, calls } = fakeBackend()
+    setBackend(client)
+
+    useAgentsStore.getState().startCreate()
+    useAgentsStore.getState().patchDraft({ name: 'Ada@work', providerId: 'p1', modelId: 'm' })
+
+    await expect(useAgentsStore.getState().saveDraft()).resolves.toBeNull()
+    expect(calls).toEqual([])
+  })
+
+  it('removes a params field rather than storing undefined', () => {
+    setBackend(fakeBackend().client)
+
+    useAgentsStore.getState().startCreate()
+    useAgentsStore.getState().patchParams({ temperature: 0.7 })
+    expect(useAgentsStore.getState().draft?.params).toEqual({ temperature: 0.7 })
+
+    useAgentsStore.getState().patchParams({ temperature: undefined })
+    expect(Object.keys(useAgentsStore.getState().draft?.params ?? {})).toEqual([])
+  })
+
+  it('picks an avatar colour pair from the palette', () => {
+    setBackend(fakeBackend().client)
+
+    useAgentsStore.getState().startCreate()
+    const before = useAgentsStore.getState().draft?.avatar.color
+    useAgentsStore.getState().pickAvatarColor(3)
+
+    const after = useAgentsStore.getState().draft?.avatar
+    expect(after?.color).not.toBe(before)
+    expect(after?.textColor).toBeDefined()
+  })
+
+  it('duplicates an agent under a free name and opens the copy', async () => {
+    const architect = agentFrom('a1', validDraft({ name: 'Architect' }))
+    setBackend(fakeBackend([architect]).client)
+    await useAgentsStore.getState().load()
+
+    const copy = await useAgentsStore.getState().duplicate('a1')
+
+    expect(copy?.name).toBe('Architect copy')
+    expect(useAgentsStore.getState().selectedId).toBe(copy?.id)
+    expect(useAgentsStore.getState().mode).toBe('edit')
+    expect(useAgentsStore.getState().dirty).toBe(false)
+  })
+
+  it('closes the editor when the agent it was editing is deleted', async () => {
+    const ada = agentFrom('a1', validDraft())
+    setBackend(fakeBackend([ada]).client)
+    await useAgentsStore.getState().load()
+    useAgentsStore.getState().startEdit('a1')
+
+    await useAgentsStore.getState().remove('a1')
+
+    const state = useAgentsStore.getState()
+    expect(state.agents).toEqual([])
+    expect(state.mode).toBe('idle')
+    expect(state.draft).toBeNull()
+  })
+
+  it('copies the record rather than aliasing it when an edit starts', async () => {
+    const ada = agentFrom('a1', validDraft({ skillNames: ['review'] }))
+    setBackend(fakeBackend([ada]).client)
+    await useAgentsStore.getState().load()
+
+    useAgentsStore.getState().startEdit('a1')
+    useAgentsStore.getState().patchDraft({ name: 'Changed' })
+
+    expect(useAgentsStore.getState().agents[0]?.name).toBe('Ada')
+    expect(draftFromAgent(ada).skillNames).not.toBe(ada.skillNames)
+  })
+})

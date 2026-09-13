@@ -21,8 +21,9 @@ import type {
   AppSettings,
   AppSettingsPatch,
   Chat,
-  ChatInput,
+  ChatCreateInput,
   ChatMember,
+  ChatPatch,
   ConnectionTestResult,
   McpConnectionTestResult,
   McpServer,
@@ -116,8 +117,10 @@ export interface BackendApi {
 
   'chats.list': () => Promise<Chat[]>
   'chats.get': (input: { id: string }) => Promise<Chat>
-  'chats.create': (input: { input: Partial<ChatInput> }) => Promise<Chat>
-  'chats.update': (input: { id: string; patch: Partial<ChatInput> }) => Promise<Chat>
+  /** `memberAgentIds` seeds the member list; see `ChatCreateInput`. */
+  'chats.create': (input: { input: ChatCreateInput }) => Promise<Chat>
+  /** `settings` is merged field by field; see `ChatPatch`. */
+  'chats.update': (input: { id: string; patch: ChatPatch }) => Promise<Chat>
   'chats.delete': (input: { id: string }) => Promise<void>
   /** The chat's members ordered by `position`. Read by the member panel. */
   'chats.members.list': (input: { chatId: string }) => Promise<ChatMember[]>

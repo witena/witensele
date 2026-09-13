@@ -1,0 +1,82 @@
+# agents — Context
+
+## Problem
+
+A Witena chat is interesting because the members in it are *different*: different
+models, different instructions, different jobs. Until S2.1 there was exactly one
+agent in the product — the bootstrap `Assistant` that `chats.create` wrote so the
+first conversation was possible at all. This feature is the screen and the
+handlers that let the user own that list: create an agent, give it a name, a
+face, a provider, a model, parameters and a system prompt, duplicate it, delete
+it, and find it all again after a restart.
+
+The name matters more than it looks. S2.3 resolves `@name` against this table, so
+the name is an **identifier the models will type**, not a label.
+
+## Scope
+
+- `agents.get / create / update / delete` on top of the existing repository, with
+  the validation that keeps an unusable record out of the database.
+- The Agents page: the 264px list (avatar, name, `modelId · provider`, count in
+  the header, "+" opens a draft) and the configuration editor beside it.
+- The editor: basic info (name, avatar monogram and an eight-colour palette,
+  description), model (provider select, model select or free-text id, temperature,
+  max tokens, reasoning toggle), system prompt, and the memory toggle.
+- Duplicate (under a free name) and a two-click Delete.
+- `stores/agents.ts`: the list plus the editor draft, `dirty`, and the validation
+  that gates Save.
+- `components/agents/agent-display.ts`: the derived strings two screens print
+  about an agent, and the avatar palette.
+
+## Out of scope
+
+| Not here | Owned by |
+|---|---|
+| Which agents are in which chat, and in what order | [`chats`](../chats/context.md) (S2.2) |
+| What an agent does during its turn | [`agent-turn`](../agent-turn/context.md) |
+| Choosing skills for an agent | `skills` (S3.2) |
+| Choosing MCP servers for an agent | `mcp` (S3.1) |
+| Viewing and editing an agent's memory | `memory` (S3.3) |
+| The `executor` role and its working directory | Post-MVP (see "Future extension" in `PLAN.md`) |
+| Searching or grouping the agent list | Not planned for the MVP |
+
+Three blocks of the editor are therefore **empty states that name their step**
+rather than missing sections: Skills, MCP servers and the memory viewer. They are
+drawn because the artboard's two-column proportions depend on them.
+
+## Dependencies
+
+| Feature | What this one needs from it |
+|---|---|
+| [`database`](../database/context.md) | `AgentRepository`, and the `ON DELETE CASCADE` on `chat_members.agent_id` that makes deletion remove memberships |
+| [`backend-client`](../backend-client/context.md) | `BackendClient`, the `BackendApi` contract, the typed event union |
+| [`providers`](../providers/context.md) | The provider list the model dropdown is fed from; a provider id must exist before an agent can point at it |
+| [`ui-shell`](../ui-shell/context.md) | `Column`, `Avatar`, `Field`, `Input`, `Select`, `TextArea`, `Toggle`, `EmptyState`, `SectionTitle` and the tokens |
+| [`i18n`](../i18n/context.md) | Every string under `agents.*`, including `agents.validation.*` |
+
+Depending on it in return: `chats` puts these agents into chats and prints their
+name, avatar and model on every message and member row; `orchestration` (S2.3)
+resolves `@name` against the names created here.
+
+## Decisions and trade-offs
+
+| Decision | Alternatives considered | Why this one |
+|---|---|---|
+| A name may contain spaces, but never `@`, and is unique case-insensitively | Forbid whitespace so `@name` parses by splitting on it | "Architect copy" has to be a legal duplicate, and a Chinese name has no spaces to split on anyway. S2.3 resolves the **longest matching member name** instead of tokenising, which also handles `@Data Analyst`. `@` inside a name would make any mention unparseable, so it is refused |
+| The editor works on a draft and saves as a whole | Save each field as it changes | A half-typed name is not a name, the provider change rewrites the model field, and agents are read by every chat they are in — an autosaved intermediate state would reach a running conversation |
+| Validation is computed in the store **and** enforced in the handler | Only one of the two | The handler is the authority (a future HTTP client is not this UI). The store's copy is what lets Save be disabled with the reason under the field instead of a rejection after the click |
+| Deleting an agent stops the runs of every chat it was in | Let the cascade fire and hope | A turn streaming for that agent would keep writing into a chat whose membership changed under it. Stopping first makes the outcome the same every time |
+| `agents.update` / `delete` emit `chat.updated` per affected chat | A new `agent.updated` event | The renderer already has one path for "this chat changed"; a second event type would need its own reducer in every store that cares. The chat rows are what actually re-render |
+| Avatar colours are literal hex pairs in TypeScript, not CSS variables | Tokens in `index.css` | An avatar is *data*: the pair is copied into `agents.avatar` and stored in SQLite, where `var(--color-…)` resolves to nothing |
+| `InitialAvatar` gained an optional `textColor` | Derive the foreground from the background at render time | The palette pairs come from the artboard and are not computable from the background; making it optional keeps records written before S2.1 rendering on the neutral fallback |
+| The model control is a `<select>` when the provider lists models and a text field when it does not | Always free text; always a dropdown | A provider's model list can legitimately be empty (a custom endpoint, an Ollama that was down when it was added), and a dropdown-only form would make such a provider unusable |
+| The UI only creates `participant` agents | Offer the role as a field | `executor` is reserved for the post-MVP executor agent and nothing implements it. The handler accepts it so a future caller can write one |
+| `ensureDefaultAgent` stays | Delete it now that the user can create agents | It is the only thing that makes the *first* chat of a fresh install answerable, and `e2e/chat.spec.ts` depends on that path. It now fires only while the agents table is empty |
+
+## Open questions
+
+- Whether an agent should be copyable *between* providers in one action ("the
+  same reviewer, on the other model"), which is what Duplicate is usually reached
+  for. Today it copies the provider too and the user changes it afterwards.
+- Whether the reasoning toggle should be hidden for models that do not support
+  it. That needs per-model capability data, which no provider exposes uniformly.

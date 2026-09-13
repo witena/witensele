@@ -12,7 +12,9 @@
  * which one applies. The mockup shows Stop in the same corner.
  *
  * The text is local state and is cleared only after `send` resolves true, so a
- * rejected send (no provider, chat deleted) leaves what was typed in the box.
+ * rejected send (no provider, chat deleted, no members yet) leaves what was typed
+ * in the box — and `error` prints why, right where the user is looking, instead
+ * of the message simply vanishing into nothing.
  */
 import { SendHorizontal, Square } from 'lucide-react'
 import { useState, type KeyboardEvent } from 'react'
@@ -28,9 +30,17 @@ export interface ComposerProps {
   /** Resolves true when the message was accepted, which clears the box. */
   onSend: (text: string) => Promise<boolean>
   onStop: () => void
+  /** Already-translated reason the last send was refused. */
+  error?: string | undefined
 }
 
-export function Composer({ chatId, running, onSend, onStop }: ComposerProps): React.JSX.Element {
+export function Composer({
+  chatId,
+  running,
+  onSend,
+  onStop,
+  error
+}: ComposerProps): React.JSX.Element {
   const { t } = useTranslation()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -96,6 +106,12 @@ export function Composer({ chatId, running, onSend, onStop }: ComposerProps): Re
           )}
         </div>
       </div>
+
+      {error ? (
+        <p data-testid="composer-error" className="px-1 pt-2 text-xs text-danger">
+          {error}
+        </p>
+      ) : null}
     </div>
   )
 }

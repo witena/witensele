@@ -23,10 +23,13 @@ can hold a real conversation and still holds it after a restart.
 - The middle column's message list: avatars with presence dots, author name,
   model badge, markdown body, collapsible reasoning, streaming cursor, dimmed
   `passed`, red hint on `error`.
-- The renderer stores behind all of it (`chats`, `messages`, `presence`,
-  `agents`) and the single event subscription that feeds them.
-- `ensureDefaultAgent`: the one bootstrap agent a new chat is given, so the first
-  conversation is possible before S2.1 exists.
+- The renderer stores behind all of it (`chats`, `messages`, `run`, `presence`,
+  `agents`, `providers`) and the single event subscription that feeds them.
+- The right column (S2.2): the member picker, removing a member, drag-to-reorder
+  the speaking order, and the group-settings block bound to `ChatSettings`.
+- `ensureDefaultAgent`: the bootstrap agent a chat is given **only** while the
+  agent library is empty, so a fresh install can hold a conversation before
+  anyone opens the Agents page.
 
 ## Out of scope
 
@@ -34,8 +37,7 @@ can hold a real conversation and still holds it after a restart.
 |---|---|
 | Who speaks, in which order, and for how many rounds | `orchestration` (S2.3) |
 | What one agent does during its turn | `agent-turn` |
-| Creating and editing agents | `agents` (S2.1) |
-| Adding, removing and reordering members; persisting `ChatSettings` | S2.2 |
+| Creating and editing agents | [`agents`](../agents/context.md) (S2.1) |
 | Presence beyond `working` / `available` around a turn | `presence` (S2.4) |
 | Search in the chat list, generated titles | S4.3 |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
@@ -52,14 +54,21 @@ can hold a real conversation and still holds it after a restart.
 | [`i18n`](../i18n/context.md) | Every string under `chat.*` and `common.you`; `translateNotice` for stored system notices |
 
 Depending on it in return: `orchestration` persists through the same message
-repository and emits the events these stores reduce; `agents` (S2.1) replaces
-`ensureDefaultAgent`; S2.2 fills in the member panel's actions.
+repository, emits the events these stores reduce, and reads `chat_members` — in
+`position` order — once **per run**, so a membership or settings change lands at
+the next round boundary rather than mid-turn.
 
 ## Decisions and trade-offs
 
 | Decision | Alternatives considered | Why this one |
 |---|---|---|
-| `chats.create` adds a bootstrap agent when the agents table is empty | Let a chat exist with no members; ship S2.1 first | A chat with no members cannot answer, and the step's acceptance is a working conversation. `ChatInput` carries no member list, so the handler is the only place that can fill one in. It becomes the empty-library fallback in S2.2 |
+| `chats.create` takes `memberAgentIds`, and only falls back to the bootstrap agent while the agents table is empty | Always add the first agent; never add anyone | Once the user owns agents, deciding who is in a chat is theirs. The fallback is kept because it is the only thing that makes the *first* chat of a fresh install answerable |
+| `ChatCreateInput` carries `memberAgentIds` rather than `Chat` carrying members | Put a member list on `Chat`; save the chat and then its members | Membership is a separate table and not a property of the chat row, but a chat created from the picker must be born with its members rather than saved twice |
+| `chat.send` rejects with `validation('chat has no members')`, and the composer stays enabled | Disable the composer; run with nobody and finish silently | A disabled composer does not say *why*. The rejection prints one line under the box and the member panel prints the fix |
+| `ChatPatch.settings` is a partial that the backend merges | Send the whole `ChatSettings` from every control | Two controls changed quickly would otherwise overwrite each other, and the caller would have to hold a copy of the stored object |
+| Every group-settings control persists on change, with no Save button | A Save button; a debounce | Each control is one field of one row. A select the user changed and then closed the app on must not quietly have been forgotten |
+| Reordering uses the native HTML5 drag events | A drag-and-drop library | A handful of rows in a window that is always Chromium. The library would add a package, a provider component and its own keyboard model; the only part that can silently be wrong is the index arithmetic, which lives in `lib/reorder.ts` and is unit-tested |
+| Add / remove / reorder all end in one `chats.members.set` with the whole array | Narrower add / remove / move methods | The array index *is* `position`. Three narrower calls would each have to read the current order first, and would race the `chat.updated` that follows |
 | `chats.members.list` was added to `BackendApi` | Put a member count on `Chat`; show every agent as a member | The contract had `members.set` but no getter, and both columns need the membership. A derived field on the domain type would be a lie the moment S2.2 lets membership change |
 | The chat list groups by **calendar day** | "within 24 hours" | A message sent at 23:50 has to read as *yesterday* the next morning. The rule is in `groupChats`, with the 23:50 case as its own test |
 | Delete confirms in place ("click again"), rename edits in place | A modal dialog | Both are one-click-recoverable actions on a list row; the pattern already exists in Settings → Providers |
@@ -69,8 +78,10 @@ repository and emits the events these stores reduce; `agents` (S2.1) replaces
 
 ## Open questions
 
-- Whether the member count belongs on `Chat` after all, once S2.2 makes
-  membership mutable and the left column has to react to it live.
+- Reordering is mouse-only. S2.3 also reads `position`, so a keyboard path for
+  the speaking order belongs there.
+- Whether the member count belongs on `Chat` after all: membership is now
+  mutable and the left column re-reads `chats.members.list` per chat to follow it.
 - Whether `messages.list` should return oldest-first for the first page, given
   that every caller reverses it. Changing it would change a contract that already
   has a cursor semantics written around "newest first".

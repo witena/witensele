@@ -16,6 +16,8 @@ export interface BadgeProps {
   tone?: BadgeTone | undefined
   font?: 'mono' | 'sans' | undefined
   className?: string | undefined
+  /** Forwarded to the tag; the chat header addresses its summary badge by it. */
+  'data-testid'?: string | undefined
 }
 
 const TONE_CLASS: Record<BadgeTone, string> = {
@@ -27,10 +29,12 @@ export function Badge({
   children,
   tone = 'default',
   font = 'mono',
-  className
+  className,
+  'data-testid': testId
 }: BadgeProps): React.JSX.Element {
   return (
     <span
+      data-testid={testId}
       className={clsx(
         'inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] leading-4',
         font === 'mono' ? 'font-mono' : 'font-sans',

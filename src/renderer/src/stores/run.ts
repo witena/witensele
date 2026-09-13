@@ -40,6 +40,14 @@ export interface RunState {
 
   /** Sends a message. Never rejects; a failure lands in `error`. */
   send: (chatId: string, text: string) => Promise<boolean>
+  /**
+   * Forgets the last failure.
+   *
+   * The error is a single field rather than one per chat, so switching chats has
+   * to drop it: "this chat has no members" must not follow the user into a chat
+   * that does.
+   */
+  clearError: () => void
   /** Aborts the chat's run. Idempotent, and a no-op when nothing is running. */
   stop: (chatId: string) => Promise<void>
 
@@ -53,6 +61,10 @@ export const useRunStore = create<RunState>()((set) => ({
   sendingByChat: {},
   error: undefined,
   errorCode: undefined,
+
+  clearError() {
+    set({ error: undefined, errorCode: undefined })
+  },
 
   async send(chatId, text) {
     const trimmed = text.trim()

@@ -2,27 +2,35 @@
  * The chat page: the three-column layout the whole product is shaped around —
  * chat list (264px), conversation, member panel (288px).
  *
- * S1.5 built the shell; **S1.7 makes it real**. The left column lists stored
- * chats and creates, renames and deletes them; the middle column streams a live
- * conversation; the right column lists the chat's actual members with their live
- * presence dots. What is still local-only is the group-settings block: a
- * `ChatSettings` write needs the member picker and the settings form that **S2.2**
- * owns, so those controls stay wired to component state and are not persisted.
+ * S1.5 built the shell, S1.7 made the conversation real and **S2.2 makes the right
+ * column real**: members can be added, removed and dragged into a different
+ * speaking order, and every group setting is written straight through to
+ * `chats.update` instead of living in component state. There is no Save button
+ * and no debounce — each control is one field of one row, and a select the user
+ * changed and then closed the app on must not quietly have been forgotten.
  *
- * Data comes from four stores and nothing is fetched here directly: `chats` and
- * `messages` mirror the backend, `run` says whether the Stop button is showing,
- * `presence` colours the dots. Events reach all four through
- * `lib/event-bridge.ts`, which the bootstrap starts once.
+ * The settings the controls show come from the selected `Chat`, never from local
+ * state, so the header badge, the controls and the database can never disagree:
+ * the write returns the stored row and the `chat.updated` event re-renders both.
+ *
+ * Data comes from five stores and nothing is fetched here directly: `chats`,
+ * `agents` and `providers` mirror the backend, `messages` holds the transcript,
+ * `run` says whether the Stop button is showing and `presence` colours the dots.
+ * Events reach them through `lib/event-bridge.ts`, which the bootstrap starts
+ * once.
  */
 import type { TFunction } from 'i18next'
 import { MessagesSquare, Plus, Search } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
+  MAX_AUTO_ROUNDS,
+  MIN_AUTO_ROUNDS,
   type Agent,
   type ChatMode,
+  type ChatSettings,
   type SpeakingMode
 } from '@shared/types'
 import { ChatList } from '../components/chat/chat-list'
@@ -47,6 +55,8 @@ import { useAgentsStore } from '../stores/agents'
 import { useChatMemberIds, useChatsStore } from '../stores/chats'
 import { useChatMessages, useMessagesStore } from '../stores/messages'
 import { useIsRunning, useRunStore } from '../stores/run'
+import { useProvidersStore } from '../stores/providers'
+import { reorder } from '../lib/reorder'
 
 /** Literal `t()` calls so the `used-keys` guard can verify both branches. */
 function modeLabel(t: TFunction, mode: ChatMode): string {
@@ -68,17 +78,16 @@ function speakingLabel(t: TFunction, speaking: SpeakingMode): string {
 }
 
 /** The timeout values the picker offers, in milliseconds. */
-const TIMEOUT_CHOICES_MS = [60_000, 120_000, 300_000]
+const TIMEOUT_CHOICES_MS = [30_000, 60_000, 120_000, 300_000]
 
-/** How many automatic rounds a chat may run. Matches `maxAutoRounds` in the plan. */
-const MAX_ROUND_CHOICES = [1, 2, 3, 5, 10]
-
-interface GroupSettings {
-  mode: ChatMode
-  speaking: SpeakingMode
-  maxAutoRounds: number
-  hardTimeoutMs: number
-}
+/**
+ * Every round count the backend accepts, so the select can never produce a value
+ * `chats.update` would reject.
+ */
+const MAX_ROUND_CHOICES = Array.from(
+  { length: MAX_AUTO_ROUNDS - MIN_AUTO_ROUNDS + 1 },
+  (_unused, index) => MIN_AUTO_ROUNDS + index
+)
 
 export function ChatsPage(): React.JSX.Element {
   const { t } = useTranslation()
@@ -89,23 +98,21 @@ export function ChatsPage(): React.JSX.Element {
   const chatsError = useChatsStore((state) => state.error)
   const chatsErrorCode = useChatsStore((state) => state.errorCode)
   const agents = useAgentsStore((state) => state.agents)
+  const providers = useProvidersStore((state) => state.providers)
 
   const messages = useChatMessages(selectedId)
   const memberIds = useChatMemberIds(selectedId)
   const running = useIsRunning(selectedId)
+  const runError = useRunStore((state) => state.error)
+  const runErrorCode = useRunStore((state) => state.errorCode)
 
-  const [settings, setSettings] = useState<GroupSettings>({
-    mode: DEFAULT_CHAT_SETTINGS.mode,
-    speaking: DEFAULT_CHAT_SETTINGS.speaking,
-    maxAutoRounds: DEFAULT_CHAT_SETTINGS.maxAutoRounds,
-    hardTimeoutMs: DEFAULT_APP_SETTINGS.timeouts.hardTimeoutMs
-  })
-
-  // The page owns both lists: the chat list needs them, and so does every message
-  // row (author name, avatar, model badge).
+  // The page owns all three lists: the chat list needs them, every message row
+  // needs the author's name, avatar and model, and the member panel prints the
+  // provider's name beside the model id.
   useEffect(() => {
     void useChatsStore.getState().load()
     void useAgentsStore.getState().load()
+    void useProvidersStore.getState().load()
   }, [])
 
   // Transcripts are loaded per chat, the first time one is opened. Later visits
@@ -126,6 +133,25 @@ export function ChatsPage(): React.JSX.Element {
   const memberCounts = Object.fromEntries(
     Object.entries(membersByChat).map(([chatId, ids]) => [chatId, ids.length])
   )
+
+  // A chat that is not selected yet still has to draw the settings block, so the
+  // defaults stand in — they are the same ones `chats.create` stores.
+  const settings: ChatSettings = selected?.settings ?? DEFAULT_CHAT_SETTINGS
+  const hardTimeoutMs = settings.hardTimeoutMs ?? DEFAULT_APP_SETTINGS.timeouts.hardTimeoutMs
+
+  const patchSettings = (patch: Partial<ChatSettings>): void => {
+    if (!selectedId) return
+    void useChatsStore.getState().updateSettings(selectedId, patch)
+  }
+
+  const setMembers = (agentIds: string[]): void => {
+    if (!selectedId) return
+    // "This chat has no members" is the one send error the user fixes from right
+    // here, so changing the membership drops it rather than leaving a red line
+    // under a composer that would now work.
+    useRunStore.getState().clearError()
+    void useChatsStore.getState().setMembers(selectedId, agentIds)
+  }
 
   // The header badge in the mockup: "Round-robin · In turn · Max 3 rounds".
   const orchestrationSummary = [
@@ -179,7 +205,10 @@ export function ChatsPage(): React.JSX.Element {
               chats={chats}
               selectedId={selectedId}
               memberCounts={memberCounts}
-              onSelect={(id) => useChatsStore.getState().select(id)}
+              onSelect={(id) => {
+                useRunStore.getState().clearError()
+                useChatsStore.getState().select(id)
+              }}
               onRename={(id, title) => void useChatsStore.getState().rename(id, title)}
               onDelete={(id) => void useChatsStore.getState().remove(id)}
             />
@@ -198,7 +227,7 @@ export function ChatsPage(): React.JSX.Element {
         <PageHeader
           testId="page-chats-conversation"
           title={selected ? selected.title : t('chat.noChatSelected')}
-          badge={<Badge>{orchestrationSummary}</Badge>}
+          badge={<Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>}
         />
 
         {selected ? (
@@ -216,6 +245,9 @@ export function ChatsPage(): React.JSX.Element {
         <Composer
           chatId={selectedId}
           running={running}
+          {...(runError
+            ? { error: translateError(t, { code: runErrorCode ?? 'internal', message: runError }) }
+            : {})}
           onSend={(text) =>
             selectedId ? useRunStore.getState().send(selectedId, text) : Promise.resolve(false)
           }
@@ -229,7 +261,15 @@ export function ChatsPage(): React.JSX.Element {
       <Column width={288} border="left" scroll className="bg-bg-base">
         {/* No traffic-light inset here: the lights are on the far left of the window. */}
         <div className="flex min-h-full flex-col gap-[18px] px-3 pt-3.5 pb-3.5">
-          <MemberPanel chatId={selectedId} members={members} />
+          <MemberPanel
+            chatId={selectedId}
+            members={members}
+            agents={agents}
+            providers={providers}
+            onAdd={(agentId) => setMembers([...memberIds, agentId])}
+            onRemove={(agentId) => setMembers(memberIds.filter((id) => id !== agentId))}
+            onReorder={(from, to) => setMembers(reorder(memberIds, from, to))}
+          />
 
           <div className="h-px shrink-0 bg-border" />
 
@@ -239,13 +279,10 @@ export function ChatsPage(): React.JSX.Element {
             <Field label={t('chat.mode')} htmlFor="chat-mode">
               <Select
                 id="chat-mode"
+                data-testid="chat-mode"
+                disabled={!selected}
                 value={settings.mode}
-                onChange={(event) =>
-                  setSettings((previous) => ({
-                    ...previous,
-                    mode: event.target.value as ChatMode
-                  }))
-                }
+                onChange={(event) => patchSettings({ mode: event.target.value as ChatMode })}
                 options={[
                   { value: 'roundrobin', label: modeLabel(t, 'roundrobin') },
                   { value: 'mention-only', label: modeLabel(t, 'mention-only') }
@@ -257,10 +294,19 @@ export function ChatsPage(): React.JSX.Element {
               <span className="text-xs text-fg-muted">{t('chat.speaking')}</span>
               <SegmentedControl<SpeakingMode>
                 value={settings.speaking}
-                onChange={(speaking) => setSettings((previous) => ({ ...previous, speaking }))}
+                disabled={!selected}
+                onChange={(speaking) => patchSettings({ speaking })}
                 options={[
-                  { value: 'sequential', label: speakingLabel(t, 'sequential') },
-                  { value: 'parallel', label: speakingLabel(t, 'parallel') }
+                  {
+                    value: 'sequential',
+                    label: speakingLabel(t, 'sequential'),
+                    testId: 'chat-speaking-sequential'
+                  },
+                  {
+                    value: 'parallel',
+                    label: speakingLabel(t, 'parallel'),
+                    testId: 'chat-speaking-parallel'
+                  }
                 ]}
               />
             </div>
@@ -268,13 +314,10 @@ export function ChatsPage(): React.JSX.Element {
             <Field label={t('chat.maxAutoRounds')} htmlFor="chat-max-rounds">
               <Select
                 id="chat-max-rounds"
+                data-testid="chat-max-rounds"
+                disabled={!selected}
                 value={String(settings.maxAutoRounds)}
-                onChange={(event) =>
-                  setSettings((previous) => ({
-                    ...previous,
-                    maxAutoRounds: Number(event.target.value)
-                  }))
-                }
+                onChange={(event) => patchSettings({ maxAutoRounds: Number(event.target.value) })}
                 options={MAX_ROUND_CHOICES.map((rounds) => ({
                   value: String(rounds),
                   label: String(rounds)
@@ -285,13 +328,10 @@ export function ChatsPage(): React.JSX.Element {
             <Field label={t('chat.timeout')} htmlFor="chat-timeout">
               <Select
                 id="chat-timeout"
-                value={String(settings.hardTimeoutMs)}
-                onChange={(event) =>
-                  setSettings((previous) => ({
-                    ...previous,
-                    hardTimeoutMs: Number(event.target.value)
-                  }))
-                }
+                data-testid="chat-timeout"
+                disabled={!selected}
+                value={String(hardTimeoutMs)}
+                onChange={(event) => patchSettings({ hardTimeoutMs: Number(event.target.value) })}
                 options={TIMEOUT_CHOICES_MS.map((ms) => ({
                   value: String(ms),
                   label: t('chat.secondsValue', { seconds: ms / 1000 })

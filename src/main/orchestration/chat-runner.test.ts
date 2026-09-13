@@ -68,7 +68,11 @@ describe('ChatRunner', () => {
       agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
       ctx.userId
     )
-    chat = await handlers['chats.create'](ctx, { input: { title: 'First chat' } })
+    // Explicit members: since S2.2 `chats.create` only falls back to the
+    // bootstrap agent when the agent library is empty, and this suite creates one.
+    chat = await handlers['chats.create'](ctx, {
+      input: { title: 'First chat', memberAgentIds: [agent.id] }
+    })
     events.length = 0
   })
 
@@ -80,10 +84,42 @@ describe('ChatRunner', () => {
   const finished = (): RunFinishedEvent[] => finishedIn(events)
   const settle = () => ctx.runners.for(chat.id).whenIdle()
 
-  it('adds the default agent to a chat created with no members', async () => {
+  it('stores the member list a chat was created with', async () => {
     const members = ctx.repos.chats.listMembers(chat.id, ctx.userId)
 
     expect(members).toEqual([{ chatId: chat.id, agentId: agent.id, position: 0 }])
+  })
+
+  it('reads the member list again on the next run rather than caching it', async () => {
+    const second = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: agent.providerId, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi' })
+    await settle()
+
+    // The member list changes between the two runs; the runner must pick the new
+    // first speaker up without being recreated.
+    await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [second.id, agent.id] })
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Again' })
+    await settle()
+
+    const stored = ctx.repos.messages.listForContext(chat.id, ctx.userId)
+    expect(stored.filter((message) => message.senderType === 'agent').map((m) => m.senderId)).toEqual([
+      agent.id,
+      second.id
+    ])
+  })
+
+  it('rejects chat.send on a chat with no members and stores nothing', async () => {
+    const empty = await handlers['chats.create'](ctx, { input: { title: 'Nobody here' } })
+    expect(ctx.repos.chats.listMembers(empty.id, ctx.userId)).toEqual([])
+
+    await expect(handlers['chat.send'](ctx, { chatId: empty.id, text: 'Hi' })).rejects.toMatchObject(
+      { code: 'validation', message: 'chat has no members' }
+    )
+    expect(ctx.repos.messages.listForContext(empty.id, ctx.userId)).toEqual([])
   })
 
   it('runs one full send → stream → persist cycle and emits it in order', async () => {

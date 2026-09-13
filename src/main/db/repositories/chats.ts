@@ -11,7 +11,7 @@
  *   order the caller passed and can never end up with gaps or duplicates.
  */
 import { and, asc, desc, eq } from 'drizzle-orm'
-import type { Chat, ChatInput, ChatMember, UserId } from '@shared/types'
+import type { Chat, ChatMember, ChatPatch, UserId } from '@shared/types'
 import { DEFAULT_CHAT_SETTINGS, LOCAL_USER_ID } from '@shared/types'
 import type { DrizzleDb } from '../database'
 import type { ChatRow } from '../schema'
@@ -31,14 +31,22 @@ export interface ChatRepository {
   list(userId?: UserId): Chat[]
   get(id: string, userId?: UserId): Chat
   /** Missing fields fall back to `DEFAULT_CHAT_TITLE` and `DEFAULT_CHAT_SETTINGS`. */
-  create(input?: Partial<ChatInput>, userId?: UserId): Chat
-  update(id: string, patch: Partial<ChatInput>, userId?: UserId): Chat
+  create(input?: ChatPatch, userId?: UserId): Chat
+  update(id: string, patch: ChatPatch, userId?: UserId): Chat
   /** Cascades to `chat_members` and `messages`. */
   delete(id: string, userId?: UserId): void
   /** Replaces the whole member list; the array index becomes `position`. */
   setMembers(userId: UserId, chatId: string, agentIds: string[]): ChatMember[]
   /** Members of a chat ordered by `position`. */
   listMembers(chatId: string, userId?: UserId): ChatMember[]
+  /**
+   * Ids of the chats an agent is a member of, newest chat first.
+   *
+   * Read by `agents.delete`, which has to stop those chats' runs and tell the
+   * renderer they changed *before* the cascading foreign key silently drops the
+   * membership rows.
+   */
+  listChatIdsForAgent(agentId: string, userId?: UserId): string[]
 }
 
 function toChat(row: ChatRow): Chat {
@@ -148,6 +156,17 @@ export function createChatRepository(db: DrizzleDb): ChatRepository {
     listMembers(chatId, userId = LOCAL_USER_ID) {
       const chat = row(chatId, userId)
       return members(chat.id)
+    },
+
+    listChatIdsForAgent(agentId, userId = LOCAL_USER_ID) {
+      return db
+        .select({ id: chats.id })
+        .from(chatMembers)
+        .innerJoin(chats, eq(chatMembers.chatId, chats.id))
+        .where(and(eq(chatMembers.agentId, agentId), eq(chats.userId, userId)))
+        .orderBy(desc(chats.updatedAt))
+        .all()
+        .map((found) => found.id)
     }
   }
 }

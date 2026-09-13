@@ -13,7 +13,7 @@
  * will be reused by the search results in S4.3.
  */
 import { create } from 'zustand'
-import type { BackendErrorCode, Chat } from '@shared/types'
+import type { BackendErrorCode, Chat, ChatSettings } from '@shared/types'
 import { BackendClientError } from '../lib/backend'
 import { getBackend } from '../lib/backend-provider'
 import { useAgentsStore } from './agents'
@@ -86,7 +86,8 @@ export interface ChatsState {
    *
    * Kept here rather than in `stores/agents.ts` because membership belongs to the
    * chat: the left column prints "N members" for every row and the right column
-   * needs the ids of the selected one. S2.2 adds the actions that change it.
+   * needs the ids of the selected one. `setMembers` is the only thing that
+   * changes it, and it writes through the backend first.
    */
   membersByChat: Record<string, string[]>
   status: ChatsStatus
@@ -103,6 +104,16 @@ export interface ChatsState {
   /** Creates a chat and selects it. Returns `null` and sets `error` on failure. */
   create: () => Promise<Chat | null>
   rename: (id: string, title: string) => Promise<void>
+  /**
+   * Replaces a chat's member list, order included.
+   *
+   * One method for add, remove and reorder because `chats.members.set` replaces
+   * the whole list: three actions that each read the current order and write a
+   * new one would be three chances to write a stale one.
+   */
+  setMembers: (chatId: string, agentIds: string[]) => Promise<void>
+  /** Merges a patch into a chat's orchestration settings. Persists immediately. */
+  updateSettings: (chatId: string, patch: Partial<ChatSettings>) => Promise<void>
   remove: (id: string) => Promise<void>
   select: (id: string | null) => void
 
@@ -167,6 +178,36 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
     } catch (cause) {
       set({ error: describe(cause), errorCode: classify(cause) })
       return null
+    }
+  },
+
+  async setMembers(chatId, agentIds) {
+    try {
+      const members = await getBackend().invoke('chats.members.set', { chatId, agentIds })
+      set((state) => ({
+        membersByChat: {
+          ...state.membersByChat,
+          [chatId]: members.map((member) => member.agentId)
+        },
+        error: undefined,
+        errorCode: undefined
+      }))
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause) })
+      // Re-read rather than keep an optimistic order the backend refused.
+      await get().loadMembers(chatId)
+    }
+  },
+
+  async updateSettings(chatId, patch) {
+    try {
+      // The handler merges field by field, so a patch of one field is enough and
+      // two controls changed in quick succession cannot overwrite each other.
+      get().applyUpdated(
+        await getBackend().invoke('chats.update', { id: chatId, patch: { settings: patch } })
+      )
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause) })
     }
   },
 

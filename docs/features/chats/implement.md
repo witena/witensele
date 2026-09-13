@@ -8,10 +8,10 @@ Three layers, each ignorant of the one above it:
    everything: chats ordered by `updatedAt`, membership replaced in one
    transaction, messages ordered by a per-chat `seq`.
 2. **Handlers.** `src/main/handlers/chats.ts` is validation plus events. It owns
-   two behaviours that are not CRUD: `chats.create` gives a new chat the
-   bootstrap agent, and `chats.delete` stops the chat's run before the rows go
-   away.
-3. **Renderer.** Four zustand stores mirror the backend and one module
+   three behaviours that are not CRUD: `chats.create` decides who a new chat
+   starts with, `chats.delete` stops the chat's run before the rows go away, and
+   `chat.send` refuses a chat with no members.
+3. **Renderer.** Six zustand stores mirror the backend and one module
    (`lib/event-bridge.ts`) subscribes to the backend once and fans every event
    into them. Components read stores and call store actions; none of them calls
    `BackendClient` directly.
@@ -30,11 +30,36 @@ before deciding what to do with it) without the store having to guess.
 "+" button
   → useChatsStore.create()
   → invoke('chats.create', { input: {} })
-  → handler: ensureDefaultAgent(ctx)           // creates the agent on first run
+  → handler: initialMembers(ctx, undefined)
+               agents table empty → ensureDefaultAgent(ctx), that agent
+               otherwise        → []          // the user picks in the panel
              chats.create() + chats.setMembers()
              emit chat.updated
   → store: applyUpdated(chat), select(chat.id), loadMembers(), agents.load()
-  → the row appears under "Today" and the composer becomes usable
+  → the row appears under "Today"; the composer is usable, but a send is
+    refused until the chat has a member
+```
+
+### Changing the members
+
+```
+"+ Add" → pick an agent      |  row "×"                |  drag a row onto another
+  memberIds + [agentId]      |  memberIds − agentId    |  reorder(memberIds, from, to)
+  → useChatsStore.setMembers(chatId, agentIds)
+  → invoke('chats.members.set', { chatId, agentIds })   // index becomes position
+  → handler: every agent must exist, then one transaction; emit chat.updated
+  → store: membersByChat[chatId] = the returned order
+  → ChatRunner picks the new list up on its next run
+```
+
+### Changing a group setting
+
+```
+a select / the segmented control changes
+  → useChatsStore.updateSettings(chatId, { speaking: 'parallel' })
+  → invoke('chats.update', { id, patch: { settings: { speaking: 'parallel' } } })
+  → handler validates the field, repository merges it into the stored object
+  → store applies the returned chat; the header badge re-renders from it
 ```
 
 ### Opening a chat
@@ -78,21 +103,23 @@ kebab → Delete → Delete again
 
 ## Key types and contracts
 
-Domain types are unchanged from S1.1 (`Chat`, `ChatMember`, `Message`,
-`MessagePart`, `MessageStatus`, `Usage`). One method was **added** to the
-contract:
+`Chat`, `ChatMember`, `Message`, `MessagePart`, `MessageStatus` and `Usage` are
+unchanged from S1.1. S2.2 added two input types next to them —
+**`ChatCreateInput`** (a `ChatPatch` plus `memberAgentIds`) and **`ChatPatch`**
+(every field optional, `settings` a partial that the backend merges) — plus the
+`MIN_AUTO_ROUNDS` / `MAX_AUTO_ROUNDS` bounds both layers validate against.
 
 | Channel / method | Request | Response | Notes |
 |---|---|---|---|
 | `chats.list` | — | `Chat[]` | Newest `updatedAt` first |
 | `chats.get` | `{ id }` | `Chat` | `not_found` for an unknown id |
-| `chats.create` | `{ input: Partial<ChatInput> }` | `Chat` | Adds the bootstrap agent as the only member; rejects `validation` when no provider has a model |
-| `chats.update` | `{ id, patch }` | `Chat` | Rename and settings; always bumps `updatedAt` |
+| `chats.create` | `{ input: ChatCreateInput }` | `Chat` | `memberAgentIds` seeds the members; without it the chat is empty unless the agent library is |
+| `chats.update` | `{ id, patch: ChatPatch }` | `Chat` | Rename and a **partial** `settings` merge; always bumps `updatedAt` |
 | `chats.delete` | `{ id }` | `void` | Stops the run first; cascades |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **New in S1.7.** Ordered by `position` |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the list; array index becomes `position` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is a message id |
-| `chat.send` | `{ chatId, text, mentions? }` | `Message` | The stored user message; output arrives as events |
+| `chat.send` | `{ chatId, text, mentions? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent |
 
 | Event | Payload | Emitted when |
@@ -110,19 +137,23 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 
 | File | Covers |
 |---|---|
-| `src/main/orchestration/chat-runner.test.ts` (`describe('chats handlers')`) | `chats.create` default title, settings and member; the `validation` refusal with no usable provider; rename bumping `updatedAt` and emitting `chat.updated`; the empty-title rejection; `messages.list` order and the `before` cursor; delete stopping the run and emitting `chat.deleted` |
+| `src/main/orchestration/chat-runner.test.ts` (`describe('chats handlers')`) | `chats.create` default title and settings; the `validation` refusal with no usable provider; rename bumping `updatedAt` and emitting `chat.updated`; the empty-title rejection; `messages.list` order and the `before` cursor; delete stopping the run and emitting `chat.deleted`. Also: the runner re-reads the members on the next run, and `chat.send` on an empty chat stores nothing |
+| `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, and every `ChatSettings` bound |
 | `src/main/handlers/handlers.test.ts` | Every declared method has a handler; the ones still stubbed reject with `internal` |
 | `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection |
 | `src/renderer/src/stores/messages.test.ts` | `applyDeltaToParts` (append, kind switch, first part, whole part, no mutation); created / delta / updated reduction; ignored deltas; page reversal; failed load as state |
+| `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
+| `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
 
 ## Known limitations and TODOs
 
-- **The group-settings block is local state.** Mode, speaking, max rounds and the
-  timeout are rendered from the mockup but never written to `ChatSettings`; S2.2
-  owns the form and the persistence.
-- **Membership is fixed at one agent.** "Add" is disabled; `chats.members.set`
-  has a handler and a test but no UI.
+- **The stored settings are not acted on yet.** `mode`, `speaking` and
+  `maxAutoRounds` are persisted and shown in the header badge, but `ChatRunner`
+  still runs one round with the first member; S2.3 is where they start to matter.
+  `stallTimeoutMs` / `hardTimeoutMs` are read by S2.4.
+- **Reordering is mouse-only**, and the per-member token count is an em dash
+  until S4.1.
 - **The search field is disabled** (S4.3), and titles are always the default
   `New chat` until the user renames one.
 - **The message list is not virtualized** and loads one page of 100 with no
