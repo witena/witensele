@@ -1,0 +1,97 @@
+{
+  "common": {
+    "appName": "Witena",
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "add": "Add",
+    "search": "Search",
+    "loading": "Loading…",
+    "error": "Something went wrong"
+  },
+  "nav": {
+    "chats": "Chats",
+    "agents": "Agents",
+    "settings": "Settings"
+  },
+  "chat": {
+    "newChat": "New chat",
+    "searchChats": "Search chats",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "earlier": "Earlier",
+    "members": "Members",
+    "groupSettings": "Group settings",
+    "composerPlaceholder": "Write a message. Type @ to call on a member.",
+    "send": "Send",
+    "stop": "Stop",
+    "round": "Round {{round}}",
+    "replyingTo": "Replying to @{{name}}",
+    "passed": "Passed",
+    "skipped": "Skipped"
+  },
+  "agents": {
+    "title": "Agents",
+    "newAgent": "New agent",
+    "searchAgents": "Search agents",
+    "empty": "No agents yet. Create one to start a discussion.",
+    "name": "Name",
+    "description": "Description",
+    "systemPrompt": "System prompt",
+    "provider": "Provider",
+    "model": "Model",
+    "parameters": "Parameters",
+    "temperature": "Temperature",
+    "maxTokens": "Max tokens",
+    "skills": "Skills",
+    "mcpServers": "MCP servers",
+    "memory": "Memory"
+  },
+  "settings": {
+    "title": "Settings",
+    "sections": {
+      "providers": "Providers",
+      "mcp": "MCP servers",
+      "skills": "Skills",
+      "timeouts": "Timeouts",
+      "appearanceLanguage": "Appearance & language",
+      "dataBackup": "Data & backup"
+    },
+    "language": "Language",
+    "languageSystem": "Follow the system",
+    "languageZh": "Chinese (Simplified)",
+    "languageEn": "English"
+  },
+  "presence": {
+    "available": "Available",
+    "working": "Working",
+    "away": "Away",
+    "offline": "Offline"
+  },
+  "errors": {
+    "not_found": "That item no longer exists.",
+    "validation": "The request was rejected as invalid.",
+    "provider_error": "The model provider returned an error.",
+    "mcp_error": "The MCP server returned an error.",
+    "aborted": "The request was cancelled.",
+    "unauthorized": "You are not allowed to do that.",
+    "internal": "Something went wrong inside the app."
+  },
+  "notices": {
+    "agentSkipped": "{{agent}} did not respond and was skipped this round",
+    "runStopped": "The run was stopped",
+    "maxRoundsReached": "Reached the limit of {{max}} automatic rounds. Send a message to continue.",
+    "providerError": "The provider could not answer: {{message}}"
+  },
+  "smoke": {
+    "title": "Witena · backend smoke test",
+    "backend": "backend:",
+    "language": "language setting:",
+    "resolvedLanguage": "active language:",
+    "lastEvent": "last event:",
+    "emitTestEvent": "Emit test event",
+    "pending": "…",
+    "noEvent": "—"
+  }
+}
