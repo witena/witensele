@@ -1338,6 +1338,113 @@ records this step promised not to touch. `e2e/agents.spec.ts` asserts the two
 test ids have count 0 while the editor is open; it never filled them, so there
 was nothing to remove.
 
+### S5.10 Chat goal `[ ]`
+What: the right-hand panel lets the user say what the chat is for, and every
+agent is briefed with it.
+- `Chat.goal: ChatGoal | null` where `ChatGoal = { kind: 'discussion' |
+  'document' | 'codebase', description: string, deliverable?: string,
+  materials: string[] }`; a nullable JSON `goal` column on `chats` through an
+  additive migration (`docs/features/database/`). `ChatPatch.goal` accepts a
+  goal or `null`. Handler validation with `ValidationReason`s (S5.2's layer):
+  `description` non-empty and at most 2 000 characters; `deliverable` required
+  for `document`, a relative path with no `..` that stays inside `workdir`
+  (reuse `executor/paths.ts`), the parent folder need not exist; `materials`
+  relative paths that exist inside `workdir`; `document` and `codebase` require
+  a `workdir`.
+- Group settings (member panel) gains a **Goal** block under "Working
+  directory": a `SegmentedControl` Discussion / Document / Codebase (test ids
+  `goal-discussion`, `goal-document`, `goal-codebase`), a description
+  `TextArea` (`goal-description`), for `document` a deliverable path `Input`
+  relative to the folder (`goal-deliverable`) **plus a "Choose…" button**
+  (`goal-deliverable-pick`) that opens the native save dialog through a new
+  `system.pickSavePath({ defaultDir })` overlay in `src/main/ipc/dialogs.ts`
+  (`dialog.showSaveDialog`, starting in `workdir`; the file need not exist),
+  whose absolute result the renderer turns into the relative path and refuses
+  with a translated reason when it lies outside `workdir` — so the user may
+  type the path or pick it in Finder, and both end in the same field. The
+  **Materials** list (`goal-materials`, rows with a remove button, an "Add…"
+  button) calls a new `system.pickPaths` overlay in the same file — files and
+  folders, multi-select. Both overlays are declared and rejected in
+  `handlers/system.ts` exactly like `pickFolder`. Paths picked outside
+  `workdir` are refused with a translated reason. Saving is per field on blur,
+  as the rest of the panel does.
+- The chat header shows the goal kind as a chip next to the folder chip; for
+  `document` the chip carries the deliverable's basename and, once the file
+  exists, reads "delivered" and opens it in the editor on click (S5.7).
+- Briefing: `buildGroupBriefing` gains a "Goal" section for every member —
+  the kind in one sentence, the description verbatim, the deliverable path
+  for `document`, and for `codebase` the instruction that changes are made by
+  the executor after the discussion. The executor's hand-off briefing (S5.6)
+  names the deliverable or the change.
+- Unit tests: the validation table (each reason once), the store patch, the
+  briefing section for the three kinds, the chip states. e2e: set a
+  `document` goal on a chat bound to a temp folder, see the chip, create the
+  deliverable on disk, see "delivered".
+Acceptance: a goal round-trips through the panel and survives a restart;
+every agent's system prompt carries it; invalid paths are refused with a
+translated reason. Docs: `docs/features/chats/`, `docs/features/agent-turn/`,
+`docs/features/database/`, `docs/features/backend-client/` (all four each).
+
+### S5.11 Read-only workspace tools and the materials briefing `[ ]`
+What: every member can read the folder, and the materials the user marked are
+already in front of them when the first round starts.
+- `collectAgentTools` attaches `read_file`, `list_dir`, `search_files` and
+  `git_diff` to **every** member of a chat with a `workdir` (participants
+  included; the executor keeps its full set). These are the S5.4 tools,
+  unchanged, confined to `workdir`, and they never prompt. Nothing that writes
+  is ever attached to a participant, whatever the goal says — this is PLAN's
+  read-only rule, and a test proves it for each writing tool.
+- A **workspace briefing** section in every member's system prompt when the
+  chat has a `workdir`: the folder's basename, a tree listing capped at 200
+  entries and depth 3 that honours `.gitignore` and always skips `.git`,
+  `node_modules`, build outputs and files over 1 MB, and — for `codebase` —
+  the current branch and `git status --short` summary. Pure, tested, cached
+  per turn.
+- **Materials**: each `goal.materials` entry is inlined (a file: its text; a
+  folder: its tree plus each text file up to a per-file cap) as a "Materials"
+  section placed after the briefing and before the history. The section is
+  measured with `estimateTokens` and trimmed under the same budget rules as
+  `fitHistory` (S4.2): files are included in list order until the budget for
+  materials (a fixed share of the context window, e.g. 25 %) is spent; the
+  rest are listed by path with the note that `read_file` fetches them. Binary
+  files are listed, never inlined. A `notices.materialsTruncated` line is
+  emitted once per chat when trimming happened.
+- Unit tests: the tree walker (caps, ignores, depth), the materials assembly
+  under a small budget (inline then list), binary detection, the tools
+  attached to a participant (read-only four) versus the executor (all seven),
+  a `MockLanguageModel` participant turn that calls `read_file` and gets the
+  content. e2e (Ollama-gated as in `executor.spec.ts`): two participants and
+  a folder holding one text file marked as material; the first reply quotes
+  it without any tool call; a follow-up question makes an agent call
+  `read_file` on a second, unmarked file and a tool card appears.
+Acceptance: a participant reads but cannot write; a marked material is in the
+first reply's context; large materials degrade to a list rather than blowing
+the budget. Docs: `docs/features/executor/`, `docs/features/agent-turn/`,
+`docs/features/chats/` (all four each).
+
+### S5.12 Goal-aware delivery `[ ]`
+What: the goal changes what "done" means, and the app shows it.
+- `document`: after any executor turn, if the deliverable now exists, the
+  turn's message gains a `FileRefPart` to it and the header chip flips to
+  "delivered"; the hand-off briefing tells the executor to write the
+  deliverable (creating parent folders) and to finish with a two-line summary.
+  A new quick action in `actions-card.tsx`, "Write the deliverable", is the
+  hand-off with that instruction, enabled under the same rules as
+  `chat-handoff`.
+- `codebase`: the review round (S5.6) is briefed with the goal, so reviewers
+  judge the diff against it; the hand-off briefing includes the branch and
+  asks for a summary that lists changed paths.
+- `discussion`: unchanged, except that the goal is in the briefing (S5.10).
+- Unit tests: the `FileRefPart` appended when the deliverable appears and not
+  otherwise; the review briefing includes the goal; the quick action's
+  enabled rule. e2e (Ollama-gated): a `document` goal, "Write the
+  deliverable", Allow on the prompt, the file exists, the chip reads
+  "delivered", clicking the chip calls `system.openInEditor` once (stubbed as
+  in S5.7's spec).
+Acceptance: the three kinds behave as the table in PLAN.md says; tests pass.
+Docs: `docs/features/orchestration/`, `docs/features/executor/`,
+`docs/features/chats/` (all four each).
+
 ## Phase 6: Backlog (decided, not yet scheduled)
 
 Everything below is agreed work that is deliberately **not** in Phase 5. Each

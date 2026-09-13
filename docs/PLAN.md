@@ -126,6 +126,27 @@ Scan `userData/skills/*/SKILL.md`, parse frontmatter with gray-matter. Progressi
 
 Claude Code style: `MEMORY.md` is the index, `notes/` holds one file per entry. `memory_save(title, content)` writes a file and appends an index line; `memory_search(query)` does a text search. The agent configuration page can view and edit memory by hand.
 
+### Chat goal and workspace
+
+A chat may be bound to a folder (`chats.workdir`, S5.2) and, from S5.10, to a
+**goal**: what the group is working towards, in one of three shapes.
+
+| `goal.kind` | What it means | Who reads, who writes |
+|---|---|---|
+| `discussion` | Reach a conclusion in the transcript (today's default) | Nobody touches the folder unless an executor is handed the conclusion |
+| `document` | Produce one file, `goal.deliverable` (a path relative to `workdir`) | Participants read the folder; the executor writes the deliverable |
+| `codebase` | Change the code in `workdir` as `goal.description` says | Participants read the code and `git` state; the executor edits, the group reviews the diff (S5.6) |
+
+`goal.materials` lists files or folders under `workdir` the group must start
+from. Their contents are placed in every member's context ahead of the first
+round, within the context budget, so the discussion opens grounded instead of
+with a request for the material.
+
+The read-only rule of "Future extension" point 2 is what makes the folder
+readable by everyone: participants get the executor's **read-only** tools
+(`read_file`, `list_dir`, `search_files`, `git_diff`) confined to `workdir`,
+never the writing ones, and no permission prompt is needed for a read.
+
 ## User interface
 
 - **Navigation rail**: Chats, Agents, Settings.
