@@ -13,7 +13,7 @@
 |---|---|
 | `src/shared/backend.ts` | The `BackendClient` interface every renderer file depends on |
 | `src/renderer/src/lib/backend.ts` | The Electron implementation — wraps the preload bridge, unwraps the response envelope, rebuilds the error. The **only** renderer file allowed to touch `window.witena` |
-| `src/renderer/src/pages/settings/developer-section.tsx` | The smoke surface that exercises both directions, translated in S1.4 and moved here from `App.tsx` in S1.5. A deliberate test surface, not product UI |
+| `src/renderer/src/pages/settings/developer-section.tsx` | The smoke surface that exercises both directions, translated in S1.4 and moved here from `App.tsx` in S1.5. A deliberate test surface, not product UI — with one piece of real product settings since S5.7: the Editor block, which lives here because its custom mode is a shell command ([`editor`](../editor/frontend.md)) |
 | `src/renderer/src/lib/backend-provider.ts` | S1.4: `getBackend()` / `setBackend()`. The injection point stores use instead of importing the singleton, so a store is testable in plain Node with a fake client. It replaced the planned `backendContext.tsx` — the bootstrap needs the client *before* the React tree exists, which a context cannot provide |
 | `src/renderer/src/lib/event-bridge.ts` | S1.7: the **single** `subscribe` call for the whole renderer, started by `main.tsx` before the first render. `applyBackendEvent(event)` is its exported reducer, which the store tests drive directly |
 | `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, `stores/providers.ts` in S1.6, `chats` / `messages` / `run` / `presence` / `agents` in S1.7, and `stores/permissions.ts` in S5.5 |
@@ -78,7 +78,8 @@ follows.
 | `invoke('agents.*')` | Agents page | CRUD for the configuration form |
 | `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, the skills library, the per-agent memory panel |
 | `invoke('system.pickFolder')` | `stores/skills.ts`, behind "Import folder" | The native folder dialog. Resolves `null` when the user cancels, which the store treats as a non-event rather than an error — one of the two methods whose implementation is Electron-specific (S3.2) |
-| `invoke('system.applyTheme', { theme })` | `stores/settings.ts`, after a successful `settings.update` | Tints the title bar and the native dialogs (S5.8). The other Electron-specific method, and the only call in the app whose rejection is deliberately ignored: the page is already repainted, and a transport without a window must not fail the setting |
+| `invoke('system.applyTheme', { theme })` | `stores/settings.ts`, after a successful `settings.update` | Tints the title bar and the native dialogs (S5.8). Another Electron-specific method, and the only call in the app whose rejection is deliberately ignored: the page is already repainted, and a transport without a window must not fail the setting |
+| `invoke('system.openInEditor', { path, line, chatId })` | `lib/editor.ts`, from the transcript's four clickable file surfaces | Opens a file (S5.7). The third method whose implementation may need a window, and the first that needs one only for some settings; see [`editor`](../editor/frontend.md) |
 | `invoke('chats.*')`, `invoke('chats.members.list')` | Chat list and member panel, since S1.7 | Chat CRUD and reading the membership. `chats.members.set` gets its UI in S2.2 |
 | `invoke('messages.list')` | Chat view on open and when scrolling up | Initial page and history paging |
 | `invoke('chat.send' / 'chat.stop')` | Composer and Stop button | Starts and aborts a run |

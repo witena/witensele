@@ -105,6 +105,36 @@ export interface BackendApi {
    * rejecting: a browser tab has no window chrome to tint.
    */
   'system.applyTheme': (input: { theme: ThemeSetting }) => Promise<void>
+  /**
+   * Opens one file in the user's editor, at a line when one is known (S5.7).
+   *
+   * The **third** method whose implementation may need electron, and the first
+   * whose need is conditional. `AppSettings.editor` decides: `'vscode'` and
+   * `'cursor'` are URL schemes, and only `shell.openExternal` can hand a URL to
+   * the platform, so those two are implemented in `src/main/ipc/editor.ts`;
+   * `'custom'` is a command line, which `node:child_process` runs from the
+   * Electron-free handler. Both branches share one module
+   * (`src/main/editor/open.ts`) so the validation cannot differ between them.
+   *
+   * `path` must be **absolute**, and when `chatId` names a chat bound to a
+   * folder it must resolve inside that folder — the same confinement rule the
+   * executor's tools are held to (`src/main/executor/paths.ts`). A refusal
+   * carries `editor_path_not_absolute` or `editor_path_outside_workdir` as its
+   * `ValidationReason`. `chatId` is optional because the call is also reachable
+   * from surfaces that are not inside a chat; without it only the first rule
+   * applies.
+   *
+   * Resolves `void`: the platform does not report back whether the editor
+   * actually came to the front, and a caller that waited for that would wait
+   * forever.
+   */
+  'system.openInEditor': (input: {
+    path: string
+    /** 1-based, as every editor counts. Omitted means "the top of the file". */
+    line?: number
+    /** The chat whose `workdir` confines the path, when the call came from one. */
+    chatId?: string
+  }) => Promise<void>
 
   /* -- settings ----------------------------------------------------------- */
 
@@ -351,6 +381,7 @@ export const BACKEND_METHODS = [
   'system.emitTestEvent',
   'system.pickFolder',
   'system.applyTheme',
+  'system.openInEditor',
   'settings.get',
   'settings.update',
   'providers.list',

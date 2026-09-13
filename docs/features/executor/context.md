@@ -61,7 +61,7 @@ be able to say no, and afterwards read the diff of what they said yes to.
 |---|---|
 | The transcript around the card — the message list, the code block, the composer the card sits on | [`chats`](../chats/context.md). S5.5 adds components to that page; the rules they follow are here |
 | Scheduling the hand-off and the review round, and the `chat.handoff` method | [`orchestration`](../orchestration/context.md), S5.6 `[x]`. The button that calls it is [`chats`](../chats/context.md)'s |
-| Opening a path in the editor, and finding `path:line` tokens in agent **text** | S5.7. In S5.5 a `file-ref` chip copies the reference, and nothing produces one yet |
+| Opening a path in the editor, and finding `path:line` tokens in message **text** | [`editor`](../editor/context.md), S5.7 `[x]`. It reuses `resolveInWorkdir` from this feature as its own confinement rule, and makes the diff headers and the file tool cards clickable |
 | `agents.role` as a first-class choice, the executor badge, `Chat.workdir` and its picker | [`agents`](../agents/context.md) and [`chats`](../chats/context.md), S5.2 `[x]` |
 | Tools that come from an MCP server | [`mcp`](../mcp/context.md). This feature only decides **when** one of them is confirmed |
 | `read_skill` / `memory_save` and why they bypass the side-effects rule | [`skills`](../skills/context.md), [`memory`](../memory/context.md) |

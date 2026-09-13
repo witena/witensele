@@ -16,6 +16,14 @@ None of these imports electron; `node:fs`, `node:path`, `node:child_process` and
 | `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, the executor section in `buildSystemPrompt` — extended by `AgentTurnOptions.handoff` (S5.6) — and, since S5.5, `diffPartsFrom`, which turns the stored tool results into one `DiffPart` per written file |
 | `src/main/orchestration/chat-runner.ts` | Not this feature's file, but the only caller that ever sets `handoff: true`: `ChatRunner.handoff` schedules the executor's round and passes the flag for that one turn ([`orchestration`](../orchestration/backend.md)) |
 
+### Reused elsewhere
+
+`resolveInWorkdir` has a second caller since S5.7: `src/main/editor/open.ts`
+holds `system.openInEditor`'s path to the same boundary, so a `vscode://` URL
+can never be built for a file outside the chat's folder. It is imported rather
+than re-derived — the four ways out this module's header tabulates are exactly
+the ones a second implementation would get wrong.
+
 ## Database
 
 None. This feature reads two columns other features own and writes nothing. The

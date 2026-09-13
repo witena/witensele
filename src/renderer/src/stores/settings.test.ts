@@ -44,6 +44,7 @@ function fakeBackend(initial: AppSettings = DEFAULT_APP_SETTINGS): {
           ...stored,
           ...(patch.language !== undefined ? { language: patch.language } : {}),
           ...(patch.theme !== undefined ? { theme: patch.theme } : {}),
+          editor: { ...stored.editor, ...patch.editor },
           timeouts: { ...stored.timeouts, ...patch.timeouts }
         }
         return stored
@@ -234,5 +235,54 @@ describe('setTheme', () => {
     expect(theme()).toBe('light')
     expect(useSettingsStore.getState().settings?.theme).toBe('light')
     await pending
+  })
+})
+
+describe('settings store (editor)', () => {
+  it('starts on VS Code with the default command template', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await useSettingsStore.getState().load()
+
+    expect(useSettingsStore.getState().settings?.editor).toEqual(DEFAULT_APP_SETTINGS.editor)
+  })
+
+  it('writes the kind without clearing the command, and the other way round', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setEditor({ kind: 'custom' })
+    expect(backend.stored().editor).toEqual({
+      kind: 'custom',
+      command: DEFAULT_APP_SETTINGS.editor.command
+    })
+
+    await useSettingsStore.getState().setEditor({ command: 'subl {path}:{line}' })
+    expect(backend.stored().editor).toEqual({ kind: 'custom', command: 'subl {path}:{line}' })
+  })
+
+  it('sends the patch as a partial of editor, never the whole settings object', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setEditor({ kind: 'cursor' })
+
+    expect(backend.calls.at(-1)).toEqual({
+      method: 'settings.update',
+      input: { patch: { editor: { kind: 'cursor' } } }
+    })
+  })
+
+  it('rejects rather than swallowing a refused write', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+    backend.fail(new Error('settings.update: editor.command must be a non-empty string'))
+
+    // `pages/settings/editor.ts` is what turns this into the store's `error`.
+    await expect(useSettingsStore.getState().setEditor({ command: ' ' })).rejects.toThrow()
   })
 })

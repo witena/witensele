@@ -18,12 +18,18 @@ to it is the executor's own briefing, which nobody sees.
 | `src/renderer/src/components/chat/permission-card.tsx` | One card per pending request: the agent and the tool, the rendered input, and Allow / Always allow in this chat / Deny. Owns the two keyboard shortcuts |
 | `src/renderer/src/components/chat/permission-input.ts` | `describePermissionInput(toolName, input)`: the command line **verbatim**, a write's path plus a capped content preview, an edit's patch, or raw JSON. Pure and unit-tested |
 | `src/renderer/src/components/chat/diff-block.tsx` | One `DiffPart`: a collapsed header with the path and `+n -n`, opening onto `CodeBlock` in the `diff` language |
-| `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip; clicking copies the reference |
+| `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip; since S5.7 clicking it opens the file ([`editor`](../editor/frontend.md)) |
 | `src/renderer/src/components/chat/transcript-rows.ts` | `collectDiffs`, `collectFileRefs`, `countDiffLines`, `formatFileRef` — the pure part-level transforms both components read |
 | `src/renderer/src/components/chat/tool-call.ts` | `EXECUTOR_PREVIEW_ARG`: which single argument a built-in executor tool's card prints, so the line reads `write_file(src/a.ts)` rather than `write_file(path: "src/a.ts", content: "…")` |
 | `src/renderer/src/pages/chats-page.tsx` | Stacks the cards between the transcript and the composer, oldest first, and gives the oldest `autoFocus` |
 | `src/renderer/src/lib/event-bridge.ts` | Fans `permission.requested` / `permission.resolved` into the store, and `chat.deleted` into `clear` |
 | `src/renderer/src/components/chat/message-item.tsx` | Renders the diff blocks and the chip row, under the tool cards and above the agent's own summary |
+
+Since S5.7 two of these surfaces also open a file: the `DiffBlock` header path is
+a button of its own, and a `read_file` / `write_file` / `edit_file` tool card
+carries an "open" icon. The chip's click changed meaning entirely — it opened
+nothing and copied the reference in S5.5, and now opens the file. All three are
+[`editor`](../editor/frontend.md)'s behaviour on this feature's components.
 
 ## State
 

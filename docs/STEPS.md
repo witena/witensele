@@ -1044,7 +1044,7 @@ appeared in the folder and a participant reviewed it with nothing typed. Docs in
 `docs/features/chats/`, `docs/features/agent-turn/`,
 `docs/features/backend-client/` and `docs/features/i18n/`.
 
-### S5.7 Open in editor `[ ]`
+### S5.7 Open in editor `[x] (2026-09-13)`
 What: PLAN.md point 3, step one — file paths and diffs in a message open in
 the user's editor. New feature `editor` (`docs/features/editor/`, README row).
 - Settings → Developer gains an "Editor" block: `vscode` (default, opens
@@ -1076,6 +1076,94 @@ the user's editor. New feature `editor` (`docs/features/editor/`, README row).
 Acceptance: with VS Code installed, clicking a chip in a chat bound to a folder
 opens that file at that line; the tests above. Docs: `docs/features/editor/`
 (new, all four), `docs/features/chats/` (all four).
+Done: the method is the **first one that is only half window-system**, and that
+is what shaped the code. `vscode://file/<path>:<line>` needs `shell.openExternal`;
+`code -g <path>:<line>` needs `node:child_process`, which the Electron-free layer
+may use. So instead of a stub plus an override, the whole *decision* went into
+`src/main/editor/open.ts` — confinement, the URL, the command and its quoting —
+and it returns a **plan** rather than doing anything. `handlers/system.ts` runs a
+`command` plan and rejects a `url` plan with `OPEN_IN_EDITOR_UNAVAILABLE`;
+`src/main/ipc/editor.ts` runs both. A server build with a custom editor
+configured therefore works unchanged, which neither `pickFolder` nor `applyTheme`
+can say — and, more to the point, the path cannot be confined differently in the
+two builds, because neither of them validates anything of its own.
+
+Rule 2 is `resolveInWorkdir` **imported**, not re-derived: S5.4's four ways out of
+a folder (`..`, an absolute path, a symlink, a symlink to a path that does not
+exist yet) are already closed there and a second implementation would be a second
+chance to get the fourth one wrong. Rule 1 — absolute — is the renderer's
+resolution arriving as an answer rather than a question: the detector already had
+to resolve a token against the folder in order to decide whether to draw a chip,
+so sending the result means one resolution, in one place, and
+`editor_path_not_absolute` names a real client bug rather than a user mistake.
+Confinement applies only when the call names a chat that has a folder, which is
+deliberate: a path in a message is *model* output and must be confined, while a
+call with no chat is the user asking for a specific file and refusing to open
+their own `~/notes.md` would be second-guessing a direct instruction.
+
+The detector (`components/chat/file-refs.ts`) is the part that needed the most
+restraint, because it draws a button over prose. Its rules are written as a table
+of **rejections** in the file header, and the one doing most of the work is that
+a relative token must end in an extension with a letter in it: that is what keeps
+`1.2:3`, `read/write` and `and/or` out, at the documented cost of never chipping
+`Makefile`. A URL, a Windows path, a leftover colon (`mailto:`) and an `@` in a
+token with no separator are the other four. It is lexical — the renderer has no
+filesystem and cannot follow a symlink — so it decides what to *draw* and the
+backend re-resolves through `realpathSync` on the click; the two are allowed to
+differ in one direction only, chip-then-refuse, never the reverse.
+
+Two deliberate widenings of the step as written. **Detection runs on every message
+body, the user's included**, because the sender does not change what a token
+means — a pasted stack trace deserves the same click — and because it is what
+makes the behaviour observable end to end without a live model: `e2e/editor.spec.ts`
+is entirely offline and always runs, rather than sitting behind an Ollama guard.
+And **an inline code span that is entirely one reference becomes a chip**, since
+`` `src/a.ts:42` `` is how a model writes a path more often than not; a fenced
+block is left alone, or a directory listing would become forty buttons.
+
+S5.5's copy-on-click is **gone** rather than kept beside the open: it was
+explicitly a placeholder for this step, and a 20-pixel target with two meanings is
+worse than either one — the reference is still selectable text in the message. A
+refused open paints the chip red for 2.5 seconds and says so in its tooltip;
+nothing is written into the transcript, because that would be the app narrating a
+click back at the user. The diff header became **two** buttons (expand, and the
+path) rather than one inside another, which is invalid markup and unreachable by
+keyboard.
+
+`{path}` is substituted **already quoted** (`shellQuote`: single quotes, with
+`'\''` for an embedded quote), which is what makes the naive default template
+correct for `/Users/ada/My Projects/a.ts` and what keeps `notes.md; rm -rf ~` a
+filename. The hint says not to quote the placeholder yourself, and writes its own
+`{path}` / `{line}` with **single** braces — i18next would have interpolated the
+double-brace spelling away to nothing. The Editor block sits in Settings →
+Developer because its custom mode is a shell command, and `settings.update`
+validates both fields for the reason `theme` is validated: an unknown kind falls
+through every branch of `planOpenInEditor` and a blank command spawns an empty
+shell line, neither of which fails in a way the user can see.
+
+Tests: `editor/open.test.ts` (22) drives both rules against a real temporary
+folder — including a symlink out and a `..` — plus the two URLs, the encoding, the
+quoting (a space, a single quote, a `;`, a missing line, a repeated placeholder)
+and the three plans; `file-refs.test.ts` (28) is weighted towards the rejections;
+`handlers.test.ts` gained nine (the URL branch's rejection, a custom command
+really running via a marker file the child writes, the two refusals, and
+`settings.update`'s `editor` validation); `tool-call.test.ts` six for which cards
+get an "open" icon; `settings.test.ts` four for the store. `npm test`: 82 files,
+1234 tests; `npm run typecheck` clean. `e2e/editor.spec.ts` ran after
+`npm run build`: 6 passed — the Editor block's three kinds and its conditional
+command field, both surviving a restart; a chip for `src/main.ts:12` and none for
+`/etc/passwd:1` or `1.2:3`; the backend really running the call the chip would
+make; both refusals; and no chip at all once the folder is cleared.
+`e2e/executor.spec.ts` was re-run for the diff and tool-card changes: 14 passed.
+The **click itself is not driven**: `shell.openExternal` would launch the
+developer's real editor, there is no test hook to stub the method, and
+`window.witena` is a `contextBridge` object whose methods cannot be replaced from
+the page — so the spec asserts the chip is a real button carrying the path and the
+line, and separately that the backend accepts exactly that call. That gap, and
+the fact that the acceptance sentence ("with VS Code installed…") was therefore
+verified by reading rather than by clicking, are in the Phase 6 backlog. Docs:
+`docs/features/editor/` (new, all four), `docs/features/chats/` (all four),
+`docs/features/{backend-client,executor,ui-shell,i18n}/` and the README index.
 
 ### S5.8 Light theme `[x]` (2026-09-13)
 What: a light appearance next to the existing dark one, and a setting that
@@ -1339,9 +1427,41 @@ adds a line here in the same commit.
   the same patch in twice; rendering them *instead* would mean parsing back what
   the model already read. Worth revisiting when a turn's tool results start
   being summarised rather than replayed.
-- **Nothing emits a `FileRefPart`.** S5.5 renders one as a `path:line` chip that
-  copies on click; producing them from an agent's text, and opening them in the
-  editor, is S5.7.
+- **Nothing emits a `FileRefPart`.** S5.5 renders one as a `path:line` chip and
+  S5.7 makes that chip open the file, but every chip a user actually sees comes
+  from S5.7's text **detector**: no backend code writes the part. A turn that
+  reported the files it read as parts would be more precise than a regular
+  expression over prose, and would make the chip work for a path the detector's
+  extension rule refuses.
+
+### Editor integration (S5.7)
+
+- **The click is not covered end to end.** `system.openInEditor` ends in
+  `shell.openExternal`, which would launch the developer's real editor during a
+  test run, and `window.witena` is a `contextBridge` object whose methods cannot
+  be replaced from the page — so there is no way to intercept the call.
+  `e2e/editor.spec.ts` asserts the chip is a real button carrying the path and
+  the line, and separately that the backend accepts exactly that call. A test
+  hook in the developer settings that stubs the method (S5.7's own suggestion,
+  which was not built) would close it; so would a fake editor binary and a
+  `custom` command driven through the UI.
+- **The acceptance sentence was read, not clicked.** "With VS Code installed,
+  clicking a chip in a chat bound to a folder opens that file at that line" is
+  proved in pieces — the URL is unit-tested, the round trip is end-to-end-tested
+  through a custom command — but no automated run has opened VS Code.
+- **The detector cannot tell whether a file exists.** It draws a chip on
+  `src/typo.ts:3` and refuses `Makefile` and any path containing a space. A
+  cheap batched `exists` check per message, cached per chat, would fix both
+  directions; the renderer has no filesystem, so it has to come from the backend.
+- **No editor is probed.** Choosing Cursor on a machine without Cursor is
+  accepted and fails two seconds at a time on a red chip. Probing at settings
+  time, or after the first failure, would be friendlier.
+- **A path in a chat with no folder is never clickable**, even when it is
+  absolute and unambiguous, because the detector returns nothing without a folder
+  to confine against.
+- **`{line}` cannot be omitted from a custom template.** A reference with no line
+  substitutes 1, because the default template welds `:{line}` on; a template that
+  wanted "open the file, no line" has no way to say so.
 
 ### Appearance
 

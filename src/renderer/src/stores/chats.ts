@@ -373,3 +373,18 @@ const NO_MEMBERS: string[] = []
 export function useChatMemberIds(chatId: string | null): string[] {
   return useChatsStore((state) => (chatId ? (state.membersByChat[chatId] ?? NO_MEMBERS) : NO_MEMBERS))
 }
+
+/**
+ * The folder one chat is bound to, or `null`.
+ *
+ * A selector rather than a prop threaded down the transcript (S5.7): every
+ * message row needs it — for the file chips, the diff headers and the file tool
+ * cards — and `MessageItem` already reads the presence store by `chatId` for
+ * exactly the same reason. A string is a stable value, so this re-renders a row
+ * only when the binding really changes.
+ */
+export function useChatWorkdir(chatId: string | null): string | null {
+  return useChatsStore(
+    (state) => (chatId ? (state.chats.find((chat) => chat.id === chatId)?.workdir ?? null) : null)
+  )
+}

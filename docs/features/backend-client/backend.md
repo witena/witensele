@@ -16,7 +16,7 @@
 | `src/main/secrets.ts` | `SecretStore` + `createInsecureSecretStore()`, the base64 `plain:` fallback used when the OS has no key storage |
 | `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `mcp`, `memory`, `permissions`, `anthropicCli`, `close`) and `createAppContext({ databasePath, userDataDir, secrets, userId?, events?, fetchImpl?, anthropicCli?, runner?, supervisor?, mcp? })`. `close()` stops every run, the supervisor's loops and every pending permission prompt before closing the database |
 | `src/main/handlers/types.ts` | `HandlerMap` — `BackendApi` with an `AppContext` threaded in front of each method's arguments — and `HandlerModule` (`Partial<HandlerMap>`) |
-| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, and the `system.pickFolder` / `system.applyTheme` **stubs** (see "The electron exceptions") |
+| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, the `system.pickFolder` / `system.applyTheme` **stubs**, and `system.openInEditor`, which is half implemented here (see "The electron exceptions") |
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
 | `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
@@ -26,6 +26,7 @@
 | `src/main/ipc/secret-store.ts` | `createElectronSecretStore()` over `safeStorage` |
 | `src/main/ipc/dialogs.ts` | `system.pickFolder` over `dialog.showOpenDialog`, layered over the stub inside `registerIpc` (S3.2) |
 | `src/main/ipc/theme.ts` | `system.applyTheme` over `nativeTheme.themeSource`, layered the same way (S5.8) |
+| `src/main/ipc/editor.ts` | `system.openInEditor`'s URL branch over `shell.openExternal`, layered the same way (S5.7). Owned by [`editor`](../editor/backend.md) |
 | `src/main/index.ts` | Applies `WITENA_USER_DATA`, builds the secret store and the context on ready, registers IPC and event forwarding **before** the first window, closes the context on `before-quit` |
 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld('witena', { invoke, onEvent })` |
 | `src/preload/index.d.ts` | Ambient `Window['witena']` for the renderer project |
@@ -41,7 +42,7 @@ which must print nothing. Moving the backend to a Node server means replacing
 `src/main/ipc/`, `src/main/index.ts` and the preload bridge — the handlers, the
 context, the bus and the repositories go across untouched.
 
-### The electron exceptions: `system.pickFolder` and `system.applyTheme`
+### The electron exceptions: `system.pickFolder`, `system.applyTheme` and half of `system.openInEditor`
 
 Every other `BackendApi` method is a pure function of storage, the filesystem and
 the network, so every other handler lives in `src/main/handlers/`. A **native
@@ -65,9 +66,25 @@ So the exception is made deliberately and kept honest rather than waived:
 | `ipc/dialogs.ts`, `ipc/theme.ts` | The real ones, in the directory that may already import electron |
 | `ipc/register.ts` | `const table = { ...handlers, ...dialogHandlers, ...themeHandlers }` — the overrides exist only in this transport |
 
+S5.7 added the third, and it is the first that is only **conditionally**
+window-system. `system.openInEditor` opens a `vscode://` or `cursor://` URL —
+`shell.openExternal`, electron — *or* runs a command line — `node:child_process`,
+not electron — and which of the two is a stored setting. So the shape had to bend
+one notch: the whole decision lives in an Electron-free module
+(`src/main/editor/open.ts`) that returns a **plan**, `handlers/system.ts` runs the
+command plan and rejects the URL plan, and `ipc/editor.ts` runs both. A server
+build with a custom editor configured therefore works unchanged, which no
+previous exception could say.
+
+| Layer | What `system.openInEditor` adds |
+|---|---|
+| `editor/open.ts` | `planOpenInEditor(ctx, input)` — confinement, the URL, the command and its quoting. No electron |
+| `handlers/system.ts` | Runs a `command` plan; rejects a `url` plan with `OPEN_IN_EDITOR_UNAVAILABLE` |
+| `ipc/editor.ts` | Runs a `command` plan, and hands a `url` plan to `shell.openExternal` |
+
 A server build layers nothing, and the rejection is the truth: a browser cannot
 hand a backend a path either, and a tab has no title bar to tint. The grep above
-still prints nothing, because both files are inside `src/main/ipc/`.
+still prints nothing, because all three files are inside `src/main/ipc/`.
 
 Cancelling the dialog resolves **`null`**, which is not an error — the renderer
 must not show a failure for a user who changed their mind.
@@ -206,6 +223,7 @@ temporary directory. `SkillMeta.path` and `MemoryEntry.path` are declared in
 | electron `webContents.send` | The push channel | Throws on a destroyed window; `forwardEvents` checks `isDestroyed()` first |
 | electron `safeStorage` | Encrypting provider API keys | `isEncryptionAvailable()` can be false on a machine with no keyring, and returns a `Buffer` that must be base64-encoded for a `text` column |
 | electron `dialog.showOpenDialog` | `system.pickFolder` (S3.2) | Resolves `{ canceled, filePaths }` rather than rejecting when the user cancels, so the handler answers `null`. `properties: ['openDirectory']` only — no multi-select, no file creation |
+| electron `shell.openExternal` | `system.openInEditor`'s URL branch (S5.7) | It resolves when the platform *accepted* the URL, and on macOS rejects when nothing is registered for the scheme — which is a real answer ("VS Code is not installed") and is why the renderer paints a failed chip from it |
 | electron `nativeTheme` | `system.applyTheme` (S5.8), and `backgroundColor` in `src/main/index.ts` | `themeSource` accepts `'system'` verbatim and is process-wide, so it also covers windows opened later and needs no listener of ours. `shouldUseDarkColors` is the *resolved* answer and is only read where a colour is needed now |
 | electron structured clone | Payload serialization | It preserves `undefined` and does **not** preserve prototypes. Do not rely on either — a future HTTP transport goes through `JSON.stringify`, which drops `undefined` keys, so treat an absent optional field and an explicit `undefined` as the same thing |
 | `@playwright/test` (`_electron`) | The end-to-end harness | Needs the built output in `out/`, launches with `args: ['.']` from the repository root, and needs no downloaded browsers. Config lives in `playwright.config.ts` with `testDir: 'e2e'`; vitest excludes `e2e/` so `npm test` stays unit-only |

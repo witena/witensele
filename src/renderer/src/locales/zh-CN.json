@@ -117,7 +117,9 @@
     "permissionCommandHint": "在本群聊的文件夹中以你的身份和环境变量运行。",
     "diffExpand": "展开",
     "diffCollapse": "收起",
-    "fileRefTitle": "复制该路径"
+    "fileRefTitle": "在编辑器中打开该文件",
+    "fileRefFailed": "无法打开该文件，请检查「设置 → 开发者 → 编辑器」。",
+    "openInEditor": "在编辑器中打开"
   },
   "agents": {
     "title": "智能体",
@@ -365,7 +367,14 @@
       "lastEvent": "最近事件：",
       "emitTestEvent": "发送测试事件",
       "pending": "…",
-      "noEvent": "—"
+      "noEvent": "—",
+      "editor": "编辑器",
+      "editorHint": "点击文件路径、diff 标题或文件工具卡片时，用什么打开。",
+      "editorVscode": "VS Code",
+      "editorCursor": "Cursor",
+      "editorCustom": "自定义命令",
+      "editorCommand": "命令模板",
+      "editorCommandHint": "执行时 {path} 会替换成加引号的绝对路径，{line} 替换成行号。不要自己给占位符加引号。"
     }
   },
   "presence": {
@@ -395,7 +404,9 @@
     "oauth_custom_base_url": "使用账号登录的提供方不能自定义 Base URL。",
     "handoff_no_workdir": "先给这个对话选一个工作目录，再交给执行者。",
     "handoff_no_executor": "先往这个对话里加一位执行者，再交给它。",
-    "handoff_run_active": "这个对话还在运行，等它结束或先点停止。"
+    "handoff_run_active": "这个对话还在运行，等它结束或先点停止。",
+    "editor_path_not_absolute": "该引用不是完整路径，无法打开。",
+    "editor_path_outside_workdir": "该文件在本群聊的文件夹之外，已拒绝打开。"
   },
   "notices": {
     "agentSkipped": "{{agent}} 本轮没有响应，已被跳过",

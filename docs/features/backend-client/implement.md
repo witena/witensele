@@ -212,7 +212,8 @@ Naming conventions the whole app follows:
 | `mcp.list` / `create` / `update` / `delete` | — / `{ input }` / `{ id, patch }` / `{ id }` | `McpServer[]` / `McpServer` / `McpServer` / `void` | |
 | `mcp.testConnection` | `{ id }` | `McpConnectionTestResult` | Success also returns `toolNames` |
 | `system.pickFolder` | — | `string \| null` | **S3.2**; one of the two methods implemented in `src/main/ipc/` because they need a window. `null` means the user cancelled, which is not an error |
-| `system.applyTheme` | `{ theme }` | `void` | **S5.8**; the other one. A notification, not a write — the setting is stored by `settings.update` — so it carries no state and its caller ignores a rejection. `validation` for a theme outside `THEME_SETTINGS` |
+| `system.applyTheme` | `{ theme }` | `void` | **S5.8**; the second. A notification, not a write — the setting is stored by `settings.update` — so it carries no state and its caller ignores a rejection. `validation` for a theme outside `THEME_SETTINGS` |
+| `system.openInEditor` | `{ path, line?, chatId? }` | `void` | **S5.7**; the third, and the first that needs a window only for *some* settings — a `vscode://` URL does, a custom command line does not. `validation` with `editor_path_not_absolute` / `editor_path_outside_workdir`; owned by [`editor`](../editor/implement.md) |
 | `skills.list` | — | `{ skills: SkillMeta[]; warnings: SkillWarning[] }` | S3.2. The warnings name folders that look like a skill and could not be used |
 | `skills.import` | `{ sourcePath, overwrite? }` | `SkillMeta` | S3.2; refuses an existing folder name unless `overwrite` |
 | `skills.read` / `skills.delete` | `{ name }` | `SkillDetail` / `void` | **Added in S3.2** |
@@ -233,7 +234,8 @@ and `handlers.test.ts` asserts the builder directly rather than through a method
 that happens to be missing — so the next method added to `BackendApi` before its
 step lands still rejects with a pointer instead of crashing. The two methods that
 reject in the Electron-free layer *by design* are `system.pickFolder` and
-`system.applyTheme`; see [`backend.md`](./backend.md).
+`system.applyTheme`, and `system.openInEditor` joins them for two of its three
+editor settings; see [`backend.md`](./backend.md).
 
 | Event | Payload | Emitted when |
 |---|---|---|
@@ -272,8 +274,8 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   implemented handlers check their own payload and reject with
   `code: 'validation'`; zod arrives with the first domain that needs a real
   schema.
-- **`system.pickFolder` and `system.applyTheme` are the two methods that are
-  not transport-agnostic.** Both are declared here, stubbed in the handler
+- **`system.pickFolder`, `system.applyTheme` and (conditionally)
+  `system.openInEditor` are the methods that are not transport-agnostic.** Both are declared here, stubbed in the handler
   layer and implemented in `src/main/ipc/` (`dialogs.ts`, `theme.ts`); a server
   build has to answer the first some other way (an upload, or a path field) and
   simply leaves the second rejecting — a browser tab has no window chrome to

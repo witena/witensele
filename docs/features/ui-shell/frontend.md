@@ -20,7 +20,8 @@ main-process fact it depends on.
 | `src/renderer/src/pages/settings/appearance-section.tsx` | The appearance `SegmentedControl` (System / Light / Dark, S5.8) and the language `Select` |
 | `src/renderer/src/pages/settings/theme.ts` | `applyThemeSetting` — the appearance control's counterpart to `language.ts` |
 | `src/renderer/src/lib/theme.ts` | `applyTheme` / `activateTheme`: `data-theme` on `<html>`, plus the `matchMedia` subscription `'system'` needs |
-| `src/renderer/src/pages/settings/developer-section.tsx` | The transport smoke widgets, moved here from `App.tsx` |
+| `src/renderer/src/pages/settings/developer-section.tsx` | The transport smoke widgets, moved here from `App.tsx`, plus S5.7's Editor block ([`editor`](../editor/frontend.md)) — the one piece of real product settings on this screen, here because its custom mode is a shell command |
+| `src/renderer/src/pages/settings/editor.ts` | `applyEditorSetting` — the Editor block's counterpart to `theme.ts` and `language.ts` (S5.7) |
 | `src/renderer/src/pages/settings/language.ts` | `applyLanguageSetting` — the single handler both language controls call |
 | `src/renderer/src/stores/ui.ts` | `page` and `settingsSection` plus their setters |
 | `src/renderer/src/index.css` | Design tokens (dark base + the light override block), the `drag-region` / `no-drag` utilities and the two `.shiki` rules that pick a syntax theme |

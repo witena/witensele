@@ -244,4 +244,36 @@ describe('executor tool previews', () => {
     )
     expect(describeToolCall(call('git_diff', {})).argsPreview).toBe('')
   })
+
+  /** S5.7: which cards get an "open" icon, and which deliberately do not. */
+  describe('filePath', () => {
+    it('names the file for the three tools that are about one', () => {
+      for (const name of ['read_file', 'write_file', 'edit_file']) {
+        expect(describeToolCall(call(name, { path: 'src/a.ts' })).filePath).toBe('src/a.ts')
+      }
+    })
+
+    it('is null for the tools whose path is not a file, and for the rest', () => {
+      // `list_dir` and `git_diff` take a `path` too; neither is a file to open.
+      expect(describeToolCall(call('list_dir', { path: 'src' })).filePath).toBeNull()
+      expect(describeToolCall(call('git_diff', { path: 'src' })).filePath).toBeNull()
+      expect(describeToolCall(call('search_files', { query: 'x' })).filePath).toBeNull()
+      expect(describeToolCall(call('run_command', { command: 'npm test' })).filePath).toBeNull()
+    })
+
+    it('is null for an MCP tool of the same name', () => {
+      expect(describeToolCall(call('write_file', { path: 'a.ts' }, 'filesystem')).filePath).toBeNull()
+    })
+
+    it('is null when the argument is missing, blank or not a string', () => {
+      expect(describeToolCall(call('read_file', {})).filePath).toBeNull()
+      expect(describeToolCall(call('read_file', { path: '   ' })).filePath).toBeNull()
+      expect(describeToolCall(call('read_file', { path: 42 })).filePath).toBeNull()
+      expect(describeToolCall(call('read_file', 'src/a.ts')).filePath).toBeNull()
+    })
+
+    it('trims the path the model typed', () => {
+      expect(describeToolCall(call('read_file', { path: ' src/a.ts ' })).filePath).toBe('src/a.ts')
+    })
+  })
 })

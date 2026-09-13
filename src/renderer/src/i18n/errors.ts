@@ -82,6 +82,10 @@ export function validationReasonMessage(t: TranslateFn, reason: ValidationReason
       return t('errors.handoff_no_executor')
     case 'handoff_run_active':
       return t('errors.handoff_run_active')
+    case 'editor_path_not_absolute':
+      return t('errors.editor_path_not_absolute')
+    case 'editor_path_outside_workdir':
+      return t('errors.editor_path_outside_workdir')
   }
 }
 

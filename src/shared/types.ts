@@ -489,11 +489,42 @@ export type ThemeSetting = 'system' | 'light' | 'dark'
 /** Every value `AppSettings.theme` accepts, in the order the control shows them. */
 export const THEME_SETTINGS = ['system', 'light', 'dark'] as const satisfies readonly ThemeSetting[]
 
+/**
+ * Which editor `system.openInEditor` hands a file to (S5.7).
+ *
+ * The two named editors are URL schemes — `vscode://file/<path>:<line>` and its
+ * Cursor twin — because a URL needs nothing installed on the `PATH` and works
+ * whether or not the user ever ran "Install 'code' command in PATH". `'custom'`
+ * is the escape hatch for everything else, and it is a command line rather than
+ * a second scheme because that is the only interface every editor has.
+ */
+export type EditorKind = 'vscode' | 'cursor' | 'custom'
+
+/** Every value `EditorSettings.kind` accepts, in the order the control shows them. */
+export const EDITOR_KINDS = ['vscode', 'cursor', 'custom'] as const satisfies readonly EditorKind[]
+
+/**
+ * The command template `kind: 'custom'` starts from.
+ *
+ * `{path}` and `{line}` are the only placeholders; the backend substitutes them
+ * with the *quoted* absolute path and the line number, so a template may put them
+ * anywhere without thinking about spaces in a directory name.
+ */
+export const DEFAULT_EDITOR_COMMAND = 'code -g {path}:{line}'
+
+export interface EditorSettings {
+  kind: EditorKind
+  /** Only used when `kind` is `'custom'`, but kept across a switch away and back. */
+  command: string
+}
+
 export interface AppSettings {
   /** `'system'` follows the OS language, which is the first-launch default. */
   language: Language | 'system'
   /** `'system'` follows the OS appearance, which is the first-launch default. */
   theme: ThemeSetting
+  /** Where a `path:line` chip, a diff header or a file tool card opens (S5.7). */
+  editor: EditorSettings
   timeouts: AppTimeouts
 }
 
@@ -501,6 +532,10 @@ export interface AppSettings {
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   language: 'system',
   theme: 'system',
+  editor: {
+    kind: 'vscode',
+    command: DEFAULT_EDITOR_COMMAND
+  },
   timeouts: {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,
@@ -508,10 +543,18 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   }
 }
 
-/** A shallow patch of `AppSettings`; `timeouts` may be updated one field at a time. */
+/**
+ * A shallow patch of `AppSettings`.
+ *
+ * `timeouts` and `editor` may each be updated one field at a time, because both
+ * are written by a form whose controls commit separately: the kind is a click and
+ * the command template is a field that commits on blur, and a whole-object write
+ * from either would overwrite whatever the other one did a moment earlier.
+ */
 export interface AppSettingsPatch {
   language?: AppSettings['language']
   theme?: AppSettings['theme']
+  editor?: Partial<EditorSettings>
   timeouts?: Partial<AppTimeouts>
 }
 
@@ -669,7 +712,11 @@ export const VALIDATION_REASONS = [
   /** `chat.handoff` on a chat whose members include no executor (S5.6). */
   'handoff_no_executor',
   /** `chat.handoff` while a run of that chat is still going (S5.6). */
-  'handoff_run_active'
+  'handoff_run_active',
+  /** `system.openInEditor` was given a path that is not absolute (S5.7). */
+  'editor_path_not_absolute',
+  /** `system.openInEditor` was given a path outside the chat's folder (S5.7). */
+  'editor_path_outside_workdir'
 ] as const
 
 export type ValidationReason = (typeof VALIDATION_REASONS)[number]

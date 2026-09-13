@@ -1,8 +1,13 @@
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BACKEND_METHODS, type BackendMethod } from '@shared/backend'
 import type { BackendEvent } from '@shared/events'
 import {
   DEFAULT_APP_SETTINGS,
+  DEFAULT_EDITOR_COMMAND,
+  EDITOR_KINDS,
   LOCAL_USER_ID,
   THEME_SETTINGS,
   type AnthropicAuthState,
@@ -15,6 +20,7 @@ import { createInsecureSecretStore } from '../secrets'
 import type { FetchImpl } from '../providers/discovery'
 import { createTestAppContext, type TestAppContext } from '../testing'
 import { buildHandlers, notImplemented } from './index'
+import { OPEN_IN_EDITOR_UNAVAILABLE } from './system'
 
 /**
  * An `AppContext` backed by the S1.2 test fixture: a real temporary database
@@ -91,6 +97,71 @@ describe('handlers/buildHandlers', () => {
     })
   })
 
+  /**
+   * The half of `system.openInEditor` the Electron-free layer really implements
+   * (S5.7). The URL half rejects here and is layered over by
+   * `src/main/ipc/editor.ts`; the path rules themselves are covered in
+   * `src/main/editor/open.test.ts`, so these are the handler's own three answers.
+   */
+  describe('system.openInEditor', () => {
+    let root: string
+    let chatId: string
+
+    beforeEach(() => {
+      // Realpathed for the same reason `editor/open.test.ts` does it: macOS puts
+      // `tmpdir()` behind the `/var` -> `/private/var` symlink.
+      root = realpathSync(mkdtempSync(join(tmpdir(), 'witena-open-')))
+      writeFileSync(join(root, 'a.ts'), 'export const answer = 42\n', 'utf8')
+      chatId = ctx.repos.chats.create({ title: 'Bound', workdir: root }, ctx.userId).id
+    })
+
+    afterEach(() => {
+      rmSync(root, { recursive: true, force: true })
+    })
+
+    it('rejects with a pointer at the overlay while the editor is a URL scheme', async () => {
+      await expect(
+        handlers['system.openInEditor'](ctx, { path: join(root, 'a.ts'), line: 3, chatId })
+      ).rejects.toMatchObject({ code: 'internal', message: OPEN_IN_EDITOR_UNAVAILABLE })
+    })
+
+    it('runs a custom command line, with the path substituted and quoted', async () => {
+      const marker = join(root, 'marker.txt')
+      ctx.repos.settings.update(
+        { editor: { kind: 'custom', command: `cat {path} > '${marker}'` } },
+        ctx.userId
+      )
+
+      await handlers['system.openInEditor'](ctx, { path: join(root, 'a.ts'), chatId })
+
+      // The child is detached and nothing is awaited by contract, so the file it
+      // writes is the only observable and it has to be waited for.
+      await expect
+        .poll(() => (existsSync(marker) ? readFileSync(marker, 'utf8') : null), { timeout: 5_000 })
+        .toBe('export const answer = 42\n')
+    })
+
+    it('refuses a path outside the chat folder before reading the setting', async () => {
+      ctx.repos.settings.update({ editor: { kind: 'custom' } }, ctx.userId)
+
+      await expect(
+        handlers['system.openInEditor'](ctx, { path: '/etc/passwd', chatId })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'editor_path_outside_workdir' }
+      })
+    })
+
+    it('refuses a relative path', async () => {
+      await expect(
+        handlers['system.openInEditor'](ctx, { path: 'a.ts', chatId })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'editor_path_not_absolute' }
+      })
+    })
+  })
+
   describe('settings.get / settings.update', () => {
     it('returns the defaults before anything was stored', async () => {
       await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
@@ -138,6 +209,54 @@ describe('handlers/buildHandlers', () => {
     it('rejects unknown keys instead of storing them', async () => {
       await expect(
         handlers['settings.update'](ctx, { patch: { nope: true } as never })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('stores each of the three editor kinds', async () => {
+      for (const kind of EDITOR_KINDS) {
+        const updated = await handlers['settings.update'](ctx, { patch: { editor: { kind } } })
+        expect(updated.editor.kind).toBe(kind)
+        // Field by field, like `timeouts`: the kind is a click and the command is
+        // a field that commits on blur, so neither may clear the other (S5.7).
+        expect(updated.editor.command).toBe(DEFAULT_EDITOR_COMMAND)
+      }
+    })
+
+    it('merges the editor command without touching the kind', async () => {
+      await handlers['settings.update'](ctx, { patch: { editor: { kind: 'custom' } } })
+      const updated = await handlers['settings.update'](ctx, {
+        patch: { editor: { command: 'subl {path}:{line}' } }
+      })
+
+      expect(updated.editor).toEqual({ kind: 'custom', command: 'subl {path}:{line}' })
+    })
+
+    it('rejects an editor kind that is not one of them', async () => {
+      await expect(
+        handlers['settings.update'](ctx, { patch: { editor: { kind: 'emacs' as never } } })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('rejects a blank or non-string editor command', async () => {
+      for (const command of ['', '   ', 42 as never]) {
+        await expect(
+          handlers['settings.update'](ctx, { patch: { editor: { command } } })
+        ).rejects.toMatchObject({ code: 'validation' })
+      }
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('rejects an editor patch that is not an object, and unknown keys in it', async () => {
+      await expect(
+        handlers['settings.update'](ctx, { patch: { editor: 'vscode' as never } })
+      ).rejects.toMatchObject({ code: 'validation' })
+      await expect(
+        handlers['settings.update'](ctx, { patch: { editor: { nope: true } as never } })
       ).rejects.toMatchObject({ code: 'validation' })
 
       await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
@@ -495,11 +614,17 @@ describe('handlers/buildHandlers', () => {
 
 describe('handlers/stubs', () => {
   /**
-   * What is left is the two methods that need a window: `system.pickFolder`,
+   * What is left is the methods that need a window: `system.pickFolder`,
    * implemented in `src/main/ipc/dialogs.ts`, and `system.applyTheme` (S5.8), in
    * `src/main/ipc/theme.ts`. Outside the Electron transport both must reject
    * rather than resolve — `null` would look to the renderer like the user
    * cancelling, and a silent `undefined` like window chrome that was tinted.
+   *
+   * `system.openInEditor` (S5.7) is excluded from the sweep rather than listed
+   * as a stub, because it is the one method that is *conditionally* electron:
+   * with `editor.kind: 'custom'` it runs here, and it reaches the database before
+   * it can decide, which this sweep's context-shaped `{ userId }` has no room
+   * for. Both of its branches have their own cases above.
    */
   it('every method the Electron-free layer cannot implement rejects rather than resolving undefined', async () => {
     const handlers = buildHandlers()
@@ -564,7 +689,9 @@ describe('handlers/stubs', () => {
       // S5.4
       'permission.reply',
       // S5.6
-      'chat.handoff'
+      'chat.handoff',
+      // S5.7 — see the comment above: half of it is implemented here.
+      'system.openInEditor'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

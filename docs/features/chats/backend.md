@@ -199,6 +199,11 @@ from [`executor`](../executor/backend.md)'s gate. This feature's backend half is
 unchanged by S5.5: the permission card, the diff block and the file-reference
 chip are renderer-only, and the `DiffPart`s they draw are appended by the turn.
 
+S5.7 leaves it unchanged too, with one read: `system.openInEditor` looks a chat
+up by id and takes its `workdir` as the folder a path must resolve inside. It
+writes nothing, emits nothing, and treats a chat that has been deleted as simply
+no confinement; the method belongs to [`editor`](../editor/backend.md).
+
 ## Filesystem
 
 Nothing. Chats and messages live entirely in `userData/witena.db`.

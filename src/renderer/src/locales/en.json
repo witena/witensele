@@ -117,7 +117,9 @@
     "permissionCommandHint": "Runs in this chat's folder, as you, with your environment.",
     "diffExpand": "expand",
     "diffCollapse": "collapse",
-    "fileRefTitle": "Copy this path"
+    "fileRefTitle": "Open this file in your editor",
+    "fileRefFailed": "Could not open this file. Check Settings -> Developer -> Editor.",
+    "openInEditor": "Open in editor"
   },
   "agents": {
     "title": "Agents",
@@ -365,7 +367,14 @@
       "lastEvent": "last event:",
       "emitTestEvent": "Emit test event",
       "pending": "…",
-      "noEvent": "—"
+      "noEvent": "—",
+      "editor": "Editor",
+      "editorHint": "Where a file path, a diff header or a file tool card opens when you click it.",
+      "editorVscode": "VS Code",
+      "editorCursor": "Cursor",
+      "editorCustom": "Custom command",
+      "editorCommand": "Command template",
+      "editorCommandHint": "Run with {path} replaced by the quoted absolute path and {line} by the line number. Do not quote the placeholders yourself."
     }
   },
   "presence": {
@@ -395,7 +404,9 @@
     "oauth_custom_base_url": "A provider that signs in cannot use a custom base URL.",
     "handoff_no_workdir": "Choose a working directory for this chat before handing it over.",
     "handoff_no_executor": "Add an executor to this chat before handing it over.",
-    "handoff_run_active": "This chat is still running. Wait for it, or press Stop."
+    "handoff_run_active": "This chat is still running. Wait for it, or press Stop.",
+    "editor_path_not_absolute": "That reference is not a full path, so it cannot be opened.",
+    "editor_path_outside_workdir": "That file is outside this chat's folder, so it was not opened."
   },
   "notices": {
     "agentSkipped": "{{agent}} did not respond and was skipped this round",

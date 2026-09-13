@@ -10,6 +10,8 @@ import type { BackendEvent, BackendEventType, EventOf, MessageDelta } from '@sha
 import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
+  DEFAULT_EDITOR_COMMAND,
+  EDITOR_KINDS,
   LOCAL_USER_ID,
   type Message,
   type MessagePart,
@@ -27,6 +29,7 @@ const EXPECTED_METHODS = [
   'system.emitTestEvent',
   'system.pickFolder',
   'system.applyTheme',
+  'system.openInEditor',
   'settings.get',
   'settings.update',
   'providers.list',
@@ -144,12 +147,23 @@ describe('defaults', () => {
       // S5.8: `theme` used to be the single value `dark`. A stored `'dark'` still
       // means dark; only a *fresh* installation now follows the machine.
       theme: 'system',
+      // S5.7: VS Code by default, because it is the editor the product tour
+      // shows and the one whose URL scheme needs nothing on the `PATH`. The
+      // command template is only read for `kind: 'custom'`, but it is stored
+      // from the start so switching to custom offers a working line rather than
+      // an empty field.
+      editor: {
+        kind: 'vscode',
+        command: 'code -g {path}:{line}'
+      },
       timeouts: {
         stallTimeoutMs: 30000,
         hardTimeoutMs: 120000,
         toolTimeoutMs: 60000
       }
     })
+    expect(DEFAULT_APP_SETTINGS.editor.command).toBe(DEFAULT_EDITOR_COMMAND)
+    expect(EDITOR_KINDS).toEqual(['vscode', 'cursor', 'custom'])
   })
 
   it('fixes the local user id', () => {

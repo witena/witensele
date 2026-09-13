@@ -15,7 +15,7 @@
  *   "not loaded yet" and "load failed" need different UI.
  */
 import { create } from 'zustand'
-import type { AppSettings, AppTimeouts, ThemeSetting } from '@shared/types'
+import type { AppSettings, AppTimeouts, EditorSettings, ThemeSetting } from '@shared/types'
 import { getNavigatorLanguage, i18n, resolveLanguage } from '../i18n'
 import { getBackend } from '../lib/backend-provider'
 import { activateTheme } from '../lib/theme'
@@ -42,6 +42,16 @@ export interface SettingsState {
    * traffic lights and the native dialogs (`system.applyTheme`).
    */
   setTheme: (theme: ThemeSetting) => Promise<void>
+  /**
+   * Persists the editor choice, one field at a time (S5.7).
+   *
+   * A **partial** for the same reason `setTimeouts` takes one: the kind is a
+   * click and the command is a field that commits on blur, and a whole-object
+   * write from either control would undo whatever the other one did a moment
+   * earlier. Nothing is optimistic here — no pixel on screen depends on the
+   * value, only the next click on a file chip does.
+   */
+  setEditor: (patch: Partial<EditorSettings>) => Promise<void>
   /**
    * Persists one or more heartbeat budgets.
    *
@@ -99,6 +109,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     await getBackend()
       .invoke('system.applyTheme', { theme: settings.theme })
       .catch(() => undefined)
+  },
+
+  async setEditor(patch) {
+    const settings = await getBackend().invoke('settings.update', { patch: { editor: patch } })
+    set({ settings, status: 'ready', error: undefined })
   },
 
   async setTimeouts(patch) {

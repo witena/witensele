@@ -13,13 +13,14 @@
 | `src/renderer/src/components/chat/handoff.ts` | `handoffBlocker({ workdir, members, running })` → the `ValidationReason` that disables the button, or `null`. The same three rules the backend applies, in the same order. Pure and unit-tested |
 | `src/renderer/src/components/chat/permission-card.tsx` | The executor's permission prompt (S5.5): one card per pending request, above the composer, with Allow / Always allow in this chat / Deny. Enter allows and Escape denies, handled on the card so the composer keeps Enter |
 | `src/renderer/src/components/chat/permission-input.ts` | `describePermissionInput`: what the card shows about a call — a command line **verbatim**, a path plus a capped content preview, the patch of an edit, or raw JSON. Pure and unit-tested |
-| `src/renderer/src/components/chat/diff-block.tsx` | One `DiffPart`: a collapsed header with the path and the `+`/`-` counts, opening onto `CodeBlock` in the `diff` language |
-| `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip. Clicking copies the reference; S5.7 makes it open the editor |
-| `src/renderer/src/components/chat/markdown.tsx` | `react-markdown` + `remark-gfm` with the mockup's prose rules as descendant utilities; hands fenced blocks to `CodeBlock`, wraps tables in their own scroller and marks every link `target="_blank" rel="noreferrer"` |
+| `src/renderer/src/components/chat/diff-block.tsx` | One `DiffPart`: a collapsed header with the path and the `+`/`-` counts, opening onto `CodeBlock` in the `diff` language. Since S5.7 the header is a row of two buttons and the path opens the file |
+| `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip. Since S5.7 clicking it opens the file in the editor (it used to copy the reference); see [`editor`](../editor/frontend.md) |
+| `src/renderer/src/components/chat/file-refs.ts` | S5.7's pure path detector, owned by [`editor`](../editor/frontend.md) and listed here because it is what `markdown.tsx` calls |
+| `src/renderer/src/components/chat/markdown.tsx` | `react-markdown` + `remark-gfm` with the mockup's prose rules as descendant utilities; hands fenced blocks to `CodeBlock`, wraps tables in their own scroller and marks every link `target="_blank" rel="noreferrer"`. Since S5.7 it also turns the file paths in a body into chips |
 | `src/renderer/src/components/chat/code-block.tsx` | A fenced block: language header, Copy button ("Copied" for 1.5 s), shiki markup when a grammar exists and plain monospace otherwise |
 | `src/renderer/src/components/chat/code-language.ts` | `resolveCodeLanguage` / `codeLanguageLabel`: the fourteen highlighted languages, their aliases, and `null` for everything else. Pure and unit-tested |
 | `src/renderer/src/lib/highlighter.ts` | The memoised shiki core highlighter: the JavaScript regex engine, `vitesse-dark`, and one lazy import per grammar |
-| `src/renderer/src/components/chat/tool-card.tsx` | The mockup's one-line tool card, expandable to the pretty-printed input and output |
+| `src/renderer/src/components/chat/tool-card.tsx` | The mockup's one-line tool card, expandable to the pretty-printed input and output. A `read_file` / `write_file` / `edit_file` card carries an "open" icon since S5.7 |
 | `src/renderer/src/components/chat/tool-call.ts` | `describeToolCall` / `collectToolCalls`: pairing a `tool-call` with its `tool-result` and summarising both. Pure and unit-tested |
 | `src/renderer/src/components/chat/composer.tsx` | Auto-growing textarea (Enter sends, Shift+Enter newline, IME-safe, up to 8 lines), the `@` autocomplete popover, the clickable mention chips plus `@all`, Send / Stop |
 | `src/renderer/src/components/chat/mention-query.ts` | `extractMentionQuery` / `filterMentionCandidates` / `insertMention` / `appendMention`: everything the autocomplete could get wrong. Pure and unit-tested |
@@ -125,8 +126,8 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | folder refused | The left column's `chats-error` line names the reason: not absolute, no longer there, or a file rather than a folder |
 | permission prompt open | A card between the transcript and the composer: the agent and the tool, the call itself (a command line verbatim in mono, a path plus a content preview, or a patch), and Allow / Always allow in this chat / Deny. The oldest card takes focus, so Enter and Escape work without a click. The agent stays `working` — its turn is suspended inside the tool call, not stalled |
 | permission answered, or the run stopped | The card disappears on `permission.resolved`. A denial is not a system notice: it comes back as an errored tool card carrying the sentence the **model** read |
-| a file was changed | One collapsed `diff-block` per file under the tool cards, headed by the path with `+n -n`; opening it renders the unified diff through the same `code-block` a fenced diff uses |
-| a file is referenced | A `path:line` chip. Clicking copies the reference and the icon becomes a tick for 1.5 s |
+| a file was changed | One collapsed `diff-block` per file under the tool cards, headed by the path with `+n -n`; opening it renders the unified diff through the same `code-block` a fenced diff uses. The path itself opens the file (S5.7) |
+| a file is referenced | A `path:line` chip. Clicking opens the file in the editor (S5.7); a refused open turns the chip red for 2.5 s. A reference with no absolute path to open is plain text, not a button |
 
 Sending during a run is deliberately allowed: the message appears immediately and
 is answered after the current run (see `../orchestration/context.md`).
@@ -162,7 +163,7 @@ New keys, all under the existing namespaces:
 | `chat.actions.title`, `.summarize`, `.vote` | The Actions card's heading and its two buttons (S2.5 nested what were three flat keys) |
 | `chat.permissionTitle`, `chat.permissionRequest`, `chat.permissionAllow`, `chat.permissionAllowAlways`, `chat.permissionDeny`, `chat.permissionKeyHint`, `chat.permissionTruncated`, `chat.permissionCommandHint` | The permission card (S5.5). The **call itself is never translated**: a path, a command line and a patch are data |
 | `chat.diffExpand`, `chat.diffCollapse` | The diff block's toggle |
-| `chat.fileRefTitle` | The file-reference chip's tooltip |
+| `chat.fileRefTitle`, `chat.fileRefFailed`, `chat.openInEditor` | The file-reference chip's two tooltips, and the one on the diff header and the tool card's "open" icon (S5.7, [`editor`](../editor/frontend.md)) |
 | `chat.actions.summarizePrompt`, `chat.actions.votePrompt` | The **message text** each action sends, after the `@mention`. A locale key rather than a constant, because an agent answers in the language it is addressed in |
 
 Already present and now actually used: `chat.today` / `yesterday` / `earlier`,
@@ -212,12 +213,18 @@ is never translated.
   `data-kind`), `permission-allow`, `permission-allow-always`,
   `permission-deny`, `diff-block` (with `data-path`), `diff-block-toggle`,
   `diff-block-path`, `diff-block-stat`, `file-ref` (with `data-path` and
-  `data-line`) and `message-file-refs`.
+  `data-line`) and `message-file-refs`. S5.7 added `diff-block-more`,
+  `tool-card-open` (with `data-path`), `data-openable` on `file-ref`, and
+  `settings-editor` with `editor-vscode` / `editor-cursor` / `editor-custom` and
+  `settings-editor-command`.
 - **The permission card owns Enter and Escape only while it is focused.** The
   shortcuts are on the card element, not on the document: a global listener would
   take Enter away from the composer, where it sends. The oldest card is focused
   when it appears (`tabIndex={-1}`, so it takes no Tab stop) and the buttons keep
   their own focus ring; the card carries `aria-label` from
   `chat.permissionTitle`.
+- Since S5.7 the diff header is **two** buttons rather than one containing
+  another (invalid, and unreachable by keyboard): the toggle, and the path that
+  opens the file, with the expand/collapse word as a third.
 - The diff block's toggle is a `button` with `aria-expanded`; the file-reference
   chip is a `button` with a translated `title`.

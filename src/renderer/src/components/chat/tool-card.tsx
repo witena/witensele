@@ -12,13 +12,24 @@
  * `data-tool` stays the tool's own name so an end-to-end spec can address a card
  * without depending on which server provided it.
  *
+ * ## The "open" icon (S5.7)
+ *
+ * A `read_file`, `write_file` or `edit_file` card is about one file, so it gets a
+ * second control on the right that opens that file in the editor. It is a
+ * sibling of the expand toggle rather than something inside it — a button cannot
+ * contain a button — and it only appears when the path actually resolves inside
+ * the chat's folder, so a card in a chat whose folder was cleared is the plain
+ * S5.5 card again.
+ *
  * Everything worth testing is in `tool-call.ts`; this file is the markup.
  */
 import clsx from 'clsx'
-import { Wrench } from 'lucide-react'
+import { SquareArrowOutUpRight, Wrench } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
+import { openInEditor } from '../../lib/editor'
+import { absoluteInWorkdir } from './file-refs'
 import type { ToolCallDescription } from './tool-call'
 
 /** Literal `t()` calls so the used-keys guard can see all three summaries. */
@@ -38,11 +49,16 @@ function summary(t: TFunction, call: ToolCallDescription): string {
 
 export interface ToolCardProps {
   call: ToolCallDescription
+  /** The chat the call happened in; the backend confines the path to its folder. */
+  chatId?: string | undefined
+  /** That chat's working directory, for a path the model wrote relatively. */
+  workdir?: string | null | undefined
 }
 
-export function ToolCard({ call }: ToolCardProps): React.JSX.Element {
+export function ToolCard({ call, chatId, workdir }: ToolCardProps): React.JSX.Element {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const target = call.filePath === null ? null : absoluteInWorkdir(workdir, call.filePath)
 
   return (
     <div
@@ -52,30 +68,50 @@ export function ToolCard({ call }: ToolCardProps): React.JSX.Element {
       data-state={call.state}
       className="flex flex-col gap-2 rounded-lg border border-border-strong bg-bg-elevated px-2.5 py-2 text-xs"
     >
-      <button
-        type="button"
-        data-testid="tool-card-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 text-left text-fg-dim transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
-      >
-        <Wrench aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-        <span data-testid="tool-card-name" className="truncate font-mono">
-          {`${call.label}(${call.argsPreview})`}
-        </span>
-        <span
-          data-testid="tool-card-summary"
-          className={clsx(
-            'ml-auto shrink-0',
-            call.state === 'error' ? 'text-danger' : 'text-fg-faint',
-            call.state === 'running' && 'animate-pulse'
-          )}
+      <div className="flex w-full items-center gap-2">
+        <button
+          type="button"
+          data-testid="tool-card-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          className="flex min-w-0 grow items-center gap-2 text-left text-fg-dim transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
         >
-          {call.state === 'running'
-            ? summary(t, call)
-            : `${summary(t, call)} · ${open ? t('chat.toolCollapse') : t('chat.toolExpand')}`}
-        </span>
-      </button>
+          <Wrench aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+          <span data-testid="tool-card-name" className="truncate font-mono">
+            {`${call.label}(${call.argsPreview})`}
+          </span>
+          <span
+            data-testid="tool-card-summary"
+            className={clsx(
+              'ml-auto shrink-0',
+              call.state === 'error' ? 'text-danger' : 'text-fg-faint',
+              call.state === 'running' && 'animate-pulse'
+            )}
+          >
+            {call.state === 'running'
+              ? summary(t, call)
+              : `${summary(t, call)} · ${open ? t('chat.toolCollapse') : t('chat.toolExpand')}`}
+          </span>
+        </button>
+
+        {target === null ? null : (
+          <button
+            type="button"
+            data-testid="tool-card-open"
+            data-path={call.filePath}
+            aria-label={t('chat.openInEditor')}
+            title={t('chat.openInEditor')}
+            onClick={() => {
+              void openInEditor({ path: target, ...(chatId === undefined ? {} : { chatId }) }).catch(
+                () => undefined
+              )
+            }}
+            className="shrink-0 rounded p-0.5 text-fg-faint transition-colors hover:text-accent focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
+          >
+            <SquareArrowOutUpRight aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
 
       {open ? (
         <div data-testid="tool-card-detail" className="flex flex-col gap-1.5">

@@ -103,9 +103,9 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 | `nav` | The three navigation rail entries |
 | `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, and since S5.5 the executor's permission card, the diff block and the file-reference chip |
 | `agents` | Agent list and configuration form labels |
-| `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` |
+| `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` and S5.7 extended with the Editor block's seven `editor*` keys |
 | `presence` | The four presence states |
-| `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`). `errors.test.ts` asserts the namespace holds **exactly** the codes plus the reasons, in both directions, so a code added to the shared union without copy fails there rather than on screen (S5.3 added two of each; S5.6 three more reasons, for the hand-off's three refusals) |
+| `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`). `errors.test.ts` asserts the namespace holds **exactly** the codes plus the reasons, in both directions, so a code added to the shared union without copy fails there rather than on screen (S5.3 added two of each; S5.6 three more reasons, for the hand-off's three refusals; S5.7 two more, for the two ways a path can be refused by `system.openInEditor`) |
 | `notices` | Backend-authored notices — the keys `SystemNoticePart.key` may take |
 
 S1.5 was the first step to render most of `nav`, `chat`, `agents` and `settings`,
@@ -130,6 +130,18 @@ rather than UI copy — it never reaches the renderer, so it has no key and is
 translated at authoring time, not at display time. That makes `briefing.zh-CN.ts`
 the one `.ts` file allowed to contain Chinese; see
 [`../agent-turn/backend.md`](../agent-turn/backend.md).
+
+S5.7's keys are seven under `settings.developer.editor*` and three under
+`chat.*` (`fileRefTitle`, reworded from "Copy this path" when the chip stopped
+copying, `fileRefFailed` and `openInEditor`). Two of the seven — `editorVscode`
+and `editorCursor` — are **brand marks** and are byte-identical in both files,
+which is precisely the shape `locales.test.ts` allows: a `zh-CN` value with no
+CJK in it must *equal* its English counterpart, so a brand name passes and an
+untranslated sentence does not. And
+`editorCommandHint` writes its placeholders as single-brace `{path}` / `{line}`
+rather than i18next's `{{…}}`: they are literal text the user types into a
+command template, not interpolation, and the double-brace spelling would have
+been substituted away to nothing.
 
 S5.8 added five `settings.theme*` keys next to the language ones, and nothing
 else: the theme is an attribute on `<html>`, so the only translated text it

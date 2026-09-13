@@ -15,6 +15,7 @@ import type { HandlerMap } from '../handlers/types'
 import { BackendFailure } from '../errors'
 import { IPC_EVENT, IPC_INVOKE, toBackendError, type InvokeResponse } from '../ipc-protocol'
 import { dialogHandlers } from './dialogs'
+import { editorHandlers } from './editor'
 import { themeHandlers } from './theme'
 
 /** The erased call signature the transport works with; `HandlerMap` keeps the typing. */
@@ -30,13 +31,15 @@ type ErasedHandler = (ctx: AppContext, input: unknown) => unknown
  * - **Never dispatches an unknown name.** `isBackendMethod` gates the lookup, so
  *   a compromised renderer cannot reach anything that is not a declared method.
  * - **Electron-only handlers are layered here, not merged into `buildHandlers`.**
- *   `dialogHandlers` and `themeHandlers` override the `system.pickFolder` and
- *   `system.applyTheme` stubs — the two methods that genuinely need a window
- *   (see `./dialogs.ts` and `./theme.ts`). They are spread *after* the
- *   Electron-free map, so this transport is the only build in which they exist.
+ *   `dialogHandlers`, `themeHandlers` and `editorHandlers` override the
+ *   `system.pickFolder`, `system.applyTheme` and `system.openInEditor` stubs —
+ *   the methods that need a window (see `./dialogs.ts`, `./theme.ts` and
+ *   `./editor.ts`; the last of the three is only half window-system, and its
+ *   file says which half). They are spread *after* the Electron-free map, so
+ *   this transport is the only build in which they exist.
  */
 export function registerIpc(ipcMain: IpcMain, ctx: AppContext, handlers: HandlerMap): void {
-  const table: HandlerMap = { ...handlers, ...dialogHandlers, ...themeHandlers }
+  const table: HandlerMap = { ...handlers, ...dialogHandlers, ...themeHandlers, ...editorHandlers }
 
   ipcMain.handle(IPC_INVOKE, async (_event, method: unknown, input: unknown): Promise<InvokeResponse> => {
     try {

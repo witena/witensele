@@ -47,12 +47,32 @@
  * `splitMentions` in `@shared/mentions`, the same function the backend resolves
  * a reply's mentions with, so a highlighted name and a scheduled speaker can
  * never disagree.
+ *
+ * ## File references (S5.7)
+ *
+ * The same decoration, one layer further in: inside each segment that is *not* a
+ * mention, `findFileRefs` looks for tokens that resolve inside the chat's working
+ * directory and each one becomes a `FileRefChip` that opens the file. Mentions
+ * are split first because `@Ada` can never be a path and a path can never be a
+ * mention, and running the cheaper, stricter rule first keeps each pass simple.
+ *
+ * **Inline code is a chip too, and only inline code.** `` `src/main.ts:42` `` is
+ * how a model writes a path more often than not, so the `code` renderer checks
+ * whether its whole content is one resolvable reference and renders the chip
+ * instead of a mono span. A *fenced* block is left alone: a diff or a listing
+ * mentioning forty paths would become forty buttons, and it is a `CodeBlock` with
+ * its own copy button already.
+ *
+ * Nothing happens at all when the chat is not bound to a folder — `findFileRefs`
+ * returns nothing without one — so an ordinary chat's prose is untouched.
  */
 import { Children, Fragment, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { splitMentions, type MentionMember } from '@shared/mentions'
 import { CodeBlock } from './code-block'
+import { FileRefChip } from './file-ref-chip'
+import { findFileRefs } from './file-refs'
 
 /**
  * The prose rules, as descendant utilities on one wrapper.
@@ -83,18 +103,61 @@ const PROSE = [
   '[&_td]:border [&_td]:border-border-strong [&_td]:px-2 [&_td]:py-1 [&_td]:whitespace-nowrap'
 ].join(' ')
 
+/** Where the chips have to be resolved against; absent means "draw none". */
+interface FileRefContext {
+  workdir?: string | null | undefined
+  chatId?: string | undefined
+}
+
 /**
- * Wraps every `@Name` token of a text child in an accent-coloured span.
+ * One run of plain text, with its file references replaced by chips.
  *
- * Only string children are touched; an element child (a link, inline code) is
- * returned untouched, which is what keeps `@Name` inside a code span plain.
+ * Returns the string itself when there is nothing to do, so the overwhelmingly
+ * common case adds no elements to the tree at all.
  */
-function highlightMentions(children: ReactNode, members: readonly MentionMember[]): ReactNode {
-  if (members.length === 0) return children
+function withFileRefs(text: string, context: FileRefContext, keyPrefix: string): ReactNode {
+  const refs = findFileRefs(text, context.workdir)
+  if (refs.length === 0) return text
+
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  refs.forEach((ref, index) => {
+    if (ref.start > cursor) {
+      nodes.push(<Fragment key={`${keyPrefix}-t${index}`}>{text.slice(cursor, ref.start)}</Fragment>)
+    }
+    nodes.push(
+      <FileRefChip
+        key={`${keyPrefix}-r${index}`}
+        part={{ type: 'file-ref', path: ref.path, ...(ref.line === undefined ? {} : { line: ref.line }) }}
+        absolute={ref.absolute}
+        {...(context.chatId === undefined ? {} : { chatId: context.chatId })}
+      />
+    )
+    cursor = ref.end
+  })
+  if (cursor < text.length) {
+    nodes.push(<Fragment key={`${keyPrefix}-tail`}>{text.slice(cursor)}</Fragment>)
+  }
+  return nodes
+}
+
+/**
+ * Wraps every `@Name` token of a text child in an accent-coloured span, and
+ * every file reference in the rest of it in a chip.
+ *
+ * Only string children are touched; an element child (a link, a fenced block) is
+ * returned untouched, which is what keeps `@Name` inside a code span plain.
+ * Inline code is handled by the `code` renderer instead, which is the one place
+ * that knows a span is inline.
+ */
+function decorate(
+  children: ReactNode,
+  members: readonly MentionMember[],
+  context: FileRefContext
+): ReactNode {
   return Children.map(children, (child, childIndex) => {
     if (typeof child !== 'string') return child
     const segments = splitMentions(child, members)
-    if (!segments.some((segment) => segment.agentIds)) return child
     return segments.map((segment, index) =>
       segment.agentIds ? (
         <span
@@ -105,7 +168,9 @@ function highlightMentions(children: ReactNode, members: readonly MentionMember[
           {segment.text}
         </span>
       ) : (
-        <Fragment key={`${childIndex}-${index}`}>{segment.text}</Fragment>
+        <Fragment key={`${childIndex}-${index}`}>
+          {withFileRefs(segment.text, context, `${childIndex}-${index}`)}
+        </Fragment>
       )
     )
   })
@@ -124,17 +189,30 @@ export interface MarkdownProps {
   children: string
   /** Members whose names are highlighted where they appear as `@Name`. */
   mentions?: readonly MentionMember[]
+  /** The chat's working directory; without one no file chip is drawn (S5.7). */
+  workdir?: string | null | undefined
+  /** The chat the body belongs to, sent with every open-in-editor call. */
+  chatId?: string | undefined
 }
 
-export function Markdown({ children, mentions = [] }: MarkdownProps): React.JSX.Element {
+export function Markdown({
+  children,
+  mentions = [],
+  workdir,
+  chatId
+}: MarkdownProps): React.JSX.Element {
+  const refContext: FileRefContext = {
+    workdir,
+    ...(chatId === undefined ? {} : { chatId })
+  }
   // `node` is react-markdown's AST node and is not a DOM attribute; it is
   // destructured away so the rest can be spread onto the element.
   const components: Components = {
     p: ({ node: _node, children: content, ...props }) => (
-      <p {...props}>{highlightMentions(content, mentions)}</p>
+      <p {...props}>{decorate(content, mentions, refContext)}</p>
     ),
     li: ({ node: _node, children: content, ...props }) => (
-      <li {...props}>{highlightMentions(content, mentions)}</li>
+      <li {...props}>{decorate(content, mentions, refContext)}</li>
     ),
     a: ({ node: _node, children: content, ...props }) => (
       // See the header: the handler in the main process decides where this goes.
@@ -151,6 +229,24 @@ export function Markdown({ children, mentions = [] }: MarkdownProps): React.JSX.
       // An indented block has no info string but does span lines; an inline span
       // has neither. Either is enough to make it a block.
       if (!fence && !text.includes('\n')) {
+        // `src/main.ts:42` in backticks is the commonest way a model writes a
+        // path. One reference and nothing else makes the span a chip; anything
+        // longer stays the mono span it was.
+        const inlineRefs = findFileRefs(text, refContext.workdir)
+        const only = inlineRefs.length === 1 ? inlineRefs[0] : undefined
+        if (only && only.start === 0 && only.end === text.trim().length) {
+          return (
+            <FileRefChip
+              part={{
+                type: 'file-ref',
+                path: only.path,
+                ...(only.line === undefined ? {} : { line: only.line })
+              }}
+              absolute={only.absolute}
+              {...(refContext.chatId === undefined ? {} : { chatId: refContext.chatId })}
+            />
+          )
+        }
         return (
           <code className={className} {...props}>
             {content}
