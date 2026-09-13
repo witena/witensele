@@ -14,6 +14,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "npm run build && playwright test",
+    "e2e:packaged": "playwright test --config playwright.packaged.config.ts",
+    "demo": "npm run build && playwright test --config playwright.demo.config.ts",
+    "dist": "npm run build && electron-builder --mac",
+    "dist:dir": "npm run build && electron-builder --mac --dir",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
@@ -50,6 +54,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "drizzle-kit": "^0.31.0",
     "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.0",

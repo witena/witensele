@@ -13,6 +13,12 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: 'e2e',
+  // Two files in `e2e/` are not part of the suite and have their own config:
+  // `packaged.spec.ts` needs a dmg that `npm run dist` has already produced
+  // (`npm run e2e:packaged`), and `demo.record.ts` is a screen recording, not a
+  // test (`npm run demo`). Both would otherwise fail or hang an ordinary
+  // `npm run e2e`.
+  testIgnore: ['packaged.spec.ts', 'demo.record.ts'],
   // One Electron app at a time: they would share the userData override otherwise.
   workers: 1,
   fullyParallel: false,

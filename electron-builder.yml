@@ -1,0 +1,57 @@
+# electron-builder configuration (S4.4).
+#
+# Only macOS arm64 is produced today: Witena is a single-user macOS desktop app
+# (PLAN.md, "Context"), and a build for a platform nobody has tested the layout
+# on would be a promise the project cannot keep.
+#
+# The build is **unsigned and not notarized** — `identity: null` and
+# `hardenedRuntime: false`. There is no Apple Developer account behind this
+# repository, and a signature that does not exist cannot be faked; see
+# docs/features/packaging/backend.md for what that means for whoever opens the
+# dmg (Gatekeeper: right-click -> Open, once).
+appId: com.witena.app
+productName: Witena
+directories:
+  output: dist
+  buildResources: build
+
+# `out/**` is everything electron-vite produced (main, preload, renderer) and
+# `package.json` carries `main` plus the production dependency list.
+# `node_modules` is not listed: electron-builder appends the production
+# dependency tree on its own, and spelling it out here would only let the two
+# lists drift apart.
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+  - '!**/.DS_Store'
+
+# better-sqlite3 is a native module: its `.node` binary has to sit on the real
+# filesystem, because `dlopen` cannot read out of an asar archive. Everything
+# else stays packed.
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+
+# The skills shipped with the build. `src/main/index.ts` seeds them into an
+# empty library on first launch and looks for them at
+# `process.resourcesPath/resources/skills` when packaged — the `to` below is
+# what makes that path true.
+extraResources:
+  - from: resources
+    to: resources
+    filter:
+      - '**/*'
+      - '!**/.DS_Store'
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  hardenedRuntime: false
+  identity: null
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
