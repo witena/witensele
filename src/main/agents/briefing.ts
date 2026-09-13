@@ -7,7 +7,9 @@
  * other members' turns arrive as `[name]:` prefixed user messages rather than as
  * assistant turns, and the two protocol tokens — `@name` to call on someone and
  * `[PASS]` to abstain. Since S5.10 a fifth, when the chat has one: the **goal**
- * — what the group is working towards, in the user's own words.
+ * — what the group is working towards, in the user's own words. Since S5.12 a
+ * sixth, for one round only: that this round is a **review** of what the
+ * executor just changed, judged against that goal.
  *
  * It exists in **both languages** and follows the UI language (PLAN, "Bilingual
  * UI"): a Chinese-first model reads a Chinese briefing far more reliably than a
@@ -63,6 +65,21 @@ export interface GroupBriefingInput {
    * if it had.
    */
   goal?: ChatGoal | null
+  /**
+   * True for the members of a hand-off's **review** round (S5.12).
+   *
+   * The round exists since S5.6 and until now said nothing about itself: every
+   * reviewer was handed the executor's message plus its diffs and left to guess
+   * what it was being asked. What it is being asked is the thing the goal
+   * answers — *does this change do what this chat is for* — so the two travel
+   * together, and the review block is written immediately after the goal in both
+   * languages so "the goal above" is one line up rather than a page away.
+   *
+   * The executor never gets it: it is not reviewing, it wrote the thing, and its
+   * own section already tells it what to do (`buildExecutorSection`). The runner
+   * sets this for the review round's speakers only, which is everybody else.
+   */
+  reviewing?: boolean
 }
 
 /** What a language module is given: the briefing input minus the language. */
@@ -71,6 +88,7 @@ export interface BriefingInput {
   members: BriefingMember[]
   memoryEnabled: boolean
   goal: ChatGoal | null
+  reviewing: boolean
 }
 
 /** The shape both language modules implement. */
@@ -109,7 +127,8 @@ export function buildGroupBriefing(input: GroupBriefingInput): string {
     self,
     members: roster,
     memoryEnabled: input.memoryEnabled === true,
-    goal: input.goal ?? null
+    goal: input.goal ?? null,
+    reviewing: input.reviewing === true
   })
 }
 

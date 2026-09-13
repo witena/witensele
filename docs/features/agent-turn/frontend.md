@@ -36,8 +36,16 @@ Since S5.6 one more option reaches the turn and **nothing** of it reaches the
 renderer: `handoff` only lengthens the system prompt, so a handed-over turn
 streams, fails, is stopped and is rendered exactly like any other. S5.10's goal
 is the same again — it changes what every member is told and nothing about how a
-reply is drawn. What the *user* sees of the goal is the panel and the header
+reply is drawn — and so is S5.12's `reviewing`, which is one more block of one
+round's prompts. What the *user* sees of the goal is the panel and the header
 chip, both owned by [`chats`](../chats/frontend.md).
+
+S5.12's one visible addition is a **part**, not an option: an executor turn that
+brought the chat's deliverable into existence carries a `FileRefPart` for it,
+after its diff blocks. It arrives as a `message.delta` of kind `part` like any
+other and is drawn by the `FileRefChip` that already existed — the only thing new
+is that this chip's path was reported by the backend rather than found in prose
+by [`editor`](../editor/frontend.md)'s detector.
 
 Reasoning parts are rendered collapsed behind a "Reasoning" toggle
 (`chat.reasoning`) because they are long, low-signal and not what the group said.

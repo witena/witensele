@@ -47,7 +47,7 @@ work.
 | The transcript itself — the message list, the rows, the code blocks | [`chats`](../chats/context.md). This feature adds behaviour to components that live there |
 | The executor's tools, the permission prompt and the `DiffPart`s a turn appends | [`executor`](../executor/context.md). This feature reuses its confinement rule (`executor/paths.ts`) and makes its output clickable |
 | `Chat.workdir`, its picker and its validation | [`chats`](../chats/context.md), S5.2 `[x]` |
-| Emitting a `FileRefPart` from the backend | Nobody yet. The part type has existed since S1.1 and nothing writes one; the chips a user actually sees come from the text detector. See the Phase 6 backlog |
+| Emitting a `FileRefPart` from the backend | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md), S5.12, for exactly one case: the `document` goal's deliverable, on the executor turn that produced it. Every other chip a user sees still comes from this feature's text detector. See the Phase 6 backlog |
 | A VS Code extension that embeds the chat panel | PLAN.md point 3 step two, scheduled with the server work (STEPS.md Phase 6) |
 | Opening a **folder**, a URL, or a file in a chat that is not bound to a folder when the reference is relative | Nobody. A relative path with no folder has nothing to resolve against |
 
@@ -84,10 +84,13 @@ it, one click less conveniently.
 
 ## Open questions
 
-- **Nothing emits a `FileRefPart`.** The part type is rendered and the chip is
-  the same component either way, but every chip a user sees today comes from the
-  text detector. A turn that reported the files it read as parts would be more
-  precise than a regular expression over prose.
+- **Almost nothing emits a `FileRefPart`.** S5.12 added the first backend-authored
+  one — the deliverable of a `document` goal, on the turn that delivered it — and
+  it needed no change here, because the chip was already a renderer of the part.
+  Every other chip a user sees still comes from the text detector. A turn that
+  reported the files it *read* as parts would be more precise than a regular
+  expression over prose, and would make the chip work for a path the detector's
+  extension rule refuses.
 - **The detector cannot see a file that does not exist, or one that does.** It
   draws a chip on `src/typo.ts:3` and refuses `Makefile`. A cheap backend
   `exists` batch per message, cached per chat, would fix both directions.

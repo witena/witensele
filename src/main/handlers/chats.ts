@@ -34,7 +34,7 @@
  *   goal on a chat that already has a folder costs one read.
  */
 import { existsSync, statSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute } from 'node:path'
 import type {
   ChatCreateInput,
   ChatGoal,
@@ -42,13 +42,20 @@ import type {
   ChatMode,
   ChatPatch,
   ChatSettings,
+  HandoffIntent,
   SpeakingMode,
   ValidationReason
 } from '@shared/types'
-import { GOAL_KINDS, MAX_AUTO_ROUNDS, MAX_GOAL_DESCRIPTION_CHARS, MIN_AUTO_ROUNDS } from '@shared/types'
+import {
+  GOAL_KINDS,
+  HANDOFF_INTENTS,
+  MAX_AUTO_ROUNDS,
+  MAX_GOAL_DESCRIPTION_CHARS,
+  MIN_AUTO_ROUNDS
+} from '@shared/types'
 import { summarizeUsage, type ChatUsageSummary } from '@shared/usage'
 import { ensureDefaultAgent } from '../agents/default-agent'
-import { resolveInWorkdir } from '../executor/paths'
+import { deliverablePath, resolveInWorkdir } from '../executor/paths'
 import { validation } from '../errors'
 import type { AppContext } from '../app-context'
 import type { HandlerModule } from './types'
@@ -285,15 +292,18 @@ function assertGoal(value: unknown, workdir: string | null): asserts value is Ch
  * keeps the member count off the domain type. The renderer asks when it opens a
  * chat and whenever that chat changes; S5.12 is what makes an executor turn ask.
  *
- * `join` rather than `resolveInWorkdir`: the path was confined when the goal was
- * saved, and a folder that has since gone simply answers "not delivered" instead
- * of throwing at a chip that only wants to know whether to say so.
+ * Where the path comes from is `deliverablePath` (`executor/paths.ts`), shared
+ * since S5.12 with the executor turn that appends a chip for the file it just
+ * delivered: two spellings of the same `join` would be two chances for the chip
+ * in the header and the chip in the transcript to name different files. That
+ * helper uses `join` rather than `resolveInWorkdir` — the path was confined when
+ * the goal was saved, and a folder that has since gone simply answers "not
+ * delivered" instead of throwing at a chip that only wants to know whether to
+ * say so.
  */
 function goalStatus(goal: ChatGoal | null, workdir: string | null): ChatGoalStatus {
-  if (!goal || goal.kind !== 'document' || !goal.deliverable || workdir === null) {
-    return { deliverable: null, delivered: false }
-  }
-  const deliverable = join(workdir, goal.deliverable)
+  const deliverable = deliverablePath(goal, workdir)
+  if (deliverable === null) return { deliverable: null, delivered: false }
   return { deliverable, delivered: existsSync(deliverable) }
 }
 
@@ -541,11 +551,20 @@ export const chatHandlers: HandlerModule = {
   'chat.handoff': async (ctx, input) => {
     const chatId = (input as { chatId?: unknown })?.chatId
     if (typeof chatId !== 'string' || chatId.length === 0) throw validation('A chat id is required')
-    // Everything else this refuses — no folder, no executor, a run already in
-    // flight — is a fact about the *run*, and the runner is the only object that
-    // holds all three. It rejects with a `ValidationReason` the renderer
-    // translates; see `ChatRunner.handoff`.
-    return ctx.runners.handoff({ chatId })
+    // `intent` (S5.12) is checked here only for its *shape*; whether this chat
+    // can satisfy it is the runner's question, like the other three.
+    const intent = (input as { intent?: unknown })?.intent
+    if (intent !== undefined && !HANDOFF_INTENTS.includes(intent as HandoffIntent)) {
+      throw validation(`Unknown hand-off intent: ${String(intent)}`)
+    }
+    // Everything else this refuses — no folder, no executor, no deliverable, a
+    // run already in flight — is a fact about the *run*, and the runner is the
+    // only object that holds all four. It rejects with a `ValidationReason` the
+    // renderer translates; see `ChatRunner.handoff`.
+    return ctx.runners.handoff({
+      chatId,
+      ...(intent === undefined ? {} : { intent: intent as HandoffIntent })
+    })
   },
 
   'chat.stop': async (ctx, input) => {

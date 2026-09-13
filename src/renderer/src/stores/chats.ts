@@ -402,7 +402,19 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
   async loadGoalStatus(chatId) {
     try {
       const status = await getBackend().invoke('chats.goalStatus', { chatId })
-      set((state) => ({ goalStatusByChat: { ...state.goalStatusByChat, [chatId]: status } }))
+      set((state) => {
+        // An answer identical to the one already held writes **nothing** (S5.12).
+        // The query is asked far more often since an executor turn became one of
+        // its moments — twice per hand-off round, and almost always with the same
+        // answer — and a `set` with a fresh object for an unchanged fact would
+        // re-render the whole chat page, message list included, in the middle of
+        // a reply that is still streaming.
+        const held = state.goalStatusByChat[chatId]
+        if (held && held.deliverable === status.deliverable && held.delivered === status.delivered) {
+          return {}
+        }
+        return { goalStatusByChat: { ...state.goalStatusByChat, [chatId]: status } }
+      })
     } catch {
       // A chat that has just been deleted is the usual case here, and the chip
       // it would have fed is already gone. Nothing to tell the user.

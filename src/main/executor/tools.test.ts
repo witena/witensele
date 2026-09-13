@@ -379,7 +379,7 @@ describe('git_diff', () => {
 
 describe('buildExecutorSection', () => {
   it('names the folder, every tool, and the summary the turn must end with', () => {
-    const section = buildExecutorSection('/tmp/project')
+    const section = buildExecutorSection({ workdir: '/tmp/project' })
     expect(section).toContain('/tmp/project')
     for (const name of EXECUTOR_TOOLS) expect(section).toContain(name)
     expect(section).toMatch(/summary of every file you changed/)
@@ -419,14 +419,85 @@ describe('goalHandoffLine', () => {
     expect(goalHandoffLine(undefined)).toBeNull()
   })
 
+  it('names the branch of a codebase goal, and asks for the changed paths (S5.12)', () => {
+    const line = goalHandoffLine(goal({ kind: 'codebase' }), 'feat/split-runner') ?? ''
+    expect(line).toContain('feat/split-runner')
+    expect(line).toMatch(/path of every file you changed/)
+
+    // A folder that is not a repository, or a `git` that did not answer in
+    // time, costs the sentence rather than the briefing: nothing is guessed.
+    expect(goalHandoffLine(goal({ kind: 'codebase' }))).not.toMatch(/branch/)
+  })
+
   it('reaches the executor section only on the hand-off turn', () => {
     const document = goal({ kind: 'document', deliverable: 'docs/plan.md' })
 
     // A reviewer, and an executor a reviewer `@`-ed afterwards, are being asked
     // something specific and must not be told to go and write the deliverable.
-    expect(buildExecutorSection('/tmp/project', false, document)).not.toContain('docs/plan.md')
-    expect(buildExecutorSection('/tmp/project', true, document)).toContain('docs/plan.md')
-    expect(buildExecutorSection('/tmp/project', true, null)).toMatch(/implement the conclusion/i)
+    expect(
+      buildExecutorSection({ workdir: '/tmp/project', goal: document })
+    ).not.toContain('docs/plan.md')
+    expect(
+      buildExecutorSection({ workdir: '/tmp/project', handoff: 'implement', goal: document })
+    ).toContain('docs/plan.md')
+    expect(
+      buildExecutorSection({ workdir: '/tmp/project', handoff: 'implement', goal: null })
+    ).toMatch(/implement the conclusion/i)
+  })
+})
+
+/**
+ * S5.12: the second hand-off intent.
+ *
+ * The two paragraphs are alternatives, not a pair — a model given "implement the
+ * conclusion" and "write the file" in one prompt follows neither reliably — so
+ * what is asserted is as much what is *absent* as what is there.
+ */
+describe('buildExecutorSection (deliver)', () => {
+  const document: ChatGoal = {
+    kind: 'document',
+    description: 'Write the quarterly report',
+    deliverable: 'docs/REPORT.md',
+    materials: []
+  }
+
+  it('asks for the file, its parent folders and a two-line summary', () => {
+    const section = buildExecutorSection({
+      workdir: '/tmp/project',
+      handoff: 'deliver',
+      goal: document
+    })
+
+    expect(section).toMatch(/write the deliverable of this chat now/)
+    expect(section).toMatch(/creating any parent folder/)
+    expect(section).toMatch(/exactly two lines/)
+    // …and the path itself, which comes from `goalHandoffLine` rather than from
+    // the paragraph, so the two really are composed.
+    expect(section).toContain('docs/REPORT.md')
+    expect(section).not.toMatch(/Implement the conclusion the group reached/)
+  })
+
+  it('keeps the implement paragraph for the other intent', () => {
+    const section = buildExecutorSection({
+      workdir: '/tmp/project',
+      handoff: 'implement',
+      goal: document
+    })
+
+    expect(section).toMatch(/Implement the conclusion the group reached/)
+    expect(section).not.toMatch(/exactly two lines/)
+  })
+
+  it('leaves the folder and the tool list identical in all three shapes', () => {
+    const shapes = [
+      buildExecutorSection({ workdir: '/tmp/project' }),
+      buildExecutorSection({ workdir: '/tmp/project', handoff: 'implement', goal: document }),
+      buildExecutorSection({ workdir: '/tmp/project', handoff: 'deliver', goal: document })
+    ]
+    // The suffix is a suffix: everything above it is one description of the
+    // folder and the tools, written once.
+    const [plain] = shapes as [string, string, string]
+    for (const shape of shapes) expect(shape.startsWith(plain)).toBe(true)
   })
 })
 

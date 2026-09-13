@@ -4,11 +4,18 @@ S5.4 was the backend half — the tools, the folder confinement and the permissi
 gate. S5.5 is the visible half: the user can answer the prompt, and what the
 executor changed is in the transcript.
 
-The one surface S5.6 adds — the "Hand to executor" button above the composer —
-is **not** here: it starts a run, so it belongs to
-[`orchestration`](../orchestration/frontend.md) and is drawn on
+The two surfaces S5.6 and S5.12 add — the "Hand to executor" button above the
+composer and the Actions card's "Write the deliverable" — are **not** here: both
+start a run, so they belong to
+[`orchestration`](../orchestration/frontend.md) and are drawn on
 [`chats`](../chats/frontend.md)'s page. The only thing this feature contributes
-to it is the executor's own briefing, which nobody sees.
+to them is the executor's own briefing, which nobody sees.
+
+What S5.12 does add here is a chip that is finally **authored by the backend**: a
+`FileRefPart` naming the deliverable, appended to the executor turn that produced
+it. It is drawn by the same `FileRefChip` a detected path uses and opens through
+the same `openInEditor`; the only thing new on screen is that the reference is
+now a fact the turn reported rather than a guess made from its prose.
 
 ## Pages and components
 
@@ -18,7 +25,7 @@ to it is the executor's own briefing, which nobody sees.
 | `src/renderer/src/components/chat/permission-card.tsx` | One card per pending request: the agent and the tool, the rendered input, and Allow / Always allow in this chat / Deny. Owns the two keyboard shortcuts |
 | `src/renderer/src/components/chat/permission-input.ts` | `describePermissionInput(toolName, input)`: the command line **verbatim**, a write's path plus a capped content preview, an edit's patch, or raw JSON. Pure and unit-tested |
 | `src/renderer/src/components/chat/diff-block.tsx` | One `DiffPart`: a collapsed header with the path and `+n -n`, opening onto `CodeBlock` in the `diff` language |
-| `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip; since S5.7 clicking it opens the file ([`editor`](../editor/frontend.md)) |
+| `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip; since S5.7 clicking it opens the file ([`editor`](../editor/frontend.md)). Since S5.12 one of the parts it draws is written by the backend — the deliverable of a `document` goal, on the turn that delivered it — and needs no change here: the component was already a renderer of the part |
 | `src/renderer/src/components/chat/transcript-rows.ts` | `collectDiffs`, `collectFileRefs`, `countDiffLines`, `formatFileRef` — the pure part-level transforms both components read |
 | `src/renderer/src/components/chat/tool-call.ts` | `EXECUTOR_PREVIEW_ARG`: which single argument a built-in executor tool's card prints, so the line reads `write_file(src/a.ts)` rather than `write_file(path: "src/a.ts", content: "…")` |
 | `src/renderer/src/pages/chats-page.tsx` | Stacks the cards between the transcript and the composer, oldest first, and gives the oldest `autoFocus` |

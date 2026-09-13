@@ -10,7 +10,7 @@ thing answerable.
 | Module | Owns |
 |---|---|
 | `paths.ts` | `resolveInWorkdir(workdir, path)` → `{ absolute, relative }`, and nothing else. Every path an executor tool touches goes through it |
-| `tools.ts` | The seven AI SDK tools, the constants that cap them, and `buildExecutorSection(workdir, handoff, goal)` (the prompt, plus `HANDOFF_BRIEFING` and S5.10's `goalHandoffLine` for the turn a hand-off schedules) |
+| `tools.ts` | The seven AI SDK tools, the constants that cap them, and `buildExecutorSection({ workdir, handoff, goal, branch })` (the prompt, plus `HANDOFF_BRIEFING` / `DELIVER_BRIEFING` and `goalHandoffLine` for the turn a hand-off schedules) |
 | `permissions.ts` | `PermissionGate`: `ask` / `reply` / `pending` / `abortAll`, one promise per waiting prompt |
 | `workspace.ts` (S5.11) | `walkTree` / `formatTree`, the `.gitignore` parser (`parseGitignore`, `loadIgnoreRules`, `isIgnored`), `gitInfo`, and `buildWorkspaceSection` — the folder as a model reads it |
 
@@ -20,7 +20,7 @@ thing answerable.
 | `components/chat/permission-card.tsx` | The card: what it says, the three buttons, Enter and Escape |
 | `components/chat/permission-input.ts` | What a call looks like on that card — verbatim for a command |
 | `components/chat/diff-block.tsx` + `transcript-rows.ts` | The `DiffPart` block and the pure transforms behind it |
-| `components/chat/file-ref-chip.tsx` | The `path:line` chip, which copies until S5.7 |
+| `components/chat/file-ref-chip.tsx` | The `path:line` chip; since S5.7 it opens the file, and since S5.12 the backend emits the parts it draws as well as the detector |
 
 The gate lives on `AppContext` (`ctx.permissions`) for the same reason the runner
 registry and the MCP pool do: a pending prompt outlives the IPC call that raised
@@ -179,12 +179,15 @@ method; this feature contributes only the sentence the executor reads.
 | `src/renderer/src/components/chat/tool-call.test.ts` (S5.5 block) | `write_file(path)`, `run_command(command)` flattened and capped, `search_files(query)`, an MCP tool of the same name keeping the generic preview, and a missing argument falling back |
 | `src/renderer/src/components/chat/transcript-rows.test.ts` | `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines`, `formatFileRef` |
 | `e2e/executor.spec.ts` | Offline: a chat with no executor shows no card, and the hand-off button carries `data-blocked` naming the rule that disabled it. Behind the `qwen2.5:3b` guard: the card appears, nothing is on disk while it waits, Allow writes the file, the card goes away and the diff block appears and opens onto a `diff` code block — and (S5.6) two participants plus an executor discuss, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again without anybody typing |
-| `src/main/executor/tools.test.ts` (`goalHandoffLine`, S5.10) | The deliverable and its parent folders for a `document`, the change for a `codebase`, nothing for a discussion or a chat with no goal, and the line reaching `buildExecutorSection` only when `handoff` is set |
+| `src/main/executor/tools.test.ts` (`goalHandoffLine`, S5.10, S5.12) | The deliverable and its parent folders for a `document`, the change for a `codebase`, nothing for a discussion or a chat with no goal, the line reaching `buildExecutorSection` only when `handoff` is set, and — S5.12 — the branch named when `gitInfo` knew one and left out when it did not, plus the summary that lists changed paths |
+| `src/main/executor/tools.test.ts` (`buildExecutorSection (deliver)`, S5.12) | The deliver paragraph asking for the file, its parent folders and a two-line summary, with the path from `goalHandoffLine` and *without* the implement paragraph; the implement intent keeping its own and not gaining the two-line rule; and all three shapes sharing one prefix, which is what makes the briefing a suffix |
+| `src/main/executor/paths.test.ts` (S5.12) | `deliverablePath`: the join, `null` for every goal that is not a `document` naming a file and for a chat with no folder, and a path answered for a file — and a folder — that is not there |
+| `src/main/agents/agent-turn.test.ts` (S5.12 block) | Seven whole turns: the `FileRefPart` on the turn that brought the deliverable into existence and on no other (a later rewrite, a different file, a goal that names none, a participant while something else wrote it), the review block reaching a reviewer's prompt and not an ordinary one, and the deliver briefing reaching the executor's |
 | `src/main/executor/workspace.test.ts` (S5.11) | The walker against real temporary folders: the sort order, `maxDepth`, `maxEntries` and its marker, the always-skipped folders, the size cap, and a `.gitignore` with a comment, a bare name, a `dir/`, a `*.tmp` and a `!keep.tmp`; the parser's anchoring, `?`, `**` and un-ignoring rules and that an uncompilable pattern throws nothing; `gitInfo` answering `null` outside a repository and naming the branch inside one; and the section itself — the folder and its listing, the empty folder, the executor's missing sentence, and the git half appearing for `codebase` and for nothing else |
 | `src/main/agents/agent-turn.test.ts` (S5.11 block) | A whole participant turn in a chat with a folder: the four read-only tools offered and none of the three that write (asserted one by one), the folder and its listing in the prompt, a marked material in the prompt with the unmarked file's contents *not* in it, a real `read_file` call on that unmarked file coming back with its contents, `materialsOmitted` reported when a material was too large, and a chat with no folder getting neither tools nor section |
 | `src/main/orchestration/chat-runner.test.ts` (S5.6 block) | The briefing this feature contributes, asserted where it is used: the handed-over turn's prompt contains `HANDOFF_BRIEFING` and the folder, and the executor's next turn contains the folder but not the briefing. A Stop inside the handed-over turn leaves `ctx.permissions.pending()` empty and nothing on disk |
 
-`npm test`: 85 files, 1337 tests. `npm run typecheck` clean.
+`npm test`: 85 files, 1374 tests. `npm run typecheck` clean.
 
 ## Known limitations and TODOs
 
@@ -194,8 +197,9 @@ method; this feature contributes only the sentence the executor reads.
   nothing lists what has been granted or takes it back short of quitting.
 - **A `write_file` card previews content, not a diff**, because the tool computes
   the patch only after the grant. `edit_file` shows its patch.
-- **Nothing emits a `FileRefPart` yet.** The chip renders one and copies it;
-  producing them from agent text, and opening them, is S5.7.
+- **The only `FileRefPart` the backend emits is the deliverable's** (S5.12).
+  Every other chip a user sees still comes from S5.7's text detector, so a turn
+  that read six files reports none of them as parts.
 - **The shell is not sandboxed** (see `context.md`, "Open questions"): `cwd` is
   confined, the command is not.
 - **Only the root `.gitignore` is read** (S5.11), and the tree is walked once per

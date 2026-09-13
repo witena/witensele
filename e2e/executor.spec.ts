@@ -1,8 +1,9 @@
 /**
  * The executor: the role and the chat's working directory (S5.2), the permission
  * prompt and the diff block (S5.5), the hand-off with its review round (S5.6),
- * the chat goal that briefs all of them (S5.10), and the read-only tools plus the
- * materials briefing every member now gets (S5.11).
+ * the chat goal that briefs all of them (S5.10), the read-only tools plus the
+ * materials briefing every member now gets (S5.11), and the goal-aware delivery
+ * that closes the loop (S5.12).
  *
  * Everything up to the hand-off button's disabled states is **offline** — it is
  * all configuration, and no message is ever sent — and always runs. The three
@@ -86,6 +87,8 @@ let handoffdir: string
 let goaldir: string
 /** The S5.11 folder: one marked file and one the group has to go and read. */
 let materialsdir: string
+/** The S5.12 folder: empty, so the deliverable appearing in it is this chat's doing. */
+let deliverdir: string
 let toolModelAvailable = false
 
 /** The preload bridge's envelope, restated here: `e2e/` may not import preload. */
@@ -163,6 +166,7 @@ test.beforeAll(async () => {
   handoffdir = mkdtempSync(join(tmpdir(), 'witena-handoff-'))
   goaldir = mkdtempSync(join(tmpdir(), 'witena-goaldir-'))
   writeFileSync(join(goaldir, 'notes.md'), '# material\n')
+  deliverdir = mkdtempSync(join(tmpdir(), 'witena-deliver-'))
   materialsdir = mkdtempSync(join(tmpdir(), 'witena-materials-'))
   writeFileSync(
     join(materialsdir, 'BRIEF.md'),
@@ -195,6 +199,7 @@ test.afterAll(async () => {
   if (handoffdir) rmSync(handoffdir, { recursive: true, force: true })
   if (goaldir) rmSync(goaldir, { recursive: true, force: true })
   if (materialsdir) rmSync(materialsdir, { recursive: true, force: true })
+  if (deliverdir) rmSync(deliverdir, { recursive: true, force: true })
 })
 
 test('the agent list tags the executors and only the executors', async () => {
@@ -760,4 +765,161 @@ test('a participant answers from the materials, and reads an unmarked file when 
   await expect(cards.first()).toHaveAttribute('data-state', 'done', { timeout: TOOL_CALL_MS })
   // A participant was never offered anything that writes: no prompt was raised.
   await expect(window.getByTestId('permission-card')).toHaveCount(0)
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.12: goal-aware delivery                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The offline half: when "Write the deliverable" may be pressed.
+ *
+ * Its four rules are the hand-off's, in the hand-off's order, plus the goal —
+ * and the reason is on the element, so none of this depends on the copy or on
+ * the active language.
+ */
+test('the quick action needs a document goal on top of the hand-off rules', async () => {
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chats-new').click()
+  await addMember('Reviewer')
+  const chatId = await selectedChatId()
+  const deliver = window.getByTestId('chat-write-deliverable')
+
+  // No folder: the first rule, and the same one the hand-off button reports.
+  await expect(deliver).toBeDisabled()
+  await expect(deliver).toHaveAttribute('data-blocked', 'handoff_no_workdir')
+
+  expect((await call('chats.update', { id: chatId, patch: { workdir: deliverdir } })).ok).toBe(true)
+  await expect(deliver).toHaveAttribute('data-blocked', 'handoff_no_executor')
+
+  await addMember('Hands')
+  await expect(memberRows()).toHaveCount(2)
+  // Folder and executor in place, but nothing to deliver yet.
+  await expect(deliver).toBeDisabled()
+  await expect(deliver).toHaveAttribute('data-blocked', 'handoff_no_deliverable')
+
+  // A goal of the wrong kind is the same refusal: this chat produces no file.
+  expect(
+    (
+      await call('chats.update', {
+        id: chatId,
+        patch: {
+          goal: { kind: 'codebase', description: 'Change the code in here', materials: [] }
+        }
+      })
+    ).ok
+  ).toBe(true)
+  await expect(deliver).toHaveAttribute('data-blocked', 'handoff_no_deliverable')
+
+  // …and the backend refuses it on the same rule, for a client that never saw
+  // the disabled button.
+  expect(await call('chat.handoff', { chatId, intent: 'deliver' })).toMatchObject({
+    error: { code: 'validation', details: { reason: 'handoff_no_deliverable' } }
+  })
+
+  expect(
+    (
+      await call('chats.update', {
+        id: chatId,
+        patch: {
+          goal: {
+            kind: 'document',
+            description: 'Write a one-line release note',
+            deliverable: 'docs/RELEASE.md',
+            materials: []
+          }
+        }
+      })
+    ).ok
+  ).toBe(true)
+  await expect(deliver).toBeEnabled()
+  await expect(deliver).toHaveAttribute('data-blocked', '')
+  // Nothing has been written, so the chip is the "not yet" one.
+  await expect(window.locator('[data-kind="document"]')).toHaveAttribute('data-delivered', 'false')
+})
+
+/**
+ * S5.12's acceptance sentence, end to end: the action writes the file, the
+ * header says so, and the chip is a real control carrying the path.
+ *
+ * The chat is the one the case above built — an executor, a participant, an
+ * empty folder and a `document` goal — so what appears in `deliverdir` can only
+ * be this hand-off's doing.
+ *
+ * The chip's **click is not driven**, for exactly the reason S5.7 recorded:
+ * `shell.openExternal` would launch the developer's real editor, and
+ * `window.witena` is a `contextBridge` object whose methods cannot be replaced
+ * from the page. So this asserts the chip is a button carrying the deliverable's
+ * path; that the backend accepts precisely that call is asserted separately by
+ * `e2e/editor.spec.ts`.
+ */
+test('writes the deliverable, and the header chip flips to delivered', async () => {
+  test.skip(
+    !toolModelAvailable,
+    `${TOOL_MODEL} is not available on ${OLLAMA_MODELS_URL}; the delivery test needs a local model that can call tools.`
+  )
+  test.setTimeout(TOOL_ATTEMPTS * TOOL_CALL_MS + 240_000)
+
+  // The executor keeps the tool-calling model and a prompt that leaves it in no
+  // doubt about which tool to use; set here so this test does not depend on the
+  // order of the ones above.
+  await openAgents(window)
+  await window.getByTestId('agent-item').filter({ hasText: 'Hands' }).click()
+  await window.getByTestId('agent-model').selectOption(TOOL_MODEL)
+  await window
+    .getByTestId('agent-system-prompt')
+    .fill('You write files with the write_file tool. When asked to write a file, call write_file once with the path and the content, then say what you wrote.')
+  await window.getByTestId('agent-save').click()
+  await expect(window.getByTestId('agent-save')).toBeDisabled()
+
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chat-item').first().click()
+  await window.getByTestId('chat-max-rounds').selectOption('2')
+
+  const deliver = window.getByTestId('chat-write-deliverable')
+  await expect(deliver).toBeEnabled()
+
+  const card = window.getByTestId('permission-card')
+  const stop = window.getByTestId('composer-stop')
+
+  // The same three-attempt budget the other model-backed cases use, and for the
+  // same reason: a 3B model is not a reliable tool caller.
+  let asked = false
+  for (let attempt = 0; attempt < TOOL_ATTEMPTS && !asked; attempt += 1) {
+    await deliver.click()
+    // The click is recorded in the transcript as a message of its own, under
+    // its own notice key.
+    await expect(window.locator('[data-notice-key="handoffDeliver"]')).toHaveCount(attempt + 1)
+    try {
+      await expect(card.first()).toBeVisible({ timeout: TOOL_CALL_MS })
+      asked = true
+    } catch {
+      await expect(stop).toHaveCount(0, { timeout: TOOL_CALL_MS })
+    }
+  }
+
+  expect(
+    asked,
+    `${TOOL_MODEL} did not reach for a gated tool in ${TOOL_ATTEMPTS} attempts. The hand-off itself is covered by the unit suite; this case measures a small local model's willingness to call a tool.`
+  ).toBe(true)
+
+  await card.first().getByTestId('permission-allow').click()
+  await expect(card).toHaveCount(0, { timeout: TOOL_CALL_MS })
+
+  // The file is where the goal said it would be…
+  const written = join(deliverdir, 'docs', 'RELEASE.md')
+  await expect.poll(() => existsSync(written), { timeout: TOOL_CALL_MS }).toBe(true)
+
+  // …the header chip noticed without anybody touching the goal, which is the
+  // moment S5.12 added…
+  const chip = window.locator('[data-kind="document"]')
+  await expect(chip).toHaveAttribute('data-delivered', 'true', { timeout: TOOL_CALL_MS })
+  await expect(window.getByTestId('chat-goal-chip')).toContainText('RELEASE.md')
+
+  // …and the chip is a real, openable control carrying the deliverable's path.
+  // The click itself is not driven; see this test's header.
+  await expect(chip).toHaveAttribute('data-path', 'docs/RELEASE.md')
+  await expect(chip).toBeEnabled()
+
+  await expect(stop).toHaveCount(0, { timeout: 2 * TOOL_CALL_MS })
 })

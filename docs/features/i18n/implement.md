@@ -143,6 +143,15 @@ rather than i18next's `{{…}}`: they are literal text the user types into a
 command template, not interpolation, and the double-brace spelling would have
 been substituted away to nothing.
 
+S5.12 added four: `chat.writeDeliverable` and `chat.writeDeliverableTitle` for
+the Actions card's third row, `errors.handoff_no_deliverable` for the rule that
+disables it, and `notices.handoffDeliver` for the message the click stores. The
+notice is a **second key** rather than a parameter on `notices.handoff`, which is
+the rule this feature keeps coming back to: a parameter is for a value inside a
+sentence, and these are two different sentences — one says "implement what the
+group decided", the other names a file. The error key follows the S5.2 shape
+exactly, so the disabled tooltip and the backend's rejection are one string.
+
 S5.8 added five `settings.theme*` keys next to the language ones, and nothing
 else: the theme is an attribute on `<html>`, so the only translated text it
 owns is the three segment labels and one hint. `themeSystem` is worded

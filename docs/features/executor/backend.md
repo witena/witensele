@@ -7,15 +7,15 @@ None of these imports electron; `node:fs`, `node:path`, `node:child_process` and
 
 | File | Responsibility |
 |---|---|
-| `src/main/executor/paths.ts` | `resolveInWorkdir`, `realWorkdir`, `realPathOf`, `isInside`. The only place a path is turned into something the tools may touch |
-| `src/main/executor/tools.ts` | `buildExecutorTools` (the seven AI SDK tools), `buildExecutorSection(workdir, handoff, goal)` (the prompt), `HANDOFF_BRIEFING` (the paragraph it appends for a hand-off, S5.6) and `goalHandoffLine` (the sentence S5.10 adds to that paragraph, naming the deliverable or the change), `runCommand` (the captured, killable child process), the caps, `GATED_EXECUTOR_TOOLS`, `PermissionDeniedError`, `unifiedDiff`, `cap` |
+| `src/main/executor/paths.ts` | `resolveInWorkdir`, `realWorkdir`, `realPathOf`, `isInside`. The only place a path is turned into something the tools may touch. Plus `deliverablePath(goal, workdir)` (S5.12): the one spelling of "where a `document` goal's file is", shared with `chats.goalStatus` |
+| `src/main/executor/tools.ts` | `buildExecutorTools` (the seven AI SDK tools), `buildExecutorSection({ workdir, handoff, goal, branch })` (the prompt), `HANDOFF_BRIEFING` and `DELIVER_BRIEFING` with `handoffBriefing(intent)` picking between them (S5.6, S5.12), `goalHandoffLine(goal, branch)` (the sentence S5.10 adds to that paragraph, naming the deliverable or the change, and since S5.12 the branch), `runCommand` (the captured, killable child process), the caps, `GATED_EXECUTOR_TOOLS`, `PermissionDeniedError`, `unifiedDiff`, `cap` |
 | `src/main/executor/workspace.ts` | `buildWorkspaceSection` (the `Workspace` prompt section), `walkTree` / `formatTree` (the bounded listing), `parseGitignore` / `loadIgnoreRules` / `isIgnored` (the hand-written ignore rules), `gitInfo` (`spawnSync` git, `null` outside a repository), and the caps `MAX_TREE_ENTRIES`, `MAX_TREE_DEPTH`, `MAX_TREE_FILE_BYTES`, `MAX_STATUS_LINES`, `SKIPPED_TREE_DIRS` (S5.11) |
 | `src/main/executor/permissions.ts` | `createPermissionGate`: `ask` / `reply` / `pending` / `abortAll`, the `allowAlways` set |
 | `src/main/handlers/permissions.ts` | The `permission.reply` handler: two validations, then `ctx.permissions.reply` |
 | `src/main/app-context.ts` | `AppContext.permissions`, built with `emit: ctx.events.emit`; `close()` calls `abortAll()` after `runners.stopAll()` |
 | `src/main/testing.ts` | The same gate for unit tests, with an injectable `newRequestId` so a suite can answer `request-1` |
-| `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule) and `workspaceWorkdir` (S5.11's: any member of a chat with a folder), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, the executor section in `buildSystemPrompt` — extended by `AgentTurnOptions.handoff` (S5.6) — and, since S5.5, `diffPartsFrom`, which turns the stored tool results into one `DiffPart` per written file |
-| `src/main/orchestration/chat-runner.ts` | Not this feature's file, but the only caller that ever sets `handoff: true`: `ChatRunner.handoff` schedules the executor's round and passes the flag for that one turn ([`orchestration`](../orchestration/backend.md)) |
+| `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule) and `workspaceWorkdir` (S5.11's: any member of a chat with a folder), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, the executor section in `buildSystemPrompt` — extended by `AgentTurnOptions.handoff` (S5.6, now a `HandoffIntent`) — `diffPartsFrom`, which turns the stored tool results into one `DiffPart` per written file (S5.5), and `deliveredRef`, which adds a `FileRefPart` when the turn brought the deliverable into existence (S5.12) |
+| `src/main/orchestration/chat-runner.ts` | Not this feature's file, but the only caller that ever sets `handoff`: `ChatRunner.handoff` schedules the executor's round and passes the intent for that one turn, and sets `reviewing` for every speaker of the round after it ([`orchestration`](../orchestration/backend.md)) |
 
 ### Reused elsewhere
 
@@ -66,6 +66,32 @@ write tools return and appends one `DiffPart` per file, each as a
 | Walked in **call** order, patches concatenated in that order | Two writes issued in one step finish in whichever order the filesystem answers. A block order that depends on that would reshuffle between two identical turns |
 | A patch that does not end in a newline gets one | Two `+++` headers running into each other would break the block |
 | Appended even when the turn was stopped or failed afterwards | The writes really happened. Hiding them is the one thing the transcript must never do |
+
+## The delivered chip (S5.12)
+
+`deliveredRef(deliverable, existedBefore)` runs immediately after
+`diffPartsFrom`, on an **executor** turn of a chat whose goal is a `document`
+naming a file. It appends at most one `FileRefPart`, carrying the **absolute**
+path — what `system.openInEditor` takes, and what `chats.goalStatus` answers with
+for the header chip.
+
+The rule is *the turn that delivered it, and only that turn*: the deliverable was
+not on disk when the turn started (one `existsSync` before the stream) and is on
+disk now (one after it).
+
+| Consequence | Why it is right |
+|---|---|
+| A later turn that rewrites the deliverable gets **no** chip | It did not deliver the document; its `DiffPart` is the record of what it did. Same argument as `diffPartsFrom` ignoring `git_diff` |
+| A deliverable that already existed before the chat ever ran gets **no** chip | The header chip has read "delivered" since the chat was opened; nothing is hidden |
+| A file deleted by hand and written again gets a **new** chip | That turn really did deliver it again |
+| A participant's turn never gets one | Participants cannot write, so a file appearing while one spoke was somebody else's doing |
+| The turn need not have *written* it with a tool | `run_command` produces files and returns no patch. The question the chip answers is whether the deliverable is there |
+| A stopped or failed turn keeps its chip | The file is on disk either way — the same rule the diffs follow |
+
+Two alternatives were rejected: a chip on *every* executor turn while the file
+exists (a claim each of them produced it), and "the first executor turn in a chat
+whose deliverable exists" (a transcript scan that still cannot tell a file this
+chat wrote from one that was already lying in the folder).
 
 ## Events emitted
 

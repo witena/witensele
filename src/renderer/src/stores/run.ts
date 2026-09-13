@@ -13,7 +13,7 @@
  * `run.started` arrives.
  */
 import { create } from 'zustand'
-import type { BackendErrorCode } from '@shared/types'
+import type { BackendErrorCode, HandoffIntent } from '@shared/types'
 import { BackendClientError } from '../lib/backend'
 import { getBackend } from '../lib/backend-provider'
 
@@ -37,7 +37,7 @@ function classify(cause: unknown): BackendErrorCode {
  * The `details` a refusal carried, or `undefined`.
  *
  * Kept beside the code because a `validation` on this store can now be one of
- * three hand-off rules (S5.6), and `translateFailure` needs the identifier in
+ * four hand-off rules (S5.6, S5.12), and `translateFailure` needs the identifier in
  * `details` to say which — the generic "the request was rejected as invalid"
  * would be the one sentence that helps nobody here.
  */
@@ -68,12 +68,17 @@ export interface RunState {
    * Hands the chat to its executor (S5.6). Never rejects; a refusal lands in
    * `error` / `errorCode` / `errorDetails`, which is what the composer prints.
    *
+   * `intent` (S5.12) says which hand-off it is: omitted for "Hand to executor",
+   * `'deliver'` for the Actions card's "Write the deliverable". Both go through
+   * this one action for the same reason they go through one backend method —
+   * they start the same run and are refused by the same four rules.
+   *
    * It goes through the run store rather than the chats store because what it
    * starts is a **run**: the Stop button, the round status and this call are the
    * same piece of state, and the three refusals are read with the same
    * `translateFailure` the composer already uses for a failed send.
    */
-  handoff: (chatId: string) => Promise<boolean>
+  handoff: (chatId: string, intent?: HandoffIntent) => Promise<boolean>
   /**
    * Forgets the last failure.
    *
@@ -131,7 +136,7 @@ export const useRunStore = create<RunState>()((set) => ({
     }
   },
 
-  async handoff(chatId) {
+  async handoff(chatId, intent) {
     // `sendingByChat` covers this call too: it is what keeps the button (and the
     // composer) from starting a second run in the fraction of a second before
     // `run.started` arrives, and the disabled state is then one rule, not two.
@@ -144,7 +149,10 @@ export const useRunStore = create<RunState>()((set) => ({
     try {
       // The stored hand-off message arrives as `message.created`, like a sent
       // one, so the return value is deliberately dropped here as well.
-      await getBackend().invoke('chat.handoff', { chatId })
+      // `intent` is omitted rather than defaulted here: the backend's default is
+      // the one that decides, and a renderer that spelled `'implement'` out
+      // would be a second place to change if a third intent ever appears.
+      await getBackend().invoke('chat.handoff', { chatId, ...(intent ? { intent } : {}) })
       return true
     } catch (cause) {
       set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })

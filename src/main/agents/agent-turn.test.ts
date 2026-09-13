@@ -1495,6 +1495,250 @@ describe('runAgentTurn with executor tools', () => {
 })
 
 /* -------------------------------------------------------------------------- */
+/* S5.12: the deliverable chip and the review briefing                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The chip that says the file this chat exists for is now on disk.
+ *
+ * The rule `deliveredRef` documents has three edges and each of them is a whole
+ * turn here rather than a unit call, because the interesting part is *when* the
+ * two `existsSync` samples are taken: before the stream and after it. A pure
+ * test of the helper would prove the rule and none of the timing.
+ */
+describe('runAgentTurn and a document goal', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let agent: Agent
+  let participant: Agent
+  let chat: Chat
+  let workdir: string
+
+  const DELIVERABLE = 'docs/REPORT.md'
+
+  /**
+   * A model that writes `path` once and then answers.
+   *
+   * The same shape as the executor block's `callThenAnswer`, restated here
+   * because that one is scoped to its own `describe`; hoisting it would put a
+   * tool-call helper in front of every test in this file.
+   */
+  const writes = (path: string, content = '# Report\n'): MockLanguageModelV4 => {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                {
+                  type: 'tool-call',
+                  toolCallId: 'call-1',
+                  toolName: 'write_file',
+                  input: JSON.stringify({ path, content })
+                },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks(['Done.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  /** Re-reads the chat row, which is what a real turn is handed. */
+  const reload = (): void => {
+    chat = ctx.repos.chats.get(chat.id, ctx.userId)
+  }
+
+  const setGoal = (deliverable: string | undefined): void => {
+    ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: {
+          kind: 'document',
+          description: 'Write the quarterly report',
+          materials: [],
+          ...(deliverable === undefined ? {} : { deliverable })
+        }
+      },
+      ctx.userId
+    )
+    reload()
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    const created = createTestAppContext(database)
+    ctx = created.ctx
+
+    workdir = mkdtempSync(join(tmpdir(), 'witena-turn-deliver-'))
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({ name: 'Hands', providerId: provider.id, modelId: 'deepseek-chat', role: 'executor' }),
+      ctx.userId
+    )
+    participant = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Report', workdir }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id, participant.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'Write it.' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    setGoal(DELIVERABLE)
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const turn = (model: MockLanguageModelV4, speaker: Agent = agent, extra = {}) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent: speaker,
+      members: [agent, participant],
+      round: 1,
+      signal: new AbortController().signal,
+      model,
+      ...extra
+    })
+
+  const allow = (): (() => void) =>
+    ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision: 'allowAlways' })
+      }
+    })
+
+  const refs = (message: { parts: MessagePart[] }): MessagePart[] =>
+    message.parts.filter((part) => part.type === 'file-ref')
+
+  it('appends a file-ref to the turn that brought the deliverable into existence', async () => {
+    const stop = allow()
+
+    const result = await turn(writes(DELIVERABLE))
+
+    // The absolute path, because that is what `system.openInEditor` takes and
+    // what `chats.goalStatus` answers with for the header chip.
+    expect(refs(result.message)).toEqual([{ type: 'file-ref', path: join(workdir, DELIVERABLE) }])
+    expect(existsSync(join(workdir, DELIVERABLE))).toBe(true)
+    stop()
+  })
+
+  it('appends nothing on a later turn, once the file is already there', async () => {
+    const stop = allow()
+    mkdirSync(join(workdir, 'docs'), { recursive: true })
+    writeFileSync(join(workdir, DELIVERABLE), '# Old\n', 'utf8')
+
+    // The turn really does write to it — the diff proves that — and still gets
+    // no chip: it did not deliver the document, it edited one that was there.
+    const result = await turn(writes(DELIVERABLE, '# New\n'))
+
+    expect(refs(result.message)).toEqual([])
+    expect(result.message.parts.some((part) => part.type === 'diff')).toBe(true)
+    stop()
+  })
+
+  it('appends nothing when the turn wrote some other file', async () => {
+    const stop = allow()
+
+    const result = await turn(writes('SCRATCH.md'))
+
+    expect(refs(result.message)).toEqual([])
+    stop()
+  })
+
+  it('appends nothing for a chat whose goal names no file', async () => {
+    const stop = allow()
+    ctx.repos.chats.update(
+      chat.id,
+      { goal: { kind: 'discussion', description: 'Just talk', materials: [] } },
+      ctx.userId
+    )
+    reload()
+
+    const result = await turn(writes(DELIVERABLE))
+
+    expect(refs(result.message)).toEqual([])
+    stop()
+  })
+
+  it('appends nothing for a participant, whatever appeared while it spoke', async () => {
+    // A participant cannot write, so the file here is created by something else
+    // entirely — which is exactly the case the chip must not claim credit for.
+    mkdirSync(join(workdir, 'docs'), { recursive: true })
+    const model = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        writeFileSync(join(workdir, DELIVERABLE), '# Someone else\n', 'utf8')
+        return { stream: simulateReadableStream({ chunks: textChunks(['Noted.']) }) }
+      }
+    })
+
+    const result = await turn(model, participant)
+
+    expect(refs(result.message)).toEqual([])
+  })
+
+  it('tells the reviewers of a hand-off what they are reading, and the executor nothing of the kind', async () => {
+    const reviewer = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => ({ stream: simulateReadableStream({ chunks: textChunks(['Fine.']) }) })
+    })
+
+    await turn(reviewer, participant, { reviewing: true })
+    const reviewPrompt = JSON.stringify(reviewer.doStreamCalls[0]?.prompt)
+    expect(reviewPrompt).toMatch(/This round is a review/)
+    // The goal is one line above it, which is the whole point of the placement.
+    expect(reviewPrompt).toMatch(/judge it against the goal of this chat/)
+
+    const plain = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => ({ stream: simulateReadableStream({ chunks: textChunks(['Hm.']) }) })
+    })
+    await turn(plain, participant)
+    expect(JSON.stringify(plain.doStreamCalls[0]?.prompt)).not.toMatch(/This round is a review/)
+  })
+
+  it('briefs the executor to write the deliverable when the hand-off says deliver', async () => {
+    const stop = allow()
+    const model = writes(DELIVERABLE)
+
+    await turn(model, agent, { handoff: 'deliver' })
+
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
+    expect(prompt).toMatch(/write the deliverable of this chat now/)
+    expect(prompt).toMatch(/exactly two lines/)
+    expect(prompt).toContain(DELIVERABLE)
+    // The other intent's paragraph is not also in there: one instruction, once.
+    expect(prompt).not.toMatch(/Implement the conclusion the group reached/)
+    stop()
+  })
+})
+
+/* -------------------------------------------------------------------------- */
 /* S5.11: the workspace briefing and the materials                             */
 /* -------------------------------------------------------------------------- */
 

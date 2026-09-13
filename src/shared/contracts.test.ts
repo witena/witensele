@@ -13,6 +13,7 @@ import {
   DEFAULT_EDITOR_COMMAND,
   EDITOR_KINDS,
   LOCAL_USER_ID,
+  type HandoffIntent,
   type Message,
   type MessagePart,
   type PermissionDecision,
@@ -226,11 +227,20 @@ describe('type contracts', () => {
     }>()
   })
 
-  it('hands a chat to its executor with nothing but the chat id (S5.6)', () => {
+  it('hands a chat to its executor with the chat id and an optional intent (S5.6, S5.12)', () => {
     // The executor, the folder and the review round are all decided in the
     // backend from the chat record: a renderer that had to name the executor
     // could name a different one than `executorWorkdir` attaches the tools to.
-    expectTypeOf<Parameters<BackendApi['chat.handoff']>[0]>().toEqualTypeOf<{ chatId: string }>()
+    //
+    // `intent` is the one thing the renderer does say, and it is **optional**:
+    // S5.6's button sends nothing and gets `'implement'`, S5.12's quick action
+    // sends `'deliver'`. A second method would have been `handoff()` copied for
+    // the sake of one paragraph of briefing.
+    expectTypeOf<Parameters<BackendApi['chat.handoff']>[0]>().toEqualTypeOf<{
+      chatId: string
+      intent?: HandoffIntent
+    }>()
+    expectTypeOf<HandoffIntent>().toEqualTypeOf<'implement' | 'deliver'>()
     // The stored hand-off message comes back, like `chat.send`'s.
     expectTypeOf<ReturnType<BackendApi['chat.handoff']>>().toEqualTypeOf<Promise<Message>>()
   })

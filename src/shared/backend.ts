@@ -29,6 +29,7 @@ import type {
   ChatMember,
   ChatPatch,
   ConnectionTestResult,
+  HandoffIntent,
   McpConnectionTestResult,
   McpServer,
   McpServerInput,
@@ -377,12 +378,20 @@ export interface BackendApi {
    * which the other members read what it changed. Resolves with that stored
    * message as soon as the run is scheduled, exactly like `chat.send`.
    *
+   * `intent` (S5.12) says what is being handed over and defaults to
+   * `'implement'`, which is S5.6's behaviour unchanged. `'deliver'` — the
+   * "Write the deliverable" action — stores the `notices.handoffDeliver` key
+   * instead and briefs the executor to write the `document` goal's file rather
+   * than to implement the conclusion. Everything else about the call is
+   * identical, which is why it is an argument and not a second method.
+   *
    * Rejects with `validation` and a `ValidationReason` in `details` when the
    * chat has no working directory (`handoff_no_workdir`), no executor member
-   * (`handoff_no_executor`), or a run is already in flight
-   * (`handoff_run_active`) — the three states the button is disabled in.
+   * (`handoff_no_executor`), `intent: 'deliver'` on a chat whose goal names no
+   * deliverable (`handoff_no_deliverable`), or a run is already in flight
+   * (`handoff_run_active`) — the four states the buttons are disabled in.
    */
-  'chat.handoff': (input: { chatId: string }) => Promise<Message>
+  'chat.handoff': (input: { chatId: string; intent?: HandoffIntent }) => Promise<Message>
 }
 
 /** The name of any backend method. */

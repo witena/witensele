@@ -143,7 +143,7 @@ Two channels carry everything:
 | `settings.get` | none | `AppSettings` | — |
 | `settings.update` | `{ patch: AppSettingsPatch }` | `AppSettings` | `validation` when the patch is not an object or carries a key other than `language`, `theme`, `timeouts` |
 | `permission.reply` | `{ requestId, decision }` | `void` | `validation` for a blank id or a decision outside `PERMISSION_DECISIONS`; `not_found` when nothing is waiting on that id (S5.4 — see [`executor`](../executor/backend.md)) |
-| `chat.handoff` | `{ chatId }` | `Message` | `validation` for a blank id, and `validation` carrying a `ValidationReason` (`handoff_no_workdir`, `handoff_no_executor`, `handoff_run_active`) from the runner; `not_found` for an unknown chat (S5.6 — see [`orchestration`](../orchestration/backend.md)) |
+| `chat.handoff` | `{ chatId, intent? }` | `Message` | `validation` for a blank id or an unknown `intent`, and `validation` carrying a `ValidationReason` (`handoff_no_workdir`, `handoff_no_executor`, `handoff_no_deliverable`, `handoff_run_active`) from the runner; `not_found` for an unknown chat (S5.6, S5.12 — see [`orchestration`](../orchestration/backend.md)) |
 | every other `BACKEND_METHODS` entry | see `implement.md` | see `implement.md` | `internal`: `Not implemented yet: <method> (see docs/STEPS.md)` |
 
 Failure rules the transport enforces:

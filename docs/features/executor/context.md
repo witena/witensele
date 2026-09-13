@@ -64,12 +64,31 @@ be able to say no, and afterwards read the diff of what they said yes to.
   restating it, because the goal is already in the group briefing the same
   prompt carries, and the goal itself belongs to
   [`chats`](../chats/context.md).
-- **The hand-off briefing** (S5.6): the paragraph `buildExecutorSection` appends
-  for the one turn "Hand to executor" schedules — implement the conclusion above,
-  do not re-open the debate, report the paths you touched. The *scheduling* of
-  that turn and of the review round after it belongs to
-  [`orchestration`](../orchestration/context.md); this feature only owns what the
-  executor is told.
+- **The hand-off briefing** (S5.6, S5.12): the paragraph `buildExecutorSection`
+  appends for the one turn "Hand to executor" schedules. There are now **two** of
+  them, picked by `HandoffIntent`:
+
+  | Intent | Paragraph | Says |
+  |---|---|---|
+  | `implement` | `HANDOFF_BRIEFING` | implement the conclusion above, do not re-open the debate, report the paths you touched |
+  | `deliver` | `DELIVER_BRIEFING` | write the file itself, create its parent folders, finish with a summary of exactly two lines — the path, then one sentence |
+
+  They are alternatives, never both: a model given the same instruction twice in
+  two wordings follows neither reliably. Whichever applies, `goalHandoffLine` is
+  appended to it. The *scheduling* of that turn and of the review round after it
+  belongs to [`orchestration`](../orchestration/context.md); this feature only
+  owns what the executor is told.
+- **The branch a `codebase` hand-off is made on** (S5.12). `goalHandoffLine`
+  names it when `gitInfo` knows one, and asks for a summary that lists the
+  changed paths — the two things the review round needs in order to look at the
+  right diff. The probe is run **once per turn** by `buildTurnPrompt` and handed
+  to both this section and the workspace one, so the prompt cannot name two
+  different branches and a large repository is not walked by `git` twice.
+- **The chip for a delivered document** (S5.12): `deliverablePath` lives in
+  `paths.ts` and is shared with `chats.goalStatus`, so the header and the
+  transcript agree on which file the goal names; `deliveredRef` in
+  [`agent-turn`](../agent-turn/context.md) is what turns it into a `FileRefPart`
+  on the turn that produced it.
 
 - **The materials briefing's reader** (S5.11) is `agents/materials.ts` and
   belongs to [`agent-turn`](../agent-turn/context.md); it reuses this feature's

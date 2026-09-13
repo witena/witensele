@@ -12,7 +12,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { isInside, realPathOf, realWorkdir, resolveInWorkdir } from './paths'
+import type { ChatGoal } from '@shared/types'
+import { deliverablePath, isInside, realPathOf, realWorkdir, resolveInWorkdir } from './paths'
 
 let root: string
 let workdir: string
@@ -144,5 +145,51 @@ describe('isInside', () => {
   it('rejects a sibling whose name merely starts with the root', () => {
     expect(isInside('/a/b', '/a/bc')).toBe(false)
     expect(isInside('/a/b', '/a')).toBe(false)
+  })
+})
+
+/**
+ * S5.12: the one place the deliverable's absolute path is computed.
+ *
+ * Shared by `chats.goalStatus` and by the executor turn that appends the chip,
+ * so that the header and the transcript cannot end up naming different files.
+ * Unlike everything above it, this one touches no filesystem and refuses
+ * nothing: the goal's paths were confined when they were saved.
+ */
+describe('deliverablePath', () => {
+  const goal = (patch: Partial<ChatGoal> = {}): ChatGoal => ({
+    kind: 'document',
+    description: 'Write the quarterly report',
+    deliverable: 'docs/REPORT.md',
+    materials: [],
+    ...patch
+  })
+
+  it('joins the folder and the relative deliverable', () => {
+    expect(deliverablePath(goal(), '/tmp/project')).toBe('/tmp/project/docs/REPORT.md')
+  })
+
+  it('answers null for everything that is not a document with a file', () => {
+    expect(deliverablePath(null, '/tmp/project')).toBeNull()
+    expect(deliverablePath(undefined, '/tmp/project')).toBeNull()
+    expect(deliverablePath(goal({ kind: 'discussion' }), '/tmp/project')).toBeNull()
+    expect(deliverablePath(goal({ kind: 'codebase' }), '/tmp/project')).toBeNull()
+    expect(deliverablePath(goal({ deliverable: '  ' }), '/tmp/project')).toBeNull()
+    const { deliverable: _dropped, ...rest } = goal()
+    expect(deliverablePath(rest as ChatGoal, '/tmp/project')).toBeNull()
+  })
+
+  it('answers null for a chat with no folder, rather than a relative path', () => {
+    expect(deliverablePath(goal(), null)).toBeNull()
+    expect(deliverablePath(goal(), '')).toBeNull()
+  })
+
+  it('does not care whether the file, or the folder, is there', () => {
+    // The whole point of a deliverable is that it does not exist yet; and a
+    // folder that has since been unmounted answers a path, which the caller
+    // then finds is not on disk.
+    expect(deliverablePath(goal(), join(root, 'gone'))).toBe(
+      join(root, 'gone', 'docs', 'REPORT.md')
+    )
   })
 })

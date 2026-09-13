@@ -144,6 +144,77 @@ describe('buildGroupBriefing (goal)', () => {
   })
 })
 
+/**
+ * S5.12: the review block, for the round a hand-off schedules after the executor.
+ *
+ * Content rather than wording again, and the one thing that has to be *placed*
+ * rather than merely present: the block comes after the goal, so the sentence
+ * that says what to judge the change against is next to the thing it names.
+ */
+describe('buildGroupBriefing (review)', () => {
+  const goal: ChatGoal = {
+    kind: 'codebase',
+    description: 'Split the runner in two',
+    materials: []
+  }
+
+  const brief = (language: Language, reviewing: boolean, value: ChatGoal | null = goal): string =>
+    buildGroupBriefing({
+      language,
+      self: reviewer,
+      members: [architect, reviewer],
+      goal: value,
+      reviewing
+    })
+
+  for (const language of LANGUAGES) {
+    describe(language, () => {
+      it('says nothing at all in an ordinary round', () => {
+        expect(brief(language, false)).toBe(
+          buildGroupBriefing({
+            language,
+            self: reviewer,
+            members: [architect, reviewer],
+            goal
+          })
+        )
+      })
+
+      it('adds a block, after the goal, when the round is a review', () => {
+        const reviewing = brief(language, true)
+        const ordinary = brief(language, false)
+
+        expect(reviewing.length).toBeGreaterThan(ordinary.length)
+        expect(reviewing.startsWith(ordinary)).toBe(true)
+        // The goal's own text is still the last thing before it, which is what
+        // "judge it against the goal above" depends on.
+        expect(reviewing).toContain(goal.description)
+        expect(reviewing.indexOf(goal.description)).toBeLessThan(ordinary.length)
+      })
+
+      it('points a chat with no goal at the conclusion instead', () => {
+        // A hand-off in a chat that never set a goal is legal, and a briefing
+        // that told the reviewer to judge against "the goal above" would then be
+        // pointing at nothing.
+        const none = brief(language, true, null)
+        expect(none.length).toBeGreaterThan(
+          buildGroupBriefing({ language, self: reviewer, members: [architect, reviewer] }).length
+        )
+      })
+    })
+  }
+
+  it('names the executor role in English so the reviewer knows whose work it is', () => {
+    expect(brief('en', true)).toMatch(/executor of this chat has just changed files/)
+    expect(brief('en', true)).toMatch(/judge it against the goal of this chat/)
+    expect(brief('en', true, null)).toMatch(/judge it against the conclusion the group reached/)
+  })
+
+  it('says it in a different language in each, as the rest of the briefing does', () => {
+    expect(brief('en', true)).not.toBe(brief('zh-CN', true))
+  })
+})
+
 describe('toBriefingMember', () => {
   it('keeps only the name and the description', () => {
     expect(

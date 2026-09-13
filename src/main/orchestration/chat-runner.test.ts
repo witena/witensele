@@ -24,7 +24,7 @@ import type {
   RunRoundEvent
 } from '@shared/events'
 import { PASS_TOKEN } from '@shared/pass'
-import type { Agent, Chat, Message, SystemNoticePart } from '@shared/types'
+import type { Agent, Chat, HandoffIntent, Message, SystemNoticePart } from '@shared/types'
 import { toModelMessages } from '../agents/history'
 import type { AppContext } from '../app-context'
 import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
@@ -35,6 +35,7 @@ import { WRITE_FILE_TOOL } from '../executor/tools'
 import {
   NOTICE_CONTEXT_TRUNCATED,
   NOTICE_HANDOFF,
+  NOTICE_HANDOFF_DELIVER,
   NOTICE_MATERIALS_TRUNCATED,
   NOTICE_MAX_ROUNDS,
   type ChatRunnerOptions
@@ -1549,6 +1550,139 @@ describe('ChatRunner (hand to executor)', () => {
     // Neither the write nor the review round happened.
     expect(existsSync(join(workdir, 'NOTES.md'))).toBe(false)
     expect(rounds(events)).toHaveLength(1)
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* S5.12: the second intent, and the review round that knows it is one       */
+  /* ------------------------------------------------------------------------ */
+
+  /** Puts a `document` goal on the chat and returns the deliverable's path. */
+  const setDocumentGoal = async (deliverable = 'docs/REPORT.md'): Promise<string> => {
+    await handlers['chats.update'](ctx, {
+      id: chat.id,
+      patch: {
+        goal: {
+          kind: 'document',
+          description: 'Write the quarterly report',
+          deliverable,
+          materials: []
+        }
+      }
+    })
+    return deliverable
+  }
+
+  it('stores its own notice for a deliver hand-off, naming the file', async () => {
+    const deliverable = await setDocumentGoal()
+
+    const message = await handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    await settle()
+
+    expect(message).toMatchObject({
+      senderType: 'user',
+      mentions: [hands.id],
+      // A different key rather than the same one with a parameter: the sentence
+      // the user reads is a different sentence. The path is the **relative** one
+      // the goal stores, which is what the header chip shows too.
+      parts: [
+        {
+          type: 'system-notice',
+          key: NOTICE_HANDOFF_DELIVER,
+          params: { agent: 'Hands', path: deliverable }
+        }
+      ]
+    })
+    // …and the same two staged rounds as an ordinary hand-off: the intent
+    // changes the briefing, not the scheduling.
+    expect(rounds(events).map((event) => event.speakers)).toEqual([
+      [hands.id],
+      [ada.id, bob.id]
+    ])
+  })
+
+  it('briefs the executor to write the file, and reaches the reviewers as prose', async () => {
+    await setDocumentGoal()
+    models.set('Hands', saying('Written.'))
+    models.set('Ada', saying('Reads fine.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    await settle()
+
+    expect(promptOf('Hands')).toContain('write the deliverable of this chat now')
+    expect(promptOf('Hands')).toContain('docs/REPORT.md')
+    expect(promptOf('Hands')).not.toContain('Implement the conclusion the group reached')
+    // The notice is rendered into the transcript the reviewers read, like the
+    // other one: a key with no rendering would be an empty request.
+    expect(promptOf('Ada')).toContain('write the deliverable of this chat')
+  })
+
+  it('tells the review round it is reviewing, and the executor round nothing of the kind', async () => {
+    await setDocumentGoal()
+    models.set('Hands', saying('Written.'))
+    models.set('Ada', saying('Reads fine.'))
+    models.set('Bob', saying('Same here.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    expect(promptOf('Ada')).toContain('This round is a review')
+    expect(promptOf('Bob')).toContain('This round is a review')
+    // The executor wrote the thing; it is not reviewing it.
+    expect(promptOf('Hands')).not.toContain('This round is a review')
+  })
+
+  it('does not carry the review briefing into the rounds after it', async () => {
+    await setDocumentGoal()
+    models.set('Hands', answering(['Written.', 'Fixed.']))
+    models.set('Ada', saying('@Hands the title is wrong.'))
+    models.set('Bob', saying('Nothing from me.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    // Round 3 is ordinary `@` scheduling; nothing in it is a review round, so
+    // the executor's second prompt carries neither block.
+    expect(promptOf('Hands', 1)).not.toContain('This round is a review')
+  })
+
+  it('refuses a deliver hand-off on a chat whose goal names no file', async () => {
+    // No goal at all…
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    ).rejects.toMatchObject({
+      code: 'validation',
+      details: { reason: 'handoff_no_deliverable' }
+    })
+
+    // …and a goal of the wrong kind. Both are the same mistake to the user: this
+    // chat has nothing to deliver.
+    await handlers['chats.update'](ctx, {
+      id: chat.id,
+      patch: { goal: { kind: 'codebase', description: 'Split the runner', materials: [] } }
+    })
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    ).rejects.toMatchObject({ details: { reason: 'handoff_no_deliverable' } })
+
+    // Nothing was stored on either path, and the ordinary hand-off still works.
+    expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])
+  })
+
+  it('checks the folder and the executor before the deliverable', async () => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: null } })
+
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    ).rejects.toMatchObject({ details: { reason: 'handoff_no_workdir' } })
+  })
+
+  it('refuses an intent it does not know', async () => {
+    // Cast because the *type* already forbids it: the check exists for a caller
+    // the compiler never saw — a stale renderer, or a future HTTP client.
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'ship-it' as HandoffIntent })
+    ).rejects.toMatchObject({ code: 'validation' })
+    expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])
   })
 
   it('refuses a chat with no working directory', async () => {

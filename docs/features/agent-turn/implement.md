@@ -29,7 +29,8 @@ ChatRunner picks a speaker
   │
   ├─ system  = agent.systemPrompt                              ── buildTurnPrompt, once per turn
   │            + buildGroupBriefing(...)                      (+ the memory rule, S3.3)
-  │            + buildExecutorSection(workdir, handoff, goal)  (S5.4, the chat's executor only)
+  │            + buildExecutorSection({ workdir, handoff,      (S5.4, the chat's executor only)
+  │                                    goal, branch })          (handoff: the intent, S5.6/S5.12)
   │            + buildWorkspaceSection({ workdir, goal, … })   (S5.11, every member, when bound)
   │            + buildSkillsSection(enabledSkills(ctx, agent)) (S3.2, when any)
   │            + buildMemorySection(ctx.memory.readIndex(id))  (S3.3, when enabled)
@@ -136,18 +137,48 @@ with the instruction that makes PLAN.md's review loop work: finish with a summar
 of every file changed and ask the others to review it.
 
 **S5.6** adds one optional flag on top: `AgentTurnOptions.handoff`, passed
-straight into `buildExecutorSection(workdir, handoff, goal)`, which appends
-`HANDOFF_BRIEFING` — implement the conclusion above, do not re-open the debate,
-report the paths — plus, since **S5.10**, `goalHandoffLine(goal)`: the file to
-write (with its parent folders) for a `document`, or the change to make for a
-`codebase`, and nothing at all for a discussion, where `HANDOFF_BRIEFING`
-already says everything there is to say. It points at the goal rather than
-restating it, because the goal is already in the group briefing of the same
-prompt. `ChatRunner` sets it for exactly one turn, the executor's in
-the round "Hand to executor" scheduled ([`orchestration`](../orchestration/implement.md)),
-and it reaches nothing else in the turn: not the history, not the tools, not the
-result. A reviewer, and an executor re-`@`-ed later, are being asked something
-specific and must not be told the discussion is over.
+straight into `buildExecutorSection`, which appends `HANDOFF_BRIEFING` —
+implement the conclusion above, do not re-open the debate, report the paths —
+plus, since **S5.10**, `goalHandoffLine(goal)`: the file to write (with its
+parent folders) for a `document`, or the change to make for a `codebase`, and
+nothing at all for a discussion, where `HANDOFF_BRIEFING` already says everything
+there is to say. It points at the goal rather than restating it, because the goal
+is already in the group briefing of the same prompt. `ChatRunner` sets it for
+exactly one turn, the executor's in the round "Hand to executor" scheduled
+([`orchestration`](../orchestration/implement.md)), and it reaches nothing else
+in the turn: not the history, not the tools, not the result. A reviewer, and an
+executor re-`@`-ed later, are being asked something specific and must not be told
+the discussion is over.
+
+**S5.12** turns that flag into a `HandoffIntent`. `deliver` swaps
+`HANDOFF_BRIEFING` for `DELIVER_BRIEFING` — write the file itself, create its
+parent folders, finish with a summary of exactly two lines — and a `codebase`
+goal's `goalHandoffLine` gains the branch `gitInfo` reports plus the request for
+a summary listing every changed path. The two paragraphs are alternatives, never
+both.
+
+### The review block (S5.12)
+
+`AgentTurnOptions.reviewing` reaches `buildGroupBriefing`, which appends one more
+block **after** the goal, in both languages: the executor has just changed files,
+read the diffs in its message above, and judge them against the goal rather than
+against what you would have written. It goes in the group briefing rather than in
+a section of its own for the reason the goal does — it is a rule of the room —
+and it goes *after* the goal because "the goal above" has to be one line up. A
+chat with no goal gets the same block pointing at the conclusion in the
+transcript instead, since a hand-off in a chat that never set a goal is legal.
+
+### The delivered chip (S5.12)
+
+Two `existsSync` calls bracket the turn: one before the stream, on
+`deliverablePath(chat.goal, chat.workdir)` for an **executor** of a `document`
+chat, and one after it, in `deliveredRef`. A file that was not there and is there
+now produces one `FileRefPart` carrying the **absolute** path, appended
+immediately after the diff blocks. Every other case produces nothing — including
+a later turn that rewrites the deliverable, which is claiming credit it did not
+earn, and a participant's turn, which cannot write. The rules and the rejected
+alternatives are tabulated in
+[`executor/backend.md`](../executor/backend.md#the-delivered-chip-s512).
 
 ### The workspace briefing and the materials (S5.11)
 
@@ -255,6 +286,8 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | `src/main/executor/tools.test.ts` (`goalHandoffLine`) | S5.10: the deliverable and its parent folders for a `document`, the change for a `codebase`, nothing for a discussion or a chat with no goal, and the line reaching `buildExecutorSection` **only** on the hand-off turn |
 | `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call and **neither** being set for an agent with empty `params` (the S5.9 shape), `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
 | `src/main/agents/agent-turn.test.ts` (S3.2 / S3.3 blocks) | The built-in tools end to end against a real skills folder and a real memory directory: the prompt carrying a skill's description but not its body, `read_skill` and `read_skill_file` answering, a traversal refused as an errored tool result, a missing skill skipped, `memory_save` writing the note **and** the index line, the index reaching the next prompt, the briefing's memory sentence appearing only when memory is on, and one agent unable to search another's notes |
+| `src/main/agents/agent-turn.test.ts` (S5.12 block, `runAgentTurn and a document goal`) | Seven whole turns: the `FileRefPart` appended when the deliverable appears and not when it was already there, not for another file, not without a `document` goal and not for a participant; the review block in a reviewer's prompt and not in an ordinary one; and `DELIVER_BRIEFING` plus the path in a `deliver` hand-off's prompt, with the implement paragraph absent |
+| `src/main/agents/briefing.test.ts` (S5.12 block) | The review block in both languages: absent byte for byte in an ordinary round, appended **after** the goal when the round is a review, and pointing at the conclusion instead when the chat has no goal |
 | `src/main/agents/agent-turn.test.ts` (S5.5 block) | `diffPartsFrom` as a pure function — one block per file, several writes to one file concatenated at its first position, a missing trailing newline separated, and a denial / an unchanged edit / a `git_diff` / a malformed output each producing nothing — plus three whole turns through `streamText`: two files giving two blocks and two `part` deltas, a write then an edit of the same file giving one, and a denied write giving none |
 | `src/main/agents/agent-turn.test.ts` (S5.11 block) | A whole **participant** turn in a chat with a folder: the four read-only tools offered and `write_file` / `edit_file` / `run_command` each asserted absent, the folder and its listing in the prompt, a marked material in the prompt while an unmarked file's contents are not, a real `read_file` call on that unmarked file returning its contents, `materialsOmitted` reported for a material too large to inline, and a chat with no folder getting neither tools nor a `Workspace` section |
 | `src/main/agents/agent-turn.test.ts` (S5.4 block) | A `MockLanguageModelV4` calling `write_file` in a chat bound to a real temporary folder: the seven tools offered and the folder in the prompt, a `permission.requested` carrying the path and the content, `allow` writing the file and storing a `tool-result` with the patch, `deny` writing nothing and storing a `tool-error`, `allowAlways` not asking a second time, a participant and a folderless chat getting no tools at all, the two-executor tie broken by position, and a read-only tool and a path that leaves the folder never asking |

@@ -48,7 +48,26 @@ function goalSection(goal: ChatGoal): string[] {
   return lines
 }
 
-export const buildChineseBriefing: BriefingBuilder = ({ self, members, memoryEnabled, goal }) => {
+/** The review block (S5.12); says the same things in the same order as `briefing.en.ts`. */
+function reviewSection(goal: ChatGoal | null): string[] {
+  return [
+    '',
+    '这一轮是复核:',
+    '- 本群的 executor 刚刚改动了工作目录里的文件。它上面那条消息说了改了什么,每个文件的 diff 也在那条消息里。',
+    goal
+      ? '- 读它改了什么,并对照本群的目标来判断,而不是对照你自己会怎么写:说清楚它有没有做到目标要求的事,做不到的地方指出是哪个文件。'
+      : '- 读它改了什么,并对照上面大家得出的结论来判断,而不是对照你自己会怎么写:说清楚它有没有做到说好的事,做不到的地方指出是哪个文件。',
+    '- 如果有缺漏或者做错了,就具体说出来,并用 @ 点名 executor 让它去改。如果没问题,用一句话说没问题,不要把它做的事再复述一遍。'
+  ]
+}
+
+export const buildChineseBriefing: BriefingBuilder = ({
+  self,
+  members,
+  memoryEnabled,
+  goal,
+  reviewing
+}) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat; see `briefing.en.ts`.
   const other = members.find((member) => member.name !== self.name) ?? self
@@ -79,6 +98,8 @@ export const buildChineseBriefing: BriefingBuilder = ({ self, members, memoryEna
         ]
       : []),
     // S5.10: last, for the same reason as in `briefing.en.ts`.
-    ...(goal ? goalSection(goal) : [])
+    ...(goal ? goalSection(goal) : []),
+    // S5.12: after the goal, for the same reason as in `briefing.en.ts`.
+    ...(reviewing ? reviewSection(goal) : [])
   ].join('\n')
 }

@@ -70,7 +70,11 @@
  *   read (PLAN.md) — and after it exactly one review round with everybody else.
  *   From there the ordinary `@` mechanics resume, so a reviewer that writes
  *   `@Hands` starts another executor round and `maxAutoRounds` caps the chain
- *   exactly as it does for a typed message.
+ *   exactly as it does for a typed message. Since S5.12 the call carries an
+ *   `intent` — `implement` or `deliver` — which changes the notice it stores and
+ *   the paragraph the executor's briefing gains, and nothing else; and the
+ *   review round tells its speakers that is what they are doing, so they judge
+ *   the diff against the chat's goal instead of guessing why they were woken.
  *
  * - **Three things are announced by the runner rather than by the turn** (S4.2,
  *   S4.3, S5.11), because each is a fact about a *run* and `AgentTurn` does not
@@ -86,7 +90,7 @@
  */
 import type { BackendEvent, RunFinishReason } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
-import type { Agent, Chat, Message } from '@shared/types'
+import { HANDOFF_INTENTS, type Agent, type Chat, type HandoffIntent, type Message } from '@shared/types'
 import type { AppContext } from '../app-context'
 import {
   createModelFromRegistry,
@@ -132,6 +136,34 @@ export const NOTICE_MATERIALS_TRUNCATED = 'materialsTruncated'
  * as the request it was.
  */
 export const NOTICE_HANDOFF = 'handoff'
+/**
+ * The same message for `intent: 'deliver'` — the "Write the deliverable" action
+ * (S5.12).
+ *
+ * A key of its own rather than a parameter on `handoff`, because the sentence
+ * the user reads is a different sentence and not the same one with a word
+ * swapped: one says "implement what the group decided", the other names a file.
+ * It carries the deliverable's **relative** path, which is what the goal stores
+ * and what the header chip shows — an absolute path in a transcript is the
+ * user's home directory printed into every later prompt.
+ */
+export const NOTICE_HANDOFF_DELIVER = 'handoffDeliver'
+
+/**
+ * Which round of a hand-off `#runRound` is running, if it is one (S5.6, S5.12).
+ *
+ * One object rather than three parameters because the three are one fact: a
+ * round is the executor's, or the review of it, or neither, and a call that
+ * could say both would be a state that does not exist.
+ */
+interface HandoffStage {
+  /** The executor being handed the work this round, or `null`. */
+  implementing: string | null
+  /** What it is being handed; only read when `implementing` is set. */
+  intent: HandoffIntent
+  /** True in the round after that one, for everybody speaking in it. */
+  reviewing: boolean
+}
 
 /** One turn that is in flight right now. Read by the tests and by S2.4. */
 export interface ActiveTurn {
@@ -221,7 +253,8 @@ export class ChatRunner {
    */
   #materialsNoticed = false
   /**
-   * The executor a `handoff()` call scheduled, until `#loop` picks it up.
+   * The hand-off a `handoff()` call scheduled, until `#loop` picks it up: which
+   * executor, and which of the two things it is being asked for (S5.12).
    *
    * A field rather than a message on `#pending`, because the two rounds a
    * hand-off schedules are not what a user message schedules: the executor
@@ -229,7 +262,7 @@ export class ChatRunner {
    * review by everybody else. Consumed at the top of the run, so the restart in
    * `#start`'s `finally` cannot replay it.
    */
-  #handoffTo: string | null = null
+  #handoff: { agentId: string; intent: HandoffIntent } | null = null
 
   constructor(ctx: AppContext, chatId: string, options: ChatRunnerOptions = {}) {
     this.#ctx = ctx
@@ -325,16 +358,28 @@ export class ChatRunner {
    *   `@` mechanics resume — a reviewer that writes `@Hands` starts another
    *   executor round — and `maxAutoRounds` caps that chain as it always does.
    *
-   * Refused with `validation` in the three states the button is disabled in, so
+   * `intent` (S5.12) is the fourth decision and the only one the renderer makes:
+   * `'implement'` — the default, and S5.6 unchanged — or `'deliver'`, the "Write
+   * the deliverable" action, which stores a different notice and briefs the
+   * executor to write the `document` goal's file instead of implementing the
+   * conclusion. Everything else on this path is identical, which is why it is an
+   * argument rather than a second method: the executor is chosen by the same
+   * rule, the same message shape is stored, and the same two rounds run.
+   *
+   * Refused with `validation` in the four states the buttons are disabled in, so
    * a stale window, a second client or a folder deleted since the last render
    * meets the same rule the UI shows.
    */
-  async handoff(input: { chatId: string }): Promise<Message> {
+  async handoff(input: { chatId: string; intent?: HandoffIntent }): Promise<Message> {
     if (input.chatId !== this.chatId) {
       throw validation('chat.handoff reached the runner of a different chat', {
         expected: this.chatId,
         received: input.chatId
       })
+    }
+    const intent: HandoffIntent = input.intent ?? 'implement'
+    if (!HANDOFF_INTENTS.includes(intent)) {
+      throw validation(`Unknown hand-off intent: ${String(input.intent)}`)
     }
     // `not_found` for a chat that is gone, before anything else is read.
     const chat = this.#ctx.repos.chats.get(this.chatId, this.#ctx.userId)
@@ -352,6 +397,17 @@ export class ChatRunner {
       throw validation('this chat has no executor member', { reason: 'handoff_no_executor' })
     }
 
+    // Before the run check, so the two configuration mistakes are both reported
+    // while they can be fixed and the transient one is reported last: a user
+    // whose chat has no deliverable *and* is running should be told about the
+    // deliverable, which is the one that will still be true in a minute.
+    const deliverable = chat.goal?.kind === 'document' ? chat.goal.deliverable : undefined
+    if (intent === 'deliver' && (typeof deliverable !== 'string' || deliverable.length === 0)) {
+      throw validation('this chat has no deliverable to write', {
+        reason: 'handoff_no_deliverable'
+      })
+    }
+
     // A hand-off is not a message that can join a running chain: it schedules
     // two rounds of its own, and merging them into a round somebody else's
     // mentions already filled would make "the executor speaks alone" untrue.
@@ -359,12 +415,21 @@ export class ChatRunner {
       throw validation('a run is already active in this chat', { reason: 'handoff_run_active' })
     }
 
+    const notice =
+      intent === 'deliver'
+        ? {
+            type: 'system-notice' as const,
+            key: NOTICE_HANDOFF_DELIVER,
+            params: { agent: executor.name, path: deliverable as string }
+          }
+        : { type: 'system-notice' as const, key: NOTICE_HANDOFF, params: { agent: executor.name } }
+
     const message = this.#ctx.repos.messages.create(
       {
         chatId: chat.id,
         senderType: 'user',
         senderId: this.#ctx.userId,
-        parts: [{ type: 'system-notice', key: NOTICE_HANDOFF, params: { agent: executor.name } }],
+        parts: [notice],
         status: 'done',
         round: 0,
         mentions: [executor.id]
@@ -373,7 +438,7 @@ export class ChatRunner {
     )
     this.#emit({ type: 'message.created', message })
 
-    this.#handoffTo = executor.id
+    this.#handoff = { agentId: executor.id, intent }
     this.#start()
     return message
   }
@@ -439,8 +504,8 @@ export class ChatRunner {
      * where a message lands as the loop ends — cannot hand the same chat to its
      * executor twice.
      */
-    const handoffTo = this.#takeHandoff()
-    let handoffStage: 'executor' | 'review' | 'done' = handoffTo ? 'executor' : 'done'
+    const handoff = this.#takeHandoff()
+    let handoffStage: 'executor' | 'review' | 'done' = handoff ? 'executor' : 'done'
     /** What the round that just ended scheduled. */
     let carried: RoundPlan = EMPTY_PLAN
     let chat: Chat | null = null
@@ -486,15 +551,19 @@ export class ChatRunner {
         //
         // `implementing` is the agent that is being handed the work *this*
         // round; it is what extends its briefing (see `#runRound`), and it is
-        // null in the review round and in every ordinary run.
+        // null in the review round and in every ordinary run. `reviewing` is the
+        // other half of the same fact (S5.12): in the round after it, everybody
+        // who speaks is reading what the executor changed, and is told so.
         let implementing: string | null = null
-        if (handoffTo !== null && handoffStage !== 'done') {
+        let reviewing = false
+        if (handoff !== null && handoffStage !== 'done') {
           if (handoffStage === 'executor') {
-            implementing = handoffTo
-            plan = mergePlans(memberIds, planFromHandoff(memberIds, handoffTo), plan)
+            implementing = handoff.agentId
+            plan = mergePlans(memberIds, planFromHandoff(memberIds, handoff.agentId), plan)
             handoffStage = 'review'
           } else {
-            plan = mergePlans(memberIds, planFromReview(memberIds, handoffTo), plan)
+            reviewing = true
+            plan = mergePlans(memberIds, planFromReview(memberIds, handoff.agentId), plan)
             handoffStage = 'done'
           }
         }
@@ -537,14 +606,11 @@ export class ChatRunner {
         const speakers = plan.speakers
           .map((id) => members.find((member) => member.id === id))
           .filter((member): member is Agent => member !== undefined)
-        const outcomes = await this.#runRound(
-          chat,
-          members,
-          speakers,
-          plan,
-          controller.signal,
-          implementing
-        )
+        const outcomes = await this.#runRound(chat, members, speakers, plan, controller.signal, {
+          implementing,
+          intent: handoff?.intent ?? 'implement',
+          reviewing
+        })
         this.#noticeTruncation(chat, members, outcomes)
         this.#noticeMaterials(chat, members, outcomes)
 
@@ -605,8 +671,8 @@ export class ChatRunner {
     speakers: Agent[],
     plan: RoundPlan,
     signal: AbortSignal,
-    /** The executor being handed the work this round, or `null` (S5.6). */
-    implementing: string | null = null
+    /** Which round of a hand-off this is, if it is one (S5.6, S5.12). */
+    stage: HandoffStage = { implementing: null, intent: 'implement', reviewing: false }
   ): Promise<TurnOutcome[]> {
     const round = this.#round
     const parallel = chat.settings.speaking === 'parallel'
@@ -627,9 +693,13 @@ export class ChatRunner {
           signal,
           ...(plan.inReplyTo[agent.id] ? { inReplyTo: plan.inReplyTo[agent.id] } : {}),
           // Only the agent the work was handed to, and only in that round: the
-          // extra briefing tells it to implement the conclusion above rather
-          // than re-open the discussion, which is wrong advice for a reviewer.
-          ...(implementing === agent.id ? { handoff: true } : {}),
+          // extra briefing tells it to implement the conclusion above — or to
+          // write the deliverable (S5.12) — rather than re-open the discussion,
+          // which is wrong advice for a reviewer.
+          ...(stage.implementing === agent.id ? { handoff: stage.intent } : {}),
+          // …and the round after that one, where everybody who speaks is reading
+          // what it changed and is told to judge it against the chat's goal.
+          ...(stage.reviewing ? { reviewing: true } : {}),
           ...(snapshot ? { history: snapshot } : {}),
           ...(this.#options.createModel ? { createModel: this.#options.createModel } : {}),
           // The turn's own events pass straight through; the wrapper only picks
@@ -818,10 +888,10 @@ export class ChatRunner {
   }
 
   /** Takes the pending hand-off, if there is one, and forgets it. */
-  #takeHandoff(): string | null {
-    const executorId = this.#handoffTo
-    this.#handoffTo = null
-    return executorId
+  #takeHandoff(): { agentId: string; intent: HandoffIntent } | null {
+    const handoff = this.#handoff
+    this.#handoff = null
+    return handoff
   }
 
   /** Empties the pending list and returns what was in it. */
@@ -931,7 +1001,7 @@ export class ChatRunnerRegistry {
   }
 
   /** Hands a chat to its executor and starts the implement/review run (S5.6). */
-  handoff(input: { chatId: string }): Promise<Message> {
+  handoff(input: { chatId: string; intent?: HandoffIntent }): Promise<Message> {
     return this.for(input.chatId).handoff(input)
   }
 

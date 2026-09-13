@@ -317,6 +317,24 @@ export interface ChatGoalStatus {
   delivered: boolean
 }
 
+/**
+ * What the user is handing the executor (S5.12).
+ *
+ * One `chat.handoff` with an argument rather than two methods, because the two
+ * differ in **one sentence of the briefing and one notice key** and in nothing
+ * else: the same executor is chosen by the same rule, the same message shape is
+ * stored, and the same two staged rounds run. A second method would have been
+ * `handoff()` copied for its last paragraph.
+ *
+ * - `implement` — S5.6's hand-off: build the conclusion the group reached.
+ * - `deliver` — the "Write the deliverable" action: write the `document` goal's
+ *   file now. Refused (`handoff_no_deliverable`) on a chat whose goal is not a
+ *   `document` with a deliverable, because there would be no file to name.
+ */
+export const HANDOFF_INTENTS = ['implement', 'deliver'] as const
+
+export type HandoffIntent = (typeof HANDOFF_INTENTS)[number]
+
 export interface Chat extends EntityBase {
   title: string
   /**
@@ -780,6 +798,8 @@ export const VALIDATION_REASONS = [
   'handoff_no_executor',
   /** `chat.handoff` while a run of that chat is still going (S5.6). */
   'handoff_run_active',
+  /** `chat.handoff` with `intent: 'deliver'` on a chat with no deliverable (S5.12). */
+  'handoff_no_deliverable',
   /** `system.openInEditor` was given a path that is not absolute (S5.7). */
   'editor_path_not_absolute',
   /** `system.openInEditor` was given a path outside the chat's folder (S5.7). */

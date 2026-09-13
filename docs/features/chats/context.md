@@ -69,7 +69,8 @@ can hold a real conversation and still holds it after a restart.
 | The executor's file, shell and git tools, the permission **gate** and the `DiffPart`s the backend appends | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md). This feature owns the folder they are confined to and the three surfaces that draw their results — not what they may do |
 | The wording of the goal in a system prompt, in either language, and the hand-off line that names the deliverable | [`agent-turn`](../agent-turn/context.md) and [`executor`](../executor/context.md), S5.10. This feature owns the goal as **data** and as a **control**; they own what a model is told about it |
 | Placing a goal's `materials` in every member's context, the workspace briefing, and the read-only tools every member now gets | [`agent-turn`](../agent-turn/context.md) and [`executor`](../executor/context.md), S5.11 `[x]`. This feature records the materials, validates that they exist inside `workdir`, and lists them in the panel; what a model is shown of them, and in what order, is theirs |
-| Flipping the chip and appending a `FileRefPart` when an executor turn produces the deliverable | S5.12. S5.10's chip is refreshed when the chat changes, which is enough for a file created by hand or by any other means |
+| Appending a `FileRefPart` when an executor turn produces the deliverable, and what the executor is told to write | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md), S5.12. This feature owns the query the chip reads and the moments the renderer asks it |
+| Scheduling the hand-off either control starts, and the four rules that refuse it | [`orchestration`](../orchestration/context.md), S5.6 / S5.12. Both controls are drawn on this feature's page and neither is this feature's: they start a run |
 | Opening a `file-ref` chip, a path in the body text, a diff header or a file tool card in the editor | [`editor`](../editor/context.md), S5.7 `[x]`. It adds behaviour to components this feature owns; the rules it follows — the path detector, the confinement, the `AppSettings.editor` choice — are written up there |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
 | Virtualized message list, upward paging | S2.5 |
@@ -143,10 +144,14 @@ the next round boundary rather than mid-turn.
 - Whether the chat should offer to bind the folder when an executor joins a chat
   that has none. Today the two are independent and the user does both by hand.
 - Whether `chats.goalStatus` should be pushed rather than polled. Today the
-  renderer re-asks when the chat is opened and on every `chat.updated`, so a file
-  written by something that is not this app is noticed only at the next such
-  moment. S5.12 makes an executor turn one of them; a filesystem watcher would
-  make it immediate and is deliberately not in S5.10.
+  renderer re-asks when the chat is opened, on every `chat.updated`, at every
+  round boundary and at the end of a run (S5.12 added the last two, which is what
+  makes an executor turn flip the chip), so a file written by something that is
+  not this app is noticed only at the next such moment. A filesystem watcher
+  would make it immediate and is deliberately not in Phase 5. Because the query
+  is now asked far more often, `loadGoalStatus` writes **nothing** when the
+  answer is unchanged: a fresh object for an unchanged fact re-rendered the whole
+  chat page in the middle of a streaming reply.
 - Whether a `discussion` goal should be allowed to carry materials at all. It
   may, as long as the chat has a folder, and since S5.11 that is a useful
   combination rather than an inert one: a discussion grounded in three documents

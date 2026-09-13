@@ -43,6 +43,7 @@
  */
 import { existsSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import type { ChatGoal } from '@shared/types'
 import { validation } from '../errors'
 
 /** A path the executor is allowed to touch. */
@@ -123,4 +124,30 @@ export function resolveInWorkdir(workdir: string, input: string | undefined): Re
 
   const rel = relative(root, target)
   return { absolute: target, relative: rel.length === 0 ? '.' : rel }
+}
+
+/**
+ * Where a `document` goal's deliverable is, as one absolute path, or `null`
+ * (S5.10, S5.12).
+ *
+ * One function for the two places that ask. `chats.goalStatus` asks so the
+ * header chip knows whether to say "delivered"; an executor turn asks so it can
+ * tell whether the file it was handed the chat to produce has appeared. Two
+ * spellings of `join(workdir, deliverable)` would be two chances for the chip
+ * and the transcript to disagree about which file the goal names.
+ *
+ * `join` rather than `resolveInWorkdir`, deliberately and in both callers: the
+ * path was confined by `assertGoal` when the user saved it, and neither caller
+ * is about to *touch* the file — one wants to know whether it exists, the other
+ * prints it. A folder that has since been renamed or unmounted must answer "not
+ * there" rather than throw at a chip that only wanted to know whether to say so.
+ */
+export function deliverablePath(
+  goal: ChatGoal | null | undefined,
+  workdir: string | null | undefined
+): string | null {
+  if (!goal || goal.kind !== 'document') return null
+  if (typeof goal.deliverable !== 'string' || goal.deliverable.trim().length === 0) return null
+  if (typeof workdir !== 'string' || workdir.trim().length === 0) return null
+  return join(workdir, goal.deliverable)
 }

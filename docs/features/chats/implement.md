@@ -144,14 +144,15 @@ a backend rejection is reported: the same three store fields, a
 A materials pick keeps what was inside and reports what was not, rather than
 discarding the lot: a user who selected six files and one stray meant the six.
 
-### Is the deliverable there yet? (S5.10)
+### Is the deliverable there yet? (S5.10, S5.12)
 
 ```
-open a chat, or chat.updated for it
+open a chat, or chat.updated for it,
+or a round boundary, or the end of a run          (S5.12)
   → useChatsStore.loadGoalStatus(chatId)
   → invoke('chats.goalStatus', { chatId })
-  → join(workdir, goal.deliverable) + existsSync
-  → goalStatusByChat[chatId]
+  → deliverablePath(goal, workdir) + existsSync
+  → goalStatusByChat[chatId]                      (only if the answer changed)
   → goalChipState(goal, status) → the header chip
 ```
 
@@ -159,8 +160,25 @@ A **query**, not a column. Whether a file exists is a fact about the filesystem,
 so a stored boolean would be wrong the moment anything created, moved or deleted
 it — including something that is not this app — and the same reasoning already
 keeps the member count off `Chat`. It is re-asked whenever the chat row changes,
-which covers every edit the panel makes; S5.12 is what makes an executor turn
-one of those moments too.
+which covers every edit the panel makes.
+
+S5.12 adds the two moments an **executor turn** can have written the deliverable.
+A round boundary is what catches a hand-off — the executor writes in a round of
+its own and the review round starts the moment it finishes, so the chip flips
+while the reviewers are still reading — and the end of the run catches the rest,
+including a hand-off with nobody to review it. In `chats-page.tsx` that is two
+extra dependencies on one effect (`running` and the active round).
+
+Asking far more often made one thing matter that did not before: **an unchanged
+answer must not write**. `loadGoalStatus` compares the two fields and returns an
+empty patch when they match, because a fresh `ChatGoalStatus` object for a fact
+that has not changed re-renders the chat page — message list included — in the
+middle of a reply that is still streaming, and `react-virtuoso` re-measures the
+row the streaming cursor is in.
+
+`deliverablePath` (`executor/paths.ts`) is shared with the executor turn that
+appends the deliverable's `FileRefPart`, so the header chip and the chip in the
+transcript cannot come to name two different files.
 
 ### Adding an executor member (S5.2)
 
@@ -368,6 +386,7 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection; `setWorkdir` binding and clearing, the rejection's `reason` kept in `errorDetails`, and `chooseWorkdir` writing nothing at all when the dialog is cancelled; and S5.10's `setGoal` (the whole object, `null` to remove, the refusal's reason kept), `pickDeliverable` (converted, refused outside, nothing left behind on cancel), `pickMaterials` (the ones inside kept and the stray reported, `[]` on cancel) and a deleted chat forgetting its goal status |
 | `src/renderer/src/lib/workdir.test.ts` | `folderName`: the last segment, trailing separators, Windows separators, the filesystem root, a bare name, a name with a dot or a space. S5.10 adds `relativeToWorkdir`: the conversion, a path outside the folder, a sibling whose name starts with the same characters, the folder itself, no folder bound, and both separators |
 | `src/renderer/src/components/chat/goal.test.ts` | `goalChipState` (S5.10): nothing without a goal, the kind for `discussion` and `codebase` (including a stale `document` status arriving for one), the file name and path for a `document`, openable **only** once delivered, and not delivered while the query has not answered |
+| `src/renderer/src/stores/chats.test.ts` (S5.12) | `loadGoalStatus` keeping the **same object** when the answer has not changed, and writing a new one the moment `delivered` really flips |
 | `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker` (S5.6): the enabled case, each of the three refusals, a blank `workdir`, and the order the rules are applied in when more than one is broken |
 | `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` and every `ValidationReason` resolving to distinct real copy; `validationReasonOf` narrowing a known reason and ignoring everything else; `translateFailure` preferring a reason only under `validation` |
 | `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
@@ -440,10 +459,14 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   material deleted after it was saved is dropped from the prompt silently, while
   the panel still lists it.
 - **"Delivered" is polled, not watched.** `chats.goalStatus` runs when a chat is
-  opened and on every `chat.updated` for it, so a deliverable written by
-  something that is not this app is noticed at the next such moment rather than
-  immediately. A filesystem watcher is deliberately not in S5.10; S5.12 adds the
-  executor turn as one more moment.
+  opened, on every `chat.updated` for it, at every round boundary and at the end
+  of a run (S5.12), so a deliverable written by something that is not this app is
+  noticed at the next such moment rather than immediately. A filesystem watcher
+  is deliberately not in Phase 5.
+- **The chip only flips for the chat that is open.** The query is asked for
+  `selectedId`, so a hand-off finishing in a chat the user is not looking at
+  leaves that chat's chip stale until they open it — which is the same moment it
+  would have been asked anyway.
 - **The Goal block's two dialogs are not driven end to end.** They are native
   modals, like the folder picker, so `e2e/executor.spec.ts` writes the goal
   through the backend client and asserts what the UI does with it. The

@@ -70,6 +70,19 @@ that owns the `AbortController` the Stop button reaches.
 | **The `handoff` notice key**, on a `user` message rather than a `system` one | `NOTICE_HANDOFF` |
 | **Three `ValidationReason`s** — `handoff_no_workdir`, `handoff_no_executor`, `handoff_run_active` — and the button that reads the same three rules before offering the action | `shared/types.ts`, `components/chat/handoff.ts` |
 
+## What S5.12 added
+
+| Change | Where |
+|---|---|
+| **`intent` on the hand-off** — `implement` (the default, S5.6 unchanged) or `deliver` — carried on `chat.handoff` and stored on `#handoff` beside the executor id | `chat-runner.ts`, `shared/types.ts` |
+| **A second notice key**, `handoffDeliver`, naming the agent *and* the deliverable's relative path | `NOTICE_HANDOFF_DELIVER`, `agents/history.ts` |
+| **A fourth `ValidationReason`**, `handoff_no_deliverable`, refused after the folder and the executor and **before** the run check, so the configuration mistake is reported ahead of the transient one | `shared/types.ts`, `components/chat/handoff.ts` |
+| **`reviewing`**, the other half of `implementing`: true for every speaker of the review round, and the only thing that sets `AgentTurnOptions.reviewing` | `#runRound`, [`agent-turn`](../agent-turn/context.md) |
+
+The scheduling is **untouched**: the same two staged plans, the same merge, the
+same cap. An intent changes one paragraph of one prompt and one stored key; a
+review round changes one section of the prompts of the round after it.
+
 ## Out of scope (permanently, for this feature)
 
 | Not here | Owned by |

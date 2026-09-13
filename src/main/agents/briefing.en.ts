@@ -50,7 +50,36 @@ function goalSection(goal: ChatGoal): string[] {
   return lines
 }
 
-export const buildEnglishBriefing: BriefingBuilder = ({ self, members, memoryEnabled, goal }) => {
+/**
+ * The `This round is a review` block (S5.12), or nothing.
+ *
+ * It comes **after** the goal, and that placement is the whole design: the
+ * reviewer's question is "does what the executor just did satisfy the goal", and
+ * a briefing that asked it a page above the goal would be two facts the model has
+ * to put together itself. With a goal it says so; without one — a hand-off in a
+ * chat that never set a goal is perfectly legal — it falls back to the
+ * conclusion the transcript holds, because "judge it against the goal above"
+ * would then point at nothing.
+ */
+function reviewSection(goal: ChatGoal | null): string[] {
+  return [
+    '',
+    'This round is a review:',
+    '- The executor of this chat has just changed files in the working directory. Its message above says what it changed, and the diff of each file is part of that message.',
+    goal
+      ? '- Read what it changed and judge it against the goal of this chat, not against what you would have written yourself: say whether it does what the goal asks, and name the file where it does not.'
+      : '- Read what it changed and judge it against the conclusion the group reached above, not against what you would have written yourself: say whether it does what was agreed, and name the file where it does not.',
+    '- If something is missing or wrong, say so precisely and mention the executor with @ so it can fix it. If it is right, say so in one sentence instead of restating it.'
+  ]
+}
+
+export const buildEnglishBriefing: BriefingBuilder = ({
+  self,
+  members,
+  memoryEnabled,
+  goal,
+  reviewing
+}) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat rather than a made-up
   // one: a model copies the example it is given, and a concrete name is the
@@ -85,6 +114,10 @@ export const buildEnglishBriefing: BriefingBuilder = ({ self, members, memoryEna
     // Last, and deliberately so: the rules say how to behave, and this says what
     // for. The thing a model should still be following at the end of a long
     // prompt is the one it was given a chat for.
-    ...(goal ? goalSection(goal) : [])
+    ...(goal ? goalSection(goal) : []),
+    // S5.12, and after the goal for the reason `reviewSection` gives: it is the
+    // only block here that is about *this round* rather than about the chat, so
+    // it is the last thing the model reads before the transcript.
+    ...(reviewing ? reviewSection(goal) : [])
   ].join('\n')
 }

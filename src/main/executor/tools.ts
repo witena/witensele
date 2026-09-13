@@ -42,7 +42,7 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, type Dir
 import { dirname, join, relative } from 'node:path'
 import { createPatch } from 'diff'
 import { jsonSchema, tool, type ToolSet } from 'ai'
-import type { ChatGoal } from '@shared/types'
+import type { ChatGoal, HandoffIntent } from '@shared/types'
 import { isBackendFailure, validation } from '../errors'
 import { resolveInWorkdir, realWorkdir, type ResolvedPath } from './paths'
 import type { PermissionGate, PermissionOutcome } from './permissions'
@@ -183,24 +183,40 @@ export const HANDOFF_BRIEFING = [
 ].join(' ')
 
 /**
- * The `Executor` section of the system prompt.
+ * The paragraph that replaces `HANDOFF_BRIEFING` for the "Write the deliverable"
+ * action (S5.12).
  *
- * Model-facing text, so it is English only and not an i18n key — the same rule
- * the group briefing and the skills section follow. Three things have to be in
- * it or the executor misbehaves in a way that looks like a bug: the folder it is
- * bound to, what each tool is for, and what to do at the end (summarize, ask for
- * review) — PLAN.md's review loop only works if the executor closes its turn
- * with something the others can review.
+ * The two hand-off intents differ in what the executor is being asked to
+ * *produce*, and that is the whole difference. `HANDOFF_BRIEFING` says
+ * "implement the conclusion", which is the right instruction for a chat that
+ * argued its way to a design and wrong for one whose goal has been a single file
+ * since before anybody spoke — a model told to implement a conclusion about a
+ * report tends to write the report into the transcript.
  *
- * `handoff` appends `HANDOFF_BRIEFING` for the one turn "Hand to executor"
- * schedules. It is a *suffix* rather than a different section so the folder and
- * the tool list are described once, in one order, in both situations. Since
- * S5.10 that suffix also names the chat's deliverable or its change
- * (`goalHandoffLine`), which is the difference between "implement the
- * conclusion" and "write `docs/report.md`".
+ * Three things it has to say, and each of them is a failure that really happens
+ * with a small model: write the **file** (not a message about the file), create
+ * the parent folders (S5.10 lets a deliverable name a folder that does not exist
+ * yet, which is the common case), and end with a summary of exactly **two
+ * lines** — the path, then one sentence — because the review round that follows
+ * needs the path and does not need the document pasted in underneath it.
+ *
+ * The path itself is not here: `goalHandoffLine` names it, and it is appended to
+ * whichever of the two paragraphs applies.
  */
+export const DELIVER_BRIEFING = [
+  'The discussion above has finished and the user has asked you to write the deliverable of this chat now.',
+  'Write the file itself, creating any parent folder that does not exist yet, from the conclusion the group reached above: do not re-open the debate, do not ask which option to take, and do not reply with the document in the chat instead of writing it.',
+  'When the file is written, finish your message with a summary of exactly two lines: the first the path you wrote, the second one sentence saying what it now contains.'
+].join(' ')
+
+/** The briefing paragraph for one hand-off intent (S5.6, S5.12). */
+export function handoffBriefing(intent: HandoffIntent): string {
+  return intent === 'deliver' ? DELIVER_BRIEFING : HANDOFF_BRIEFING
+}
+
 /**
- * The one sentence the hand-off briefing gains from the chat's goal (S5.10).
+ * The one sentence the hand-off briefing gains from the chat's goal (S5.10),
+ * plus — for a `codebase` goal — the branch it is being made on (S5.12).
  *
  * `HANDOFF_BRIEFING` says "implement the conclusion the group reached", which is
  * exactly right for a discussion and one sentence short of useful when the chat
@@ -213,23 +229,63 @@ export const HANDOFF_BRIEFING = [
  * group briefing this same prompt carries, and a model given the same
  * instruction twice in two wordings follows neither reliably. So this is the
  * pointer, not the brief.
+ *
+ * The **branch** is the one fact in it that is not in the goal and not in the
+ * transcript: the user chose it outside the app, between two hand-offs perhaps,
+ * and an executor that mentions the wrong one in its summary sends the reviewers
+ * to look at a diff that is not there. `null` when the folder is not a
+ * repository, or when `git` could not answer inside `gitInfo`'s timeout, in
+ * which case the sentence is simply left out rather than guessed at.
  */
-export function goalHandoffLine(goal: ChatGoal | null | undefined): string | null {
+export function goalHandoffLine(
+  goal: ChatGoal | null | undefined,
+  branch: string | null = null
+): string | null {
   if (!goal) return null
   if (goal.kind === 'document' && goal.deliverable) {
     return `The goal of this chat is the file ${goal.deliverable}: write it, creating its parent folders if they do not exist, and report the path when you are done.`
   }
   if (goal.kind === 'codebase') {
-    return `The goal of this chat is a change to the code in this working directory: ${goal.description.trim()} Make that change now.`
+    return [
+      `The goal of this chat is a change to the code in this working directory: ${goal.description.trim()} Make that change now.`,
+      ...(branch ? [`The working tree is on branch ${branch}; make the change there and do not switch branches.`] : []),
+      'Finish with a summary that lists the path of every file you changed, so the others can review the change against that goal.'
+    ].join(' ')
   }
   return null
 }
 
-export function buildExecutorSection(
-  workdir: string,
-  handoff = false,
-  goal: ChatGoal | null = null
-): string {
+/** What `buildExecutorSection` needs to know beyond the folder. */
+export interface ExecutorSectionInput {
+  /** The chat's working directory, already resolved. */
+  workdir: string
+  /**
+   * The hand-off this turn is, or `null` for an ordinary executor turn (S5.6).
+   *
+   * A suffix rather than a section of its own, so the folder and the tool list
+   * are described once, in one order, in all three situations.
+   */
+  handoff?: HandoffIntent | null
+  /** The chat's goal, which names the deliverable or the change (S5.10). */
+  goal?: ChatGoal | null
+  /** The branch a `codebase` hand-off is made on, when `git` knows one (S5.12). */
+  branch?: string | null
+}
+
+/**
+ * The `Executor` section of the system prompt.
+ *
+ * Model-facing text, so it is English only and not an i18n key — the same rule
+ * the group briefing and the skills section follow. Three things have to be in
+ * it or the executor misbehaves in a way that looks like a bug: the folder it is
+ * bound to, what each tool is for, and what to do at the end (summarize, ask for
+ * review) — PLAN.md's review loop only works if the executor closes its turn
+ * with something the others can review.
+ */
+export function buildExecutorSection(input: ExecutorSectionInput): string {
+  const { workdir } = input
+  const handoff = input.handoff ?? null
+  const goal = input.goal ?? null
   return [
     'You are the executor of this chat: the one member allowed to change anything. Your working directory is:',
     '',
@@ -249,7 +305,14 @@ export function buildExecutorSection(
     `${WRITE_FILE_TOOL}, ${EDIT_FILE_TOOL} and ${RUN_COMMAND_TOOL} pause until the user allows or declines the call. A declined call is an answer, not a failure: do not retry it, say what you wanted to do and why.`,
     '',
     `Read a file before you edit it, prefer ${EDIT_FILE_TOOL} over rewriting a whole file, and make the smallest change that does the job. When you are finished, end your message with a short summary of every file you changed and what it now does, and ask the others to review it.`,
-    ...(handoff ? ['', [HANDOFF_BRIEFING, goalHandoffLine(goal)].filter(Boolean).join(' ')] : [])
+    ...(handoff
+      ? [
+          '',
+          [handoffBriefing(handoff), goalHandoffLine(goal, input.branch ?? null)]
+            .filter(Boolean)
+            .join(' ')
+        ]
+      : [])
   ].join('\n')
 }
 

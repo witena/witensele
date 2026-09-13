@@ -176,17 +176,25 @@ refusing one that fell outside the folder — no dialog on any platform this run
 on can be confined to a directory (see [frontend.md](./frontend.md)).
 
 `chats.goalStatus` is separate from all of this because it asks the filesystem
-rather than validating a request: `join(workdir, deliverable)` plus `existsSync`.
-It uses `join` rather than `resolveInWorkdir` on purpose — the path was confined
-when the goal was saved, and a folder that has since gone should answer "not
-delivered" to a chip that only wants to know whether to say so, not throw.
+rather than validating a request: `deliverablePath(goal, workdir)` plus
+`existsSync`. That helper lives in `executor/paths.ts` and is shared, since
+S5.12, with the executor turn that appends the deliverable's `FileRefPart`, so
+the chip in the header and the chip in the transcript cannot come to name two
+different files. It uses `join` rather than `resolveInWorkdir` on purpose — the
+path was confined when the goal was saved, and a folder that has since gone
+should answer "not delivered" to a chip that only wants to know whether to say
+so, not throw.
 
-### Handing a chat to its executor (S5.6)
+### Handing a chat to its executor (S5.6, S5.12)
 
-`chat.handoff` is three lines in this module and the rest is
+`chat.handoff` is a few lines in this module and the rest is
 [`orchestration`](../orchestration/backend.md)'s, which is the same division
 `chat.send` follows: this feature owns the chat record and its columns, and the
-runner owns what a run does with them. The three refusals are
+runner owns what a run does with them. The one thing this module checks is the
+**shape** of S5.12's `intent` — it is either absent or one of `HANDOFF_INTENTS` —
+because "is this a well-formed request" is the handler layer's question, while
+"can this chat satisfy it" needs the chat, its members and whether a run is
+going, which only the runner holds. The four refusals are
 `ValidationReason`s for S5.2's reason — the seven `BackendErrorCode`s are a
 failure taxonomy, and "the request was rejected as invalid" cannot tell a user
 whether to pick a folder or to add a member.

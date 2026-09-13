@@ -90,6 +90,8 @@
     "goalChipTitleDelivered": "{{path}} 已经写好了,点击打开。",
     "handoff": "交给执行者",
     "handoffTitle": "让执行者在本对话的目录里实现上面讨论出的结论",
+    "writeDeliverable": "写出产出文件",
+    "writeDeliverableTitle": "让执行者现在按大家讨论出的结论，写出本对话的产出文件",
     "actions": {
       "title": "动作",
       "summarize": "让某位智能体汇总各方观点",
@@ -425,6 +427,7 @@
     "handoff_no_workdir": "先给这个对话选一个工作目录，再交给执行者。",
     "handoff_no_executor": "先往这个对话里加一位执行者，再交给它。",
     "handoff_run_active": "这个对话还在运行，等它结束或先点停止。",
+    "handoff_no_deliverable": "这个对话还没有产出文件。先给它设一个“文档”目标并填上要写的文件。",
     "editor_path_not_absolute": "该引用不是完整路径，无法打开。",
     "editor_path_outside_workdir": "该文件在本群聊的文件夹之外，已拒绝打开。",
     "goal_description_empty": "目标需要一句描述。",
@@ -448,6 +451,7 @@
     "toolsUnsupported": "{{agent}} 的模型不支持工具调用,这条回复没有使用工具",
     "contextTruncated": "{{agent}} 的上下文窗口装不下整段对话，最早的 {{dropped}} 条消息已从它的视野中省略",
     "materialsTruncated": "{{agent}} 的上下文窗口装不下全部材料，其中 {{omitted}} 项只列出了路径，它仍可用 read_file 读取",
-    "handoff": "已交给 {{agent}}：实现大家讨论出的结论，并汇报改了什么"
+    "handoff": "已交给 {{agent}}：实现大家讨论出的结论，并汇报改了什么",
+    "handoffDeliver": "已让 {{agent}} 现在按大家讨论出的结论写出 {{path}}"
   }
 }

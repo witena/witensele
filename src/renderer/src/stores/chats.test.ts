@@ -316,6 +316,33 @@ describe('chats store', () => {
     })
   })
 
+  it('keeps the same object when the answer has not changed (S5.12)', async () => {
+    // Since an executor turn became one of the moments this is asked, it is
+    // asked several times per hand-off and almost always gets the same answer.
+    // A fresh object for an unchanged fact would re-render the whole chat page —
+    // message list included — in the middle of a reply that is still streaming.
+    let answer = { deliverable: '/w/a.md', delivered: false }
+    setBackend({
+      invoke: (async () => answer) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().loadGoalStatus('a')
+    const first = useChatsStore.getState().goalStatusByChat.a
+    await useChatsStore.getState().loadGoalStatus('a')
+
+    expect(useChatsStore.getState().goalStatusByChat.a).toBe(first)
+
+    // …and it does write when the file really appears, which is the whole point.
+    answer = { deliverable: '/w/a.md', delivered: true }
+    await useChatsStore.getState().loadGoalStatus('a')
+
+    expect(useChatsStore.getState().goalStatusByChat.a).toEqual({
+      deliverable: '/w/a.md',
+      delivered: true
+    })
+  })
+
   it('sends null to remove the goal, which an emptied description does', async () => {
     const patches: unknown[] = []
     setBackend({

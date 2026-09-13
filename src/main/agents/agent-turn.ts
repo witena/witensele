@@ -76,7 +76,10 @@
  * When the stream is over, `diffPartsFrom` turns the patches those writes
  * returned into one `DiffPart` per file and appends them to the same message
  * (S5.5), so what an executor changed is a block in the transcript rather than a
- * field inside a tool result nobody expands.
+ * field inside a tool result nobody expands. `deliveredRef` adds one more part
+ * after them when the turn is the one that brought a `document` goal's
+ * deliverable into existence (S5.12): a `FileRefPart` the user can click to open
+ * the file the chat was for.
  *
  * ## Skills and memory (S3.2, S3.3)
  *
@@ -111,6 +114,7 @@
  * (carries `finishReason` and `totalUsage`, summed over every step), `abort` and
  * `error`. `stepCountIs` is exported by `ai` as an alias of `isStepCount`.
  */
+import { existsSync } from 'node:fs'
 import { stepCountIs, streamText, type LanguageModel, type LanguageModelUsage, type ToolSet } from 'ai'
 import type { BackendEvent } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
@@ -120,6 +124,8 @@ import type {
   Agent,
   Chat,
   DiffPart,
+  FileRefPart,
+  HandoffIntent,
   Message,
   MessagePart,
   MessageStatus,
@@ -140,7 +146,8 @@ import {
   READ_ONLY_EXECUTOR_TOOLS,
   WRITE_FILE_TOOL
 } from '../executor/tools'
-import { buildWorkspaceSection } from '../executor/workspace'
+import { deliverablePath } from '../executor/paths'
+import { buildWorkspaceSection, gitInfo, type GitInfo } from '../executor/workspace'
 import { toAiTools, type AgentTools, type ToolOrigin } from '../mcp/tools'
 import { buildMemorySection, buildMemoryTools } from '../memory/tools'
 import { scanSkills } from '../skills/loader'
@@ -232,16 +239,27 @@ export interface AgentTurnOptions {
    */
   history?: Message[]
   /**
-   * True for the one turn "Hand to executor" schedules (S5.6).
+   * Set for the one turn "Hand to executor" schedules (S5.6), and says which of
+   * the two hand-offs it is (S5.12).
    *
    * It only extends the executor's briefing — implement the conclusion above,
-   * do not re-open the debate, report the paths you touched — and reaches no
-   * other part of the turn. The runner sets it for the agent it handed the work
-   * to, in that round only: a reviewer told to "implement the conclusion" would
-   * be the wrong instruction, and an executor re-@'d later is being asked
-   * something specific rather than being handed the whole discussion again.
+   * or write the deliverable; either way do not re-open the debate and report
+   * the paths you touched — and reaches no other part of the turn. The runner
+   * sets it for the agent it handed the work to, in that round only: a reviewer
+   * told to "implement the conclusion" would be the wrong instruction, and an
+   * executor re-@'d later is being asked something specific rather than being
+   * handed the whole discussion again.
    */
-  handoff?: boolean
+  handoff?: HandoffIntent
+  /**
+   * True for the members of the review round a hand-off schedules (S5.12).
+   *
+   * It adds the review block to the group briefing — read what the executor
+   * changed and judge it against the goal — and nothing else. Never set for the
+   * executor: it is not reviewing its own work, and `planFromReview` leaves it
+   * out of the round in the first place.
+   */
+  reviewing?: boolean
   /** Aborting it stops the turn; the message ends as `error` / `'aborted'`. */
   signal: AbortSignal
   /** A model client built by the caller. Omitted, `createModel` builds one. */
@@ -380,6 +398,49 @@ export function diffPartsFrom(parts: readonly MessagePart[]): DiffPart[] {
 }
 
 /**
+ * The chip that says "here is the file this chat exists for", or `null` (S5.12).
+ *
+ * The rule is **the turn that delivered it, and only that turn**: the
+ * deliverable was not on disk when the turn started and is on disk now. Two
+ * alternatives were considered and both are worse.
+ *
+ * - *Every executor turn while the file exists* would put a chip on the turn
+ *   that fixed a typo in it and on the one that only read it, which reads as a
+ *   claim each of them produced the document. It is the argument `diffPartsFrom`
+ *   already makes about `git_diff`: a part attached to a turn is a statement
+ *   about what that turn did.
+ * - *The first executor turn in a chat whose deliverable exists* needs a scan of
+ *   the whole transcript for an earlier chip, and still cannot tell a file this
+ *   chat wrote from one that was already lying in the folder when it opened.
+ *
+ * So the state is sampled once at the top of the turn and once at the bottom,
+ * which costs two `existsSync` calls and says exactly what happened. The
+ * consequences are deliberate: a deliverable that already existed before the
+ * chat ever ran gets no chip (the header chip has said "delivered" since the
+ * chat was opened, so nothing is hidden), a rewrite of it gets no second chip
+ * (its `DiffPart` is the record of that), and a file deleted by hand and written
+ * again gets a new one, because that turn really did deliver it again.
+ *
+ * It is not conditional on the turn having *written* the file: the executor may
+ * have produced it with `run_command`, which returns no patch, and the question
+ * the chip answers is whether the deliverable is there, not which tool made it.
+ * A failed or stopped turn keeps its chip for the same reason it keeps its
+ * diffs — the file is on disk either way.
+ */
+export function deliveredRef(
+  /** Absolute path of the deliverable, or `null` when this turn has none. */
+  deliverable: string | null,
+  /** Whether it was already on disk when the turn started. */
+  existedBefore: boolean
+): FileRefPart | null {
+  if (deliverable === null || existedBefore) return null
+  if (!existsSync(deliverable)) return null
+  // No `line`: the chip names a file the turn produced, and line 1 of a document
+  // nobody has read is not a more precise place to open it at.
+  return { type: 'file-ref', path: deliverable }
+}
+
+/**
  * Appends to the last part of `kind`, or starts a new one — the exact rule
  * `MessageDelta` in `src/shared/events.ts` documents for the renderer, applied
  * here so the in-memory copy and the renderer's copy can never diverge.
@@ -456,14 +517,30 @@ export interface TurnPrompt {
  * `AgentTurnResult` without every test that asserts on the prompt having to
  * unwrap an object.
  */
+/** Which round this turn is, as far as the prompt is concerned (S5.6, S5.12). */
+export interface TurnStage {
+  /**
+   * The hand-off this turn is, when the runner handed the work to this agent.
+   *
+   * `null` — the default — is every ordinary turn, including an executor that a
+   * reviewer `@`-ed afterwards: that one is being asked something specific, not
+   * handed the whole discussion again.
+   */
+  handoff?: HandoffIntent | null
+  /** True for the members of a hand-off's review round (S5.12). */
+  reviewing?: boolean
+  /** Injectable for the tests; defaults to the real `git`. */
+  readGit?: (workdir: string) => GitInfo | null
+}
+
 export function buildTurnPrompt(
   ctx: AppContext,
   chat: Chat,
   agent: Agent,
   members: Agent[],
-  /** True for the executor's turn in a hand-off run (S5.6). */
-  handoff = false
+  stage: TurnStage = {}
 ): TurnPrompt {
+  const handoff = stage.handoff ?? null
   const language = resolveMainLanguage(ctx.repos.settings.get(ctx.userId).language)
   const briefing = buildGroupBriefing({
     language,
@@ -472,27 +549,46 @@ export function buildTurnPrompt(
     memoryEnabled: agent.memoryEnabled,
     // S5.10: every member is briefed with the chat's goal, executor or not —
     // what the group is for is not a fact about one role.
-    goal: chat.goal
+    goal: chat.goal,
+    // S5.12: and the reviewers of a hand-off are told that is what they are.
+    reviewing: stage.reviewing === true
   })
 
   const sections = [agent.systemPrompt.trim(), briefing]
 
   const executing = executorWorkdir(chat, agent, members)
+  const workspace = workspaceWorkdir(chat)
+  // One `git` probe per turn at most, and only for the goal that reads it. The
+  // hand-off line names the branch (S5.12) and the workspace section prints the
+  // status (S5.11); both come from the same `gitInfo`, and two `spawnSync` calls
+  // for one prompt is a real cost on a large repository — and a chance for the
+  // two halves of the same prompt to name two different branches.
+  const readGit = stage.readGit ?? gitInfo
+  const git = workspace !== null && chat.goal?.kind === 'codebase' ? readGit(workspace) : null
+
   if (executing) {
-    sections.push(buildExecutorSection(executing, handoff, chat.goal))
+    sections.push(
+      buildExecutorSection({
+        workdir: executing,
+        handoff,
+        goal: chat.goal,
+        branch: git?.branch ?? null
+      })
+    )
   }
 
   // S5.11: every member of a chat with a folder is shown the folder, executor or
   // not. The section is built once per turn, here, because `walkTree` touches
   // the disk and a turn that assembled it twice would be reading the same
   // hundreds of directory entries for the same prompt.
-  const workspace = workspaceWorkdir(chat)
   if (workspace) {
     sections.push(
       buildWorkspaceSection({
         workdir: workspace,
         goal: chat.goal,
-        executor: executing !== null
+        executor: executing !== null,
+        // The probe above, handed over rather than run again.
+        readGit: () => git
       })
     )
   }
@@ -529,9 +625,9 @@ export function buildSystemPrompt(
   chat: Chat,
   agent: Agent,
   members: Agent[],
-  handoff = false
+  stage: TurnStage = {}
 ): string {
-  return buildTurnPrompt(ctx, chat, agent, members, handoff).text
+  return buildTurnPrompt(ctx, chat, agent, members, stage).text
 }
 
 /**
@@ -827,6 +923,19 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     controller
   })
 
+  /**
+   * The deliverable of a `document` goal, for an **executor** turn (S5.12).
+   *
+   * Two facts are wanted and only one of them survives the turn, so both are
+   * taken here: where the file would be, and whether it was already there before
+   * this turn started. See `deliveredRef` at the bottom of the turn for the rule
+   * they feed.
+   */
+  const deliverable = executorWorkdir(chat, agent, members)
+    ? deliverablePath(chat.goal, chat.workdir)
+    : null
+  const deliveredBefore = deliverable !== null && existsSync(deliverable)
+
   const parts: MessagePart[] = []
   let usage: Usage | undefined
   let failure: string | undefined
@@ -891,7 +1000,10 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const agentsById = Object.fromEntries(members.map((member) => [member.id, member]))
     const origins = attached?.origins ?? {}
 
-    prompt ??= buildTurnPrompt(ctx, chat, agent, members, options.handoff === true)
+    prompt ??= buildTurnPrompt(ctx, chat, agent, members, {
+      handoff: options.handoff ?? null,
+      reviewing: options.reviewing === true
+    })
     const system = prompt.text
     materialsOmitted = prompt.materialsOmitted
     // Both history paths go through the budget: the sequential turn's fresh read
@@ -1044,6 +1156,12 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   // or failed afterwards, because the writes really happened and hiding them is
   // the one thing the transcript must never do.
   for (const diff of diffPartsFrom(parts)) onPart(diff)
+
+  // …and, when this is the turn that produced the file the chat exists for, a
+  // chip pointing at it (S5.12). After the diffs, because it is the conclusion
+  // they add up to.
+  const delivered = deliveredRef(deliverable, deliveredBefore)
+  if (delivered) onPart(delivered)
 
   // The supervisor's hard timeout and the user's Stop both arrive as an abort;
   // only the reason tells them apart, and they end in different statuses.

@@ -186,11 +186,21 @@ export function ChatsPage(): React.JSX.Element {
   // The goal's delivery state is a fact about the filesystem, so it is asked for
   // rather than stored: on every visit, and again whenever this chat changes —
   // which is what a `chat.updated` from a goal edit, a rename or a membership
-  // change already is. S5.12 is what makes an executor turn refresh it.
+  // change already is.
+  //
+  // S5.12 adds the two moments an **executor turn** can have written the
+  // deliverable: every round boundary, and the end of the run. A round boundary
+  // is what catches a hand-off — the executor writes in its own round and the
+  // review round starts the moment it is finished, so the chip flips while the
+  // reviewers are still reading — and the end of the run catches the rest,
+  // including a hand-off whose chat has nobody to review it. Polling at these
+  // points rather than watching the file is the choice S5.10 recorded; a
+  // filesystem watcher is in the Phase 6 backlog.
+  const activeRound = activeRun?.round ?? 0
   useEffect(() => {
     if (!selectedId) return
     void useChatsStore.getState().loadGoalStatus(selectedId)
-  }, [selectedId, selectedUpdatedAt])
+  }, [selectedId, selectedUpdatedAt, running, activeRound])
 
   // Usage is seeded from the backend on every visit too, and for the same kind of
   // reason: the summary covers the **whole** transcript while the messages store
@@ -594,6 +604,12 @@ export function ChatsPage(): React.JSX.Element {
             chatId={selectedId}
             members={members}
             onSend={(text) => void composer.current?.submitText(text)}
+            workdir={selected?.workdir}
+            goal={selected?.goal}
+            running={running}
+            onWriteDeliverable={(chatId) =>
+              void useRunStore.getState().handoff(chatId, 'deliver')
+            }
           />
         </div>
       </Column>

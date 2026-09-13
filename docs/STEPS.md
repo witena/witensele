@@ -1637,7 +1637,7 @@ nobody marked, with no permission card anywhere. The per-turn tree walk, the roo
 Phase 6 backlog. Docs: `docs/features/{executor,agent-turn,chats}/` (all four
 each) plus `docs/features/{orchestration,i18n}/`.
 
-### S5.12 Goal-aware delivery `[ ]`
+### S5.12 Goal-aware delivery `[x] (2026-09-13)`
 What: the goal changes what "done" means, and the app shows it.
 - `document`: after any executor turn, if the deliverable now exists, the
   turn's message gains a `FileRefPart` to it and the header chip flips to
@@ -1659,6 +1659,99 @@ What: the goal changes what "done" means, and the app shows it.
 Acceptance: the three kinds behave as the table in PLAN.md says; tests pass.
 Docs: `docs/features/orchestration/`, `docs/features/executor/`,
 `docs/features/chats/` (all four each).
+Done: the step is **one argument, one part and one prompt block**, and each of
+the three was the choice worth arguing about.
+
+`chat.handoff` takes an optional `intent` — `'implement'` (the default, S5.6
+unchanged) or `'deliver'` — rather than gaining a second method. The two differ
+in the notice key they store and the paragraph the executor's briefing gains, and
+in **nothing else**: the same executor is picked by the same rule, the same user
+message shape is stored, the same two staged rounds run, and `#loop` carries the
+intent beside the executor id without reading it. A `chat.deliver` would have
+been `handoff()` copied for the sake of its last paragraph, and the four refusals
+would then have had two orders to keep in step. `contracts.test.ts` pins the
+argument as optional, which is what lets the old button keep sending nothing:
+the backend's default is the one that decides what a plain hand-off means, and
+the renderer omits the field rather than spelling `'implement'` out. The fourth
+`ValidationReason`, `handoff_no_deliverable`, is checked **after** the folder and
+the executor and **before** the run — the transient rule is last, so a chat that
+is both running and has nothing to deliver is told about the deliverable, which
+is the one that will still be true in a minute. `handoffBlocker` grew the same
+argument rather than a `deliverBlocker` wrapper, for the same reason: a wrapper
+would have had its own idea of where the new rule goes.
+
+The `FileRefPart` rule is **the turn that delivered it, and only that turn**: the
+deliverable was not on disk when the turn started and is on disk now, sampled by
+two `existsSync` calls bracketing the stream. "Every executor turn while the file
+exists" would put a chip on the turn that fixed a typo in it, which is a claim
+that turn did not earn — the same argument `diffPartsFrom` already makes about
+`git_diff` — and "the first executor turn in a chat whose deliverable exists"
+needs a transcript scan and still cannot tell a file this chat wrote from one
+that was lying in the folder when it opened. The consequences are deliberate and
+each has a test: a rewrite gets no second chip (its `DiffPart` is the record), a
+deliverable that predates the chat gets none (the header chip has said
+"delivered" since it was opened), a file deleted by hand and written again gets a
+new one, and a participant never gets one whatever appeared while it spoke. It is
+not conditional on a *write tool* having run, because `run_command` produces
+files and returns no patch. `deliverablePath` moved into `executor/paths.ts` so
+`chats.goalStatus` and the turn compute the same path from the same code.
+
+The review round (S5.6) was, until now, the only round in the product that was
+never told what it was: four models handed a diff and left to guess. `reviewing`
+adds one block to the **group briefing** — not a section of its own — placed
+immediately after the goal, because "judge it against the goal above" is only
+true if the goal is one line up; a chat with no goal gets the same block pointing
+at the conclusion in the transcript, since a hand-off without a goal is legal.
+The `codebase` half of `goalHandoffLine` gained the **branch** and the request
+for a summary listing changed paths, which meant `buildTurnPrompt` had to run
+`gitInfo` itself and hand the one result to both the executor section and the
+workspace section: two probes would be two `spawnSync` calls on a large
+repository and a chance for one prompt to name two branches.
+
+Two things the step changed that were not in its text. `buildExecutorSection`
+became an options object, because a fourth positional parameter after
+`(workdir, handoff, goal)` is where a call site starts getting them wrong. And
+`loadGoalStatus` now writes **nothing** when the answer is unchanged — which is
+not a tidiness pass but a bug this step introduced and the end-to-end suite
+caught: refreshing the query at every round boundary meant a fresh
+`ChatGoalStatus` object during a streaming reply, the chat page re-rendered, and
+`react-virtuoso` re-measured the row the cursor was in. The chip's new moments
+are the round boundary and the end of the run, which between them cover a
+hand-off (the executor writes in its own round; the review round starting is what
+flips the header while the reviewers are still reading) and every other executor
+turn.
+
+Tests: `agent-turn.test.ts` gained a seven-case `runAgentTurn and a document goal`
+block (the chip appearing and the four ways it must not, the review block in a
+reviewer's prompt and not an ordinary one, the deliver briefing in the
+executor's); `briefing.test.ts` gained seven across both languages, including
+that the review block is byte-for-byte absent in an ordinary round and that it
+lands after the goal; `tools.test.ts` gained four (the deliver paragraph and its
+two-line summary, the implement one unchanged, all three shapes sharing one
+prefix, and the branch); `paths.test.ts` four for `deliverablePath`;
+`chat-runner.test.ts` seven (the `handoffDeliver` notice with the relative path
+and the same two rounds, the briefing reaching the executor and the notice
+reaching the reviewers as prose, the review round told and the executor not, the
+round after it told neither, the refusal with no goal and with a `codebase` one,
+the folder and the executor still checked first, and an unknown intent);
+`handoff.test.ts` five for the new rule and its place in the order;
+`stores/chats.test.ts` one for the unchanged-answer rule; `stores/run.test.ts`
+one for the intent on the wire; plus `contracts.test.ts`. `npm test`: 85 files,
+1374 tests, all passing; `npm run typecheck` clean. `e2e/executor.spec.ts` ran
+after `npm run build` with `qwen2.5:3b` present, so nothing was skipped: **15
+passed**, including the two new cases — the quick action's four disabled states
+with the backend refusing on the same rule, and the whole delivery: the action
+clicked, `handoffDeliver` in the transcript, Allow on the permission card,
+`docs/RELEASE.md` on disk, the header chip flipping to `data-delivered="true"`
+with nobody touching the goal, and the chip a real button carrying
+`data-path="docs/RELEASE.md"`. The chip's **click is not driven**, for the reason
+S5.7 recorded. The rest of the end-to-end suite was re-run for the chat-page and
+Actions-card changes: 82 passed, with one pre-existing failure that is not this
+step's — `chat.spec.ts`'s streaming-cursor race, which fails on a *warm* Ollama
+whenever the reply finishes between the two assertions, and which was confirmed
+to fail three times out of three on `3688233` under the same conditions. Docs:
+`docs/features/{orchestration,executor,chats}/` (all four each) plus
+`docs/features/{agent-turn,backend-client,editor,i18n}/`.
 
 ## Phase 6: Backlog (decided, not yet scheduled)
 
@@ -1749,12 +1842,12 @@ adds a line here in the same commit.
   the same patch in twice; rendering them *instead* would mean parsing back what
   the model already read. Worth revisiting when a turn's tool results start
   being summarised rather than replayed.
-- **Nothing emits a `FileRefPart`.** S5.5 renders one as a `path:line` chip and
-  S5.7 makes that chip open the file, but every chip a user actually sees comes
-  from S5.7's text **detector**: no backend code writes the part. A turn that
-  reported the files it read as parts would be more precise than a regular
-  expression over prose, and would make the chip work for a path the detector's
-  extension rule refuses.
+- **Almost nothing emits a `FileRefPart`.** S5.12 added the first: the
+  deliverable of a `document` goal, on the executor turn that produced it. Every
+  other chip a user actually sees still comes from S5.7's text **detector**. A
+  turn that reported the files it *read* as parts would be more precise than a
+  regular expression over prose, and would make the chip work for a path the
+  detector's extension rule refuses.
 
 ### Chat goal (S5.10)
 
@@ -1771,10 +1864,13 @@ adds a line here in the same commit.
   is a button carrying the path; the backend accepting that call is asserted
   separately by `e2e/editor.spec.ts`.
 - **"Delivered" is polled, not watched.** `chats.goalStatus` runs when a chat is
-  opened and on every `chat.updated` for it, so a deliverable written by
-  something that is not this app is noticed at the next such moment rather than
-  immediately. S5.12 adds an executor turn as one more moment; a filesystem
-  watcher would make it immediate and would be the first one in the product.
+  opened, on every `chat.updated` for it, and — since S5.12 — at every round
+  boundary and at the end of a run, so a deliverable written by something that is
+  not this app is noticed at the next such moment rather than immediately. A
+  filesystem watcher would make it immediate and would be the first one in the
+  product. It is also asked only for the chat that is **open**: a hand-off
+  finishing in a chat the user is not looking at leaves that chat's chip stale
+  until they open it.
 - **`relativeToWorkdir` compares paths exactly.** Both strings come from one
   dialog rooted at the folder, so a case-insensitive volume cannot make them
   differ — but a path assembled some other way, on such a volume, with different
@@ -1793,6 +1889,33 @@ adds a line here in the same commit.
   Since S5.11 reads them that is a useful combination rather than an inert one,
   but whether it should exist at all is still an open question in
   `docs/features/chats/context.md`.
+
+### Goal-aware delivery (S5.12)
+
+- **The review round is briefed, not verified.** Reviewers are told to judge the
+  executor's change against the goal; nothing checks that they did, and a
+  `[PASS]` from every one of them ends the run as an approval nobody wrote. A
+  structured verdict — approve / change requested, per reviewer — is the obvious
+  shape, and is what a "the group approved this" state would need.
+- **A `deliver` hand-off is not told whether it worked.** The review round is
+  scheduled whether or not the deliverable appeared; it is the turn's own
+  `FileRefPart` and the header chip that say so. A hand-off that ended with
+  nothing written could say so in a notice rather than leaving the reviewers to
+  notice.
+- **The two-line summary is asked for, not enforced.** `DELIVER_BRIEFING` asks
+  the executor to close with the path and one sentence; a model that writes six
+  paragraphs instead is not corrected, and the review round reads whatever it
+  wrote.
+- **The deliverable's chip is not driven end to end.** `e2e/executor.spec.ts`
+  asserts that the header chip is a real button carrying `data-path` after a
+  delivery, and the transcript chip is covered by the unit suite; the **click**
+  of either is not driven, for the reason S5.7 records below —
+  `shell.openExternal` would launch the developer's real editor and
+  `window.witena` cannot be stubbed from the page.
+- **A `codebase` hand-off names the branch but cannot hold it.** The executor is
+  told which branch the working tree is on and asked not to switch; nothing stops
+  `run_command` from doing so, and nothing re-checks the branch afterwards. The
+  permission prompt is the only boundary, which is the same gap the shell has.
 
 ### Workspace briefing and materials (S5.11)
 

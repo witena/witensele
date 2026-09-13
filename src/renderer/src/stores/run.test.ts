@@ -194,6 +194,18 @@ describe('run store', () => {
     expect(useRunStore.getState().sendingByChat[CHAT]).toBeUndefined()
   })
 
+  it('carries the intent when there is one, and omits it otherwise (S5.12)', async () => {
+    const calls = fakeBackend()
+
+    await expect(useRunStore.getState().handoff(CHAT, 'deliver')).resolves.toBe(true)
+
+    // Omitted rather than sent as `'implement'` above: the backend's default is
+    // the one that decides what a plain hand-off means.
+    expect(calls).toEqual([
+      { method: 'chat.handoff', input: { chatId: CHAT, intent: 'deliver' } }
+    ])
+  })
+
   it('keeps the refusal’s reason so the composer can name it', async () => {
     fakeBackend(
       new BackendClientError({

@@ -46,6 +46,13 @@ does not throw, it just makes every answer slightly worse.
   (`diffPartsFrom`, S5.5): the patches the write tools returned, grouped by path
   in call order. The turn is where the stored parts are, so it is where "what did
   this turn change" can be answered without asking the filesystem.
+- Appending a `FileRefPart` for the chat's deliverable when this turn is the one
+  that brought it into existence (`deliveredRef`, S5.12): one `existsSync` before
+  the stream, one after it. The turn is also the only thing that can answer
+  "did *this* turn produce it", which is what makes the chip a statement rather
+  than a decoration.
+- Telling the reviewers of a hand-off that is what they are (`reviewing`, S5.12):
+  one more section of the group briefing, for one round, set by the runner.
 
 ## Out of scope
 
@@ -74,7 +81,7 @@ does not throw, it just makes every answer slightly worse.
 | [`backend-client`](../backend-client/context.md) | The event bus and the `message.*` / `presence.changed` payloads |
 | [`i18n`](../i18n/context.md) | The *setting* only. The briefing is model-facing text, not UI copy, and does not live in the locale files |
 | [`executor`](../executor/context.md) | `buildExecutorTools`, `READ_ONLY_EXECUTOR_TOOLS`, `buildExecutorSection` (including S5.6's hand-off paragraph), `buildWorkspaceSection`, `resolveInWorkdir`, `walkTree` and `looksBinary`, plus `ctx.permissions`, `Chat.workdir` and `Agent.role` for the rules that decide which of them applies |
-| [`orchestration`](../orchestration/context.md) | The caller. Since S5.6 it also passes `handoff: true` for the one turn a hand-off schedules — the only option that changes the prompt rather than the transcript |
+| [`orchestration`](../orchestration/context.md) | The caller. Since S5.6 it also passes `handoff` for the one turn a hand-off schedules — a `HandoffIntent` since S5.12 — and `reviewing` for every speaker of the round after it. Both change the prompt rather than the transcript |
 
 `orchestration` depends on this feature: `ChatRunner` calls `runAgentTurn` once
 per speaker and reads the returned status to decide how the run ends.
@@ -99,6 +106,8 @@ per speaker and reads the returned status to decide how the run ends.
 | A `codebase` goal states that the **executor** makes the change (S5.10) | Let the goal speak for itself | PLAN.md's one-writer rule is invisible to a participant that has just been told the group is changing a codebase, and a model told to change code with no tools writes the change out in prose as if it had |
 | The **hand-off briefing points at the goal rather than restating it** (S5.10) | Repeat the whole goal in the executor section | The goal is already in the group briefing the same prompt carries, and a model given one instruction twice in two wordings follows neither reliably |
 | **`handoff` is an option of the turn, not a fact about the agent or the chat** (S5.6) | A column on the chat; an executor that always reads the hand-off briefing | It is true of exactly one turn. An executor asked a follow-up question by a reviewer is not being handed the discussion again, and a prompt that said so would make it start over instead of answering |
+| **`reviewing` is an option of the turn too** (S5.12), and it goes in the **group briefing** rather than in a section of its own | A `Review` section beside `Workspace`; a sentence in the executor's report | It is a rule of the room for one round — the same class of thing as the roster and the goal — and it has to sit immediately after the goal, because "judge it against the goal above" is only true if the goal is one line up |
+| **The delivered chip is "this turn delivered it", not "the file exists"** (S5.12) | A chip on every executor turn while the deliverable is there; a transcript scan for an earlier chip | A part attached to a turn is a statement about what that turn did — the same argument that keeps `git_diff` out of `diffPartsFrom`. Two `existsSync` calls say exactly that; a scan still could not tell a file this chat wrote from one already lying in the folder |
 | The **executor section is conditional on the same rule that attaches the tools** (S5.4), and sits between the briefing and the skills | Always include it for an `executor`; put it with the skills | Same reason as the memory sentence, and the section is protocol rather than reference material: a model running out of attention should lose the reference first. `executorWorkdir` is the one function both the prompt and the tool set ask |
 | **Every** member of a chat with a folder is given the workspace briefing (S5.11) | Only the executor; nobody | It is the counterpart of the read-only tools: an agent told it can read a folder and not told what is in it opens the discussion with three `list_dir` calls. The section is built once per turn, memoised inside the turn, because it walks the disk |
 | The **materials go last**, after skills and memory (S5.11) | First, so they are certainly read; beside the briefing | They are the bulkiest part of the prompt and the purest reference material in it, and the same rule that puts skills after the briefing puts them after skills. Last is also immediately before the history they are meant to ground |

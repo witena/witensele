@@ -144,31 +144,46 @@ the loop takes the pending list
 The list is taken **before** the round runs, so a message that lands during that
 round schedules the round after it.
 
-### A hand-off (S5.6)
+### A hand-off (S5.6, S5.12)
 
 ```
 chat.handoff
-  → ChatRunner.handoff({ chatId })
+  → ChatRunner.handoff({ chatId, intent? })      // intent defaults to 'implement'
+      intent ∉ HANDOFF_INTENTS → throw validation
       chats.get(chatId)                          // not_found before anything is written
       chat.workdir  ?? throw validation('handoff_no_workdir')
       executor = first member with role 'executor'
                 ?? throw validation('handoff_no_executor')
+      intent === 'deliver' && no document deliverable
+                → throw validation('handoff_no_deliverable')
       #running !== null → throw validation('handoff_run_active')
-      messages.create({ senderType: 'user', parts: [handoff notice], mentions: [executor.id] })
+      messages.create({ senderType: 'user',
+                        parts: [ intent === 'deliver'
+                                   ? handoffDeliver notice { agent, path }
+                                   : handoff notice { agent } ],
+                        mentions: [executor.id] })
       emit message.created
-      #handoffTo = executor.id; #start()
+      #handoff = { agentId: executor.id, intent }; #start()
   ← resolves with the stored message
 
 … the loop …
-  round 1: [executor]              (handoff: true on that turn's briefing)
-  round 2: [every other member]    (reviewing, fed by the executor's message)
+  round 1: [executor]              (handoff: intent on that turn's briefing)
+  round 2: [every other member]    (reviewing: true, fed by the executor's message)
   round 3+: ordinary @ scheduling, capped by maxAutoRounds
 ```
 
-The three refusals are `ValidationReason`s rather than bare `validation`s, and
-the renderer computes the **same three** from the chat record to decide whether
-to enable the button (`components/chat/handoff.ts`), in the same order, so the
-tooltip and the rejection can never name different rules.
+The four refusals are `ValidationReason`s rather than bare `validation`s, and the
+renderer computes the **same four** from the chat record to decide whether to
+enable either control (`components/chat/handoff.ts`), in the same order, so a
+tooltip and a rejection can never name different rules. `handoff_no_deliverable`
+sits third — after the two configuration rules and **before** the transient one —
+so a chat that is running and has nothing to deliver is told about the
+deliverable.
+
+`intent` is validated for its *shape* in `handlers/chats.ts` and for what this
+chat can satisfy in the runner, which is the same split the other three follow:
+the handler knows what a well-formed request looks like, the runner is the only
+object that holds the chat, its members and whether a run is going.
 
 ### Stop
 
@@ -257,6 +272,7 @@ wrapper that only reads the `message.created` of each turn to learn its
 | `src/renderer/src/stores/run.test.ts` (S5.6 block) | `handoff` calling `chat.handoff` with nothing but the id, and a refusal keeping its `details` so the composer can name the reason |
 | `e2e/orchestration.spec.ts` | Two real models: round-robin in round 1, parallel streaming both rows at once, `mention-only` answering with one member, and the `noMentions` notice |
 | `e2e/executor.spec.ts` | Offline: the hand-off button's `data-blocked` naming the rule that disabled it, and the backend refusing on the same rule. Behind the `qwen2.5:3b` guard: two participants plus an executor discuss, "Hand to executor" is clicked, the permission prompt is allowed, a file appears in the folder and a participant speaks again |
+| `src/main/orchestration/chat-runner.test.ts` (S5.12 cases) | `intent: 'deliver'` storing the `handoffDeliver` key with the agent and the relative path while scheduling the same two rounds; the executor's prompt carrying the deliver paragraph and the path and *not* the implement one; the notice reaching the reviewers as prose; the review round's prompts carrying the review block while the executor's does not, and the round after it carrying neither; the refusal with no goal and with a `codebase` goal; the folder and the executor still checked first; and an unknown intent refused |
 
 ## Known limitations and TODOs
 
@@ -282,6 +298,13 @@ wrapper that only reads the `message.created` of each turn to learn its
 - **A hand-off is refused while a run is active** rather than queued, and the
   button is disabled in that state. A user who wants both has to wait or press
   Stop.
+- **The review round is briefed, not verified.** S5.12 tells the reviewers to
+  judge the change against the goal; nothing checks that they did, and a `[PASS]`
+  from every reviewer ends the run as an approval nobody wrote.
+- **A `deliver` hand-off is not told whether it worked.** The runner schedules
+  the review round whether or not the deliverable appeared; it is the turn's own
+  `FileRefPart` and the header chip that say so, and a reviewer reading a chat
+  where nothing was written has to notice that for itself.
 - **A run does not summarise itself.** With `maxAutoRounds` reached, the user
   gets a notice and has to read the rounds; PLAN's "ask an agent to summarise" is
   a later action.

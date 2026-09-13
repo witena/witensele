@@ -90,6 +90,8 @@
     "goalChipTitleDelivered": "{{path}} has been written. Click to open it.",
     "handoff": "Hand to executor",
     "handoffTitle": "Ask the executor to implement the conclusion above in this chat’s folder",
+    "writeDeliverable": "Write the deliverable",
+    "writeDeliverableTitle": "Ask the executor to write this chat’s deliverable now, from what the group decided",
     "actions": {
       "title": "Actions",
       "summarize": "Ask an agent to summarise every point of view",
@@ -425,6 +427,7 @@
     "handoff_no_workdir": "Choose a working directory for this chat before handing it over.",
     "handoff_no_executor": "Add an executor to this chat before handing it over.",
     "handoff_run_active": "This chat is still running. Wait for it, or press Stop.",
+    "handoff_no_deliverable": "This chat has no deliverable yet. Give it a Document goal with a file to write.",
     "editor_path_not_absolute": "That reference is not a full path, so it cannot be opened.",
     "editor_path_outside_workdir": "That file is outside this chat's folder, so it was not opened.",
     "goal_description_empty": "A goal needs a description.",
@@ -448,6 +451,7 @@
     "toolsUnsupported": "{{agent}}'s model cannot use tools, so this reply was written without them",
     "contextTruncated": "{{agent}} could not fit the whole conversation in its context window, so the {{dropped}} oldest messages were left out of its view",
     "materialsTruncated": "{{agent}} could not fit every material in its context window, so {{omitted}} of them are listed by path instead; it can still read them with read_file",
-    "handoff": "Handed to {{agent}}: implement what the group decided, then report what changed"
+    "handoff": "Handed to {{agent}}: implement what the group decided, then report what changed",
+    "handoffDeliver": "Asked {{agent}} to write {{path}} now, from what the group decided"
   }
 }

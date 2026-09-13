@@ -123,19 +123,19 @@ This is the part worth reading twice, because it is where a subtle bug would hid
   server capability"). A server version replaces `EventBus` and
   `MessageRepository`, not `ChatRunner`.
 
-## The hand-off, round by round (S5.6)
+## The hand-off, round by round (S5.6, S5.12)
 
-`handoff()` validates, stores the message, sets `#handoffTo` and starts the loop.
-`#loop` **takes** that field once, before the first iteration, and then spends it
-over two rounds:
+`handoff()` validates, stores the message, sets `#handoff` — `{ agentId, intent }`
+— and starts the loop. `#loop` **takes** that field once, before the first
+iteration, and then spends it over two rounds:
 
-| Iteration | Plan | `implementing` |
-|---|---|---|
-| 1 | `mergePlans(memberIds, planFromHandoff(memberIds, executorId), carried)` | the executor |
-| 2 | `mergePlans(memberIds, planFromReview(memberIds, executorId), carried)` | `null` |
-| 3+ | Ordinary `planFromReplies`, so a reviewer's `@Hands` schedules another executor round | `null` |
+| Iteration | Plan | `implementing` | `reviewing` |
+|---|---|---|---|
+| 1 | `mergePlans(memberIds, planFromHandoff(memberIds, executorId), carried)` | the executor | `false` |
+| 2 | `mergePlans(memberIds, planFromReview(memberIds, executorId), carried)` | `null` | `true` |
+| 3+ | Ordinary `planFromReplies`, so a reviewer's `@Hands` schedules another executor round | `null` | `false` |
 
-Three details that are decisions:
+Four details that are decisions:
 
 - **Taken, not read.** `#start`'s `finally` restarts the loop when a message
   landed in the sliver where the run was ending; a field still holding the
@@ -145,10 +145,35 @@ Three details that are decisions:
 - **`implementing` is one agent for one round**, and it is the only thing that
   sets `AgentTurnOptions.handoff`. A reviewer told to "implement the conclusion"
   would be the wrong instruction, and so would an executor re-`@`-ed later.
+- **`reviewing` is the whole round** (S5.12), and it is the only thing that sets
+  `AgentTurnOptions.reviewing`. Every speaker of round 2 is reading what the
+  executor changed; round 3 is ordinary `@` scheduling and carries neither flag,
+  which is asserted by the *absence* of both blocks in the second executor
+  prompt.
+
+`intent` (S5.12) travels beside the executor id and reaches exactly two places:
+the notice key stored on the user message (`handoff` or `handoffDeliver`), and
+`AgentTurnOptions.handoff` for the one implementing turn. Nothing about the
+scheduling reads it.
 
 Everything else — Stop, the barrier, the cap, the offline filter, the truncation
 notice — applies unchanged, which is the reason the hand-off is two staged plans
 rather than a mode of its own.
+
+### The four refusals, in order
+
+| Order | Reason | True when |
+|---|---|---|
+| 1 | `handoff_no_workdir` | the chat is bound to no folder |
+| 2 | `handoff_no_executor` | no member has `role: 'executor'` |
+| 3 | `handoff_no_deliverable` | `intent: 'deliver'` and the goal is not a `document` naming a file |
+| 4 | `handoff_run_active` | a run of this chat is already going |
+
+The transient one is **last** deliberately: a chat that is both missing its
+deliverable and running should be told about the deliverable, which is the rule
+that will still be true in a minute. `components/chat/handoff.ts` computes the
+same four from the same facts in the same order, so the disabled button and the
+rejection cannot name different rules.
 
 ## Three things the runner announces, and why it is the runner (S4.2, S4.3, S5.11)
 
