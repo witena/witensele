@@ -34,6 +34,14 @@
  * for the whole registry the moment the page opens would start a handful of
  * `npx` processes the user never asked for.
  *
+ * ## Role (S5.2)
+ *
+ * The one control on this form that changes what the agent may do to the user's
+ * machine, so PLAN.md's rule is printed under it: participants discuss and never
+ * write, one executor per chat makes the changes in that chat's working
+ * directory, and every change is confirmed. The same field already gates the MCP
+ * checklist below (`allowSideEffects`), which is why the two sit on one screen.
+ *
  * ## Why the model control is a select *and* a text field
  *
  * A provider's `models` list can legitimately be empty (a custom endpoint nobody
@@ -47,7 +55,7 @@ import type { TFunction } from 'i18next'
 import { Sparkles, Server } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { Agent, Provider } from '@shared/types'
+import type { Agent, AgentRole, Provider } from '@shared/types'
 import {
   Avatar,
   Button,
@@ -55,6 +63,7 @@ import {
   Field,
   Input,
   SectionTitle,
+  SegmentedControl,
   Select,
   TextArea,
   Toggle
@@ -67,6 +76,16 @@ import type { AgentDraftErrors } from '../../stores/agents'
 import { useAgentsStore, validateDraft } from '../../stores/agents'
 import { useMcpStore } from '../../stores/mcp'
 import { missingSkillNames, useSkillsStore } from '../../stores/skills'
+
+/** Literal `t()` calls, so `used-keys.test.ts` can verify both role labels. */
+function roleLabel(t: TFunction, role: AgentRole): string {
+  switch (role) {
+    case 'participant':
+      return t('agents.roleParticipant')
+    case 'executor':
+      return t('agents.roleExecutor')
+  }
+}
 
 /** Literal `t()` calls so `used-keys.test.ts` can verify every message. */
 function nameError(t: TFunction, code: AgentDraftErrors['name']): string | undefined {
@@ -273,6 +292,35 @@ export function AgentEditor({
                 placeholder={t('agents.descriptionPlaceholder')}
                 onChange={(event) => store().patchDraft({ description: event.target.value })}
               />
+            </Field>
+
+            {/*
+              The role, with PLAN.md's rule spelled out under it rather than in a
+              tooltip: picking "Executor" changes what this agent is allowed to
+              do to the user's disk, and that is not a thing to discover by
+              hovering. The explanation is one key so both languages say the same
+              thing in one sentence each.
+            */}
+            <Field label={t('agents.role')} layout="column">
+              <SegmentedControl<AgentRole>
+                value={draft.role}
+                onChange={(role) => store().patchDraft({ role })}
+                options={[
+                  {
+                    value: 'participant',
+                    label: roleLabel(t, 'participant'),
+                    testId: 'agent-role-participant'
+                  },
+                  {
+                    value: 'executor',
+                    label: roleLabel(t, 'executor'),
+                    testId: 'agent-role-executor'
+                  }
+                ]}
+              />
+              <p data-testid="agent-role-hint" className="text-[11px] leading-relaxed text-fg-faint">
+                {t('agents.roleHint')}
+              </p>
             </Field>
           </section>
 

@@ -62,6 +62,49 @@ a select / the segmented control changes
   → store applies the returned chat; the header badge re-renders from it
 ```
 
+### Binding the working directory (S5.2)
+
+```
+"Choose…"
+  → useChatsStore.chooseWorkdir(chatId)
+  → invoke('system.pickFolder')            // native modal, src/main/ipc/dialogs.ts
+      cancelled → null → nothing happens, and no error is left behind
+  → useChatsStore.setWorkdir(chatId, path)
+  → invoke('chats.update', { id, patch: { workdir: path } })
+  → assertWorkdir: absolute, statSync, isDirectory
+      refused → validation + { reason: 'workdir_not_absolute' | 'workdir_missing'
+                              | 'workdir_not_directory' }
+  → store applies the returned chat
+  → the header chip and the settings row re-render from it
+
+"Clear" → setWorkdir(chatId, null)         // the one path that needs no dialog
+```
+
+Two calls rather than one backend method, for the reason `stores/skills.ts`
+imports a folder the same way: the dialog is the single thing the backend cannot
+do without electron, and keeping it a separate call keeps `chats.update` a plain
+validated write that a future HTTP client can make on its own.
+
+The chip prints `folderName(workdir)` with the whole path in `title`
+(`lib/workdir.ts`) — the interesting half of a path is its last segment, and the
+rest does not fit beside a title or in a 288px panel.
+
+### Adding an executor member (S5.2)
+
+```
+"+ Add" → the picker
+            hasExecutor(members) && isExecutor(candidate)
+              → the row is disabled, and its sub-line becomes chat.executorTaken
+          otherwise → the usual setMembers path
+  → invoke('chats.members.set')
+  → assertOneExecutor over the resulting list
+      two executors → validation + { reason: 'second_executor' }
+```
+
+The picker is the **explanation**; the handler is the **rule**. Disabling the row
+is what stops the user wondering why a click did nothing, and the backend refusal
+is what makes the invariant true for a second window or a later HTTP client.
+
 ### Opening a chat
 
 ```
@@ -183,7 +226,10 @@ kebab → Delete → Delete again
 ## Key types and contracts
 
 `Chat`, `ChatMember`, `Message`, `MessagePart`, `MessageStatus` and `Usage` are
-unchanged from S1.1. S2.2 added two input types next to them —
+unchanged from S1.1 except that **`Chat.workdir` is no longer reserved** (S5.2):
+`ChatPatch` accepts it, and `VALIDATION_REASONS` / `ValidationReason` were added
+beside `BackendError` for the refusals the renderer names precisely. S2.2 added
+two input types next to them —
 **`ChatCreateInput`** (a `ChatPatch` plus `memberAgentIds`) and **`ChatPatch`**
 (every field optional, `settings` a partial that the backend merges) — plus the
 `MIN_AUTO_ROUNDS` / `MAX_AUTO_ROUNDS` bounds both layers validate against.
@@ -193,7 +239,7 @@ unchanged from S1.1. S2.2 added two input types next to them —
 | `chats.list` | — | `Chat[]` | Newest `updatedAt` first |
 | `chats.get` | `{ id }` | `Chat` | `not_found` for an unknown id |
 | `chats.create` | `{ input: ChatCreateInput }` | `Chat` | `memberAgentIds` seeds the members; without it the chat is empty unless the agent library is |
-| `chats.update` | `{ id, patch: ChatPatch }` | `Chat` | Rename and a **partial** `settings` merge; always bumps `updatedAt` |
+| `chats.update` | `{ id, patch: ChatPatch }` | `Chat` | Rename, `workdir` (absolute, existing, a directory — or `null`) and a **partial** `settings` merge; always bumps `updatedAt` |
 | `chats.delete` | `{ id }` | `void` | Stops the run first; cascades |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **New in S1.7.** Ordered by `position` |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the list; array index becomes `position` |
@@ -219,9 +265,11 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | File | Covers |
 |---|---|
 | `src/main/orchestration/chat-runner.test.ts` (`describe('chats handlers')`) | `chats.create` default title and settings; the `validation` refusal with no usable provider; rename bumping `updatedAt` and emitting `chat.updated`; the empty-title rejection; `messages.list` order and the `before` cursor; delete stopping the run and emitting `chat.deleted`. Also: the runner re-reads the members on the next run, and `chat.send` on an empty chat stores nothing |
-| `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, and every `ChatSettings` bound |
+| `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, every `ChatSettings` bound, and S5.2's two rules: `workdir` accepted / cleared / refused as relative, blank, missing and a file, and the second-executor refusal on both `members.set` and `chats.create` (with one executor beside participants, and an executor-for-executor swap, both allowed) |
 | `src/main/handlers/handlers.test.ts` | Every declared method has a handler; the ones still stubbed reject with `internal` |
-| `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection |
+| `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection; `setWorkdir` binding and clearing, the rejection's `reason` kept in `errorDetails`, and `chooseWorkdir` writing nothing at all when the dialog is cancelled |
+| `src/renderer/src/lib/workdir.test.ts` | `folderName`: the last segment, trailing separators, Windows separators, the filesystem root, a bare name, a name with a dot or a space |
+| `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` and every `ValidationReason` resolving to distinct real copy; `validationReasonOf` narrowing a known reason and ignoring everything else; `translateFailure` preferring a reason only under `validation` |
 | `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
 | `src/renderer/src/stores/usage.test.ts` | Client-side aggregation: the total moving on `message.updated`, the per-agent split, a local provider costing nothing, an unknown model reporting no cost, and the page-vs-whole-transcript fallback to the backend |
 | `src/main/db/chats.test.ts` (`describe('search')`) | Title and message-text matches, one hit per chat, non-text parts ignored, `%` / `_` escaped, blank query, ordering and the user scope |
@@ -230,6 +278,7 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
 | `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
+| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client |
 | `src/renderer/src/components/chat/tool-call.test.ts` | `previewToolArgs`, `countToolResults` over the shapes a tool actually returns, `describeToolCall`'s three states, and `collectToolCalls` pairing by id rather than by position |
 | `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp) and `buildTranscriptRows`' interleaving and key stability |
 | `src/renderer/src/components/chat/mention-query.test.ts` | `extractMentionQuery`'s boundary rules, `filterMentionCandidates`' longest-first order, and both insertion helpers' spacing |
@@ -271,3 +320,13 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   card's `serverName · toolName` line reads.
 - **`chats.members.list` is one call per chat** on load. See the trade-off table
   in `context.md`.
+- **`workdir` is written but not yet read.** `ChatRunner` re-reads the chat record
+  every round, so the field reaches the orchestrator already; attaching the
+  executor's tools to it is S5.3.
+- **The one-executor rule is enforced on membership only.** Promoting an agent
+  to `executor` while it is already in a chat that has one is not refused; see
+  the known gap in `backend.md`.
+- **A refused `workdir` prints in the left column**, with every other chats-store
+  failure, rather than under the row the user clicked. The sentence names the
+  reason, so it reads correctly there — but it is further from the control than
+  it could be.

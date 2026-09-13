@@ -40,6 +40,18 @@ function classify(cause: unknown): BackendErrorCode {
   return cause instanceof BackendClientError ? cause.code : 'internal'
 }
 
+/**
+ * The failing handler's own `details`, when the rejection carried any.
+ *
+ * Kept beside the code because a `validation` refusal may name *which* rule it
+ * broke (`ValidationReason`), and "that folder no longer exists" is a far better
+ * line than "the request was rejected as invalid". `i18n/errors.ts` narrows it;
+ * the store stores it unread, exactly as it stores `message`.
+ */
+function detailsOf(cause: unknown): unknown {
+  return cause instanceof BackendClientError ? cause.details : undefined
+}
+
 /** Local midnight of the day `timestamp` falls in. */
 function startOfDay(timestamp: number): number {
   const date = new Date(timestamp)
@@ -95,6 +107,8 @@ export interface ChatsState {
   /** Developer-facing detail of the last failure; the UI shows translated copy. */
   error?: string | undefined
   errorCode?: BackendErrorCode | undefined
+  /** The rejection's `details`, which may name a `ValidationReason`. */
+  errorDetails?: unknown
   /** The chat the conversation column is showing. Local UI state. */
   selectedId: string | null
   /** What the left column's search box holds, trimmed. `''` means no filter. */
@@ -125,6 +139,23 @@ export interface ChatsState {
   setMembers: (chatId: string, agentIds: string[]) => Promise<void>
   /** Merges a patch into a chat's orchestration settings. Persists immediately. */
   updateSettings: (chatId: string, patch: Partial<ChatSettings>) => Promise<void>
+  /**
+   * Binds the chat to a local folder, or unbinds it with `null`.
+   *
+   * The backend checks the path against the filesystem, so a folder that has
+   * been deleted since it was picked lands in `error` with a `ValidationReason`
+   * saying which of the three rules it broke.
+   */
+  setWorkdir: (chatId: string, workdir: string | null) => Promise<void>
+  /**
+   * Opens the native folder picker and binds the chat to what came back.
+   *
+   * Two calls rather than one backend method, for the same reason
+   * `stores/skills.ts` imports a folder this way: the dialog is the one thing
+   * the backend cannot do without electron, and a cancelled dialog must leave
+   * no error behind — it is an answer, not a failure.
+   */
+  chooseWorkdir: (chatId: string) => Promise<void>
   remove: (id: string) => Promise<void>
   select: (id: string | null) => void
   /**
@@ -148,21 +179,28 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
   status: 'idle',
   error: undefined,
   errorCode: undefined,
+  errorDetails: undefined,
   selectedId: null,
   searchQuery: '',
   matchIds: null,
 
   async load() {
-    set({ status: 'loading', error: undefined, errorCode: undefined })
+    set({ status: 'loading', error: undefined, errorCode: undefined, errorDetails: undefined })
     try {
       const chats = await getBackend().invoke('chats.list')
-      set({ chats: sortChats(chats), status: 'ready', error: undefined, errorCode: undefined })
+      set({
+        chats: sortChats(chats),
+        status: 'ready',
+        error: undefined,
+        errorCode: undefined,
+        errorDetails: undefined
+      })
       // One call per chat. Cheap over local IPC for a desktop-sized list, and the
       // alternative — a member count on `Chat` — would put a derived field in the
       // domain type. S2.2 revisits it if a list ever gets long enough to notice.
       await Promise.all(chats.map((chat) => get().loadMembers(chat.id)))
     } catch (cause) {
-      set({ status: 'error', error: describe(cause), errorCode: classify(cause) })
+      set({ status: 'error', error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
     }
   },
 
@@ -188,7 +226,7 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
       // provider has a model, which is the first-run path.
       const chat = await getBackend().invoke('chats.create', { input: {} })
       get().applyUpdated(chat)
-      set({ selectedId: chat.id, error: undefined, errorCode: undefined })
+      set({ selectedId: chat.id, error: undefined, errorCode: undefined, errorDetails: undefined })
       await get().loadMembers(chat.id)
       // `chats.create` may have created the bootstrap agent on the way (see
       // `src/main/agents/default-agent.ts`), and the member panel and every
@@ -198,7 +236,7 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
       await useAgentsStore.getState().load()
       return chat
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause) })
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
       return null
     }
   },
@@ -212,10 +250,11 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
           [chatId]: members.map((member) => member.agentId)
         },
         error: undefined,
-        errorCode: undefined
+        errorCode: undefined,
+        errorDetails: undefined
       }))
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause) })
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
       // Re-read rather than keep an optimistic order the backend refused.
       await get().loadMembers(chatId)
     }
@@ -229,7 +268,38 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
         await getBackend().invoke('chats.update', { id: chatId, patch: { settings: patch } })
       )
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause) })
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
+    }
+  },
+
+  async setWorkdir(chatId, workdir) {
+    try {
+      get().applyUpdated(
+        await getBackend().invoke('chats.update', { id: chatId, patch: { workdir } })
+      )
+      set({ error: undefined, errorCode: undefined, errorDetails: undefined })
+    } catch (cause) {
+      set({
+        error: describe(cause),
+        errorCode: classify(cause),
+        errorDetails: detailsOf(cause)
+      })
+    }
+  },
+
+  async chooseWorkdir(chatId) {
+    try {
+      const picked = await getBackend().invoke('system.pickFolder')
+      // Cancelling the dialog is not a decision to unbind: `null` here means
+      // "never mind", while `setWorkdir(chatId, null)` is the Clear button.
+      if (!picked) return
+      await get().setWorkdir(chatId, picked)
+    } catch (cause) {
+      set({
+        error: describe(cause),
+        errorCode: classify(cause),
+        errorDetails: detailsOf(cause)
+      })
     }
   },
 
@@ -239,7 +309,7 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
     try {
       get().applyUpdated(await getBackend().invoke('chats.update', { id, patch: { title: trimmed } }))
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause) })
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
     }
   },
 
@@ -248,7 +318,7 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
       await getBackend().invoke('chats.delete', { id })
       get().applyDeleted(id)
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause) })
+      set({ error: describe(cause), errorCode: classify(cause), errorDetails: detailsOf(cause) })
     }
   },
 
@@ -268,7 +338,12 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
       // A slower answer to an earlier query must not overwrite a newer one.
       if (get().searchQuery === trimmed) set({ matchIds })
     } catch (cause) {
-      set({ error: describe(cause), errorCode: classify(cause), matchIds: [] })
+      set({
+        error: describe(cause),
+        errorCode: classify(cause),
+        errorDetails: detailsOf(cause),
+        matchIds: []
+      })
     }
   },
 

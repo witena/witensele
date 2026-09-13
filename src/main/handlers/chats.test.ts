@@ -1,12 +1,17 @@
 /**
- * The parts of `chats.*` that S2.2 made real: who a new chat is created with, the
- * member list, and the orchestration settings.
+ * The parts of `chats.*` that S2.2 made real — who a new chat is created with,
+ * the member list, and the orchestration settings — plus the two rules S5.2
+ * added: at most one `executor` among a chat's members, and a `workdir` that has
+ * to be an absolute path to a directory that actually exists.
  *
  * The S1.7 behaviour (create, rename, delete, the run methods) is covered by
  * `handlers.test.ts` and `../orchestration/chat-runner.test.ts`; this file is
  * about the three rules that changed, and about the events the member panel
  * depends on. Nothing here talks to a model, so no runner options are injected.
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendEvent, ChatUpdatedEvent } from '@shared/events'
 import { DEFAULT_CHAT_SETTINGS, type Agent, type Provider } from '@shared/types'
@@ -27,6 +32,16 @@ describe('handlers/chats members and settings', () => {
   const createAgent = (name: string): Promise<Agent> =>
     handlers['agents.create'](ctx, {
       input: agentInput({ name, providerId: provider.id, modelId: 'deepseek-chat' })
+    })
+
+  const createExecutor = (name: string): Promise<Agent> =>
+    handlers['agents.create'](ctx, {
+      input: agentInput({
+        name,
+        providerId: provider.id,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      })
     })
 
   beforeEach(() => {
@@ -148,6 +163,132 @@ describe('handlers/chats members and settings', () => {
       await expect(
         handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, ada.id] })
       ).rejects.toMatchObject({ code: 'validation' })
+    })
+  })
+
+  describe('one executor per chat', () => {
+    it('refuses a second executor member, with the reason the renderer translates', async () => {
+      const first = await createExecutor('Hands')
+      const second = await createExecutor('Other hands')
+      const chat = await handlers['chats.create'](ctx, { input: { memberAgentIds: [first.id] } })
+      events.length = 0
+
+      await expect(
+        handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [first.id, second.id] })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'second_executor' } })
+
+      // Refused before the transaction: the membership is exactly as it was.
+      expect(ctx.repos.chats.listMembers(chat.id, ctx.userId).map((m) => m.agentId)).toEqual([
+        first.id
+      ])
+      expect(chatUpdates()).toEqual([])
+    })
+
+    it('allows one executor beside any number of participants', async () => {
+      const hands = await createExecutor('Hands')
+      const ada = await createAgent('Ada')
+      const bob = await createAgent('Bob')
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, hands.id, bob.id] })
+      ).resolves.toHaveLength(3)
+    })
+
+    it('allows swapping one executor for another in a single write', async () => {
+      const first = await createExecutor('Hands')
+      const second = await createExecutor('Other hands')
+      const chat = await handlers['chats.create'](ctx, { input: { memberAgentIds: [first.id] } })
+
+      // The whole list is replaced, so this is one executor, not two.
+      const members = await handlers['chats.members.set'](ctx, {
+        chatId: chat.id,
+        agentIds: [second.id]
+      })
+
+      expect(members.map((member) => member.agentId)).toEqual([second.id])
+    })
+
+    it('refuses a chat created with two executors before the row exists', async () => {
+      const first = await createExecutor('Hands')
+      const second = await createExecutor('Other hands')
+      const before = ctx.repos.chats.list(ctx.userId).length
+
+      await expect(
+        handlers['chats.create'](ctx, { input: { memberAgentIds: [first.id, second.id] } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'second_executor' } })
+
+      expect(ctx.repos.chats.list(ctx.userId)).toHaveLength(before)
+    })
+  })
+
+  describe('chats.update workdir', () => {
+    let folder: string
+
+    beforeEach(() => {
+      folder = mkdtempSync(join(tmpdir(), 'witena-workdir-'))
+    })
+
+    afterEach(() => {
+      rmSync(folder, { recursive: true, force: true })
+    })
+
+    it('stores an absolute path that is a real directory', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      const updated = await handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: folder } })
+
+      expect(updated.workdir).toBe(folder)
+      expect(ctx.repos.chats.get(chat.id, ctx.userId).workdir).toBe(folder)
+    })
+
+    it('clears the binding with null', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: { workdir: folder } })
+
+      const cleared = await handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: null } })
+
+      expect(cleared.workdir).toBeNull()
+    })
+
+    it('refuses a relative path', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: 'code/witena' } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_absolute' } })
+      expect(ctx.repos.chats.get(chat.id, ctx.userId).workdir).toBeNull()
+    })
+
+    it('refuses an empty string, which is not the same as clearing', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: '   ' } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_absolute' } })
+    })
+
+    it('refuses a path that does not exist', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: join(folder, 'gone') } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_missing' } })
+    })
+
+    it('refuses a file', async () => {
+      const file = join(folder, 'notes.md')
+      writeFileSync(file, '# not a folder\n')
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: file } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_directory' } })
+    })
+
+    it('checks the same rules on chats.create', async () => {
+      await expect(
+        handlers['chats.create'](ctx, { input: { workdir: 'relative/path' } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_absolute' } })
     })
   })
 

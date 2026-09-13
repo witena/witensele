@@ -4,7 +4,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/handlers/chats.ts` | The `chats.*` / `messages.*` / `chat.*` methods: validation (including every `ChatSettings` field), the member list a chat is born with, stopping the run on delete, the `chat.*` events, plus `chats.search` and `messages.usageSummary` (S4.1, S4.3) |
+| `src/main/handlers/chats.ts` | The `chats.*` / `messages.*` / `chat.*` methods: validation (including every `ChatSettings` field, and since S5.2 `workdir` against the real filesystem and the one-executor rule), the member list a chat is born with, stopping the run on delete, the `chat.*` events, plus `chats.search` and `messages.usageSummary` (S4.1, S4.3) |
 | `src/shared/pricing.ts` | The model price table, `estimateCost`, `contextWindowFor` and the `formatTokens` / `formatCost` helpers. Shared, because the renderer prices the same numbers; see [`providers`](../providers/backend.md) for how to edit the table |
 | `src/shared/usage.ts` | `summarizeUsage`: the one copy of the per-chat / per-agent arithmetic, run by this handler over the database and by `stores/usage.ts` over the transcript in the store |
 | `src/main/handlers/agents.ts` | The five `agents.*` methods; see [`agents`](../agents/backend.md) |
@@ -13,7 +13,10 @@
 | `src/main/db/repositories/messages.ts` | Unchanged from S1.2; `seq` ordering, the `before` cursor, `listForContext` for the runner |
 | `src/main/testing.ts` | `createTestAppContext`: a context over the temporary database, the recording bus and the insecure secret store. Not imported by production code |
 
-None of them imports electron (CLAUDE.md rule #5).
+None of them imports electron (CLAUDE.md rule #5). `handlers/chats.ts` does read
+`node:fs` and `node:path` since S5.2, which the rule permits: it is about
+electron, not about Node, and the `workdir` check is worthless if it does not
+touch the filesystem.
 
 ## Database
 
@@ -28,7 +31,7 @@ is the only thing that reads it. See
 |---|---|---|---|
 | `chats` | `id`, `user_id` | text | UUID primary key, scoped by user |
 | | `title` | text | `New chat` until it is renamed, or until `ChatRunner` generates one after the first run (S4.3) |
-| | `workdir` | text null | Reserved for the executor agent; always `null` |
+| | `workdir` | text null | Absolute path of the folder this chat's executor works in, or `null`. Written by `chats.update`, which validates it; real since S5.2 |
 | | `settings` | json | `ChatSettings`; written by the member panel's group-settings block, merged field by field |
 | | `created_at` / `updated_at` | integer | Epoch ms. `updated_at` is bumped by every message insert, which is what floats an active chat to the top |
 | `chat_members` | `chat_id`, `agent_id`, `position` | text / text / integer | Composite key; `ON DELETE CASCADE` from both parents |
@@ -48,11 +51,11 @@ is the only thing that reads it. See
 |---|---|---|---|
 | `chats.list` | — | `Chat[]` newest first | — |
 | `chats.get` | `{ id }` | `Chat` | `validation` on an empty id, `not_found` otherwise |
-| `chats.create` | `{ input: ChatCreateInput }` | `Chat` | The patch checks below; `not_found` for a `memberAgentIds` entry that names no agent; `validation` **"no provider with models"** only on the bootstrap path |
+| `chats.create` | `{ input: ChatCreateInput }` | `Chat` | The patch checks below; `not_found` for a `memberAgentIds` entry that names no agent; `validation` + `second_executor` for two executors, checked **before** the row is written; `validation` **"no provider with models"** only on the bootstrap path |
 | `chats.update` | `{ id, patch: ChatPatch }` | `Chat` | The patch checks below; `not_found` |
 | `chats.delete` | `{ id }` | `void` | `not_found`. Stops the run **before** deleting |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` by `position` | `validation`, `not_found` |
-| `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | `validation` for a non-array or a duplicate agent; `not_found` for an unknown agent, checked before anything is written. An **empty** array is valid: it is how the last member is removed |
+| `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | `validation` for a non-array or a duplicate agent, and `validation` + `second_executor` for two `executor` agents in the resulting list; `not_found` for an unknown agent. All of it before anything is written. An **empty** array is valid: it is how the last member is removed |
 | `chats.search` | `{ query }` | `string[]` chat ids, newest first, capped at `CHAT_SEARCH_LIMIT` (200) | `validation` when `query` is not a string. A blank query is **not** an error: it means "no filter" and returns every chat |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` newest first | `validation` on an empty chat id or a non-positive limit; `not_found` for an unknown cursor |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` over the whole transcript | `validation` on an empty id, `not_found` for an unknown chat |
@@ -68,6 +71,7 @@ persisted on its own:
 | Field | Rule |
 |---|---|
 | `title` | Non-empty after trimming |
+| `workdir` | `null`, or an absolute path that `statSync` reports as a directory. Three distinct `ValidationReason`s: `workdir_not_absolute`, `workdir_missing`, `workdir_not_directory` |
 | `settings.mode` | `roundrobin` or `mention-only` |
 | `settings.speaking` | `sequential` or `parallel` |
 | `settings.maxAutoRounds` | An integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` = `[1, 10]` |
@@ -87,6 +91,47 @@ A chat with no members refuses `chat.send` with `validation('chat has no
 members')`, checked in `ChatRunner.send` before the user's message is persisted.
 The composer stays enabled (the fix is one click away in the member panel) and
 the panel shows `chat.noMembersHint`.
+
+### The working directory (S5.2)
+
+`ChatPatch.workdir` is `string | null`, and `assertWorkdir` checks it against the
+**real filesystem** rather than merely parsing it: absolute, `statSync`
+succeeds, and the result `isDirectory()`. The path is a security boundary and
+not a label — every file the executor resolves in S5.3 is resolved inside it,
+and a folder that does not exist cannot confine anything.
+
+`statSync` follows symlinks on purpose. A symlink to a directory is a perfectly
+good working directory; the confinement check that matters (a path *inside* the
+folder whose realpath leaves it) is per file and belongs to S5.3.
+
+There is a race that cannot be closed here: the folder can be deleted between
+this check and the first tool call. That is what makes it a check and not a
+guarantee, and why S5.3 resolves every path again at the moment of use.
+
+The same rules run on `chats.create`, because `assertChatPatch` is shared — a
+chat cannot be born pointing at a path a later update would refuse.
+
+`ChatRunner` already re-reads the chat record every round (`repos.chats.get`), so
+`workdir` reaches the orchestrator with no new plumbing; nothing reads it yet,
+because attaching executor tools is S5.3.
+
+### One executor per chat (S5.2)
+
+PLAN.md: *discussion agents are read-only; all writes go through one executor*.
+Several models writing into the same directory overwrite each other and leave a
+diff nobody can review, so `assertOneExecutor` refuses a member list holding two
+`executor` agents, with `validation` and the reason `second_executor`.
+
+It lives where membership is **written** rather than where tools are attached,
+because `chats.members.set` replaces the whole list and is therefore the only
+place that can see the resulting set. Swapping one executor for another in a
+single call is consequently fine: that list holds one.
+
+**Known gap:** `agents.update` can promote a `participant` that is already in a
+chat with an executor, which reaches the same forbidden state by another door.
+The refusal was scoped to the member handler by S5.2; S5.3 must therefore pick a
+chat's executor deterministically (first `executor` in `position` order) rather
+than assuming the set has exactly one.
 
 ### Searching chats (S4.3)
 

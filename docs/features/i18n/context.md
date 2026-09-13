@@ -20,7 +20,9 @@ S1.4 delivers the whole mechanism, not just the two files:
 - The language setting persisted through `settings.update`, so it survives a
   restart, and applied through `i18n.changeLanguage` with no reload.
 - `translateNotice` — the renderer half of the "the backend sends keys, not
-  sentences" contract for `SystemNoticePart`.
+  sentences" contract for `SystemNoticePart`, and `i18n/errors.ts` — the same
+  contract for a rejected call, by `BackendErrorCode` and, since S5.2, by the
+  finer `ValidationReason`.
 - Two guard tests that keep the rule true as the UI grows: the key trees must
   match, and no hard-coded string may reach JSX.
 - The full key tree for the screens S1.5–S2.5 will build, written ahead of the
@@ -60,6 +62,7 @@ their copy to the two locale files rather than to their components, and
 | `'system'` is stored as itself and resolved at use time | Resolve once at first launch and store the concrete language | A machine whose language changes should follow it. Storing `zh-CN` would silently freeze a user who picked "follow the system". |
 | Every `zh*` navigator tag resolves to `zh-CN` | Only exact `zh-CN`; treat `zh-TW` as English | Traditional Chinese is far better served by Simplified Chinese than by English until a `zh-TW` locale exists. |
 | Hard-coded strings are caught by a **text-scanning guard test** | ESLint with `react/jsx-no-literals`, or trusting review | The project has no ESLint yet, and the guard also checks that every key actually resolves — something a lint rule does not do. It is a heuristic and says so in its own header. |
+| A `validation` refusal may carry a `ValidationReason` identifier, translated as `errors.<reason>` (S5.2) | A new `BackendErrorCode` per case; a sentence in `BackendError.message` | The seven codes are a failure taxonomy and four more would dilute it; a sentence from the backend would be frozen in the wrong language. A reason is the same "keys, not sentences" contract at a finer grain, and `i18n/errors.ts` switches over the union so the compiler proves the mapping is total. |
 | The backend emits keys, the renderer translates | Backend renders sentences in the user's language | A message is stored forever and the language can change afterwards; a stored sentence would be frozen in the language that was active when it was written. It also keeps `src/main` free of UI copy. |
 | Both language names are written in **English** inside `en.json` (`Chinese (Simplified)`) | The usual endonym convention, which would put the Chinese endonym in both files | CLAUDE.md rule #1: `zh-CN.json` is the only file that may contain Chinese, and `locales.test.ts` enforces it. `zh-CN.json` itself does use the endonyms. |
 

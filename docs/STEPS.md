@@ -461,7 +461,7 @@ retyped key by key with a real Enter, which is the regression the gallery must
 not hide — and checks the grid is gone once the row is saved. Docs in
 `docs/features/mcp/`.
 
-### S5.2 Executor role and the chat working directory `[ ]`
+### S5.2 Executor role and the chat working directory `[x]` (2026-09-13)
 What: make the two reserved fields real. `agents.role = 'executor'` becomes a
 first-class choice with an explanation, and a chat can be bound to a local
 folder.
@@ -491,6 +491,80 @@ folder.
 Acceptance: a chat shows its folder chip after `chats.update({ workdir })`; an
 invalid path is refused with a translated error; two executors cannot join one
 chat. Docs: `docs/features/chats/` and `docs/features/agents/` (all four each).
+Done: `ChatPatch.workdir` is `string | null` and `assertWorkdir` in
+`src/main/handlers/chats.ts` checks it against the **real filesystem** —
+absolute, `statSync` succeeds, `isDirectory()` — which is why that module now
+reads `node:fs` and `node:path` (rule #5 is about electron, not about Node).
+`statSync` follows symlinks on purpose: a symlink to a directory is a perfectly
+good working directory, and the check that matters — a path *inside* the folder
+whose realpath leaves it — is per file and belongs to S5.3. The race is
+acknowledged rather than closed: the folder can vanish between the check and the
+first tool call, which is why S5.3 resolves every path again at use. The same
+rules run on `chats.create`, because `assertChatPatch` is shared. Nothing new
+was needed in the runner: `ChatRunner` already re-reads the chat record every
+round, so `workdir` reaches the orchestrator with no plumbing at all, and
+attaching tools to it is S5.3's job rather than dead code written early.
+
+`assertOneExecutor` refuses a member list holding two `executor` agents, on both
+`chats.members.set` and `chats.create`. It lives where membership is **written**
+because `members.set` replaces the whole list and is therefore the only place
+that can see the resulting set — which also makes swapping one executor for
+another in a single call correctly legal. The **known gap** is recorded rather
+than papered over: `agents.update` can still *promote* a participant that is
+already in a chat with an executor, so S5.3 must pick a chat's executor
+deterministically (first `executor` in `position` order) instead of assuming the
+set has exactly one.
+
+The step's one real design decision was how a refusal says *which* rule it broke.
+`BackendErrorCode` is a failure taxonomy of seven classes, and "the request was
+rejected as invalid" is the right sentence almost everywhere because the control
+that sent the request is on screen saying what it wanted — but not for a folder
+that turned out to be a file. So `shared/types.ts` gained `VALIDATION_REASONS` /
+`ValidationReason` (`workdir_not_absolute`, `workdir_missing`,
+`workdir_not_directory`, `second_executor`), carried in `BackendError.details` as
+an **identifier the renderer translates**, never a sentence the backend wrote.
+`i18n/errors.ts` gained `validationReasonOf` (narrowing, so an unknown reason
+from a newer backend degrades to the generic copy rather than printing a raw
+id), a literal-`switch` `validationReasonMessage`, and `translateFailure(t, code,
+details)` — which is also the one place a store's `errorCode` + `errorDetails`
+becomes copy, so no component rebuilds a `BackendError` literal in JSX any more.
+
+Renderer: `stores/chats.ts` keeps `errorDetails` beside `errorCode` and gained
+`setWorkdir` and `chooseWorkdir` (two calls rather than one method, exactly as
+`stores/skills.ts` imports a folder — the dialog is the single thing the backend
+cannot do without electron, and a cancelled dialog must write nothing and leave
+no error). The group-settings block has a "Working directory" row with "Choose…"
+and "Clear", and the header carries an accent chip holding `folderName(workdir)`
+with the whole path in `title` — `lib/workdir.ts` is `basename` written by hand,
+because the renderer project has no Node types. The path itself is printed, never
+translated: it is data. **The role control did not exist** despite the step's
+wording — only the `allowSideEffects={draft.role === 'executor'}` site read the
+field — so the agent editor gained a two-segment control with PLAN.md's rule
+printed under it rather than in a tooltip, and picking "Executor" immediately
+un-greys the `sideEffects` rows in the MCP checklist below it. The badge is drawn
+from `isExecutor` / `hasExecutor` in `agent-display.ts` by all four surfaces that
+show it (agent list, member row, member picker, message header) rather than from
+four literal comparisons; the picker uses `hasExecutor` to disable a second
+executor and replace its model line with `chat.executorTaken`, so the click that
+the backend would refuse is not offered at all.
+
+One deliberate non-change: a refused `workdir` prints in the left column's
+`chats-error` line with every other chats-store failure rather than under the row
+the user clicked. One store, one error field, one place it is rendered — and the
+reason sentence is now specific enough to read correctly anywhere.
+
+Tests: `handlers/chats.test.ts` covers `workdir` accepted, cleared, and refused
+as relative / blank / missing / a file, plus the second-executor refusal on both
+handlers and the two shapes that must stay legal; `stores/chats.test.ts` covers
+both new actions including the cancelled dialog; `lib/workdir.test.ts` and
+`agent-display.test.ts` cover the display helpers; `i18n/errors.test.ts` now
+proves the reason mapping is total and that `errors` holds exactly the codes plus
+the reasons. `e2e/executor.spec.ts` is new and offline — it drives the role
+control, both badges, the greyed candidate, the chip appearing after a
+`chats.update({ workdir })` made through the backend client, "Clear", the three
+refusals with their reasons, and a restart. The native picker is not driven,
+which the file says in its header. `e2e/members.spec.ts` needed no change and
+still passes. Docs in `docs/features/{chats,agents,i18n}/`.
 
 ### S5.3 Executor tools and the permission gate `[ ]`
 What: the built-in tools an executor uses on the chat's folder, and the prompt

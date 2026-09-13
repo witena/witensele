@@ -85,8 +85,16 @@ export interface ProviderInput {
 /* -------------------------------------------------------------------------- */
 
 /**
- * `participant` agents discuss. `executor` is reserved for the post-MVP executor
- * agent bound to `Chat.workdir`; nothing implements it yet.
+ * `participant` agents discuss and never write. `executor` is the single agent
+ * per chat that is allowed to act on the outside world, bound to `Chat.workdir`.
+ *
+ * PLAN.md's decision, in one line: *discussion agents are read-only; all writes
+ * go through one executor*. Several models writing into the same directory
+ * overwrite each other and nothing is reviewable, so exactly one writer plus a
+ * diff-review loop is the shape. Two consequences are already enforced:
+ * `collectAgentTools` attaches a `sideEffects` MCP server only to an `executor`
+ * (S3.1), and a chat refuses a second `executor` member (S5.2). The executor's
+ * own file, shell and git tools arrive in S5.3.
  */
 export type AgentRole = 'participant' | 'executor'
 
@@ -197,8 +205,14 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
 export interface Chat extends EntityBase {
   title: string
   /**
-   * Local working directory for the future executor agent. Reserved: the MVP
-   * always stores `null`.
+   * Absolute path of the local folder this chat's executor works in, or `null`
+   * when the chat is not bound to one.
+   *
+   * Validated by `chats.update` against the real filesystem (absolute, exists,
+   * is a directory), because every path the executor resolves in S5.3 is
+   * confined to it — a folder that is not there is not a boundary. A chat may
+   * have an `executor` member and no `workdir`; that agent simply gets no
+   * executor tools.
    */
   workdir: string | null
   settings: ChatSettings
@@ -517,6 +531,36 @@ export interface BackendError {
   code: BackendErrorCode
   message: string
   details?: unknown
+}
+
+/**
+ * The `validation` refusals the renderer has a sentence of its own for.
+ *
+ * `BackendErrorCode` is deliberately coarse — seven classes for the whole
+ * product — and "the request was rejected as invalid" is the right answer for
+ * almost every one of them, because the control that sent the request is right
+ * there saying what it wanted. These four are the exceptions: the user picked a
+ * folder and it turned out not to be one, or added a member the chat cannot
+ * hold, and the generic sentence would leave them guessing.
+ *
+ * A reason travels in `BackendError.details` as `{ reason }`, so it is an
+ * **identifier the renderer translates**, never a sentence the backend wrote
+ * (CLAUDE.md rule #4). Adding one means adding an `errors.<reason>` key to both
+ * locale files; `i18n/errors.ts` switches over the union and the compiler proves
+ * the mapping is total.
+ */
+export const VALIDATION_REASONS = [
+  'workdir_not_absolute',
+  'workdir_missing',
+  'workdir_not_directory',
+  'second_executor'
+] as const
+
+export type ValidationReason = (typeof VALIDATION_REASONS)[number]
+
+/** The shape `BackendError.details` takes when a reason is carried. */
+export interface ValidationDetails {
+  reason: ValidationReason
 }
 
 /* -------------------------------------------------------------------------- */

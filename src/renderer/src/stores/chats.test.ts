@@ -12,6 +12,7 @@ import type { BackendClient, BackendMethod } from '@shared/backend'
 import type { Chat, ChatMember } from '@shared/types'
 import { DEFAULT_CHAT_SETTINGS, LOCAL_USER_ID } from '@shared/types'
 import { applyBackendEvent } from '../lib/event-bridge'
+import { BackendClientError } from '../lib/backend'
 import { resetBackend, setBackend } from '../lib/backend-provider'
 import { groupChats, useChatsStore } from './chats'
 
@@ -39,6 +40,7 @@ beforeEach(() => {
     status: 'idle',
     error: undefined,
     errorCode: undefined,
+    errorDetails: undefined,
     selectedId: null
   })
 })
@@ -199,6 +201,91 @@ describe('chats store', () => {
     applyBackendEvent({ type: 'chat.deleted', chatId: 'a' })
 
     expect(useChatsStore.getState().selectedId).toBe('b')
+  })
+
+  it('binds a working directory and applies the chat the backend returned', async () => {
+    const bound: Chat = { ...chat('a', 5), workdir: '/Users/ada/code/witena' }
+    const calls: { method: BackendMethod; input: unknown }[] = []
+    setBackend({
+      invoke: (async (method: BackendMethod, input: unknown) => {
+        calls.push({ method, input })
+        return bound
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().setWorkdir('a', '/Users/ada/code/witena')
+
+    expect(calls).toEqual([
+      { method: 'chats.update', input: { id: 'a', patch: { workdir: '/Users/ada/code/witena' } } }
+    ])
+    expect(useChatsStore.getState().chats).toEqual([bound])
+    expect(useChatsStore.getState().error).toBeUndefined()
+  })
+
+  it('sends null to unbind, which is what Clear does', async () => {
+    const cleared = chat('a', 6)
+    const patches: unknown[] = []
+    setBackend({
+      invoke: (async (_method: BackendMethod, input: unknown) => {
+        patches.push((input as { patch: unknown }).patch)
+        return cleared
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().setWorkdir('a', null)
+
+    expect(patches).toEqual([{ workdir: null }])
+    expect(useChatsStore.getState().chats[0]?.workdir).toBeNull()
+  })
+
+  it('keeps the rejection reason so the line can say which rule was broken', async () => {
+    setBackend({
+      invoke: (async () => {
+        throw new BackendClientError({
+          code: 'validation',
+          message: 'workdir does not exist: /gone',
+          details: { reason: 'workdir_missing' }
+        })
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await expect(useChatsStore.getState().setWorkdir('a', '/gone')).resolves.toBeUndefined()
+
+    expect(useChatsStore.getState().errorCode).toBe('validation')
+    expect(useChatsStore.getState().errorDetails).toEqual({ reason: 'workdir_missing' })
+  })
+
+  it('picks a folder and binds it, and does nothing at all when the dialog is cancelled', async () => {
+    const calls: BackendMethod[] = []
+    setBackend({
+      invoke: (async (method: BackendMethod) => {
+        calls.push(method)
+        if (method === 'system.pickFolder') return '/Users/ada/code/witena'
+        return { ...chat('a', 5), workdir: '/Users/ada/code/witena' }
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().chooseWorkdir('a')
+    expect(calls).toEqual(['system.pickFolder', 'chats.update'])
+
+    calls.length = 0
+    setBackend({
+      invoke: (async (method: BackendMethod) => {
+        calls.push(method)
+        return null
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().chooseWorkdir('a')
+
+    // Cancelling is an answer, not a failure: no write, and no error left behind.
+    expect(calls).toEqual(['system.pickFolder'])
+    expect(useChatsStore.getState().error).toBeUndefined()
   })
 
   it('ignores a rename to an empty title without calling the backend', async () => {

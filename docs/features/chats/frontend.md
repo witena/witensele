@@ -4,7 +4,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, and the group-settings block, which now writes straight through to `chats.update` |
+| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, the group-settings block (which writes straight through to `chats.update`) including the S5.2 "Working directory" row, and the folder chip beside the header title |
 | `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete |
 | `src/renderer/src/components/chat/message-list.tsx` | The virtualized scroller (react-virtuoso): `followOutput` only while at the bottom, the "jump to latest" pill, and the day separators |
 | `src/renderer/src/components/chat/transcript-rows.ts` | `buildTranscriptRows` / `dayBucket`: `Message[]` → the flat row array the virtualizer renders. Pure and unit-tested |
@@ -18,9 +18,11 @@
 | `src/renderer/src/components/chat/composer.tsx` | Auto-growing textarea (Enter sends, Shift+Enter newline, IME-safe, up to 8 lines), the `@` autocomplete popover, the clickable mention chips plus `@all`, Send / Stop |
 | `src/renderer/src/components/chat/mention-query.ts` | `extractMentionQuery` / `filterMentionCandidates` / `insertMention` / `appendMention`: everything the autocomplete could get wrong. Pure and unit-tested |
 | `src/renderer/src/components/chat/actions-card.tsx` | The right column's Actions card: the summarise picker and the vote button, both sending an ordinary message |
-| `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover, the member rows (avatar with presence dot, name, `model · presence` — counting up as `away · Ns` — the usage placeholder or, while the member is offline, a Retry button, and remove on hover) and native HTML5 drag-and-drop reordering |
+| `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover (which since S5.2 greys out a second executor and says why in its sub-line), the member rows (avatar with presence dot, name, the executor badge, `model · presence` — counting up as `away · Ns` — the usage placeholder or, while the member is offline, a Retry button, and remove on hover) and native HTML5 drag-and-drop reordering |
 | `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested |
-| `src/renderer/src/components/agents/agent-display.ts` | `agentModelLabel`, shared with the Agents page so both screens name a model the same way |
+| `src/renderer/src/lib/workdir.ts` | `folderName(path)`: the last segment of a path, for the header chip and the settings row. Hand-written rather than `node:path`, because the renderer has no Node types. Pure and unit-tested |
+| `src/renderer/src/i18n/errors.ts` | `translateFailure(t, code, details)`: the one place a store's `errorCode` + `errorDetails` becomes a sentence, and where a `ValidationReason` overrides the generic `validation` copy |
+| `src/renderer/src/components/agents/agent-display.ts` | `agentModelLabel`, plus `isExecutor` / `hasExecutor` (S5.2) — shared with the Agents page so all four surfaces that draw the badge read one rule |
 | `src/renderer/src/lib/event-bridge.ts` | The single backend subscription; fans every event into the stores |
 | `src/renderer/src/lib/message-view.ts` | `wasStopped`, `messageText` (which also strips a trailing `[PASS]`, S4.3) and the stored `'aborted'` detail |
 | `src/renderer/src/stores/usage.ts` | The per-chat token and cost summary: seeded from `messages.usageSummary` when a chat is opened, recomputed locally on every `message.updated` |
@@ -33,7 +35,7 @@
 | `chats` | `chats` | `Chat[]` | Backend-owned, newest `updatedAt` first. Replaced by `chats.list`, upserted by `chat.updated`, filtered by `chat.deleted` |
 | `chats` | `membersByChat` | `Record<string, string[]>` | Backend-owned member agent ids, in speaking order. Written only by `setMembers`, which goes through the backend first |
 | `chats` | `selectedId` | `string \| null` | Local UI state, not persisted |
-| `chats` | `status` / `error` / `errorCode` | | Load state and the last failure |
+| `chats` | `status` / `error` / `errorCode` / `errorDetails` | | Load state and the last failure. `errorDetails` is the rejection's own `details`, which may carry a `ValidationReason` — that is what turns "the request was rejected as invalid" into "that folder no longer exists" |
 | `messages` | `byChat` | `Record<string, Message[]>` | Backend-owned, **oldest first** |
 | `messages` | `status` | `Record<string, MessagesStatus>` | Per chat, so one failed load does not blank the others |
 | `run` | `activeByChat` | `Record<string, ActiveRun>` | Backend-owned; set by `run.started` / `run.round`, cleared by `run.finished`. Drives the Stop button |
@@ -66,6 +68,8 @@ selector re-renders on every store write.
 | `invoke('chat.send')` | Composer, Enter or the Send button — and the Actions card, through the composer's `submitText` handle | Stores the message and schedules a run |
 | `invoke('chats.members.set')` | The picker, the row's "×", and a drop | Replaces the whole member list, order included |
 | `invoke('chats.update')` | Every group-settings control | Persists one `ChatSettings` field immediately; no Save button and no debounce |
+| `invoke('system.pickFolder')` + `invoke('chats.update')` | "Choose…" in the Working directory row, through `chooseWorkdir` | The native modal, then the binding. A cancelled dialog writes nothing and leaves no error |
+| `invoke('chats.update')` | "Clear" in the Working directory row, through `setWorkdir(id, null)` | Unbinds the folder; the one path that needs no dialog |
 | `invoke('providers.list')` | `providers.load()` on mount | The provider name in the member picker |
 | `invoke('chat.stop')` | The Stop button | Aborts the run |
 | `subscribe(...)` | `startEventBridge()` in `main.tsx`, once at bootstrap | Fans `message.*`, `chat.*`, `run.*` and `presence.changed` into the stores |
@@ -102,6 +106,10 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | no members | The member panel shows its empty state plus an accent hint ("Add at least one agent"), and a send is refused with a red line under the composer. The composer itself stays enabled |
 | picker open | A popover under "+ Add" listing the agents that are not members yet (avatar, name, `model · provider`); it closes on a pick, on an outside click, and when the chat changes |
 | dragging a member | The dragged row is at 50% opacity; dropping on another row writes the new order through `chats.members.set` |
+| executor member | An accent `executor` chip next to the name, in the member row and on every message that agent sends. The agent list on the Agents page carries the same chip |
+| second executor offered | The picker's row is disabled and at 55% opacity, and its mono model line is replaced by `chat.executorTaken`. The click is not merely ignored — there is nothing to click |
+| folder bound | An accent chip beside the chat title holding the folder's **name**, with the whole path in its `title`; the settings row prints the same name in mono and enables "Clear" |
+| folder refused | The left column's `chats-error` line names the reason: not absolute, no longer there, or a file rather than a folder |
 
 Sending during a run is deliberately allowed: the message appears immediately and
 is answered after the current run (see `../orchestration/context.md`).
@@ -126,6 +134,10 @@ New keys, all under the existing namespaces:
 | `chat.messageUsage`, `chat.messageUsageWithCost` | The model badge's tooltip on one message: `In … · out …`, plus the cost when there is one |
 | `chat.searchEmptyTitle`, `chat.searchEmptyDescription` | The empty state when a query matches no chat (distinct from "no chats yet") |
 | `chat.jumpToLatest` | The pill that appears when a message arrives while the user is scrolled up |
+| `chat.workdir`, `chat.workdirHint`, `chat.workdirNone`, `chat.workdirChoose`, `chat.workdirClear` | The Working directory row. The **path itself is never translated** — it is data, printed as it is stored |
+| `chat.executorTaken` | The picker's sub-line on a second executor |
+| `agents.executorBadge`, `agents.executorBadgeTitle` | The chip and its tooltip, shared with the Agents page — the copy belongs to the role, which `agents` owns |
+| `errors.workdir_not_absolute`, `errors.workdir_missing`, `errors.workdir_not_directory`, `errors.second_executor` | The four `ValidationReason` sentences, resolved by `translateFailure` |
 | `chat.mentionAllHint` | The subtitle of the popover's `@all` row |
 | `chat.copy`, `chat.copied`, `chat.copyCode` | The code block's Copy button, its confirmed state and its accessible name |
 | `chat.toolRunning`, `chat.toolDone`, `chat.toolError`, `chat.toolResults`, `chat.toolExpand`, `chat.toolCollapse`, `chat.toolInput`, `chat.toolOutput` | The tool card |
@@ -170,3 +182,7 @@ is never translated.
   `data-bucket`, `code-block` with `data-language`, `tool-card` with `data-tool`
   and `data-state`, `mention-popover` / `mention-option` with `data-name`, and
   `mention-chip` / `mention-chip-all`; every existing attribute was kept.
+  S5.2 added `chat-workdir` (with `data-path`, empty when unbound),
+  `chat-workdir-chip`, `chat-workdir-choose`, `chat-workdir-clear`,
+  `member-executor`, `member-candidate-executor`, `message-executor` and
+  `data-blocked` on `member-candidate`.

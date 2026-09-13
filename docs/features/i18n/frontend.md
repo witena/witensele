@@ -99,7 +99,10 @@ actually wanted.
 4. Text the main process produces is not a string: emit a `SystemNoticePart` with
    a key under `notices.*` and render it with `translateNotice`. A rejected
    `invoke` is rendered from `errors.<BackendError.code>`; `BackendError.message`
-   is log detail and is never shown.
+   is log detail and is never shown. When the rejection carries a
+   `ValidationReason` in `details`, `translateFailure` prefers `errors.<reason>`
+   over the generic `errors.validation` — the narrower half of the same contract
+   (S5.2).
 
 Things the guards will refuse: an English sentence in `zh-CN.json`, any CJK in
 `en.json`, an empty value, a key that exists in one file only, a key that no

@@ -47,7 +47,8 @@ Delete (first click arms, second acts)
 
 | Name | Where | Notes |
 |---|---|---|
-| `Agent`, `AgentInput`, `AgentParams`, `AgentAvatar`, `AgentRole` | `src/shared/types.ts` | `AgentInput = Omit<Agent, keyof EntityBase>`; `InitialAvatar` gained an optional `textColor` in S2.1 |
+| `Agent`, `AgentInput`, `AgentParams`, `AgentAvatar`, `AgentRole` | `src/shared/types.ts` | `AgentInput = Omit<Agent, keyof EntityBase>`; `InitialAvatar` gained an optional `textColor` in S2.1. `AgentRole` stopped being reserved in S5.2, and its doc comment is where PLAN.md's one-writer decision is restated |
+| `isExecutor`, `hasExecutor` | `src/renderer/src/components/agents/agent-display.ts` | The badge's rule and the member picker's, in one place. Pure and unit-tested |
 | `agents.get / create / update / delete` | `src/shared/backend.ts` | Declared since S1.1; implemented in S2.1 |
 | `AgentDraftErrors`, `validateDraft`, `duplicateName` | `src/renderer/src/stores/agents.ts` | Pure, exported, and unit-tested |
 | `AGENT_AVATAR_COLORS`, `avatarInitial`, `agentModelLabel` | `src/renderer/src/components/agents/agent-display.ts` | Shared by the Agents page and the chat's member panel |
@@ -68,6 +69,11 @@ disabled with a reason.
 | `params.maxTokens` | When set: a positive integer | `validation` / `maxTokensRange` |
 | `role` | `participant` or `executor` | `validation` |
 
+Since S5.2 the form writes both roles. The handler's rule is unchanged — it
+always accepted either — and nothing about `role` is validated *against a chat*
+here; that is `chats.members.set`'s job (see
+[`../chats/backend.md`](../chats/backend.md)).
+
 The stored name is trimmed; the avatar monogram falls back to the first character
 of the name, uppercased, when the user did not type one.
 
@@ -77,8 +83,9 @@ of the name, uppercased, when the user did not type one.
 |---|---|
 | `src/main/handlers/agents.test.ts` | Every validation case, case-insensitive uniqueness, the reserved `executor` role, the membership cascade, the `chat.updated` fan-out, and "delete stops a running chat" against a mock model that never finishes |
 | `src/renderer/src/stores/agents.test.ts` | `validateDraft`, `duplicateName`, the draft lifecycle (create → save → edit), `dirty` going true and back, a params field being removed rather than set to `undefined`, and the editor closing when its agent is deleted |
-| `src/renderer/src/components/agents/agent-display.test.ts` | `agentModelLabel` with and without a provider, `avatarInitial` including an astral-plane character, the palette's size |
+| `src/renderer/src/components/agents/agent-display.test.ts` | `agentModelLabel` with and without a provider, `avatarInitial` including an astral-plane character, the palette's size, and `isExecutor` / `hasExecutor` over an empty list, a list of participants and a mixed one |
 | `e2e/agents.spec.ts` | The whole screen: empty library, create, duplicate name refused, a second agent on a second model, duplicate, two-click delete, restart |
+| `e2e/executor.spec.ts` | S5.2: the role control writing `executor` and surviving a save and a restart, the explanation rendered under it, and the badge appearing in the agent list for the executors and only for them. The rest of that spec is [`chats`](../chats/implement.md)'s half of the step |
 
 ## Known limitations and TODOs
 
@@ -94,6 +101,12 @@ of the name, uppercased, when the user did not type one.
   selection.
 - The reasoning toggle writes `params.reasoning`; nothing reads it yet —
   `agent-turn` starts honouring it when a provider that supports it is wired up.
+- **The role is real but half-used.** It already gates the `sideEffects` MCP
+  checklist (S3.1) and the "one executor per chat" rule (S5.2); the executor's
+  own file, shell and git tools arrive in S5.3, so an `executor` in a chat with
+  no `workdir` behaves exactly like a participant today.
+- Promoting an agent to `executor` is not refused when it is already in a chat
+  that has one. See [`../chats/backend.md`](../chats/backend.md).
 - There is no `agent.created` / `agent.updated` event. The agents page is the only
   writer and patches its own list; other screens learn through `chat.updated`.
 - Duplicate copies the provider as well as the model, so "the same agent on

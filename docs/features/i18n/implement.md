@@ -105,7 +105,7 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 | `agents` | Agent list and configuration form labels |
 | `settings` | Section names, the language switcher's own copy, the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` |
 | `presence` | The four presence states |
-| `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` |
+| `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`) |
 | `notices` | Backend-authored notices — the keys `SystemNoticePart.key` may take |
 
 S1.5 was the first step to render most of `nav`, `chat`, `agents` and `settings`,

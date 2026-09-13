@@ -17,7 +17,7 @@ import { AgentList } from '../components/agents/agent-list'
 import { Column } from '../components/layout/column'
 import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from '../components/layout/window-chrome'
 import { EmptyState, IconButton, SectionTitle } from '../components/ui'
-import { translateError } from '../i18n/errors'
+import { translateFailure } from '../i18n/errors'
 import { useAgentsStore } from '../stores/agents'
 import { useChatsStore } from '../stores/chats'
 import { useProvidersStore } from '../stores/providers'
@@ -102,12 +102,13 @@ export function AgentsPage(): React.JSX.Element {
               providers={providers}
               selectedId={selectedId}
               onSelect={select}
+              executorLabel={t('agents.executorBadge')}
             />
           )}
 
           {error ? (
             <p data-testid="agents-error" className="px-2 pt-2 text-xs text-danger">
-              {translateError(t, { code: errorCode ?? 'internal', message: error })}
+              {translateFailure(t, errorCode)}
             </p>
           ) : null}
         </div>

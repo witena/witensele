@@ -32,6 +32,12 @@ can hold a real conversation and still holds it after a restart.
 - `ensureDefaultAgent`: the bootstrap agent a chat is given **only** while the
   agent library is empty, so a fresh install can hold a conversation before
   anyone opens the Agents page.
+- The chat's **working directory** (S5.2): `ChatPatch.workdir`, the handler's
+  filesystem check, the "Working directory" row in the group settings with
+  "Choose…" and "Clear", and the folder chip in the header.
+- The **one executor per chat** rule (S5.2): refused by `chats.members.set`, and
+  explained in advance by the member picker, which greys a second executor out.
+  The executor badge on member rows and message headers is here too.
 
 ## Out of scope
 
@@ -42,6 +48,8 @@ can hold a real conversation and still holds it after a restart.
 | Creating and editing agents | [`agents`](../agents/context.md) (S2.1) |
 | The presence state machine, the heartbeat, the two timeouts and the Retry button | [`presence`](../presence/context.md). This feature owns the `ChatSettings` fields that override the budgets, and the rows the dots are drawn on |
 | Generating the title itself | [`orchestration`](../orchestration/context.md) — `ChatRunner` writes it after the first run (S4.3); this feature owns the field, the rename and the list row |
+| The `executor` **role** itself — the control, the badge's copy, what the role means | [`agents`](../agents/context.md). This feature owns the *membership* rule and the surfaces that draw the badge |
+| The executor's file, shell and git tools, and the permission prompt | S5.3 and S5.4 (`docs/features/executor/`). This feature owns the folder the tools will be confined to, and nothing more |
 | Syntax highlighting, tool cards, `@` autocomplete | S2.5 |
 | Virtualized message list, upward paging | S2.5 |
 
@@ -64,6 +72,11 @@ the next round boundary rather than mid-turn.
 
 | Decision | Alternatives considered | Why this one |
 |---|---|---|
+| `workdir` is checked against the **real filesystem**, not merely parsed | Store whatever string arrives and fail at the first tool call | The path is a boundary, not a label: S5.3 resolves every executor path inside it. A folder that is not there confines nothing, and "the write failed" three screens later is a far worse answer than "that folder does not exist" at the moment it is picked |
+| A chat with an `executor` member and **no** `workdir` is allowed | Refuse the member until a folder is bound | Configuration order is the user's. S5.3 simply attaches no executor tools, which is the same outcome with none of the ordering rules |
+| The second-executor refusal lives in `chats.members.set` | Refuse it in `agents.update`; enforce it when tools are attached | `members.set` replaces the whole list and is the only place that sees the resulting set, so it is the only place the rule can be *checked* rather than guessed. The cost is the promotion gap recorded in `backend.md` |
+| A refused `workdir` or member carries a `ValidationReason` in `details` | One more `BackendErrorCode` each; a generic `validation` line | The seven codes are a failure *taxonomy*, not a message catalogue, and four new ones would dilute it. A reason is an identifier the renderer translates, which is the same contract `SystemNoticePart` already uses for stored text |
+| The workdir failure is shown in the left column's `chats-error` line, like every other chats-store failure | A dedicated error line under the Working directory row | One store, one error field, one place it is rendered. A second surface for one field would be the first exception in a screen that has had none, and the reason sentence is now specific enough to be read anywhere |
 | `chats.create` takes `memberAgentIds`, and only falls back to the bootstrap agent while the agents table is empty | Always add the first agent; never add anyone | Once the user owns agents, deciding who is in a chat is theirs. The fallback is kept because it is the only thing that makes the *first* chat of a fresh install answerable |
 | `ChatCreateInput` carries `memberAgentIds` rather than `Chat` carrying members | Put a member list on `Chat`; save the chat and then its members | Membership is a separate table and not a property of the chat row, but a chat created from the picker must be born with its members rather than saved twice |
 | `chat.send` rejects with `validation('chat has no members')`, and the composer stays enabled | Disable the composer; run with nobody and finish silently | A disabled composer does not say *why*. The rejection prints one line under the box and the member panel prints the fix |
@@ -96,3 +109,8 @@ the next round boundary rather than mid-turn.
 - Whether `messages.list` should return oldest-first for the first page, given
   that every caller reverses it. Changing it would change a contract that already
   has a cursor semantics written around "newest first".
+- Whether the "one executor" rule should also be enforced when an agent is
+  *promoted* to `executor` (`agents.update`). Today it is not; see the known gap
+  in `backend.md`.
+- Whether the chat should offer to bind the folder when an executor joins a chat
+  that has none. Today the two are independent and the user does both by hand.

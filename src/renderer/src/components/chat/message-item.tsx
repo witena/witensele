@@ -68,6 +68,7 @@ import { useAgent, useAgentsStore } from '../../stores/agents'
 import { useAgentPresence } from '../../stores/presence'
 import { useProvidersStore } from '../../stores/providers'
 import { Avatar, Badge } from '../ui'
+import { isExecutor } from '../agents/agent-display'
 import { Markdown } from './markdown'
 import { ToolCard } from './tool-card'
 import { collectToolCalls } from './tool-call'
@@ -302,6 +303,19 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
               {...(usageHint ? { title: usageHint } : {})}
             >
               {agent.modelId}
+            </Badge>
+          ) : null}
+          {/* The one member allowed to change things (S5.2). It belongs on every
+              message rather than only in the member panel: reading a transcript
+              afterwards, "who wrote to the disk" is the first question. */}
+          {agent && isExecutor(agent) ? (
+            <Badge
+              tone="accent"
+              font="sans"
+              data-testid="message-executor"
+              title={t('agents.executorBadgeTitle')}
+            >
+              {t('agents.executorBadge')}
             </Badge>
           ) : null}
           {message.round > 0 ? (

@@ -8,21 +8,31 @@
  */
 import clsx from 'clsx'
 import type { Agent, Provider } from '@shared/types'
-import { Avatar } from '../ui'
-import { agentModelLabel } from './agent-display'
+import { Avatar, Badge } from '../ui'
+import { agentModelLabel, isExecutor } from './agent-display'
 
 export interface AgentListProps {
   agents: readonly Agent[]
   providers: readonly Provider[]
   selectedId: string | null
   onSelect: (id: string) => void
+  /**
+   * Already-translated label for the executor tag.
+   *
+   * Passed in rather than looked up here because this component is otherwise
+   * free of i18next — the page above it already holds `t`, and a list row that
+   * subscribed to the translation context would re-render every agent on a
+   * language change for one word.
+   */
+  executorLabel: string
 }
 
 export function AgentList({
   agents,
   providers,
   selectedId,
-  onSelect
+  onSelect,
+  executorLabel
 }: AgentListProps): React.JSX.Element {
   return (
     <div className="flex flex-col gap-0.5">
@@ -47,8 +57,15 @@ export function AgentList({
             size="lg"
           />
           <span className="flex min-w-0 flex-col gap-px">
-            <span data-testid="agent-item-name" className="truncate text-[13px] text-fg">
-              {agent.name}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span data-testid="agent-item-name" className="truncate text-[13px] text-fg">
+                {agent.name}
+              </span>
+              {isExecutor(agent) ? (
+                <Badge tone="accent" font="sans" data-testid="agent-item-executor">
+                  {executorLabel}
+                </Badge>
+              ) : null}
             </span>
             <span
               data-testid="agent-item-model"

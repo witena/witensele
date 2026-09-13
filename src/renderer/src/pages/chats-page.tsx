@@ -45,6 +45,7 @@ import { PageHeader } from '../components/layout/page-header'
 import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from '../components/layout/window-chrome'
 import {
   Badge,
+  Button,
   EmptyState,
   Field,
   IconButton,
@@ -53,7 +54,7 @@ import {
   SegmentedControl,
   Select
 } from '../components/ui'
-import { translateError } from '../i18n/errors'
+import { translateFailure } from '../i18n/errors'
 import { useAgentsStore } from '../stores/agents'
 import { useChatMemberIds, useChatsStore } from '../stores/chats'
 import { useChatMessages, useMessagesStore } from '../stores/messages'
@@ -62,6 +63,7 @@ import { useIsRunning, useRunStore } from '../stores/run'
 import { useProvidersStore } from '../stores/providers'
 import { useChatUsage, useUsageStore } from '../stores/usage'
 import { reorder } from '../lib/reorder'
+import { folderName } from '../lib/workdir'
 
 /** Literal `t()` calls so the `used-keys` guard can verify both branches. */
 function modeLabel(t: TFunction, mode: ChatMode): string {
@@ -116,6 +118,7 @@ export function ChatsPage(): React.JSX.Element {
   const selectedId = useChatsStore((state) => state.selectedId)
   const chatsError = useChatsStore((state) => state.error)
   const chatsErrorCode = useChatsStore((state) => state.errorCode)
+  const chatsErrorDetails = useChatsStore((state) => state.errorDetails)
   const agents = useAgentsStore((state) => state.agents)
   const providers = useProvidersStore((state) => state.providers)
 
@@ -302,7 +305,7 @@ export function ChatsPage(): React.JSX.Element {
 
           {chatsError ? (
             <p data-testid="chats-error" className="px-3 pb-3 text-xs text-danger">
-              {translateError(t, { code: chatsErrorCode ?? 'internal', message: chatsError })}
+              {translateFailure(t, chatsErrorCode, chatsErrorDetails)}
             </p>
           ) : null}
         </div>
@@ -313,7 +316,23 @@ export function ChatsPage(): React.JSX.Element {
         <PageHeader
           testId="page-chats-conversation"
           title={selected ? selected.title : t('chat.noChatSelected')}
-          badge={<Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>}
+          badge={
+            <>
+              <Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>
+              {/* The folder's own name, with the whole path in the tooltip: the
+                  interesting half of a path is its last segment, and the rest
+                  does not fit beside a title. */}
+              {selected?.workdir ? (
+                <Badge
+                  tone="accent"
+                  data-testid="chat-workdir-chip"
+                  title={selected.workdir}
+                >
+                  {folderName(selected.workdir)}
+                </Badge>
+              ) : null}
+            </>
+          }
           actions={
             <>
               {activeRun && speakingNow.length > 0 ? (
@@ -352,9 +371,7 @@ export function ChatsPage(): React.JSX.Element {
           handleRef={composer}
           members={members}
           running={running}
-          {...(runError
-            ? { error: translateError(t, { code: runErrorCode ?? 'internal', message: runError }) }
-            : {})}
+          {...(runError ? { error: translateFailure(t, runErrorCode) } : {})}
           onSend={(text, mentions) =>
             selectedId
               ? useRunStore.getState().send(selectedId, text, mentions)
@@ -450,6 +467,51 @@ export function ChatsPage(): React.JSX.Element {
 
             <Field label={t('chat.speakingOrder')}>
               <span className="text-[11px] text-fg-faint">{t('chat.speakingOrderHint')}</span>
+            </Field>
+
+            {/*
+              The chat's working directory (S5.2). The path itself is data, not
+              copy, so it is printed rather than translated — the folder's name
+              on the line, the whole path in the tooltip. "Choose…" goes through
+              the native picker, which is the one backend method that needs
+              electron (`src/main/ipc/dialogs.ts`).
+            */}
+            <Field label={t('chat.workdir')} hint={t('chat.workdirHint')} layout="column">
+              <div className="flex items-center gap-1.5">
+                <span
+                  data-testid="chat-workdir"
+                  data-path={selected?.workdir ?? ''}
+                  title={selected?.workdir ?? undefined}
+                  className={
+                    selected?.workdir
+                      ? 'min-w-0 grow truncate font-mono text-[11px] text-fg-dim'
+                      : 'min-w-0 grow truncate text-[11px] text-fg-faint'
+                  }
+                >
+                  {selected?.workdir ? folderName(selected.workdir) : t('chat.workdirNone')}
+                </span>
+                <Button
+                  size="sm"
+                  data-testid="chat-workdir-choose"
+                  disabled={!selectedId}
+                  onClick={() => {
+                    if (selectedId) void useChatsStore.getState().chooseWorkdir(selectedId)
+                  }}
+                >
+                  {t('chat.workdirChoose')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-testid="chat-workdir-clear"
+                  disabled={!selectedId || !selected?.workdir}
+                  onClick={() => {
+                    if (selectedId) void useChatsStore.getState().setWorkdir(selectedId, null)
+                  }}
+                >
+                  {t('chat.workdirClear')}
+                </Button>
+              </div>
             </Field>
           </section>
 

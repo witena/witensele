@@ -21,7 +21,16 @@
  * - **`chats.delete` stops the run first.** Deleting a chat cascades to its
  *   messages, so a turn still streaming into one of them would write to rows that
  *   no longer exist and emit events for a chat the renderer has dropped.
+ * - **`workdir` is checked against the real filesystem** (S5.2), which is why
+ *   this module reads `node:fs`. The handler layer is allowed to; the services
+ *   behind it are not electron-bound either way (CLAUDE.md rule #5 is about
+ *   electron, not about Node).
+ * - **A chat holds at most one executor member.** PLAN.md's rule is that all
+ *   writes go through a single agent, so the refusal lives where membership is
+ *   written rather than where tools are attached.
  */
+import { statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import type { ChatCreateInput, ChatMode, ChatPatch, ChatSettings, SpeakingMode } from '@shared/types'
 import { MAX_AUTO_ROUNDS, MIN_AUTO_ROUNDS } from '@shared/types'
 import { summarizeUsage, type ChatUsageSummary } from '@shared/usage'
@@ -52,7 +61,72 @@ function assertChatPatch(patch: unknown): asserts patch is ChatPatch {
       throw validation('A chat title cannot be empty')
     }
   }
+  if (candidate.workdir !== undefined) assertWorkdir(candidate.workdir)
   if (candidate.settings !== undefined) assertChatSettings(candidate.settings)
+}
+
+/**
+ * The chat's working directory: `null`, or an absolute path that is a directory
+ * **right now**.
+ *
+ * Checked against the filesystem rather than merely parsed, because the path is
+ * a security boundary and not a label: every file the executor reads or writes in
+ * S5.3 is resolved inside it, and a folder that does not exist cannot confine
+ * anything. `statSync` follows symlinks on purpose — a symlink to a directory is
+ * a perfectly good working directory, and the confinement check that matters
+ * (a path inside the folder whose realpath leaves it) belongs to S5.3, per file.
+ *
+ * There is a race here that cannot be closed: the folder can be deleted between
+ * this check and the first tool call. That is what makes it a check and not a
+ * guarantee, and why S5.3 resolves every path again at use.
+ *
+ * Each rejection carries a `ValidationReason` in `details` so the renderer can
+ * say which of the three went wrong; the message itself is developer-facing.
+ */
+function assertWorkdir(value: unknown): asserts value is string | null {
+  // `null` is how the "Clear" button unbinds a chat, and is always valid.
+  if (value === null) return
+  if (typeof value !== 'string' || value.trim().length === 0 || !isAbsolute(value)) {
+    throw validation('workdir must be an absolute path, or null', {
+      reason: 'workdir_not_absolute'
+    })
+  }
+
+  let stats
+  try {
+    stats = statSync(value)
+  } catch {
+    // Every failure here — missing, unreadable, a broken symlink — reads the same
+    // to the user: the folder they picked is not usable as one.
+    throw validation(`workdir does not exist: ${value}`, { reason: 'workdir_missing' })
+  }
+  if (!stats.isDirectory()) {
+    throw validation(`workdir is not a directory: ${value}`, { reason: 'workdir_not_directory' })
+  }
+}
+
+/**
+ * At most one `executor` among a chat's members.
+ *
+ * PLAN.md: *discussion agents are read-only; all writes go through one executor*.
+ * Two writers in one chat would overwrite each other's changes in the same
+ * folder and leave a diff nobody can review, so the second one is refused at the
+ * moment membership is written — which is the only place that can see the whole
+ * resulting list, because `chats.members.set` replaces it wholesale.
+ *
+ * Every id has already been resolved by the caller, so `agents.get` here is a
+ * repeat read of rows that are certainly present.
+ */
+function assertOneExecutor(ctx: AppContext, agentIds: string[]): void {
+  const executors = agentIds.filter(
+    (agentId) => ctx.repos.agents.get(agentId, ctx.userId).role === 'executor'
+  )
+  if (executors.length > 1) {
+    throw validation('a chat may have only one executor member', {
+      reason: 'second_executor',
+      agentIds: executors
+    })
+  }
 }
 
 /**
@@ -163,6 +237,9 @@ export const chatHandlers: HandlerModule = {
     if (memberAgentIds !== undefined) assertAgentIds(memberAgentIds)
 
     const members = await initialMembers(ctx, memberAgentIds)
+    // Before the row exists: a chat created with two executors would otherwise
+    // be written and then left half-built when `setMembers` refused.
+    assertOneExecutor(ctx, members)
     const chat = ctx.repos.chats.create(patch, ctx.userId)
     // `setMembers` validates that every agent exists and rejects duplicates.
     ctx.repos.chats.setMembers(ctx.userId, chat.id, members)
@@ -211,6 +288,7 @@ export const chatHandlers: HandlerModule = {
     // `not_found` for an id that names no agent of this user, before anything is
     // written: an empty member list is a valid state, a bogus one is not.
     for (const agentId of input.agentIds) ctx.repos.agents.get(agentId, ctx.userId)
+    assertOneExecutor(ctx, input.agentIds)
 
     const members = ctx.repos.chats.setMembers(ctx.userId, chatId, input.agentIds)
     ctx.events.emit({ type: 'chat.updated', chat: ctx.repos.chats.get(chatId, ctx.userId) })

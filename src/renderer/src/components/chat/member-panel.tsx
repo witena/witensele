@@ -42,10 +42,10 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatTokens } from '@shared/pricing'
 import type { Agent, AgentPresence, PresenceState, Provider } from '@shared/types'
-import { agentModelLabel } from '../agents/agent-display'
+import { agentModelLabel, hasExecutor, isExecutor } from '../agents/agent-display'
 import { useIsRetrying, usePresence, usePresenceStore } from '../../stores/presence'
 import { useChatUsage } from '../../stores/usage'
-import { Avatar, Button, EmptyState, IconButton, SectionTitle } from '../ui'
+import { Avatar, Badge, Button, EmptyState, IconButton, SectionTitle } from '../ui'
 
 /** Literal `t()` calls, so `used-keys.test.ts` can verify all four labels. */
 function presenceLabel(t: TFunction, state: PresenceState): string {
@@ -143,6 +143,11 @@ export function MemberPanel({
   }, [picking])
 
   const candidates = agents.filter((agent) => !members.some((member) => member.id === agent.id))
+  // PLAN.md: one writer per chat. The picker says so before the click rather
+  // than letting the backend refuse it — the refusal is still the authority
+  // (see `assertOneExecutor` in `src/main/handlers/chats.ts`), this is the
+  // explanation.
+  const executorTaken = hasExecutor(members)
 
   return (
     <section ref={panel} className="relative flex flex-col gap-1.5">
@@ -171,32 +176,47 @@ export function MemberPanel({
               {agents.length === 0 ? t('chat.addMemberEmpty') : t('chat.addMemberAll')}
             </p>
           ) : (
-            candidates.map((agent) => (
-              <button
-                key={agent.id}
-                type="button"
-                data-testid="member-candidate"
-                data-agent-id={agent.id}
-                onClick={() => {
-                  setPicking(false)
-                  onAdd(agent.id)
-                }}
-                className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-bg-hover"
-              >
-                <Avatar
-                  text={agent.avatar.text}
-                  color={agent.avatar.color}
-                  textColor={agent.avatar.textColor}
-                  size="md"
-                />
-                <span className="flex min-w-0 flex-col gap-px">
-                  <span className="truncate text-[13px] text-fg">{agent.name}</span>
-                  <span className="truncate font-mono text-[11px] text-fg-faint">
-                    {agentModelLabel(agent, providers)}
+            candidates.map((agent) => {
+              const blocked = executorTaken && isExecutor(agent)
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  data-testid="member-candidate"
+                  data-agent-id={agent.id}
+                  data-blocked={blocked ? 'true' : 'false'}
+                  disabled={blocked}
+                  onClick={() => {
+                    setPicking(false)
+                    onAdd(agent.id)
+                  }}
+                  className={clsx(
+                    'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
+                    blocked ? 'cursor-not-allowed opacity-55' : 'hover:bg-bg-hover'
+                  )}
+                >
+                  <Avatar
+                    text={agent.avatar.text}
+                    color={agent.avatar.color}
+                    textColor={agent.avatar.textColor}
+                    size="md"
+                  />
+                  <span className="flex min-w-0 flex-col gap-px">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-[13px] text-fg">{agent.name}</span>
+                      {isExecutor(agent) ? (
+                        <Badge tone="accent" font="sans" data-testid="member-candidate-executor">
+                          {t('agents.executorBadge')}
+                        </Badge>
+                      ) : null}
+                    </span>
+                    <span className="truncate font-mono text-[11px] text-fg-faint">
+                      {blocked ? t('chat.executorTaken') : agentModelLabel(agent, providers)}
+                    </span>
                   </span>
-                </span>
-              </button>
-            ))
+                </button>
+              )
+            })
           )}
         </div>
       ) : null}
@@ -307,8 +327,20 @@ function MemberRow({
         presenceTestId="member-presence"
       />
       <div className="flex min-w-0 grow flex-col gap-px">
-        <span data-testid="member-name" className="truncate text-[13px] text-fg">
-          {agent.name}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span data-testid="member-name" className="truncate text-[13px] text-fg">
+            {agent.name}
+          </span>
+          {isExecutor(agent) ? (
+            <Badge
+              tone="accent"
+              font="sans"
+              data-testid="member-executor"
+              title={t('agents.executorBadgeTitle')}
+            >
+              {t('agents.executorBadge')}
+            </Badge>
+          ) : null}
         </span>
         {/* `model · presence`, as the artboard has it. The provider's name would
             not fit in 288px next to both, so it lives in the tooltip and in the

@@ -84,6 +84,15 @@ The same principle covers failures: `BackendError.code` is the machine-readable
 class the renderer maps to an `errors.<code>` key, and `BackendError.message` is
 developer detail for logs that is never rendered.
 
+S5.2 added a narrower identifier for the same reason. The seven codes are a
+failure *taxonomy*, and "the request was rejected as invalid" is the right
+sentence almost everywhere because the control that sent the request is on
+screen saying what it wanted — but not when the user picked a folder that is not
+a folder, or added a member the chat cannot hold. Those refusals carry a
+`ValidationReason` (`src/shared/types.ts`) in `BackendError.details`, which the
+renderer maps to an `errors.<reason>` key exactly as it maps a code. It is still
+an identifier, never a sentence: the backend does not know the UI language.
+
 ## Prompts are not UI copy — and are still bilingual (S1.7)
 
 One piece of backend text is *not* a `system-notice`: the **group briefing**
