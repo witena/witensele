@@ -271,14 +271,74 @@ seeded skill, its detail pane, the binding, a real `read_skill` call, a real
 
 ## Phase 4: Polish (PLAN milestone 4)
 
-### S4.1 Usage and cost `[ ]`
+### S4.1 Usage and cost `[x]` (2026-09-13)
 Acceptance: token counts per message, per member and per chat are correct and shown in the header.
+Done: `src/shared/pricing.ts` — `MODEL_PRICING`, a hand-maintained table of
+approximate USD list prices **as of 2026-09** (Claude Opus/Sonnet/Haiku, the
+GPT-5 / 4.1 / 4o families, Gemini 2.5, DeepSeek, Qwen, GLM, Kimi, MiniMax,
+Doubao) matched first-hit-wins by regular expression so a vendor-prefixed id
+(`anthropic/claude-sonnet-4`) still resolves — plus `estimateCost({ modelId,
+presetId }, usage)` (`null` for a model the table does not know, **`0` for a
+`local` preset**, because Ollama and LM Studio tokens are free and a `null` would
+poison a mixed chat's total), `contextWindowFor` and the `formatTokens` (`12.4k`)
+/ `formatCost` (`$0.04`, `<$0.01`) helpers. `src/shared/usage.ts`'s
+`summarizeUsage` is the **one** copy of the arithmetic: the new
+`messages.usageSummary` handler runs it over the database, and
+`stores/usage.ts` runs it over the transcript already in the store on every
+`message.updated`, so a nine-turn run costs one IPC call rather than nine (the
+store falls back to the handler when it holds only a page — `messages.complete`).
+Three surfaces: the chat header's `12.4k tokens · $0.04`, each member row's share
+replacing the em-dash placeholder, and a tooltip on a message's model badge with
+`In … · out … · $…`. One real bug came out of it: `createOpenAICompatible` needed
+**`includeUsage: true`**, without which every OpenAI-compatible endpoint — most
+of the preset list — streams no usage at all.
 
-### S4.2 Context truncation `[ ]`
+### S4.2 Context truncation `[x]` (2026-09-13)
 Acceptance: unit test shows an over-long history is dropped oldest-first while keeping the system prompt.
+Done: `src/main/agents/context-budget.ts` — `estimateTokens` (CJK at one token per
+character, everything else at a quarter, rounded up; unit-tested with a tolerance
+because it is an approximation by construction, not a tokenizer) and
+`fitHistory({ system, messages, contextWindow, reserveForOutput })`, which drops
+the **oldest** non-system messages until
+`estimate(system) + estimate(messages) <= contextWindow - reserveForOutput`,
+**never drops the last user message**, and prepends
+`[Earlier messages were omitted to fit the context window.]` to the first
+survivor when anything went. Wired into `runAgentTurn` for both history paths —
+the sequential turn's fresh read and the snapshot a parallel round shares — with
+`contextWindow = contextWindowFor(agent.modelId)` and
+`reserveForOutput = agent.params.maxTokens ?? 4096`. The count is returned as
+`AgentTurnResult.droppedMessages` and `ChatRunner` turns it into a
+`contextTruncated` system notice **once per run per agent** (both locales), which
+is the right grain: per round would bury the discussion, per chat would never
+mention it again. `history.ts` also gained a 4 KB cap on each replayed
+`tool-result` (`MAX_TOOL_RESULT_CHARS`), the database keeping the whole output.
 
-### S4.3 Automatic titles and search `[ ]`
+### S4.3 Automatic titles and search `[x]` (2026-09-13)
 Acceptance: a title is generated after the first message; the left column search filters chats.
+Done: `src/main/agents/title.ts` — `generateChatTitle` asks the **first member's**
+model for "a title of 3 to 6 words in the language of the conversation" with
+`maxOutputTokens: 24` and a 15 s budget chained to the run's signal, and
+`sanitizeTitle` (whitespace, quotes in both scripts, trailing punctuation, a
+`Title:` preamble, 60 characters) turns the answer into a row label; every error
+is swallowed and `fallbackTitle` uses the first 40 characters of the question, so
+a chat always ends up better named than `New chat`. `ChatRunner.#maybeTitle` runs
+it after the loop and before `run.finished`, only while the title is **exactly**
+`DEFAULT_CHAT_TITLE` and only once a `done` agent message exists — the comparison
+is the whole mechanism, so a chat the user renamed is never retitled and there is
+no "generated" flag to keep in sync. It is injectable as
+`ChatRunnerOptions.generateTitle`. `ChatRepository.search` + the `chats.search`
+handler match the title and every message **text** part case-insensitively: SQL
+`LIKE` over the JSON blob narrows (fast, over-matching) and JavaScript decides
+(precise), with `escapeLike` making `%` and `_` literals under `ESCAPE '\\'`,
+capped at 200 and ordered like `chats.list` so the left column keeps its Today /
+Yesterday / Earlier headings while filtering. The search box is live again,
+debounced 200 ms, with its own empty state. Reviewer's polish: a trailing `[PASS]`
+after real content is stripped for display and for the model history
+(`src/shared/pass.ts`, shared so both sides read the identical rule) while the
+status stays `done` — the stored parts keep what the model actually wrote.
+`e2e/polish.spec.ts` drives all three against real `qwen2.5:1.5b` and captures
+`test-results/shots/polish.png`. Docs in `docs/features/{chats,agent-turn,
+orchestration,providers}/`.
 
 ### S4.4 Packaging `[ ]`
 Acceptance: electron-builder produces a macOS dmg; after installation the app launches and completes one conversation.

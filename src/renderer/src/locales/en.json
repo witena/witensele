@@ -20,6 +20,8 @@
   "chat": {
     "newChat": "New chat",
     "searchChats": "Search chats",
+    "searchEmptyTitle": "No chats match",
+    "searchEmptyDescription": "Try another word, or clear the search box.",
     "today": "Today",
     "yesterday": "Yesterday",
     "earlier": "Earlier",
@@ -45,6 +47,7 @@
     "removeMember": "Remove from this chat",
     "noMembersHint": "Add at least one agent.",
     "memberUsage": "—",
+    "memberUsageTitle": "Tokens this agent has used in this chat",
     "reorderMember": "Drag to change the speaking order",
     "groupSettings": "Group settings",
     "mode": "Orchestration mode",
@@ -73,6 +76,11 @@
     "round": "Round {{round}}",
     "replyingTo": "Replying to {{names}}",
     "runStatus": "Round {{round}} · {{speakers}} speaking",
+    "usage": "{{tokens}} tokens",
+    "usageWithCost": "{{tokens}} tokens · {{cost}}",
+    "usageTitle": "Tokens used in this chat, with an estimated cost",
+    "messageUsage": "In {{input}} · out {{output}}",
+    "messageUsageWithCost": "In {{input}} · out {{output}} · {{cost}}",
     "passed": "Passed",
     "skipped": "Skipped",
     "reasoning": "Reasoning",
@@ -330,6 +338,7 @@
     "maxRoundsReached": "Reached the limit of {{max}} automatic rounds. Send a message to continue.",
     "providerError": "The provider could not answer: {{message}}",
     "runFailed": "The run stopped after an internal error: {{message}}",
-    "toolsUnsupported": "{{agent}}'s model cannot use tools, so this reply was written without them"
+    "toolsUnsupported": "{{agent}}'s model cannot use tools, so this reply was written without them",
+    "contextTruncated": "{{agent}} could not fit the whole conversation in its context window, so the {{dropped}} oldest messages were left out of its view"
   }
 }

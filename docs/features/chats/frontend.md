@@ -22,7 +22,8 @@
 | `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested |
 | `src/renderer/src/components/agents/agent-display.ts` | `agentModelLabel`, shared with the Agents page so both screens name a model the same way |
 | `src/renderer/src/lib/event-bridge.ts` | The single backend subscription; fans every event into the stores |
-| `src/renderer/src/lib/message-view.ts` | `wasStopped`, `messageText` and the stored `'aborted'` detail |
+| `src/renderer/src/lib/message-view.ts` | `wasStopped`, `messageText` (which also strips a trailing `[PASS]`, S4.3) and the stored `'aborted'` detail |
+| `src/renderer/src/stores/usage.ts` | The per-chat token and cost summary: seeded from `messages.usageSummary` when a chat is opened, recomputed locally on every `message.updated` |
 | `src/renderer/src/main.tsx` | Starts the event bridge before the first render |
 
 ## State
@@ -40,7 +41,10 @@
 | `run` | `error` / `errorCode` | | The last refused send, shown under the composer. Cleared on a new send, on a chat switch and when the membership changes |
 | `presence` | `byChatAgent` | `Record<string, AgentPresence>` | Runtime only, keyed `chatId:agentId`, never persisted. Seeded from `presence.list` when a chat is opened; see [`presence`](../presence/frontend.md) |
 | `agents` | `agents` | `Agent[]` | Backend-owned; the Agents page (S2.1) writes it, this page only reads |
-| `providers` | `providers` | `Provider[]` | Backend-owned; the member picker prints the provider's name beside the model |
+| `providers` | `providers` | `Provider[]` | Backend-owned; the member picker prints the provider's name beside the model, and the usage store reads each provider's `presetId` to know whether its tokens are free |
+| `chats` | `searchQuery` / `matchIds` | `string` / `string[] \| null` | The debounced query and what it matched. `null` means "no filter", which is how the column tells that apart from "filtered and nothing matched" |
+| `usage` | `byChat` | `Record<string, ChatUsageSummary>` | Total and per-agent tokens plus an estimated cost. Seeded by `messages.usageSummary`, then recomputed from the messages store |
+| `messages` | `complete` | `Record<string, boolean>` | True when the store holds the **whole** transcript rather than a page. The usage store recomputes locally only when it does |
 
 Selectors worth knowing: `useChatMessages(chatId)`, `useChatMemberIds(chatId)`,
 `useIsRunning(chatId)`, `useAgentPresence(chatId, agentId)`, `useAgent(id)`. Each
@@ -56,6 +60,8 @@ selector re-renders on every store write.
 | `invoke('chats.update')` | Inline rename | Title change; the row floats to the top |
 | `invoke('chats.delete')` | The menu's second Delete click | Removes the chat and its transcript |
 | `invoke('messages.list')` | The page's `selectedId` effect, once per chat | The first (and for now only) page of the transcript |
+| `invoke('messages.usageSummary')` | The page's `selectedId` effect, on **every** visit | Seeds the header and member-row token counts over the whole transcript, not just the loaded page |
+| `invoke('chats.search')` | The search box, debounced 200 ms | The ids the left column keeps while a query is active |
 | `invoke('agents.list')` | `agents.load()` on mount and after a chat is created | Author name, avatar and model badge |
 | `invoke('chat.send')` | Composer, Enter or the Send button — and the Actions card, through the composer's `submitText` handle | Stores the message and schedules a run |
 | `invoke('chats.members.set')` | The picker, the row's "×", and a drop | Replaces the whole member list, order included |
@@ -115,7 +121,10 @@ New keys, all under the existing namespaces:
 | `chat.addMember`, `chat.addMemberAll`, `chat.addMemberEmpty` | The picker's button and its two "nothing to add" cases |
 | `chat.removeMember`, `chat.reorderMember` | The row's "×" and the drag tooltip |
 | `chat.noMembersHint` | The accent hint under the empty member list |
-| `chat.memberUsage` | The per-member token placeholder (an em dash until S4.1) |
+| `chat.memberUsage`, `chat.memberUsageTitle` | The per-member column: an em dash for a member that has not spoken, otherwise the formatted token count, with the tooltip explaining what it counts |
+| `chat.usage`, `chat.usageWithCost`, `chat.usageTitle` | The header's `12.4k tokens` / `12.4k tokens · $0.04` and its tooltip |
+| `chat.messageUsage`, `chat.messageUsageWithCost` | The model badge's tooltip on one message: `In … · out …`, plus the cost when there is one |
+| `chat.searchEmptyTitle`, `chat.searchEmptyDescription` | The empty state when a query matches no chat (distinct from "no chats yet") |
 | `chat.jumpToLatest` | The pill that appears when a message arrives while the user is scrolled up |
 | `chat.mentionAllHint` | The subtitle of the popover's `@all` row |
 | `chat.copy`, `chat.copied`, `chat.copyCode` | The code block's Copy button, its confirmed state and its accessible name |

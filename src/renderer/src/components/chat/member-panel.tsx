@@ -20,10 +20,12 @@
  * `position`. Three narrower calls would each have to read the current order
  * first and would race with the `chat.updated` event that follows.
  *
- * The per-member token count is a placeholder until S4.1 lands usage accounting;
- * it prints an em dash rather than a zero, because zero would be a claim — and an
- * **offline** member gives the column up entirely to the "Retry" button, which is
- * the manual half of S2.4's recovery loop.
+ * The per-member column carries that agent's tokens **in this chat** (S4.1), read
+ * from `stores/usage` and recomputed on every `message.updated`. A member that has
+ * not spoken yet prints an em dash rather than a zero, because a zero would be a
+ * claim about a turn that never happened — and an **offline** member gives the
+ * column up entirely to the "Retry" button, which is the manual half of S2.4's
+ * recovery loop.
  *
  * ## Presence
  *
@@ -38,9 +40,11 @@ import type { TFunction } from 'i18next'
 import { Plus, UserPlus, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { formatTokens } from '@shared/pricing'
 import type { Agent, AgentPresence, PresenceState, Provider } from '@shared/types'
 import { agentModelLabel } from '../agents/agent-display'
 import { useIsRetrying, usePresence, usePresenceStore } from '../../stores/presence'
+import { useChatUsage } from '../../stores/usage'
 import { Avatar, Button, EmptyState, IconButton, SectionTitle } from '../ui'
 
 /** Literal `t()` calls, so `used-keys.test.ts` can verify all four labels. */
@@ -119,6 +123,9 @@ export function MemberPanel({
   const [picking, setPicking] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const panel = useRef<HTMLElement>(null)
+  // Read once for the whole panel rather than once per row: it is one object in
+  // the store and a selector per row would resubscribe every member to it.
+  const usage = useChatUsage(chatId)
 
   // The picker closes when the chat changes: its candidate list belongs to the
   // chat that was open, not to the one that just became selected.
@@ -214,6 +221,7 @@ export function MemberPanel({
             key={agent.id}
             chatId={chatId}
             agent={agent}
+            tokens={usage.perAgent[agent.id]?.usage.totalTokens ?? 0}
             providers={providers}
             dragging={dragIndex === index}
             onDragStart={() => setDragIndex(index)}
@@ -233,6 +241,8 @@ export function MemberPanel({
 interface MemberRowProps {
   chatId: string | null
   agent: Agent
+  /** This agent's total tokens in this chat; `0` means it has not spoken yet. */
+  tokens: number
   providers: readonly Provider[]
   dragging: boolean
   onDragStart: () => void
@@ -244,6 +254,7 @@ interface MemberRowProps {
 function MemberRow({
   chatId,
   agent,
+  tokens,
   providers,
   dragging,
   onDragStart,
@@ -327,9 +338,13 @@ function MemberRow({
           {retrying ? t('presence.retrying') : t('presence.retry')}
         </button>
       ) : (
-        /* Token usage lands in S4.1; until then the column holds its width. */
-        <span data-testid="member-usage" className="shrink-0 font-mono text-[11px] text-fg-faint">
-          {t('chat.memberUsage')}
+        <span
+          data-testid="member-usage"
+          data-tokens={tokens}
+          title={t('chat.memberUsageTitle')}
+          className="shrink-0 font-mono text-[11px] text-fg-faint"
+        >
+          {tokens > 0 ? formatTokens(tokens) : t('chat.memberUsage')}
         </span>
       )}
       <IconButton

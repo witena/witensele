@@ -24,6 +24,7 @@
  */
 import type { ChatCreateInput, ChatMode, ChatPatch, ChatSettings, SpeakingMode } from '@shared/types'
 import { MAX_AUTO_ROUNDS, MIN_AUTO_ROUNDS } from '@shared/types'
+import { summarizeUsage, type ChatUsageSummary } from '@shared/usage'
 import { ensureDefaultAgent } from '../agents/default-agent'
 import { validation } from '../errors'
 import type { AppContext } from '../app-context'
@@ -120,6 +121,33 @@ async function initialMembers(
   return [(await ensureDefaultAgent(ctx)).id]
 }
 
+/**
+ * Usage over a whole chat, priced with each agent's own provider.
+ *
+ * The arithmetic itself is `summarizeUsage` in `@shared/usage`, which the
+ * renderer runs on the same messages: this function only supplies the "which
+ * model, on which provider" lookup, from the repositories. An agent or provider
+ * the user has since deleted resolves to `undefined`, which keeps its tokens in
+ * the total and leaves its cost unknown — the honest answer, and the reason the
+ * lookup is a function rather than a prebuilt map.
+ */
+function summarizeChatUsage(ctx: AppContext, chatId: string): ChatUsageSummary {
+  const models = new Map<string, { modelId: string; presetId?: string | undefined } | undefined>()
+  return summarizeUsage(ctx.repos.messages.listForContext(chatId, ctx.userId), (agentId) => {
+    if (models.has(agentId)) return models.get(agentId)
+    let resolved: { modelId: string; presetId?: string | undefined } | undefined
+    try {
+      const agent = ctx.repos.agents.get(agentId, ctx.userId)
+      const provider = ctx.repos.providers.get(agent.providerId, ctx.userId)
+      resolved = { modelId: agent.modelId, presetId: provider.presetId }
+    } catch {
+      resolved = undefined
+    }
+    models.set(agentId, resolved)
+    return resolved
+  })
+}
+
 export const chatHandlers: HandlerModule = {
   'chats.list': async (ctx) => ctx.repos.chats.list(ctx.userId),
 
@@ -162,6 +190,14 @@ export const chatHandlers: HandlerModule = {
     ctx.events.emit({ type: 'chat.deleted', chatId: input.id })
   },
 
+  'chats.search': async (ctx, input) => {
+    const query = (input as { query?: unknown })?.query
+    if (typeof query !== 'string') throw validation('A search query is required')
+    // A blank query is "no filter" by contract, not an error: the renderer calls
+    // this on every keystroke and the last keystroke is often a deletion.
+    return ctx.repos.chats.search(query, ctx.userId)
+  },
+
   'chats.members.list': async (ctx, input) => {
     const chatId = (input as { chatId?: unknown })?.chatId
     if (typeof chatId !== 'string' || chatId.length === 0) throw validation('A chat id is required')
@@ -196,6 +232,15 @@ export const chatHandlers: HandlerModule = {
       },
       ctx.userId
     )
+  },
+
+  'messages.usageSummary': async (ctx, input) => {
+    const chatId = (input as { chatId?: unknown })?.chatId
+    if (typeof chatId !== 'string' || chatId.length === 0) throw validation('A chat id is required')
+    // `not_found` for a chat that is gone, rather than an empty summary that
+    // would look like a chat which simply has not spoken yet.
+    ctx.repos.chats.get(chatId, ctx.userId)
+    return summarizeChatUsage(ctx, chatId)
   },
 
   'chat.send': async (ctx, input) => {

@@ -16,7 +16,8 @@ every one of these is a contract the message list has to honour:
 | `status: 'error'`, `error: 'aborted'` | Show "Stopped", not a failure — the user pressed the button themselves |
 | `status: 'error'`, any other detail | Show "The reply failed". `Message.error` is operator-facing detail and is **not** rendered |
 | `presence.changed` | Update the dot on that agent's avatars, everywhere. The dot shows the agent's *current* state, not its state when the message was sent |
-| `usage` | Stored per message; nothing displays it yet. S4.1 adds the per-member and per-chat totals |
+| `usage` | Stored per message. Since S4.1 it is the source of the chat header's `12.4k tokens · $0.04`, each member row's share, and the tooltip on that message's model badge — see [`chats`](../chats/frontend.md) |
+| `status: 'done'` on text that **ends** with `[PASS]` | Strip the trailing marker when rendering (`messageText`), keep the status. A model that answered and then signed off with the token has not abstained (S4.3) |
 | `message.delta { kind: 'part' }` carrying a `tool-call` with no `serverId` | Draw the tool card with the bare tool name and no server prefix. That is what a built-in tool looks like: `read_skill`, `read_skill_file`, `memory_save`, `memory_search` (S3.2, S3.3) |
 
 Reasoning parts are rendered collapsed behind a "Reasoning" toggle

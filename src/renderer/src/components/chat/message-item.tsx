@@ -52,11 +52,13 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type { MentionMember } from '@shared/mentions'
+import { estimateCost, formatCost, formatTokens } from '@shared/pricing'
 import type {
   Agent,
   Message,
   MessagePart,
   PresenceState,
+  Provider,
   ReasoningPart,
   SystemNoticePart
 } from '@shared/types'
@@ -64,6 +66,7 @@ import { translateNotice } from '../../i18n/notices'
 import { messageText, wasStopped } from '../../lib/message-view'
 import { useAgent, useAgentsStore } from '../../stores/agents'
 import { useAgentPresence } from '../../stores/presence'
+import { useProvidersStore } from '../../stores/providers'
 import { Avatar, Badge } from '../ui'
 import { Markdown } from './markdown'
 import { ToolCard } from './tool-card'
@@ -140,6 +143,36 @@ function reasoningPreview(reasoning: string): string {
 /** The literal `Message.inReplyTo` carries for the human. */
 const USER_SOURCE = 'user'
 
+/**
+ * What this one turn cost, as the model badge's tooltip (S4.1).
+ *
+ * A tooltip rather than a visible column: the numbers matter when a user is
+ * hunting for the expensive agent and are pure noise the rest of the time, and
+ * this row is repeated dozens of times per screen. Returns `undefined` for a
+ * message the provider reported no usage for — a streaming one, an abstention, a
+ * turn that failed before the first token — so the badge keeps no tooltip at all
+ * rather than one saying zero.
+ */
+function usageTooltip(
+  t: TFunction,
+  message: Message,
+  agent: Agent | undefined,
+  providers: readonly Provider[]
+): string | undefined {
+  if (!message.usage) return undefined
+  const input = formatTokens(message.usage.inputTokens)
+  const output = formatTokens(message.usage.outputTokens)
+  const preset = agent
+    ? providers.find((candidate) => candidate.id === agent.providerId)?.presetId
+    : undefined
+  const cost = agent ? estimateCost({ modelId: agent.modelId, presetId: preset }, message.usage) : null
+  // A zero is a local model, which costs nothing; saying `$0.00` would be
+  // technically true and read as "we could not work it out".
+  return cost !== null && cost > 0
+    ? t('chat.messageUsageWithCost', { input, output, cost: formatCost(cost) })
+    : t('chat.messageUsage', { input, output })
+}
+
 export interface MessageItemProps {
   message: Message
   /** The chat the message is in; the presence dot is per (chat, agent). */
@@ -160,6 +193,7 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
   const isAgent = message.senderType === 'agent'
   const agent = useAgent(isUser || isSystem ? undefined : message.senderId)
   const agents = useAgentsStore((state) => state.agents)
+  const providers = useProvidersStore((state) => state.providers)
   const presence = useAgentPresence(chatId, message.senderId)
 
   const mentionMembers: MentionMember[] = members.map((member) => ({
@@ -185,6 +219,7 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
   const toolCalls = collectToolCalls(message.parts)
   const label = statusLabel(t, message)
   const dimmed = message.status === 'passed' || message.status === 'skipped'
+  const usageHint = usageTooltip(t, message, agent, providers)
 
   // Reasoning is arriving and the answer has not started: show it, pulsing.
   const reasoningStreaming =
@@ -261,7 +296,14 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
           className="flex flex-wrap items-center gap-2 text-xs leading-4"
         >
           <span className="font-semibold text-fg">{name}</span>
-          {agent ? <Badge>{agent.modelId}</Badge> : null}
+          {agent ? (
+            <Badge
+              data-testid="message-model"
+              {...(usageHint ? { title: usageHint } : {})}
+            >
+              {agent.modelId}
+            </Badge>
+          ) : null}
           {message.round > 0 ? (
             <span data-testid="message-round" className="text-fg-faint">
               {t('chat.round', { round: message.round })}

@@ -21,6 +21,7 @@ import { useChatsStore } from '../stores/chats'
 import { useMessagesStore } from '../stores/messages'
 import { usePresenceStore } from '../stores/presence'
 import { useRunStore } from '../stores/run'
+import { useUsageStore } from '../stores/usage'
 import { getBackend } from './backend-provider'
 
 /** Applies one event to the stores. Exported for the store tests. */
@@ -34,6 +35,11 @@ export function applyBackendEvent(event: BackendEvent): void {
       break
     case 'message.updated':
       useMessagesStore.getState().applyUpdated(event.message)
+      // The authoritative status *and usage* of a turn arrive here, so this is
+      // the one event that can change what the header and the member rows say
+      // about tokens. Recomputed locally from the store rather than re-asked of
+      // the backend; see `stores/usage.ts`.
+      useUsageStore.getState().recompute(event.message.chatId)
       break
     case 'chat.updated':
       useChatsStore.getState().applyUpdated(event.chat)
@@ -43,6 +49,7 @@ export function applyBackendEvent(event: BackendEvent): void {
       useMessagesStore.getState().clear(event.chatId)
       usePresenceStore.getState().clear(event.chatId)
       useRunStore.getState().applyFinished(event.chatId)
+      useUsageStore.getState().clear(event.chatId)
       break
     case 'presence.changed':
       usePresenceStore.getState().apply(event.presence)

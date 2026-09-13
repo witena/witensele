@@ -206,6 +206,8 @@ wrapper that only reads the `message.created` of each turn to learn its
 | `src/main/orchestration/chat-runner.test.ts` | The S1.7 single-agent sequence, plus: every member in round 1; sequential sees the previous reply and parallel does not; a mention scheduling round 2 with only that member and the `inReplyTo` it stores; a self-mention scheduling nothing; `[PASS]`; the `maxAutoRounds` cap and its notice; `mention-only` with and without a mention; explicit composer mentions; a mid-run message joining the next round and resetting the counter; Stop aborting both turns of a parallel round; one failing speaker not blocking the other; every speaker failing → `error`; one `run.started` and one `run.finished` per multi-round run |
 | `src/main/agents/agent-turn.test.ts` | The stored `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored and absent, and the prebuilt `history` snapshot being used instead of the live transcript |
 | `src/renderer/src/stores/run.test.ts` | The composer's resolved mentions reaching `chat.send`, and an empty list being omitted |
+| `src/main/orchestration/chat-runner.test.ts` (`describe('ChatRunner (usage, truncation and titles)')`) | S4.1–S4.3 through the handlers: `messages.usageSummary` summing per agent and pricing a known model, an empty summary and `not_found`; the `contextTruncated` notice appearing once per run with the agent and the count, and not appearing when the history fits; a title generated from a mock model's `doGenerate`, sanitised, falling back when the generator returns `null` or throws, never replacing a title the user set or set later, and never written when every turn failed; a trailing `[PASS]` leaving the status `done` while disappearing from the next speaker's prompt; and `chats.search` finding a chat by a word in one of its messages |
+| `e2e/polish.spec.ts` | Against a real local model: the header and member-row token counts, the automatic title replacing `New chat`, and the search box filtering the left column |
 | `e2e/orchestration.spec.ts` | Two real models: round-robin in round 1, parallel streaming both rows at once, `mention-only` answering with one member, and the `noMentions` notice |
 
 ## Known limitations and TODOs
@@ -219,6 +221,12 @@ wrapper that only reads the `message.created` of each turn to learn its
 - **`whenIdle()` exists for the tests.** It is not part of the IPC surface, and a
   handler must not await it — `chat.send` promises to resolve as soon as the run
   is scheduled.
+- **The title is generated once and never revisited.** A chat that started with a
+  throwaway question and turned into something else keeps the first title until
+  the user renames it. Re-titling a chat under the user's feet would be worse.
+- **The title request costs one extra model call per chat**, on the first member's
+  model. It is capped at 24 output tokens and 15 seconds, and it is skipped
+  entirely once the title is not the default.
 - **A run does not summarise itself.** With `maxAutoRounds` reached, the user
   gets a notice and has to read the rounds; PLAN's "ask an agent to summarise" is
   a later action.

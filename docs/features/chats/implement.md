@@ -138,6 +138,37 @@ Deltas are increments and are applied by `applyDeltaToParts`; `message.updated`
 is authoritative, so a dropped delta is cosmetic and the transcript still
 converges.
 
+### Usage in the header (S4.1)
+
+```
+open a chat  → useUsageStore.load(chatId) → messages.usageSummary
+                                          → byChat[chatId] (whole transcript)
+message.updated → event-bridge → useUsageStore.recompute(chatId)
+                                   ├─ messages store holds the whole transcript
+                                   │    → summarizeUsage(...) locally
+                                   └─ it holds only a page
+                                        → load(chatId) again
+```
+
+The header prints `12.4k tokens · $0.04`, or the tokens alone when nothing in the
+chat could be priced; the member rows print each agent's share; the model badge
+on a message carries `In … · out … · $…` as a tooltip. Three surfaces, one
+summary object, no extra IPC per turn.
+
+### Searching the chat list (S4.3)
+
+```
+type in the box → local state → 200 ms debounce → chats.search({ query })
+                                                → matchIds in the chats store
+                                                → the page filters `chats` by it
+```
+
+`matchIds` is `null` while the box is empty, which is how the column tells "not
+filtered" from "filtered and nothing matched" — only the second shows the search
+empty state. Filtering **hides rows**; it never regroups them, so the Today /
+Yesterday / Earlier headings stay exactly where they were and `groupChats` drops
+any that end up empty.
+
 ### Deleting a chat
 
 ```
@@ -166,7 +197,9 @@ unchanged from S1.1. S2.2 added two input types next to them —
 | `chats.delete` | `{ id }` | `void` | Stops the run first; cascades |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **New in S1.7.** Ordered by `position` |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the list; array index becomes `position` |
+| `chats.search` | `{ query }` | `string[]` | Chat ids whose title or any message text matches; blank query means every chat |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is a message id |
+| `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` | Tokens and estimated cost, total and per agent, over the whole transcript |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent |
 
@@ -189,6 +222,10 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, and every `ChatSettings` bound |
 | `src/main/handlers/handlers.test.ts` | Every declared method has a handler; the ones still stubbed reject with `internal` |
 | `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection |
+| `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
+| `src/renderer/src/stores/usage.test.ts` | Client-side aggregation: the total moving on `message.updated`, the per-agent split, a local provider costing nothing, an unknown model reporting no cost, and the page-vs-whole-transcript fallback to the backend |
+| `src/main/db/chats.test.ts` (`describe('search')`) | Title and message-text matches, one hit per chat, non-text parts ignored, `%` / `_` escaped, blank query, ordering and the user scope |
+| `src/renderer/src/lib/message-view.test.ts` | `wasStopped`, and `messageText` stripping a trailing `[PASS]` while leaving a bare one alone |
 | `src/renderer/src/stores/messages.test.ts` | `applyDeltaToParts` (append, kind switch, first part, whole part, no mutation); created / delta / updated reduction; ignored deltas; page reversal; failed load as state |
 | `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
@@ -197,6 +234,7 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp) and `buildTranscriptRows`' interleaving and key stability |
 | `src/renderer/src/components/chat/mention-query.test.ts` | `extractMentionQuery`'s boundary rules, `filterMentionCandidates`' longest-first order, and both insertion helpers' spacing |
 | `src/renderer/src/components/chat/code-language.test.ts` | Every id, every alias, the first-word rule, and `null` for an unknown language |
+| `e2e/polish.spec.ts` | Against a real local model: the header and member-row token counts, an automatic title replacing `New chat`, and the search box filtering the list down to the chat with the distinctive word in it. Captures `test-results/shots/polish.png` |
 | `e2e/composer.spec.ts` | Against a real local model: `@Arc` → the popover → Enter → `@Architect `; the `@all` and member chips; a reply rendering a list and a `code` element; a fenced block rendering with a language header and a Copy button. Captures `test-results/shots/chat-polish.png` |
 
 ## Known limitations and TODOs
@@ -205,10 +243,17 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   ([`presence`](../presence/implement.md)), merged over `AppSettings.timeouts` at
   every heartbeat. Only the hard budget has a control in the group settings block;
   the stall override is honoured by the backend but has no UI of its own.
-- **Reordering is mouse-only**, and the per-member token count is an em dash
-  until S4.1.
-- **The search field is disabled** (S4.3), and titles are always the default
-  `New chat` until the user renames one.
+- **Reordering is mouse-only.** The per-member token count is real since S4.1
+  and prints an em dash only for a member that has not spoken in this chat yet.
+- **Cost is an estimate from a checked-in table** (`src/shared/pricing.ts`): a
+  model the table does not know reports tokens and no price at all, and a local
+  provider reports tokens and a cost of zero, which the UI omits. Editing the
+  table is the whole maintenance story; see
+  [`providers`](../providers/backend.md).
+- **Search is substring-only.** No stemming, no ranking, no highlighting of the
+  hit inside the row, and the result is capped at `CHAT_SEARCH_LIMIT` (200).
+  Matching is over message **text** parts and the title — not over reasoning,
+  tool arguments or tool output.
 - **The message list is virtualized** (S2.5) but still loads one page of 100 with
   no upward paging: reaching the top of a long chat does not fetch the messages
   before it. `increaseViewportBy` is set generously (2000px each way) so a row

@@ -8,6 +8,8 @@ Four modules, each a pure function except the last:
 |---|---|
 | `briefing.ts` | `(language, self, members) → string`, delegating to `briefing.en.ts` / `briefing.zh-CN.ts`. Also `resolveMainLanguage(setting)` |
 | `history.ts` | `(self, agentsById, userName, messages) → ModelMessage[]` |
+| `context-budget.ts` | `estimateTokens(text) → number` and `fitHistory({ system, messages, contextWindow, reserveForOutput }) → { messages, droppedCount, estimatedTokens }` |
+| `title.ts` | `sanitizeTitle` / `fallbackTitle`, and `generateChatTitle({ model, question, reply, signal }) → string \| null` |
 | `default-agent.ts` | `ensureDefaultAgent(ctx)`, documented under [`chats`](../chats/backend.md) |
 | `agent-turn.ts` | `runAgentTurn(options) → AgentTurnResult`; the only one with side effects |
 
@@ -152,6 +154,9 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage` |
 | `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call, `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
 | `src/main/agents/agent-turn.test.ts` (S3.2 / S3.3 blocks) | The built-in tools end to end against a real skills folder and a real memory directory: the prompt carrying a skill's description but not its body, `read_skill` and `read_skill_file` answering, a traversal refused as an errored tool result, a missing skill skipped, `memory_save` writing the note **and** the index line, the index reaching the next prompt, the briefing's memory sentence appearing only when memory is on, and one agent unable to search another's notes |
+| `src/main/agents/context-budget.test.ts` | `estimateTokens` against ASCII, CJK and a real sentence (with a tolerance, because it is an approximation), and every `fitHistory` rule: nothing dropped when it fits, oldest first, the last user message protected, the note prepended once, the reserve and the system prompt both counted, and a window smaller than its own system prompt not looping |
+| `src/main/agents/title.test.ts` | `sanitizeTitle` (whitespace, quotes in both scripts, trailing punctuation, a `Title:` preamble, the 60-character cap, and the empty result that triggers the fallback) and `fallbackTitle` |
+| `src/shared/pass.test.ts` | `isPassOnly` versus `stripTrailingPass`: a bare token is an abstention and survives, a token after real content is a sign-off and goes |
 | `src/main/agents/default-agent.test.ts` | Creating exactly one agent on the first usable provider, reusing it, preferring a user-created agent, and the `validation` refusal |
 
 ## Known limitations and TODOs
@@ -166,7 +171,21 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 - **`MAX_TOOL_STEPS = 8` covers every tool family together.** A turn that reads
   two skills and searches memory has spent three of its eight steps before it
   answers.
-- **No context truncation.** A long chat eventually exceeds the model's window and
-  the provider errors; S4.2 drops oldest-first while keeping the system prompt.
+- **Context truncation is an estimate, not a tokenizer** (S4.2). `estimateTokens`
+  counts CJK at one token per character and everything else at a quarter, which
+  is accurate to roughly ±20% across the providers this app talks to. A real
+  tokenizer would mean a WASM blob per encoding and would be exact for OpenAI and
+  wrong for everyone else. The budget is
+  `contextWindow - reserveForOutput - estimate(system)`, with
+  `reserveForOutput = agent.params.maxTokens ?? DEFAULT_OUTPUT_RESERVE (4096)`;
+  the oldest messages go first, the **last user message never does**, and when
+  anything went a one-line note is prepended to the first survivor. The number
+  dropped is returned as `droppedMessages` so `ChatRunner` can tell the user once
+  per run. Summarizing what was dropped, rather than discarding it, is still
+  future work.
+- **The context window comes from a checked-in table** (`contextWindowFor` in
+  `src/shared/pricing.ts`), and an unknown model falls back to a deliberately
+  small `DEFAULT_CONTEXT_WINDOW` (32 768). Guessing low costs a few old messages;
+  guessing high costs a rejected request.
 - **The user's display name is a constant** (`'User'`). There is no user profile
   yet; the server version gives it one.

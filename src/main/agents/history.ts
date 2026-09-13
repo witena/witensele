@@ -22,13 +22,16 @@
  *   procedural fact about the round, not content; replaying it teaches the next
  *   speaker that abstaining is normal. The round bookkeeping that needs it lives
  *   in `ChatRunner`, not in the prompt.
+ * - **Tool results are replayed, capped at `MAX_TOOL_RESULT_CHARS`.** What a tool
+ *   said is part of what the group knows; the whole blob it said it in is not.
  *
  * Nothing here reaches a database, electron or the event bus: it is a pure
  * function of the messages handed to it, which is why the rules above are pinned
  * down by `history.test.ts` rather than by a live run.
  */
 import type { ModelMessage } from 'ai'
-import type { Agent, Message, MessagePart, SystemNoticePart } from '@shared/types'
+import { stripTrailingPass } from '@shared/pass'
+import type { Agent, Message, MessagePart, SystemNoticePart, ToolResultPart } from '@shared/types'
 
 /** Name used for the human in the `[name]: ` prefix when the caller has none. */
 export const DEFAULT_USER_NAME = 'User'
@@ -64,7 +67,53 @@ const NOTICE_TEXT: Record<string, (params: Record<string, string | number>) => s
   maxRoundsReached: () => 'The automatic round limit was reached; the user has the floor.',
   noMentions: () => 'Nobody was mentioned, so no one answered that message.',
   runFailed: (params) => `The previous run stopped after an error: ${String(params['message'] ?? 'unknown')}`,
-  providerError: (params) => `A provider error occurred: ${String(params['message'] ?? 'unknown')}`
+  providerError: (params) => `A provider error occurred: ${String(params['message'] ?? 'unknown')}`,
+  contextTruncated: (params) =>
+    `${String(params['agent'] ?? 'An agent')} could not fit the whole conversation in its context ` +
+    `window, so the ${String(params['dropped'] ?? 'oldest')} oldest messages were left out of its view.`,
+  toolsUnsupported: (params) =>
+    `${String(params['agent'] ?? 'An agent')}'s model cannot use tools, so it answered without them.`,
+  allOffline: () => 'Every member of this chat was offline, so nobody answered.'
+}
+
+/**
+ * How much of one stored tool result may reach the prompt, in characters.
+ *
+ * An MCP tool can return a whole file, a directory listing or a JSON blob of
+ * thousands of rows. Inside the turn that called it the AI SDK hands the model
+ * the full thing, which is correct — that is the answer it asked for. On every
+ * **later** turn the same blob would be replayed as history to every member of
+ * the chat, on every round, for the rest of the conversation, and would push out
+ * the discussion it was gathered for.
+ *
+ * 4 KB keeps what a result is *about* (the first rows, the shape, the error) and
+ * drops the bulk. The database keeps the whole output untouched: the transcript's
+ * tool card still expands to everything the server actually said.
+ */
+export const MAX_TOOL_RESULT_CHARS = 4096
+
+/** Marker appended to a tool result the budget above had to cut. */
+const TOOL_RESULT_TRUNCATED = '… [truncated]'
+
+/** A stored tool result as prompt text, capped at `MAX_TOOL_RESULT_CHARS`. */
+function toolResultToText(part: ToolResultPart): string {
+  const raw =
+    typeof part.output === 'string' ? part.output : safeStringify(part.output)
+  if (raw.trim().length === 0) return ''
+  const body =
+    raw.length > MAX_TOOL_RESULT_CHARS
+      ? `${raw.slice(0, MAX_TOOL_RESULT_CHARS)}${TOOL_RESULT_TRUNCATED}`
+      : raw
+  return part.isError ? `[tool error] ${body}` : `[tool result] ${body}`
+}
+
+/** `JSON.stringify` that cannot throw on a cycle written by a misbehaving tool. */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? ''
+  } catch {
+    return String(value)
+  }
 }
 
 /** One notice as prompt text, or `null` when the key has no rendering. */
@@ -76,16 +125,30 @@ function renderNotice(part: SystemNoticePart): string | null {
 /**
  * The prompt text of one message's parts.
  *
- * Only `text` and `system-notice` contribute. `reasoning` is deliberately left
- * out — it is the model's scratch pad, it is not part of what the group heard,
- * and feeding it back inflates every later prompt. Tool calls and results become
- * prompt content in S3.1, where the tool loop that produces them lives.
+ * `text`, `system-notice` and `tool-result` contribute. `reasoning` is
+ * deliberately left out — it is the model's scratch pad, it is not part of what
+ * the group heard, and feeding it back inflates every later prompt. A
+ * `tool-call` is left out too: its *result* is the fact worth replaying, and
+ * repeating the arguments doubles the cost of every tool the chat ever used.
+ *
+ * Two rules applied while rendering:
+ *
+ * - A **trailing `[PASS]`** is stripped from text that has real content in front
+ *   of it (S4.3, `@shared/pass`). Replaying the marker teaches every later
+ *   speaker that signing off with it is how a normal answer ends.
+ * - A **tool result is capped** at `MAX_TOOL_RESULT_CHARS`; see that constant.
  */
 function partsToText(parts: MessagePart[]): string {
   const chunks: string[] = []
   for (const part of parts) {
     if (part.type === 'text') {
-      if (part.text.trim().length > 0) chunks.push(part.text.trim())
+      const text = stripTrailingPass(part.text).trim()
+      if (text.length > 0) chunks.push(text)
+      continue
+    }
+    if (part.type === 'tool-result') {
+      const rendered = toolResultToText(part)
+      if (rendered.length > 0) chunks.push(rendered)
       continue
     }
     if (part.type === 'system-notice') {

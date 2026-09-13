@@ -47,7 +47,7 @@ export type { ProviderRepository, Encrypt } from './providers'
 export type { AgentRepository } from './agents'
 export type { McpServerRepository } from './mcpServers'
 export type { ChatRepository } from './chats'
-export { DEFAULT_CHAT_TITLE } from './chats'
+export { CHAT_SEARCH_LIMIT, DEFAULT_CHAT_TITLE, escapeLike } from './chats'
 export type {
   MessageRepository,
   MessageCreateInput,

@@ -60,11 +60,13 @@ const EXPECTED_METHODS = [
   'chats.create',
   'chats.update',
   'chats.delete',
+  'chats.search',
   'chats.members.list',
   'chats.members.set',
   'presence.list',
   'presence.retry',
   'messages.list',
+  'messages.usageSummary',
   'chat.send',
   'chat.stop'
 ]

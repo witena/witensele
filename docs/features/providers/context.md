@@ -27,6 +27,10 @@ mean something.
   probes.
 - `src/renderer/src/i18n/errors.ts`: `BackendErrorCode` → a sentence, which every
   later feature that surfaces a failure will reuse.
+- `src/shared/pricing.ts` (S4.1): the model price table and the context-window
+  lookup derived from it. It lives with the provider layer because it is the same
+  kind of thing as `presets.ts` — vendor facts that both processes need and that
+  are maintained by editing a checked-in list, not by calling an API.
 
 ## Out of scope
 
@@ -38,6 +42,7 @@ mean something.
 | Per-provider rate limits, retries, proxies, custom headers | Not planned for the MVP; the AI SDK's own retry is left at its default |
 | Editing a provider's `type` after creation | Possible through the patch contract, not offered in the UI: the preset grid rewrites the type, which is the only sensible way to change it |
 | A provider "test all" or import/export | S4.x (data & backup) |
+| Reading a live price list from a vendor | Nobody serves one. `pricing.ts` is edited by hand, and says so |
 
 ## Dependencies
 

@@ -21,9 +21,10 @@
  * bootstrap starts once.
  */
 import type { TFunction } from 'i18next'
-import { MessagesSquare, Plus, Search } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { MessagesSquare, Plus, Search, SearchX } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { formatCost, formatTokens } from '@shared/pricing'
 import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
@@ -59,6 +60,7 @@ import { useChatMessages, useMessagesStore } from '../stores/messages'
 import { usePresenceStore } from '../stores/presence'
 import { useIsRunning, useRunStore } from '../stores/run'
 import { useProvidersStore } from '../stores/providers'
+import { useChatUsage, useUsageStore } from '../stores/usage'
 import { reorder } from '../lib/reorder'
 
 /** Literal `t()` calls so the `used-keys` guard can verify both branches. */
@@ -79,6 +81,17 @@ function speakingLabel(t: TFunction, speaking: SpeakingMode): string {
       return t('chat.speakingParallel')
   }
 }
+
+/**
+ * How long the search box waits after the last keystroke before asking the
+ * backend (S4.3).
+ *
+ * Long enough that typing a word is one query rather than five, short enough
+ * that the list feels like it is filtering as you type. The debounce lives here
+ * rather than in the store because it is an interaction detail of this one
+ * input; the store stays a plain mirror of `chats.search`.
+ */
+const SEARCH_DEBOUNCE_MS = 200
 
 /** The timeout values the picker offers, in milliseconds. */
 const TIMEOUT_CHOICES_MS = [30_000, 60_000, 120_000, 300_000]
@@ -112,6 +125,10 @@ export function ChatsPage(): React.JSX.Element {
   const activeRun = useRunStore((state) => (selectedId ? state.activeByChat[selectedId] : undefined))
   const runError = useRunStore((state) => state.error)
   const runErrorCode = useRunStore((state) => state.errorCode)
+  const usage = useChatUsage(selectedId)
+  const matchIds = useChatsStore((state) => state.matchIds)
+  // What the box holds right now; the store only ever sees the debounced value.
+  const [query, setQuery] = useState('')
 
   // The page owns all three lists: the chat list needs them, every message row
   // needs the author's name, avatar and model, and the member panel prints the
@@ -140,6 +157,24 @@ export function ChatsPage(): React.JSX.Element {
     void usePresenceStore.getState().load(selectedId)
   }, [selectedId])
 
+  // Usage is seeded from the backend on every visit too, and for the same kind of
+  // reason: the summary covers the **whole** transcript while the messages store
+  // holds a page of it. From here on `message.updated` keeps it current without
+  // another round trip (see `stores/usage.ts`).
+  useEffect(() => {
+    if (!selectedId) return
+    void useUsageStore.getState().load(selectedId)
+  }, [selectedId])
+
+  // The debounce: the store — and therefore the backend — only sees the value the
+  // user stopped typing on.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void useChatsStore.getState().search(query)
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [query])
+
   const selected = chats.find((chat) => chat.id === selectedId) ?? null
   const members: Agent[] = memberIds
     .map((id) => agents.find((agent) => agent.id === id))
@@ -148,6 +183,25 @@ export function ChatsPage(): React.JSX.Element {
   const memberCounts = Object.fromEntries(
     Object.entries(membersByChat).map(([chatId, ids]) => [chatId, ids.length])
   )
+
+  // Filtering **hides rows**, it does not regroup them: `ChatList` still buckets
+  // what is left into Today / Yesterday / Earlier, and a heading with nothing
+  // under it is dropped by `groupChats` on its own.
+  const visibleChats = matchIds === null ? chats : chats.filter((chat) => matchIds.includes(chat.id))
+  const searching = query.trim().length > 0
+
+  // `12.4k tokens · $0.04`, or the tokens alone when nothing in the chat could be
+  // priced — an unknown model, or a local one, which costs nothing and would read
+  // as a broken estimate if it printed `$0.00`.
+  const usageSummary =
+    usage.total.totalTokens > 0
+      ? usage.cost !== null && usage.cost > 0
+        ? t('chat.usageWithCost', {
+            tokens: formatTokens(usage.total.totalTokens),
+            cost: formatCost(usage.cost)
+          })
+        : t('chat.usage', { tokens: formatTokens(usage.total.totalTokens) })
+      : null
 
   // A chat that is not selected yet still has to draw the settings block, so the
   // defaults stand in — they are the same ones `chats.create` stores.
@@ -203,28 +257,38 @@ export function ChatsPage(): React.JSX.Element {
               <Plus aria-hidden="true" strokeWidth={2.2} className="h-4 w-4" />
             </IconButton>
           </div>
-          {/* Filtering the list is S4.3; the field is the mockup's, still inert. */}
           <Input
             type="search"
-            disabled
+            value={query}
+            data-testid="chats-search"
             placeholder={t('chat.searchChats')}
             aria-label={t('chat.searchChats')}
             wrapperClassName={NO_DRAG}
             icon={<Search aria-hidden="true" className="h-3.5 w-3.5" />}
+            onChange={(event) => setQuery(event.target.value)}
           />
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {chats.length === 0 ? (
-            <EmptyState
-              size="sm"
-              icon={MessagesSquare}
-              title={t('chat.emptyChatsTitle')}
-              description={t('chat.emptyChatsDescription')}
-            />
+          {visibleChats.length === 0 ? (
+            searching ? (
+              <EmptyState
+                size="sm"
+                icon={SearchX}
+                title={t('chat.searchEmptyTitle')}
+                description={t('chat.searchEmptyDescription')}
+              />
+            ) : (
+              <EmptyState
+                size="sm"
+                icon={MessagesSquare}
+                title={t('chat.emptyChatsTitle')}
+                description={t('chat.emptyChatsDescription')}
+              />
+            )
           ) : (
             <ChatList
-              chats={chats}
+              chats={visibleChats}
               selectedId={selectedId}
               memberCounts={memberCounts}
               onSelect={(id) => {
@@ -251,11 +315,23 @@ export function ChatsPage(): React.JSX.Element {
           title={selected ? selected.title : t('chat.noChatSelected')}
           badge={<Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>}
           actions={
-            activeRun && speakingNow.length > 0 ? (
-              <span data-testid="run-status" className="truncate text-xs text-accent">
-                {t('chat.runStatus', { round: activeRun.round, speakers: speakingNow })}
-              </span>
-            ) : undefined
+            <>
+              {activeRun && speakingNow.length > 0 ? (
+                <span data-testid="run-status" className="truncate text-xs text-accent">
+                  {t('chat.runStatus', { round: activeRun.round, speakers: speakingNow })}
+                </span>
+              ) : null}
+              {usageSummary ? (
+                <span
+                  data-testid="chat-usage"
+                  data-tokens={usage.total.totalTokens}
+                  title={t('chat.usageTitle')}
+                  className="shrink-0 font-mono text-[11px] text-fg-faint"
+                >
+                  {usageSummary}
+                </span>
+              ) : null}
+            </>
           }
         />
 
