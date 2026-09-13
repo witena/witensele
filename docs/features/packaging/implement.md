@@ -200,13 +200,17 @@ the only honest assertion about either is made against a real build.
 Two things cost a re-record each, and both are worth knowing before editing the
 tour:
 
-1. **The MCP arguments box swallows a typed newline.** It is a controlled
-   textarea whose `textToArgs` drops empty lines, so the Enter between `-y` and
-   `@modelcontextprotocol/server-everything` is erased by the next render and the
-   two arguments arrive as one string. `npx -y@modelcontextprotocol/...` then
-   hangs until the probe's cap. The tour uses `fill()` with both lines in one
-   change event; `e2e/mcp.spec.ts` always did, which is why the suite never
-   caught it. The underlying paper-cut is a UI bug, not a test problem.
+1. **The MCP arguments box used to swallow a typed newline.** It was a
+   controlled textarea rendered straight from the draft's normalised `args`, so
+   the Enter between `-y` and `@modelcontextprotocol/server-everything` was
+   erased by the next render and the two arguments arrived as one string;
+   `npx -y@modelcontextprotocol/...` then hung until the probe's cap. The tour
+   worked around it with `fill()`, which delivers both lines in one change
+   event, and `e2e/mcp.spec.ts` always did the same — which is why the suite
+   never caught it. The bug is fixed (the box now keeps its own raw text; see
+   `docs/features/mcp/frontend.md`, "The line-list boxes") and `mcp.spec.ts`
+   types the Enter for real. The tour still uses `fill()` because it reads as
+   the paste a person would actually do.
 2. **A cold npx cache looks exactly like a broken MCP server.** The first
    `npx -y @modelcontextprotocol/server-everything` downloads the package and its
    dependencies; warm, it connects in about 1.3 s and lists 13 tools. Prime it

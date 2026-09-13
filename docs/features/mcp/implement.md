@@ -21,7 +21,10 @@ each bound server's tools, wraps them with `toAiTools`, and hands the result to
 ```
 Settings → MCP servers → Add
   renderer  useMcpStore.startCreate()            → draft: McpServerInput
-  renderer  McpEditor edits the draft            (no round trip)
+  renderer  McpEditor edits the draft            (no round trip; the line-list
+                                                  boxes keep their raw text and
+                                                  patch the normalised value —
+                                                  see frontend.md)
   renderer  Test → backend.invoke('mcp.testConnection', { server: { draft } })
   main      handlers/mcp validates the draft
   main      McpManager.testConnection()          → fresh client, listTools, close
@@ -99,8 +102,9 @@ tool is `working`, not stalled.
 | `src/main/handlers/mcp.test.ts` | Validation (duplicate names, stdio without a command, http without a valid URL, a non-http scheme), the merged-record patch rule, connection invalidation, the delete unbinding, probing a draft, `tools` and `log` |
 | `src/main/agents/agent-turn.test.ts` | The loop end to end: a `MockLanguageModelV4` that calls a tool then answers, against the in-process server — parts in order, `part` deltas before text, usage summed over two steps, a failed tool stored as an errored result, **the side-effects rule for a participant and for an executor**, a disabled server, the tools-unsupported retry and its once-per-chat notice, and an unreachable server that still lets the agent answer |
 | `src/renderer/src/components/settings/mcp-display.test.ts` | Status precedence and the endpoint line |
+| `src/renderer/src/components/settings/mcp-text.test.ts` | The line-list boxes: a trailing newline, a blank line and surrounding spaces survive the render after the keystroke; a variable name without `=` survives; the draft wins once another record is opened |
 | `src/renderer/src/components/chat/tool-call.test.ts` | The `serverName · toolName` label |
-| `e2e/mcp.spec.ts` | The real thing: `npx @modelcontextprotocol/server-everything` spawned by the built app, its tools listed before Save, the record and the agent binding surviving a restart, and — when `qwen2.5:3b` is on Ollama — an agent actually calling `echo` |
+| `e2e/mcp.spec.ts` | The real thing: the two arguments typed key by key with a real Enter between them (the suite used `fill`, which is why the swallowed newline went unnoticed), `npx @modelcontextprotocol/server-everything` spawned by the built app, its tools listed before Save, the record and the agent binding surviving a restart, and — when `qwen2.5:3b` is on Ollama — an agent actually calling `echo` |
 
 `src/main/mcp/testing.ts` is what makes most of that cheap: an SDK `McpServer`
 with `echo` / `fail` / `slow`, linked to the client by `InMemoryTransport`. It is

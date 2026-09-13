@@ -71,6 +71,7 @@ their own tools to the same `ToolSet` through the same `collectAgentTools`.
 | The side-effects rule is enforced in `collectAgentTools` | Enforce in the handler; enforce in the UI | The UI explains it and the handler never sees a turn. The one place every tool must pass through is where the turn assembles them |
 | A model that cannot use tools gets **one retry without them** | Fail the turn; never attach tools to small models | Answering without tools beats answering nothing, and which local models support tool calling cannot be known ahead of time |
 | Tool counts are fetched **on demand**, never on page load | Load every server's tools when settings opens | `mcp.tools` connects; a settings page that spawns six `npx` processes on open is a page that is wrong to open |
+| The arguments / environment boxes own their **raw text**; the draft stores the normalised list | Render the draft back into the box on every keystroke; normalise only on blur | The normalisers drop empty lines and `=`-less lines, so a round-trip erased the Enter that starts a second argument. Blur-only would leave the draft stale while Test and Save read it |
 
 ## Open questions
 

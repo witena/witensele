@@ -24,7 +24,7 @@ first to read it for anything but CRUD.
 |---|---|---|---|
 | `mcp_servers` | `name` | text | **Also the tool prefix.** Unique per user, case-insensitively, enforced in the handler |
 | | `transport` | `'stdio' \| 'http'` | Decides which of the next four columns mean anything |
-| | `command`, `args`, `env` | text / JSON | stdio. `env` is merged over `process.env` |
+| | `command`, `args`, `env` | text / JSON | stdio. `env` is merged over `process.env`. `args` arrives already normalised (trimmed, no empty strings): the renderer's `textToArgs` does that, never this layer |
 | | `url` | text | http. `env` doubles as the request headers |
 | | `enabled` | boolean | A disabled server is never connected and offers no tools |
 | | `side_effects` | boolean | Attached to `executor` agents only |
