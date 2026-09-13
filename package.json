@@ -1,7 +1,7 @@
 {
   "name": "witena",
   "version": "0.1.0",
-  "description": "多 agent 群聊桌面应用 / Multi-agent group chat desktop app",
+  "description": "Multi-agent group chat desktop app",
   "main": "./out/main/index.js",
   "private": true,
   "type": "module",

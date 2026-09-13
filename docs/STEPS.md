@@ -1,137 +1,138 @@
-# Witena 分步执行清单
+# Witena Step-by-Step Execution List
 
-`PLAN.md` 是最终目标形态,本文件把它拆成可以一步步执行、一步步检验的小步。每一步的规则:
+`PLAN.md` is the target end state. This file breaks it into small steps that are executed and verified one at a time. Rules for every step:
 
-- 做完必须满足"验收"里的每一条才算完成,然后更新对应子功能的四份文档、跑 `npm test`、提交一次 commit。
-- 状态标记:`[ ]` 未开始、`[~]` 进行中、`[x]` 完成(附完成日期)。
-- 只按顺序做,不跳步;某步发现方案要改,先改 `PLAN.md` 再继续。
-
----
-
-## 阶段 0:准备
-
-### S0.1 项目骨架 `[ ]`
-做什么:package.json、tsconfig、electron-vite 配置、Tailwind、vitest;一个空窗口。
-验收:
-- `npm install` 成功,better-sqlite3 针对 Electron 重编译成功
-- `npm run dev` 弹出窗口,标题栏和页面显示 Witena
-- `npm run typecheck` 通过
-- `npm test` 跑通一个冒烟测试
-
-### S0.2 文档骨架与项目约定 `[ ]`
-做什么:`docs/README.md` 索引、`docs/features/` 目录与四份文档模板、根目录 `CLAUDE.md` 写明约定(四份文档、测试门禁、i18n 禁止硬编码文案)。
-验收:文件存在,CLAUDE.md 能被后续会话读到。
-
-### S0.3 首次提交并推送 `[ ]`
-验收:`git log` 有 commit,GitHub 仓库 main 分支能看到代码。
+- A step is done only when every item under "Acceptance" is met, the feature's four docs are updated, `npm test` passes, and the work is committed.
+- Status markers: `[ ]` not started, `[~]` in progress, `[x]` done (with completion date).
+- Steps are executed strictly in order. If a step reveals that the plan must change, update `PLAN.md` first, then continue.
+- Everything committed is in English (see the language rule in `PLAN.md`).
 
 ---
 
-## 阶段 1:骨架(对应 PLAN 里程碑 1)
+## Phase 0: Preparation
 
-### S1.1 共享契约 `[ ]`
-做什么:`src/shared/types.ts`(领域类型)、`events.ts`(带类型的事件)、`backend.ts`(BackendClient 接口)。
-验收:typecheck 通过;文档 `docs/features/backend-client/` 四份写好。
+### S0.1 Project skeleton `[~]`
+What: package.json, tsconfig, electron-vite config, Tailwind, vitest; an empty window.
+Acceptance:
+- `npm install` succeeds, better-sqlite3 is rebuilt against Electron
+- `npm run dev` opens a window whose title bar and page show Witena
+- `npm run typecheck` passes
+- `npm test` runs one smoke test
 
-### S1.2 数据库 `[ ]`
-做什么:drizzle schema(providers、agents、mcp_servers、chats、chat_members、messages、settings,全部带 userId / UUID / 时间戳)、migrations、打开 `userData/witena.db`。
-验收:
-- 单测用临时文件库跑各表 CRUD
-- `npm run dev` 后 userData 目录下出现 witena.db
+### S0.2 Documentation skeleton and project conventions `[~]`
+What: `docs/README.md` index, `docs/features/` directory with the four-document template, root `CLAUDE.md` stating the conventions (four docs per feature, test gate, no hard-coded UI strings, English-only repository, `CLAUDE.local.md` as the gitignored Chinese copy).
+Acceptance: files exist; CLAUDE.md is picked up by later sessions.
 
-### S1.3 IPC 与 BackendClient 的 Electron 实现 `[ ]`
-做什么:preload 暴露 `invoke` 与 `subscribe`;renderer 的 `lib/backend.ts` 实现 BackendClient;主进程 handler 注册表。
-验收:renderer 调 `system.ping` 返回 pong;主进程发一个测试事件,renderer 能收到。
+### S0.3 First commit and push `[ ]`
+Acceptance: `git log` has commits; the GitHub repository's main branch shows the code.
+
+---
+
+## Phase 1: Skeleton (PLAN milestone 1)
+
+### S1.1 Shared contracts `[ ]`
+What: `src/shared/types.ts` (domain types), `events.ts` (typed events), `backend.ts` (BackendClient interface).
+Acceptance: typecheck passes; the four docs under `docs/features/backend-client/` are written.
+
+### S1.2 Database `[ ]`
+What: drizzle schema (providers, agents, mcp_servers, chats, chat_members, messages, settings; all with userId / UUID / timestamps), migrations, opening `userData/witena.db`.
+Acceptance:
+- Unit tests run CRUD on every table against a temporary database file
+- After `npm run dev`, witena.db appears under the userData directory
+
+### S1.3 IPC and the Electron BackendClient implementation `[ ]`
+What: preload exposes `invoke` and `subscribe`; renderer `lib/backend.ts` implements BackendClient; main-process handler registry.
+Acceptance: the renderer calls `system.ping` and receives pong; the main process emits a test event and the renderer receives it.
 
 ### S1.4 i18n `[ ]`
-做什么:i18next + react-i18next,`locales/zh-CN.json` 与 `en.json`,语言存 settings 表,首次跟随系统语言。
-验收:
-- 单测:两份语言文件 key 集合完全一致
-- 设置页切换语言即时生效,重启后保持
+What: i18next + react-i18next, `locales/zh-CN.json` and `en.json`, language persisted in the settings table, follows the system language on first launch.
+Acceptance:
+- Unit test: both locale files have identical key sets
+- Switching the language in settings takes effect immediately and survives a restart
 
 ### S1.5 UI shell `[ ]`
-做什么:左侧导航栏、三个页面壳(Chats / Agents / Settings)、三栏布局、深色主题按 mockup 配色。
-验收:截图与 mockup 对照,布局与配色一致;文档 `docs/features/ui-shell/`。
+What: navigation rail, three page shells (Chats / Agents / Settings), three-column layout, dark theme with the mockup colours.
+Acceptance: a screenshot matches the mockup in layout and colours; docs under `docs/features/ui-shell/`.
 
 ### S1.6 Providers `[ ]`
-做什么:`shared/presets.ts` 预设;设置页增删改 provider;SecretStore(safeStorage)加密 key;拉取 `/models`;测试连接;`providers/registry.ts` 创建模型实例。
-验收:
-- 添加 Ollama(本地)和一个 OpenAI 兼容预设,能拉到模型列表,测试连接显示成功
-- key 在 DB 里是密文
-- 单测:预设表完整、registry 对四种 type 都能构造实例
+What: `shared/presets.ts`; settings page to add / edit / delete providers; SecretStore (safeStorage) encrypting keys; fetch `/models`; test connection; `providers/registry.ts` creating model instances.
+Acceptance:
+- Add Ollama (local) and one OpenAI-compatible preset, fetch their model lists, test connection reports success
+- Keys are stored encrypted in the DB
+- Unit tests: the preset table is complete; the registry constructs an instance for all four provider types
 
-### S1.7 单 agent 对话跑通 `[ ]`
-做什么:chats CRUD 与左栏列表;最简 ChatRunner(只有一个 agent);AgentTurn 用 streamText 流式;消息落库;输入框与停止按钮。
-验收:
-- 新建 chat,发消息,看到逐字流式回复
-- 停止按钮能中断
-- 重启应用后消息还在
-- 集成测试:用 mock 模型跑一次完整的发送、流式、落库
-
----
-
-## 阶段 2:多 agent(对应 PLAN 里程碑 2)
-
-### S2.1 Agents CRUD 与配置页 `[ ]`
-做什么:agents 表 CRUD;配置页的基本信息、provider 与模型下拉、参数、system prompt;列表页。
-验收:建 3 个挂不同 provider 的 agent,重启后还在;单测 CRUD。
-
-### S2.2 群成员与群设置 `[ ]`
-做什么:chat_members 增删与排序;右栏成员面板;群设置(模式、依次 / 并行、最大轮数、超时)。
-验收:能把 agent 拉进群、移出、拖拽排序;群设置持久化。
-
-### S2.3 编排引擎 `[ ]`
-做什么:ChatRunner 完整版:roundrobin / mention-only、sequential / parallel、@解析、PASS、maxAutoRounds、屏障、停止;历史转换(署名前缀、角色映射、连续合并)。
-验收:
-- 单测:@解析、下一轮发言者计算、历史转换、屏障等齐
-- mock 模型集成测试:两种模式跑完整多轮
-- 真实模型:3 个 agent,依次模式下后者引用前者;并行模式同时输出;@ 触发第二轮;到上限停止
-
-### S2.4 Presence 与心跳 `[ ]`
-做什么:AgentSession、AgentSupervisor 每秒 tick、stall / hard 超时、跳过并插入系统消息、provider 探活;圆点显示在成员列表和消息头像。
-验收:
-- 单测:状态机四种状态的转换
-- 集成测试:mock 一个卡住的 agent,30s 变橙、120s 变灰并被跳过,轮次继续
-- UI 上圆点实时变色
-
-### S2.5 消息渲染与输入打磨 `[ ]`
-做什么:markdown 与代码高亮、思考折叠、工具卡片、轮次与"回应 @谁"标签、PASS 弱化、@ 自动补全、Enter / Shift+Enter。
-验收:与 mockup 对照。
+### S1.7 Single-agent chat end to end `[ ]`
+What: chats CRUD and the left column list; minimal ChatRunner (one agent); AgentTurn streaming via streamText; messages persisted; composer and Stop button.
+Acceptance:
+- Create a chat, send a message, see a token-by-token streaming reply
+- Stop interrupts the reply
+- Messages survive an app restart
+- Integration test: a mock model runs one full send → stream → persist cycle
 
 ---
 
-## 阶段 3:能力(对应 PLAN 里程碑 3)
+## Phase 2: Multi-agent (PLAN milestone 2)
+
+### S2.1 Agents CRUD and configuration page `[ ]`
+What: agents table CRUD; configuration page with basic info, provider and model dropdowns, parameters, system prompt; list page.
+Acceptance: create 3 agents on different providers, they survive a restart; unit tests for CRUD.
+
+### S2.2 Chat members and chat settings `[ ]`
+What: chat_members add / remove / reorder; member panel on the right; chat settings (mode, sequential / parallel, max rounds, timeouts).
+Acceptance: agents can be added to, removed from and reordered within a chat; chat settings persist.
+
+### S2.3 Orchestration engine `[ ]`
+What: full ChatRunner: roundrobin / mention-only, sequential / parallel, @parsing, PASS, maxAutoRounds, barrier, stop; history transform (name prefixes, role mapping, merging consecutive messages).
+Acceptance:
+- Unit tests: @parsing, next-round speakers, history transform, barrier completion
+- Mock-model integration tests: full multi-round runs in both modes
+- Real models: 3 agents; in sequential mode later agents cite earlier ones; parallel mode streams simultaneously; an @mention triggers round 2; the chain stops at the limit
+
+### S2.4 Presence and heartbeat `[ ]`
+What: AgentSession, AgentSupervisor ticking every second, stall / hard timeouts, skip with a system message, provider probing; dots shown in the member panel and on message avatars.
+Acceptance:
+- Unit tests: transitions between the four states
+- Integration test: a mocked stuck agent turns orange at 30 s, grey at 120 s, is skipped, and the round continues
+- Dots change colour live in the UI
+
+### S2.5 Message rendering and composer polish `[ ]`
+What: markdown and code highlighting, collapsible reasoning, tool cards, round and "replying to @who" labels, dimmed PASS, @ autocomplete, Enter / Shift+Enter.
+Acceptance: matches the mockup.
+
+---
+
+## Phase 3: Capabilities (PLAN milestone 3)
 
 ### S3.1 MCP `[ ]`
-做什么:设置页 MCP servers(stdio / http、测试连接);MCPManager 懒连接与工具发现;agent 绑定 servers;工具调用与结果卡片。
-验收:注册 `@modelcontextprotocol/server-everything`,agent 能列出并调用工具;单测工具 schema 转换。
+What: MCP servers settings page (stdio / http, test connection); MCPManager lazy connection and tool discovery; agent ↔ server binding; tool call and result cards.
+Acceptance: register `@modelcontextprotocol/server-everything`; an agent lists and calls its tools; unit test for tool schema conversion.
 
 ### S3.2 Skills `[ ]`
-做什么:扫描 `userData/skills`;导入文件夹;agent 勾选;system prompt 注入 name / description;`read_skill`、`read_skill_file` 工具。
-验收:放一个示例 SKILL.md,agent 需要时读到全文;单测 frontmatter 解析。
+What: scan `userData/skills`; import a folder; agents select skills; system prompt injects name / description; `read_skill` and `read_skill_file` tools.
+Acceptance: drop in a sample SKILL.md; the agent reads the full text when needed; unit test for frontmatter parsing.
 
 ### S3.3 Memory `[ ]`
-做什么:`userData/memory/<agentId>/MEMORY.md` 与 notes;`memory_save`、`memory_search` 工具;配置页查看与编辑。
-验收:chat A 记住一个事实,chat B 能回忆;单测索引读写。
+What: `userData/memory/<agentId>/MEMORY.md` and notes; `memory_save` and `memory_search` tools; viewer and editor on the configuration page.
+Acceptance: a fact remembered in chat A is recalled in chat B; unit tests for index read/write.
 
 ---
 
-## 阶段 4:打磨(对应 PLAN 里程碑 4)
+## Phase 4: Polish (PLAN milestone 4)
 
-### S4.1 用量与费用 `[ ]`
-验收:每条消息、每个成员、每个 chat 的 token 统计正确;顶部显示。
+### S4.1 Usage and cost `[ ]`
+Acceptance: token counts per message, per member and per chat are correct and shown in the header.
 
-### S4.2 上下文截断 `[ ]`
-验收:单测超长历史被从最早开始丢弃且保留 system。
+### S4.2 Context truncation `[ ]`
+Acceptance: unit test shows an over-long history is dropped oldest-first while keeping the system prompt.
 
-### S4.3 自动标题与搜索 `[ ]`
-验收:第一条消息后自动起标题;左栏搜索能过滤。
+### S4.3 Automatic titles and search `[ ]`
+Acceptance: a title is generated after the first message; the left column search filters chats.
 
-### S4.4 打包 `[ ]`
-验收:electron-builder 产出 mac dmg,安装后能启动并完成一次对话。
+### S4.4 Packaging `[ ]`
+Acceptance: electron-builder produces a macOS dmg; after installation the app launches and completes one conversation.
 
 ---
 
-## 阶段 5:后续(MVP 之后,见 PLAN 第"后续扩展"节)
+## Phase 5: Later (post-MVP, see "Future extension" in PLAN.md)
 
-连接器市场、执行者 agent 与工作目录、VS Code 打开与扩展、服务端与多用户。
+Connector gallery, executor agent with a working directory, VS Code open and extension, server and multi-user.
