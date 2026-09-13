@@ -1,0 +1,133 @@
+# ui-shell — Frontend
+
+This feature is entirely frontend; see [backend.md](./backend.md) for the one
+main-process fact it depends on.
+
+## Pages and components
+
+| File | Responsibility |
+|---|---|
+| `src/renderer/src/App.tsx` | Composition root. Renders `AppShell` and nothing else (it used to hold the smoke screen) |
+| `src/renderer/src/components/layout/app-shell.tsx` | The frame: `NavRail` plus the page named by the store. A `Record<Page, Component>` lookup, one page mounted at a time |
+| `src/renderer/src/components/layout/nav-rail.tsx` | 56px rail: app mark, Chats, Agents, Settings pinned to the bottom. The window's drag handle |
+| `src/renderer/src/components/layout/column.tsx` | One vertical strip: fixed width, one border, its own scroll context |
+| `src/renderer/src/components/layout/page-header.tsx` | The 52px title bar; drag region, with `actions` opted back out |
+| `src/renderer/src/components/layout/window-chrome.ts` | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` and why they exist |
+| `src/renderer/src/components/ui/*` | `Button`, `IconButton`, `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Avatar`, `PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, plus the `index.ts` barrel |
+| `src/renderer/src/pages/chats-page.tsx` | Chat list (264px) · conversation · member panel (288px), with the composer and the group-settings block |
+| `src/renderer/src/pages/agents-page.tsx` | Agent list (264px) and the editor area's empty state |
+| `src/renderer/src/pages/settings-page.tsx` | Section nav (220px) with the language quick toggle, and the content area |
+| `src/renderer/src/pages/settings/appearance-section.tsx` | The language `Select` — the only settings control with real behaviour |
+| `src/renderer/src/pages/settings/developer-section.tsx` | The transport smoke widgets, moved here from `App.tsx` |
+| `src/renderer/src/pages/settings/language.ts` | `applyLanguageSetting` — the single handler both language controls call |
+| `src/renderer/src/stores/ui.ts` | `page` and `settingsSection` plus their setters |
+| `src/renderer/src/index.css` | Design tokens, and the `drag-region` / `no-drag` utilities |
+
+Primitives never import `react-i18next`: they take already-translated strings.
+That is what keeps an untranslated literal from hiding inside a shared component.
+
+## State
+
+| Store | Field | Type | Meaning |
+|---|---|---|---|
+| `ui` | `page` | `'chats' \| 'agents' \| 'settings'` | Purely local. Which page the shell renders; starts on `chats` |
+| `ui` | `settingsSection` | `'providers' \| 'mcp' \| 'skills' \| 'timeouts' \| 'appearance' \| 'data' \| 'developer'` | Purely local. Kept while another page is showing, so returning to Settings lands where the user left |
+| `settings` | `settings.language` | `Language \| 'system'` | Backend-owned (S1.4). Read by both language controls, written through `applyLanguageSetting` |
+| `settings` | `error` | `string \| undefined` | Backend-owned. Rendered by the Developer section under `data-testid="error"` |
+
+Actions: `setPage(page)`, `setSettingsSection(section)`. Neither touches the
+backend and neither persists — nothing about "which page was open" is worth a row
+in SQLite, and a restart landing on Chats is the right default.
+
+Component-local state, deliberately not in a store:
+
+- `ChatsPage` holds the group-settings values (`mode`, `speaking`,
+  `maxAutoRounds`, `hardTimeoutMs`), seeded from `DEFAULT_CHAT_SETTINGS` and
+  `DEFAULT_APP_SETTINGS`. S2.2 replaces it with the chat's own `ChatSettings`.
+- `DeveloperSection` holds `ping`, `lastEvent` and its own `error`.
+
+## Backend calls
+
+| Call / subscription | Called from | Purpose |
+|---|---|---|
+| `invoke('settings.update', { patch: { language } })` | `applyLanguageSetting`, via `useSettingsStore.setLanguage` | Persist the language chosen in either control |
+| `invoke('system.ping')` | `DeveloperSection` on mount | Request/response, end to end |
+| `invoke('system.emitTestEvent', { payload })` | The Developer section's button | The push direction |
+| `subscribe(…)` filtered to `system.test` | `DeveloperSection` effect | Renders the last payload received; unsubscribes on cleanup (StrictMode runs effects twice in development) |
+
+`settings.get` is still called once by the bootstrap in `main.tsx`, before the
+shell mounts. No page calls the client directly except the Developer section,
+which is a deliberate test surface rather than product UI.
+
+## Interaction states
+
+| State | What the user sees |
+|---|---|
+| idle | The rail highlights the current page (`aria-current="page"`); the settings nav highlights the current section; the language toggle highlights the stored setting with `aria-pressed` |
+| loading | None. The bootstrap resolves settings and the language before the React root is created, so the first frame is already correct — the window shows the dark page background until then, never a white flash or a frame of raw keys |
+| streaming | n/a until S1.7. The composer is disabled and there is no Stop button |
+| empty | This is the shell's normal state in S1.5: an `EmptyState` (icon, title, description) for no chats, no conversation, no members, no agents, no agent selected, and for each settings section that its own step has yet to build |
+| error | `settings.get` failing leaves the language at the system default and shows the detail in Settings → Developer under `data-testid="error"`; the app still starts. A failed `settings.update` is written into the same field by `applyLanguageSetting`, and the optimistic highlight is corrected by the next successful read |
+
+## Copy and i18n
+
+Keys added, by namespace:
+
+| Namespace | Keys |
+|---|---|
+| `nav` | `primary` (the rail's accessible name) |
+| `chat` | `noChatSelected`, `emptyChatsTitle`, `emptyChatsDescription`, `emptyConversationTitle`, `emptyConversationDescription`, `emptyMembersTitle`, `emptyMembersDescription`, `mode`, `modeRoundrobin`, `modeMentionOnly`, `speaking`, `speakingSequential`, `speakingParallel`, `maxAutoRounds`, `maxRoundsShort`, `timeout`, `secondsValue`, `speakingOrder`, `speakingOrderHint`, `actions`, `actionSummarize`, `actionVote`, `mentionHint` |
+| `agents` | `emptyTitle`, `selectOrCreateTitle`, `selectOrCreateDescription` (and `empty` reworded into a description, since it now sits under a title) |
+| `settings` | `sections.developer`, `comingSoonTitle`, `comingSoonDescription`, `interfaceLanguage`, `languageHint`, `languageSystemShort`, `languageZhShort`, `languageEnShort`, and the `developer.*` subtree (`backend`, `languageSetting`, `resolvedLanguage`, `lastEvent`, `emitTestEvent`, `pending`, `noEvent`) |
+
+Removed: the whole `smoke` namespace. Its strings are the `settings.developer.*`
+subtree now, and `EXPECTED_NAMESPACES` in `locales.test.ts` was updated to match —
+which is the deliberate decision that constant's comment asks for.
+
+Two traps worth repeating, both hit while writing this feature:
+
+1. **Do not name an interpolation placeholder `count`.** i18next treats `count`
+   as the plural trigger and looks for `key_one` / `key_other`; the badge rendered
+   a literal `{{rounds}}` until the parameter was renamed. Placeholders here are
+   `{{rounds}}` and `{{seconds}}`.
+2. **Keys must be literal.** `t(KEYS[section])` compiles and ships a missing key;
+   `used-keys.test.ts` cannot see it. Every label goes through a `switch` of
+   literal `t()` calls, which also makes the compiler prove the mapping is total.
+
+The only untranslated text in the shell is the `W` of the app mark, which is a
+brand mark. It is below the guard's three-letter threshold, so it needs no
+`ALLOWED_JSX_TEXT` entry — that list is still empty, as intended.
+
+## Accessibility and keyboard
+
+- Every icon-only control has a translated accessible name: `IconButton` requires
+  `label` and sets both `aria-label` and `title`; every decorative lucide icon is
+  `aria-hidden`.
+- The rail marks the current destination with `aria-current="page"`, the settings
+  nav does the same, and both segmented controls use `aria-pressed`.
+- `Toggle` is `role="switch"` with `aria-checked`, not a repainted checkbox.
+- `Select` is a real `<select>`, so the popup keeps the platform's keyboard
+  navigation, type-ahead and VoiceOver behaviour.
+- `SectionTitle` renders `h2` / `h3`, and `PageHeader` renders the content area's
+  `h1`, so the shell has a usable document outline.
+- Focus is visible everywhere: `focus-visible:ring-1 focus-visible:ring-accent`
+  on every interactive element.
+- Tab order follows the DOM: rail → column header → column body → next column.
+  No focus traps, no custom key handling — Enter/Shift+Enter in the composer is
+  S2.5.
+
+### Window chrome
+
+The window uses `titleBarStyle: 'hiddenInset'`, which has two consequences the
+layout has to carry:
+
+- **The traffic lights overlap the content**, roughly x 13–70, y 6–26. The rail
+  and the leftmost column header therefore start at `TRAFFIC_LIGHT_INSET` (32px)
+  rather than the mockup's 14px. The member panel and the settings content do
+  *not* get the inset — the lights are nowhere near them. This is the one
+  knowing, visible difference from the artboards.
+- **The window has no handle unless the app provides one.** The rail and every
+  `PageHeader` carry `drag-region`; every button, input and select inside them
+  carries `no-drag`. Forgetting the second half makes a control silently
+  unclickable, which is why the pair lives in one small module with that warning
+  in its header.

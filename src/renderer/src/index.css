@@ -42,6 +42,24 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
+/*
+ * Window chrome. The macOS window uses `titleBarStyle: 'hiddenInset'`, so there
+ * is no system title bar to drag: the app has to nominate its own draggable
+ * surfaces (the navigation rail and the 52px page headers) and opt every control
+ * inside them back out, or the buttons would only move the window.
+ *
+ * These are real utilities rather than Tailwind arbitrary properties
+ * (`[-webkit-app-region:drag]`) because the leading `-` of the vendor prefix is
+ * ambiguous with Tailwind's negative-value syntax.
+ */
+@utility drag-region {
+  -webkit-app-region: drag;
+}
+
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
+
 @layer base {
   html,
   body,

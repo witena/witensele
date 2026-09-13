@@ -244,7 +244,7 @@ Everything not marked "Implemented in S1.3" rejects with
 | `src/main/ipc-protocol.test.ts` | Channel names; `toBackendError` for a `BackendFailure` with and without details, an ordinary `Error`, and a non-`Error` throw |
 | `src/main/handlers/handlers.test.ts` | Every `BACKEND_METHODS` entry has a handler and the map has no extras; unimplemented methods reject with `internal` and the STEPS.md message; `system.ping`; `system.emitTestEvent` emitting exactly one event and rejecting a non-string payload; `settings.get` / `settings.update` against the temporary-database fixture, including the `timeouts` field-by-field merge, unknown-key rejection and per-user scoping |
 | `src/renderer/src/lib/backend.test.ts` | `createElectronBackendClient` against a fake bridge: resolving the envelope value, forwarding the single object argument, `undefined` for an argument-free method, rejecting with a `BackendClientError` that carries `code` and `details`, a malformed envelope becoming `internal`, `subscribe` / unsubscribe, `subscribeTo` filtering, independent subscribers |
-| `e2e/smoke.spec.ts` | The real Electron app: `system.ping` renders `backend: pong`, `settings.get` renders `language: system`, clicking the button round-trips a `system.test` event into `last-event`, and the database is created inside the `WITENA_USER_DATA` directory |
+| `e2e/smoke.spec.ts` | The real Electron app: `system.ping` renders `pong`, `settings.get` renders `system`, clicking the button round-trips a `system.test` event into `last-event`, and the database is created inside the `WITENA_USER_DATA` directory. Since S1.5 it navigates to Settings -> Developer first, via `openDeveloperSettings` |
 
 The expected method list in `contracts.test.ts` is written by hand on purpose: a
 list derived from `BackendApi` would follow a rename instead of failing on it.
@@ -270,6 +270,9 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   tree exists, so a provider component could not supply the client to it. Tests
   swap in a fake with `setBackend`; tests of the client itself still use
   `createElectronBackendClient(fakeBridge)`.
-- **The smoke UI in `App.tsx` is throwaway.** S1.4 moved its copy into the
-  `smoke.*` locale namespace, so it no longer breaks the i18n rule; S1.5 replaces
-  the file, and that namespace, entirely.
+- **The smoke UI is a test surface, not product UI.** S1.4 moved its copy into the
+  locale files; S1.5 moved the widgets themselves out of `App.tsx` into Settings ->
+  Developer and retired the `smoke` namespace, whose strings are
+  `settings.developer.*` now. It stays because `smoke.spec.ts` and `i18n.spec.ts`
+  are the only end-to-end proof the transport works until S1.7 puts a real message
+  on screen.

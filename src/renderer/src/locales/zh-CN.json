@@ -11,6 +11,7 @@
     "error": "出错了"
   },
   "nav": {
+    "primary": "主导航",
     "chats": "对话",
     "agents": "智能体",
     "settings": "设置"
@@ -21,9 +22,32 @@
     "today": "今天",
     "yesterday": "昨天",
     "earlier": "更早",
-    "members": "成员",
+    "noChatSelected": "未选择对话",
+    "emptyChatsTitle": "还没有对话",
+    "emptyChatsDescription": "新建一个对话，开始讨论。",
+    "emptyConversationTitle": "这里还没有内容",
+    "emptyConversationDescription": "新建对话，邀请几位智能体，然后向他们提问。",
+    "members": "群成员",
+    "emptyMembersTitle": "还没有成员",
+    "emptyMembersDescription": "从智能体库中添加成员，让他们参与讨论。",
     "groupSettings": "群设置",
+    "mode": "编排模式",
+    "modeRoundrobin": "轮流发言",
+    "modeMentionOnly": "仅被点名时发言",
+    "speaking": "同一轮内",
+    "speakingSequential": "依次发言",
+    "speakingParallel": "并行发言",
+    "maxAutoRounds": "最大自动轮数",
+    "maxRoundsShort": "最多 {{rounds}} 轮",
+    "timeout": "无响应超时",
+    "secondsValue": "{{seconds}} 秒",
+    "speakingOrder": "发言顺序",
+    "speakingOrderHint": "拖拽成员调整",
+    "actions": "动作",
+    "actionSummarize": "让某位智能体汇总各方观点",
+    "actionVote": "发起投票",
     "composerPlaceholder": "输入消息，用 @ 点名某位成员。",
+    "mentionHint": "点名成员",
     "send": "发送",
     "stop": "停止",
     "round": "第 {{round}} 轮",
@@ -35,7 +59,10 @@
     "title": "智能体",
     "newAgent": "新建智能体",
     "searchAgents": "搜索智能体",
-    "empty": "还没有智能体，先创建一个再开始讨论。",
+    "emptyTitle": "还没有智能体",
+    "empty": "先创建一个，再开始讨论。",
+    "selectOrCreateTitle": "选择或新建一位智能体",
+    "selectOrCreateDescription": "从左侧列表中选择一位智能体，配置它的模型、参数、技能与记忆。",
     "name": "名称",
     "description": "描述",
     "systemPrompt": "系统提示词",
@@ -51,17 +78,34 @@
   "settings": {
     "title": "设置",
     "sections": {
-      "providers": "服务商",
+      "providers": "模型服务商",
       "mcp": "MCP 服务器",
       "skills": "技能",
-      "timeouts": "超时",
+      "timeouts": "超时与心跳",
       "appearanceLanguage": "外观与语言",
-      "dataBackup": "数据与备份"
+      "dataBackup": "数据与备份",
+      "developer": "开发者"
     },
+    "comingSoonTitle": "尚未实现",
+    "comingSoonDescription": "该分区会随对应的开发步骤一起提供。",
+    "interfaceLanguage": "界面语言",
     "language": "语言",
+    "languageHint": "立即生效，并在下次启动时保留。",
     "languageSystem": "跟随系统",
     "languageZh": "简体中文",
-    "languageEn": "English"
+    "languageEn": "English",
+    "languageSystemShort": "系统",
+    "languageZhShort": "中文",
+    "languageEnShort": "English",
+    "developer": {
+      "backend": "后端：",
+      "languageSetting": "语言设置：",
+      "resolvedLanguage": "当前语言：",
+      "lastEvent": "最近事件：",
+      "emitTestEvent": "发送测试事件",
+      "pending": "…",
+      "noEvent": "—"
+    }
   },
   "presence": {
     "available": "空闲",
@@ -83,15 +127,5 @@
     "runStopped": "本次运行已停止",
     "maxRoundsReached": "已达到 {{max}} 轮自动讨论的上限，发送消息可继续。",
     "providerError": "服务商未能作答：{{message}}"
-  },
-  "smoke": {
-    "title": "Witena · 后端连通性自检",
-    "backend": "后端：",
-    "language": "语言设置：",
-    "resolvedLanguage": "当前语言：",
-    "lastEvent": "最近事件：",
-    "emitTestEvent": "发送测试事件",
-    "pending": "…",
-    "noEvent": "—"
   }
 }

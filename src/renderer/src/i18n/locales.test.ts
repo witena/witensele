@@ -15,7 +15,13 @@ type LocaleTree = { [key: string]: string | LocaleTree }
 const english = en as LocaleTree
 const chinese = zhCN as LocaleTree
 
-/** The namespaces the plan fixes; a new top-level key is a deliberate decision. */
+/**
+ * The namespaces the plan fixes; changing this list is a deliberate decision.
+ *
+ * S1.5 removed `smoke`: the throwaway screen it belonged to became Settings →
+ * Developer, and its strings moved under `settings.developer.*` where they sit
+ * with the rest of that page rather than in a namespace of their own.
+ */
 const EXPECTED_NAMESPACES = [
   'common',
   'nav',
@@ -24,8 +30,7 @@ const EXPECTED_NAMESPACES = [
   'settings',
   'presence',
   'errors',
-  'notices',
-  'smoke'
+  'notices'
 ]
 
 /** Han characters plus the CJK punctuation the Chinese copy uses. */

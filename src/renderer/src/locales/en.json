@@ -11,6 +11,7 @@
     "error": "Something went wrong"
   },
   "nav": {
+    "primary": "Primary navigation",
     "chats": "Chats",
     "agents": "Agents",
     "settings": "Settings"
@@ -21,9 +22,32 @@
     "today": "Today",
     "yesterday": "Yesterday",
     "earlier": "Earlier",
+    "noChatSelected": "No chat selected",
+    "emptyChatsTitle": "No chats yet",
+    "emptyChatsDescription": "Create one to start a discussion.",
+    "emptyConversationTitle": "Nothing here yet",
+    "emptyConversationDescription": "Create a chat, invite a few agents and ask them a question.",
     "members": "Members",
+    "emptyMembersTitle": "No members yet",
+    "emptyMembersDescription": "Add agents from your library so they can discuss.",
     "groupSettings": "Group settings",
+    "mode": "Orchestration mode",
+    "modeRoundrobin": "Round-robin",
+    "modeMentionOnly": "Mention only",
+    "speaking": "Within one round",
+    "speakingSequential": "In turn",
+    "speakingParallel": "In parallel",
+    "maxAutoRounds": "Max automatic rounds",
+    "maxRoundsShort": "Up to {{rounds}} rounds",
+    "timeout": "No-response timeout",
+    "secondsValue": "{{seconds}} s",
+    "speakingOrder": "Speaking order",
+    "speakingOrderHint": "Drag members to reorder",
+    "actions": "Actions",
+    "actionSummarize": "Ask an agent to summarise every point of view",
+    "actionVote": "Start a vote",
     "composerPlaceholder": "Write a message. Type @ to call on a member.",
+    "mentionHint": "Mention a member",
     "send": "Send",
     "stop": "Stop",
     "round": "Round {{round}}",
@@ -35,7 +59,10 @@
     "title": "Agents",
     "newAgent": "New agent",
     "searchAgents": "Search agents",
-    "empty": "No agents yet. Create one to start a discussion.",
+    "emptyTitle": "No agents yet",
+    "empty": "Create one to start a discussion.",
+    "selectOrCreateTitle": "Select or create an agent",
+    "selectOrCreateDescription": "Pick an agent from the list to configure its model, parameters, skills and memory.",
     "name": "Name",
     "description": "Description",
     "systemPrompt": "System prompt",
@@ -56,12 +83,29 @@
       "skills": "Skills",
       "timeouts": "Timeouts",
       "appearanceLanguage": "Appearance & language",
-      "dataBackup": "Data & backup"
+      "dataBackup": "Data & backup",
+      "developer": "Developer"
     },
+    "comingSoonTitle": "Not built yet",
+    "comingSoonDescription": "This section arrives with the step that owns it.",
+    "interfaceLanguage": "Interface language",
     "language": "Language",
+    "languageHint": "Applies immediately and is remembered the next time the app starts.",
     "languageSystem": "Follow the system",
     "languageZh": "Chinese (Simplified)",
-    "languageEn": "English"
+    "languageEn": "English",
+    "languageSystemShort": "System",
+    "languageZhShort": "Chinese",
+    "languageEnShort": "English",
+    "developer": {
+      "backend": "backend:",
+      "languageSetting": "language setting:",
+      "resolvedLanguage": "active language:",
+      "lastEvent": "last event:",
+      "emitTestEvent": "Emit test event",
+      "pending": "…",
+      "noEvent": "—"
+    }
   },
   "presence": {
     "available": "Available",
@@ -83,15 +127,5 @@
     "runStopped": "The run was stopped",
     "maxRoundsReached": "Reached the limit of {{max}} automatic rounds. Send a message to continue.",
     "providerError": "The provider could not answer: {{message}}"
-  },
-  "smoke": {
-    "title": "Witena · backend smoke test",
-    "backend": "backend:",
-    "language": "language setting:",
-    "resolvedLanguage": "active language:",
-    "lastEvent": "last event:",
-    "emitTestEvent": "Emit test event",
-    "pending": "…",
-    "noEvent": "—"
   }
 }
