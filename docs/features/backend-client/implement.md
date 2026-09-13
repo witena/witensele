@@ -161,5 +161,6 @@ The expected method list is written by hand on purpose: a list derived from
 - **No backpressure or replay.** Events are fire-and-forget. A renderer that was
   not listening during a run recovers by calling `messages.list`, not by
   replaying events.
-- **`messages.list` cursor** is a bare message id (see the open question in
-  `context.md`).
+- **`messages.list` cursor** is a bare message id. S1.2 made that safe by giving
+  every message a per-chat `seq`, which the repository resolves the id to; the
+  order is total even for messages written in the same millisecond.

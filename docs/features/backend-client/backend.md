@@ -31,12 +31,13 @@ built to satisfy, so the mapping is worth stating:
 | every table | `id` | `text` | UUID string, matches `EntityBase.id` |
 | every table | `user_id` | `text` | `LOCAL_USER_ID` in the desktop build |
 | every table | `created_at` / `updated_at` | `integer` | Epoch milliseconds, **not** SQLite `datetime` text |
-| `providers` | `api_key_encrypted` | `blob` | Never read into a `Provider`; only its presence becomes `hasApiKey` |
+| `providers` | `api_key_encrypted` | `text` | Ciphertext, never read into a `Provider`; only its presence becomes `hasApiKey` |
 | `agents` | `avatar`, `params`, `skill_names`, `mcp_server_ids` | `text` (json) | Serialized `AgentAvatar`, `AgentParams`, `string[]` |
 | `chats` | `settings`, `workdir` | `text` (json), `text` nullable | `ChatSettings`; `workdir` reserved, always `null` in the MVP |
 | `messages` | `parts`, `usage`, `mentions` | `text` (json) | `MessagePart[]`, `Usage`, `string[]` |
+| `messages` | `seq` | `integer` | Added by S1.2: a per-chat monotonic counter so parallel replies written in the same millisecond still have a total order. Not part of `Message` and never crosses IPC |
 
-Migrations: none — S1.2 introduces the first one.
+Migrations: introduced by S1.2; see [`../database/backend.md`](../database/backend.md) for the table-by-table schema that implements the mapping above.
 
 ## IPC handlers
 

@@ -61,9 +61,13 @@ here, and every renderer feature reaches the backend only through
 
 ## Open questions
 
-- `messages.list` pages with `before: string` (an exclusive message id cursor).
+- ~~`messages.list` pages with `before: string` (an exclusive message id cursor).
   If a chat ever has two messages with an identical `createdAt` and ordering must
-  be stable across devices, this may need to become a composite cursor.
+  be stable across devices, this may need to become a composite cursor.~~
+  Settled in S1.2: the message table carries a per-chat monotonic `seq` assigned
+  at insert, and the repository resolves the cursor id to its `seq`. The contract
+  keeps the bare message id and the order is total, so no composite cursor is
+  needed. See [`../database/context.md`](../database/context.md).
 - `providers.fetchModels` / `providers.testConnection` accept either a saved id
   or an unsaved draft (`ProviderRef`). If the settings form ends up always
   saving first, the `draft` half can be dropped.

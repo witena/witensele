@@ -60,7 +60,10 @@ src/
 - `mcp_servers`: id, name, transport (stdio | http), command, args (json), env (json), url, enabled
 - `chats`: id, title, settings (json: mode = roundrobin | mention-only, speaking = sequential | parallel, maxAutoRounds, memberOrder)
 - `chat_members`: chatId, agentId, position
-- `messages`: id, chatId, senderType (user | agent | system), senderId, parts (json: text | reasoning | tool-call | tool-result), status (streaming | done | error | passed), round, usage (json), createdAt
+- `messages`: id, chatId, seq, senderType (user | agent | system), senderId, parts (json: text | reasoning | tool-call | tool-result), status (streaming | done | error | passed | skipped), round, mentions (json), usage (json), error, createdAt
+- `settings`: userId, data (json: the whole `AppSettings` object), updatedAt
+
+Every table also carries `userId`, a UUID primary key and `createdAt` / `updatedAt` as epoch milliseconds (see "Reserved server capability"). `messages.seq` is a per-chat monotonic counter assigned at insert: parallel agents in one round can be persisted within the same millisecond, so `createdAt` alone does not define a stable transcript order. Details in `docs/features/database/`.
 
 Skills and memory are not stored in the DB; they live on the filesystem: `userData/skills/<name>/SKILL.md`, `userData/memory/<agentId>/MEMORY.md` plus `notes/*.md`.
 
@@ -182,7 +185,7 @@ Every feature keeps four documents under `docs/features/<feature>/`, updated in 
 | `frontend.md` | Pages and component files involved, zustand store fields, IPC calls used, interaction states (loading / streaming / error) |
 | `backend.md` | Main-process modules and files, DB tables and fields, IPC handler list, usage notes and pitfalls of external dependencies (AI SDK / MCP SDK) |
 
-Feature list (mirrors the directory layout): `providers`, `agents`, `chats`, `orchestration`, `agent-turn`, `presence` (heartbeat, timeouts, presence), `mcp`, `skills`, `memory`, `backend-client` (IPC abstraction and events), `ui-shell` (layout and navigation), `i18n`. `docs/README.md` holds an index linking every feature's four documents.
+Feature list (mirrors the directory layout): `providers`, `agents`, `chats`, `orchestration`, `agent-turn`, `presence` (heartbeat, timeouts, presence), `mcp`, `skills`, `memory`, `backend-client` (IPC abstraction and events, *infrastructure*), `database` (schema, migrations and repositories, *infrastructure*), `ui-shell` (layout and navigation), `i18n`. Infrastructure features have no UI of their own; their `frontend.md` says so and points at the feature that does. `docs/README.md` holds an index linking every feature's four documents.
 
 Language rule: everything committed to the repository (docs, code comments, commit messages, PR text) is in English. Chinese versions of docs use the `.zh.md` suffix and are gitignored; `CLAUDE.local.md` is the Chinese copy of `CLAUDE.md`.
 
