@@ -82,8 +82,11 @@ of the name, uppercased, when the user did not type one.
 
 ## Known limitations and TODOs
 
-- Skills, MCP servers and the memory viewer are empty states naming S3.2, S3.1
-  and S3.3.
+- Skills and the memory viewer are still empty states naming S3.2 and S3.3. The
+  MCP block became a real checklist in S3.1, bound to `mcpServerIds`; see
+  [`../mcp/frontend.md`](../mcp/frontend.md).
+- An agent takes **all** of a bound server's tools or none; there is no per-tool
+  selection.
 - The reasoning toggle writes `params.reasoning`; nothing reads it yet —
   `agent-turn` starts honouring it when a provider that supports it is wired up.
 - There is no `agent.created` / `agent.updated` event. The agents page is the only

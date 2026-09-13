@@ -68,8 +68,12 @@ different types, and "clear the temperature box" has to be spellable.
 - The avatar control is a row of eight colour swatches next to a live preview,
   where the artboard draws a single field reading "letter · warm brown". The
   artboard's version has no way to actually pick anything.
-- Skills, MCP servers and the memory body are `EmptyState`s naming S3.2, S3.1 and
-  S3.3 instead of the artboard's checkbox lists and memory excerpt. The memory
-  **toggle** is real.
+- Skills and the memory body are `EmptyState`s naming S3.2 and S3.3 instead of
+  the artboard's checkbox list and memory excerpt. The memory **toggle** is real.
+- The MCP block *is* the artboard's checkbox list from S3.1
+  (`components/agents/mcp-checklist.tsx`): one row per registered server with its
+  transport, its tool count and its side-effects tag, bound to `mcpServerIds`. A
+  `sideEffects` server is greyed out with a hint on a `participant` agent, since
+  only an `executor` is ever given those tools.
 - "Reasoning" is a `Toggle` rather than the artboard's select, because the stored
   value is a boolean.

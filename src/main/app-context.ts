@@ -18,6 +18,8 @@ import type { Repositories } from './db/repositories'
 import { createRepositories } from './db/repositories'
 import type { EventBus } from './events/bus'
 import { createEventBus } from './events/bus'
+import { McpManager } from './mcp/manager'
+import type { McpManagerOptions } from './mcp/manager'
 import { ChatRunnerRegistry } from './orchestration/chat-runner'
 import type { ChatRunnerOptions } from './orchestration/chat-runner'
 import { AgentSupervisor } from './presence/supervisor'
@@ -107,6 +109,14 @@ export interface AppContext {
    */
   supervisor: AgentSupervisor
   /**
+   * The MCP connection pool.
+   *
+   * On the context for the same reason as `runners` and `supervisor`: a stdio
+   * server is a child process that outlives the call that started it, and
+   * `mcp.update` has to be able to close the very client an agent turn opened.
+   */
+  mcp: McpManager
+  /**
    * Outbound HTTP for handlers that talk to a provider's REST endpoint
    * (`providers.fetchModels`). Absent means the platform `fetch`; a test injects
    * its own so the suite never opens a socket, and a future server build can put
@@ -131,6 +141,24 @@ export interface AppContextOptions {
   runner?: ChatRunnerOptions
   /** Clock, intervals and provider probe of the `AgentSupervisor`. */
   supervisor?: SupervisorOverrides
+  /**
+   * Transport construction and working directory of the `McpManager`.
+   *
+   * `getServer` is never overridable: it is derived from the context's own
+   * repositories, exactly like the supervisor's accessors.
+   */
+  mcp?: Omit<McpManagerOptions, 'getServer'>
+}
+
+/** Builds the MCP pool's accessors from a finished context. */
+export function createMcpManager(
+  ctx: AppContext,
+  overrides: Omit<McpManagerOptions, 'getServer'> = {}
+): McpManager {
+  return new McpManager({
+    getServer: (serverId) => ctx.repos.mcpServers.get(serverId, ctx.userId),
+    ...overrides
+  })
 }
 
 /** Builds the supervisor's accessors from a finished context. */
@@ -169,6 +197,7 @@ export function createAppContext(options: AppContextOptions): AppContext {
     // after construction. Doing it here keeps every consumer's type honest.
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
+    mcp: undefined as unknown as McpManager,
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
@@ -177,11 +206,17 @@ export function createAppContext(options: AppContextOptions): AppContext {
       closed = true
       ctx.runners.stopAll()
       ctx.supervisor.stop()
+      // Fire and forget: `close()` is synchronous because every caller of it is
+      // (electron's `will-quit`, a test's `afterEach`), and a child process that
+      // takes a moment to exit must not hold either of them up. The transport
+      // kills the process, so nothing is leaked by not awaiting.
+      void ctx.mcp.closeAll().catch(() => undefined)
       db.close()
     }
   }
 
   ctx.runners = new ChatRunnerRegistry(ctx, options.runner ?? {})
   ctx.supervisor = createSupervisor(ctx, options.supervisor ?? {})
+  ctx.mcp = createMcpManager(ctx, options.mcp ?? {})
   return ctx
 }

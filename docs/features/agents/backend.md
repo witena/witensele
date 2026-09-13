@@ -51,8 +51,11 @@ agent may keep its name):
 - `params.temperature`: finite and within `[0, 2]`; `params.maxTokens`: a positive
   integer. Absent means "the provider's default" and is always valid.
 - `role`: `participant` or `executor`. The UI writes only the first.
-- `skillNames` / `mcpServerIds`: arrays of strings (they stay empty until S3.1 and
-  S3.2 fill them).
+- `skillNames` / `mcpServerIds`: arrays of strings. `skillNames` stays empty
+  until S3.2; `mcpServerIds` is written by the agent form from S3.1, and
+  `mcp.delete` removes a deleted server's id from every agent through
+  `repos.agents.removeMcpServer` — the column is JSON, not a foreign key, so
+  nothing cascades on its own.
 
 ### Why deletion stops runs first
 

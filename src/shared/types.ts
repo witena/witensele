@@ -270,12 +270,28 @@ export interface ReasoningPart {
   text: string
 }
 
+/**
+ * One tool invocation by an agent.
+ *
+ * `toolName` is the tool's **own** name as the MCP server declares it (`echo`),
+ * not the prefixed name the model sees (`everything__echo`): the prefix exists
+ * only to keep two servers' tools apart inside one model call, and a user
+ * reading the transcript wants the real name. `serverId` / `serverName` carry
+ * where it came from, which is what the card prints as `serverName · toolName`.
+ *
+ * Both are optional because a later step adds tools with no server behind them
+ * (`read_skill` in S3.2, `memory_save` in S3.3).
+ */
 export interface ToolCallPart {
   type: 'tool-call'
   toolCallId: string
   toolName: string
   /** Tool arguments; shape is defined by the tool's own JSON schema. */
   input: unknown
+  /** The `McpServer.id` whose client ran this tool, when it came from one. */
+  serverId?: string
+  /** That server's display name, stored so a deleted server still reads right. */
+  serverName?: string
 }
 
 export interface ToolResultPart {
@@ -486,7 +502,19 @@ export interface ConnectionTestFailure {
 /** Result of "test connection" on a provider. */
 export type ConnectionTestResult = ConnectionTestOk | ConnectionTestFailure
 
+/**
+ * One tool a server offers, as the settings page and the agent editor show it.
+ *
+ * The JSON schema is deliberately **not** here: the renderer only ever lists
+ * names and descriptions, and a schema is unbounded input that would cross the
+ * transport on every list call for nothing.
+ */
+export interface McpToolInfo {
+  name: string
+  description?: string
+}
+
 /** Result of "test connection" on an MCP server; success also lists its tools. */
 export type McpConnectionTestResult =
-  | (ConnectionTestOk & { toolNames: string[] })
+  | (ConnectionTestOk & { tools: McpToolInfo[] })
   | ConnectionTestFailure

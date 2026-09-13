@@ -135,7 +135,14 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 ## Known limitations and TODOs
 
 - **No tools.** `streamText` runs with no `tools` and no `stopWhen`, so a model
-  that wants to call one simply answers in prose. S3.1 adds the loop.
+  that wants to call one simply answers in prose.
+
+Since **S3.1** that is no longer true when the agent has MCP servers bound:
+`collectAgentTools` builds the `ToolSet`, `stopWhen: stepCountIs(MAX_TOOL_STEPS)`
+runs the loop, and each `tool-call` / `tool-result` is appended as a whole
+message part (`MessageDelta`'s `part` kind). See
+[`../mcp/implement.md`](../mcp/implement.md) for the full path of one call, and
+`collectAgentTools` for the side-effects rule it enforces.
 - **No skills or memory in the system prompt.** PLAN's assembly order ends with
   the skill headers and the memory index; S3.2 and S3.3 append them.
 - **No context truncation.** A long chat eventually exceeds the model's window and

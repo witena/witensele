@@ -35,7 +35,7 @@ the name is an **identifier the models will type**, not a label.
 | Which agents are in which chat, and in what order | [`chats`](../chats/context.md) (S2.2) |
 | What an agent does during its turn | [`agent-turn`](../agent-turn/context.md) |
 | Choosing skills for an agent | `skills` (S3.2) |
-| Choosing MCP servers for an agent | `mcp` (S3.1) |
+| Registering and probing MCP servers | `mcp` (S3.1 `[x]`). The agent form's **checklist** is here; the registry, the connections and the side-effects rule are there |
 | Viewing and editing an agent's memory | `memory` (S3.3) |
 | The `executor` role and its working directory | Post-MVP (see "Future extension" in `PLAN.md`) |
 | Searching or grouping the agent list | Not planned for the MVP |

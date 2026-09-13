@@ -188,10 +188,34 @@ and captures `test-results/shots/chat-polish.png`. Docs updated in
 
 ## Phase 3: Capabilities (PLAN milestone 3)
 
-### S3.1 MCP `[ ]`
+### S3.1 MCP `[x] (2026-09-13)`
 What: MCP servers settings page (stdio / http, test connection); MCPManager lazy connection and tool discovery; agent ↔ server binding; tool call and result cards.
 Rule: servers flagged `sideEffects` are only attached to `executor` agents; `participant` agents receive read-only tools only (see "Future extension" in PLAN.md). The settings page shows the flag and explains it.
 Acceptance: register `@modelcontextprotocol/server-everything`; an agent lists and calls its tools; unit test for tool schema conversion.
+Done: `src/main/mcp/{manager,tools}.ts` — `McpManager` pools one lazily-connected
+client per server over stdio and Streamable HTTP, caches `listTools` per
+connection, runs `callTool` under `settings.timeouts.toolTimeoutMs` with the MCP
+SDK's own `RequestOptions.signal` / `timeout`, probes a saved row *or an unsaved
+draft* with a throwaway client, and keeps a 200-line stderr ring buffer per
+server. `tools.ts` is pure: `${slug}__${tool}` keys sanitized to `[a-zA-Z0-9_-]`
+with a reverse map back to `{ serverId, serverName, toolName }`, the MCP schema
+wrapped untouched in `jsonSchema()`, content blocks flattened to text and
+`isError` thrown so the SDK emits a `tool-error` part. `agent-turn.ts` gained
+`collectAgentTools` — which is where the **rule** lives: a `sideEffects` server is
+attached only to an `executor` — plus `stopWhen: stepCountIs(8)`, `tool-call` /
+`tool-result` message parts pushed as `part` deltas, and a one-shot retry without
+tools (with a `notices.toolsUnsupported` line) for a model whose provider rejects
+them. Seven `mcp.*` handlers; `mcp.update` drops the pooled client when anything
+it connects with changes, `mcp.delete` closes it and unbinds the id from every
+agent. Settings → MCP servers is the two-column card list plus editor, with the
+transport `SegmentedControl`, args and env as line-based text, the side-effects
+explanation from PLAN.md, "Test connection" showing the tool list, and "Show log"
+for stderr. The agent form's MCP block is now a real checklist that greys out a
+side-effecting server for a participant. Unit tests use the SDK's own `McpServer`
+over `InMemoryTransport`; `e2e/mcp.spec.ts` spawns the real
+`@modelcontextprotocol/server-everything` through `npx` and, with `qwen2.5:3b` on
+Ollama, watches an agent call `echo` and a tool card appear. Docs in
+`docs/features/mcp/`.
 
 ### S3.2 Skills `[ ]`
 What: scan `userData/skills`; import a folder; agents select skills; system prompt injects name / description; `read_skill` and `read_skill_file` tools.

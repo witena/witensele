@@ -44,7 +44,7 @@ legend: green idle, red busy, orange stalled, grey gone.
 | Who speaks and when, the round barrier, `run.finished` reasons | [`orchestration`](../orchestration/context.md) |
 | Streaming one turn, prompt assembly, the terminal message status | [`agent-turn`](../agent-turn/context.md) |
 | Building a model client, reading `/models`, "Test connection" | [`providers`](../providers/context.md) |
-| `toolTimeoutMs` actually capping a tool call | `mcp` (S3.1) — the setting exists and is stored, nothing reads it yet |
+| `toolTimeoutMs` actually capping a tool call | `mcp` (S3.1 `[x]`) — `agent-turn` reads the setting and passes it to `McpManager.callTool`, which hands it to the MCP SDK's `RequestOptions.timeout` |
 | Per-agent token usage in the member panel | S4.1 |
 | Persisting presence across restarts | Nobody. Presence is a fact about *now*; see the decisions below |
 

@@ -221,6 +221,8 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 - **The Copy button does not report failure.** `navigator.clipboard` is either
   available or it is not, and a red message on a copy button is noise.
 - **Tool cards are unexercised by a real tool.** The parts are rendered and
-  unit-tested against fixtures; S3.1 is the first step that produces one.
+  unit-tested against fixtures, and S3.1 produces the first real ones: a
+  `tool-call` part now also carries `serverId` / `serverName`, which is what the
+  card's `serverName · toolName` line reads.
 - **`chats.members.list` is one call per chat** on load. See the trade-off table
   in `context.md`.
