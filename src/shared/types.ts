@@ -426,6 +426,12 @@ export interface BackendError {
 export interface ConnectionTestOk {
   ok: true
   latencyMs: number
+  /**
+   * The model the probe actually ran against, for the "test connection" result
+   * line. Optional because an MCP probe (`McpConnectionTestResult`) has no model;
+   * a provider probe always sets it.
+   */
+  model?: string
 }
 
 export interface ConnectionTestFailure {

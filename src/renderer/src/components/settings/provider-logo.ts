@@ -1,0 +1,103 @@
+/**
+ * The monogram a provider is recognised by: two letters on a tinted square,
+ * exactly as in the settings artboard.
+ *
+ * Both halves are **derived, never stored**. A colour picked from the preset id
+ * means a provider looks the same in the list, in the preset grid and (later) in
+ * an agent's model dropdown without a `logoColor` column that could drift; and
+ * initials taken from the name mean a custom endpoint gets a sensible mark
+ * without asking the user to choose one.
+ *
+ * The palette is *data*, like `AgentAvatar.color`, which is why literal colours
+ * are allowed here and nowhere else: Tailwind cannot see a value that only exists
+ * at runtime, so these reach the DOM as an inline style.
+ */
+
+/** One monogram: a tinted surface and the foreground that stays readable on it. */
+export interface ProviderLogo {
+  text: string
+  color: string
+  textColor: string
+}
+
+/**
+ * Surface / foreground pairs from the artboard, in the order they are assigned.
+ *
+ * Chosen so that adjacent cards in the preset grid differ: the point of the
+ * colour is to make a provider findable at a glance, not to mean anything.
+ */
+const PALETTE: readonly { color: string; textColor: string }[] = [
+  { color: '#4a3a2f', textColor: '#e8b98a' },
+  { color: '#2f3d4a', textColor: '#8ac0e8' },
+  { color: '#3a2f4a', textColor: '#c0a0e8' },
+  { color: '#2f4a47', textColor: '#8ae0d8' },
+  { color: '#4a2f2f', textColor: '#e8a0a0' },
+  { color: '#2f4a3e', textColor: '#9fd8b8' },
+  { color: '#4a452f', textColor: '#e0d88a' },
+  { color: '#3a3a3a', textColor: '#b0aca4' }
+]
+
+/** Neutral pair for a provider with no preset — the "unbranded" look. */
+const NEUTRAL = { color: '#262421', textColor: '#8a857b' } as const
+
+/**
+ * A small, stable string hash.
+ *
+ * Deterministic across runs and machines is the whole requirement: the same
+ * preset must always land on the same swatch, so a user who learns "DeepSeek is
+ * the blue one" is never surprised. FNV-1a is two lines and does that.
+ */
+function hash(value: string): number {
+  let result = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    result ^= value.charCodeAt(index)
+    result = Math.imul(result, 16777619)
+  }
+  return result >>> 0
+}
+
+/**
+ * One or two characters for a name.
+ *
+ * - A first word that is already an acronym: its first two letters
+ *   (`LM Studio` → `LM`), because that is the part people actually say.
+ * - Two or more words otherwise: the initial of each of the first two
+ *   (`Volcengine Ark` → `VA`).
+ * - One word with an inner capital: both capitals (`DeepSeek` → `DS`).
+ * - Otherwise: the first two letters, title-cased (`Anthropic` → `An`).
+ *
+ * Non-Latin names fall back to their first character, which is what a Chinese
+ * provider name in the user's own wording would produce and is fine as a mark.
+ */
+export function providerInitials(name: string): string {
+  const trimmed = name.trim()
+  if (trimmed.length === 0) return '?'
+
+  const words = trimmed.split(/\s+/).filter(Boolean)
+  if (words.length > 1) {
+    const first = words[0] as string
+    if (/^[A-Z]{2,}$/.test(first)) return first.slice(0, 2)
+    return (first[0] ?? '').toUpperCase() + (words[1]?.[0] ?? '').toUpperCase()
+  }
+
+  const word = words[0] as string
+  const innerCapital = word.slice(1).match(/[A-Z]/)
+  if (innerCapital) return (word[0] as string).toUpperCase() + innerCapital[0]
+
+  if (!/^[A-Za-z]/.test(word)) return word.slice(0, 1)
+  return (word[0] as string).toUpperCase() + (word[1] ?? '').toLowerCase()
+}
+
+/**
+ * The monogram for a provider or a preset.
+ *
+ * `presetId` drives the colour so that a renamed provider keeps its swatch; a
+ * provider with no preset gets the neutral pair, which reads as "you configured
+ * this one yourself".
+ */
+export function providerLogo(name: string, presetId?: string | undefined): ProviderLogo {
+  const text = providerInitials(name)
+  if (!presetId) return { text, ...NEUTRAL }
+  const swatch = PALETTE[hash(presetId) % PALETTE.length] ?? NEUTRAL
+  return { text, ...swatch }
+}

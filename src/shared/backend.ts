@@ -72,7 +72,15 @@ export interface BackendApi {
   'providers.delete': (input: { id: string }) => Promise<void>
   /** Reads the provider's `/models` endpoint; does not persist the result. */
   'providers.fetchModels': (input: { provider: ProviderRef }) => Promise<string[]>
-  'providers.testConnection': (input: { provider: ProviderRef }) => Promise<ConnectionTestResult>
+  /**
+   * Sends one tiny request and reports whether it came back. `modelId` picks
+   * which model to probe; omitted, the provider's first known model is used —
+   * which is rarely what you want once a list has both a 1B and a 70B model in it.
+   */
+  'providers.testConnection': (input: {
+    provider: ProviderRef
+    modelId?: string
+  }) => Promise<ConnectionTestResult>
 
   /* -- agents ------------------------------------------------------------- */
 

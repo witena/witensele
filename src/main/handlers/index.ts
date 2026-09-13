@@ -13,10 +13,11 @@ import { BACKEND_METHODS, type BackendMethod } from '@shared/backend'
 import { BackendFailure } from '../errors'
 import { systemHandlers } from './system'
 import { settingsHandlers } from './settings'
+import { providerHandlers } from './providers'
 import type { HandlerMap, HandlerModule } from './types'
 
 /** Every namespace module, in merge order. Adding a namespace means adding a line here. */
-const MODULES: HandlerModule[] = [systemHandlers, settingsHandlers]
+const MODULES: HandlerModule[] = [systemHandlers, settingsHandlers, providerHandlers]
 
 /** The rejection a declared-but-unimplemented method produces. */
 export function notImplemented(method: BackendMethod): BackendFailure {

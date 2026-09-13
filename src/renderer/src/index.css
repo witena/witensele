@@ -37,6 +37,19 @@
   --color-presence-offline: #6f6a62;
   --color-danger: #e08a8a;
 
+  /*
+   * Status pills. Three tones, each a foreground plus the tinted surface it sits
+   * on: ok (a provider that answered), warn (a probe that failed) and idle
+   * (nothing tried yet, or no key). Taken from the settings artboard; reused by
+   * the MCP server list in S3.1.
+   */
+  --color-status-ok: #7fd49a;
+  --color-status-ok-surface: #1f3a2a;
+  --color-status-warn: #e0a040;
+  --color-status-warn-surface: #3a2a1f;
+  --color-status-idle: #8a857b;
+  --color-status-idle-surface: #262421;
+
   /* Typography */
   --font-sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
