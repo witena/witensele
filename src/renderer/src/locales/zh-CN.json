@@ -59,9 +59,13 @@
     "secondsValue": "{{seconds}} 秒",
     "speakingOrder": "发言顺序",
     "speakingOrderHint": "拖拽成员调整",
-    "actions": "动作",
-    "actionSummarize": "让某位智能体汇总各方观点",
-    "actionVote": "发起投票",
+    "actions": {
+      "title": "动作",
+      "summarize": "让某位智能体汇总各方观点",
+      "vote": "发起投票",
+      "summarizePrompt": "请汇总以上各方观点，并给出结论",
+      "votePrompt": "请对以上方案投票，并给出一条理由"
+    },
     "composerPlaceholder": "输入消息，用 @ 点名某位成员。",
     "mentionHint": "点名成员",
     "send": "发送",
@@ -73,7 +77,20 @@
     "skipped": "已跳过",
     "reasoning": "思考过程",
     "stopped": "已停止",
-    "failed": "回复失败"
+    "failed": "回复失败",
+    "jumpToLatest": "回到最新",
+    "mentionAllHint": "本群全体成员",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyCode": "复制这段代码",
+    "toolRunning": "运行中\u2026",
+    "toolDone": "完成",
+    "toolError": "出错",
+    "toolResults": "{{results}} 条结果",
+    "toolExpand": "展开",
+    "toolCollapse": "收起",
+    "toolInput": "输入",
+    "toolOutput": "输出"
   },
   "agents": {
     "title": "智能体",

@@ -59,9 +59,13 @@
     "secondsValue": "{{seconds}} s",
     "speakingOrder": "Speaking order",
     "speakingOrderHint": "Drag members to reorder",
-    "actions": "Actions",
-    "actionSummarize": "Ask an agent to summarise every point of view",
-    "actionVote": "Start a vote",
+    "actions": {
+      "title": "Actions",
+      "summarize": "Ask an agent to summarise every point of view",
+      "vote": "Start a vote",
+      "summarizePrompt": "please summarize every viewpoint above and state the conclusion",
+      "votePrompt": "please vote on the proposals above and give one reason"
+    },
     "composerPlaceholder": "Write a message. Type @ to call on a member.",
     "mentionHint": "Mention a member",
     "send": "Send",
@@ -73,7 +77,20 @@
     "skipped": "Skipped",
     "reasoning": "Reasoning",
     "stopped": "Stopped",
-    "failed": "The reply failed"
+    "failed": "The reply failed",
+    "jumpToLatest": "Jump to latest",
+    "mentionAllHint": "Everyone in this chat",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyCode": "Copy this code block",
+    "toolRunning": "running\u2026",
+    "toolDone": "done",
+    "toolError": "error",
+    "toolResults": "{{results}} results",
+    "toolExpand": "expand",
+    "toolCollapse": "collapse",
+    "toolInput": "Input",
+    "toolOutput": "Output"
   },
   "agents": {
     "title": "Agents",

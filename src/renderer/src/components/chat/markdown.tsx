@@ -17,6 +17,26 @@
  * Long content — a table, a fenced line that does not wrap — scrolls **inside**
  * its own element rather than widening the column: the message list is a fixed
  * middle column and a horizontal scrollbar on the page would be a layout bug.
+ * A table gets an explicit wrapper for that, because `display: block` on a
+ * `<table>` (the only way to make the element itself scroll) also throws away
+ * the column sizing that made the table worth rendering.
+ *
+ * ## Code
+ *
+ * Inline code keeps the descendant rules below — mono, on `bg-bg-muted`. A
+ * fenced block is handed to `CodeBlock`, which owns the header, the Copy button
+ * and shiki. The handover needs **both** overrides: `code` decides whether a
+ * node is a block, and `pre` becomes a passthrough so the block is not wrapped
+ * in a `<pre>` it would then have to fight.
+ *
+ * ## Links
+ *
+ * `target="_blank" rel="noreferrer"` on every link. In Electron a `_blank`
+ * would open a second `BrowserWindow` with no chrome and full renderer
+ * privileges, so `src/main/index.ts` installs a `setWindowOpenHandler` that
+ * hands http(s) to `shell.openExternal` and denies everything else. Both halves
+ * are needed: this one makes the link a navigation request, that one decides
+ * where it goes.
  *
  * ## Mentions
  *
@@ -26,14 +46,13 @@
  * the text inside code fences and links too. The rule itself is
  * `splitMentions` in `@shared/mentions`, the same function the backend resolves
  * a reply's mentions with, so a highlighted name and a scheduled speaker can
- * never disagree. S2.5 refines the styling and adds the composer's autocomplete.
- *
- * S2.5 adds syntax highlighting (shiki) on top of the same component.
+ * never disagree.
  */
 import { Children, Fragment, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { splitMentions, type MentionMember } from '@shared/mentions'
+import { CodeBlock } from './code-block'
 
 /**
  * The prose rules, as descendant utilities on one wrapper.
@@ -56,17 +75,12 @@ const PROSE = [
   '[&_h1]:text-fg [&_h2]:text-fg [&_h3]:text-fg',
   '[&_blockquote]:border-l-2 [&_blockquote]:border-border-strong [&_blockquote]:pl-3 [&_blockquote]:text-fg-dim',
   '[&_hr]:border-border',
-  // Inline code; the `pre code` reset below undoes this inside a block.
+  // Inline code. A fenced block never reaches these rules: it is a `CodeBlock`.
   '[&_code]:rounded [&_code]:bg-bg-muted [&_code]:px-1 [&_code]:py-0.5',
   '[&_code]:font-mono [&_code]:text-[12px] [&_code]:text-fg',
-  '[&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border-strong',
-  '[&_pre]:bg-bg-elevated [&_pre]:p-3 [&_pre]:text-[12px] [&_pre]:leading-relaxed',
-  '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
-  // Tables scroll inside their own wrapper rather than widening the column.
-  '[&_table]:block [&_table]:w-max [&_table]:max-w-full [&_table]:overflow-x-auto',
-  '[&_table]:border-collapse [&_table]:text-[13px]',
+  '[&_table]:w-full [&_table]:border-collapse [&_table]:text-[13px]',
   '[&_th]:border [&_th]:border-border-strong [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:text-fg',
-  '[&_td]:border [&_td]:border-border-strong [&_td]:px-2 [&_td]:py-1'
+  '[&_td]:border [&_td]:border-border-strong [&_td]:px-2 [&_td]:py-1 [&_td]:whitespace-nowrap'
 ].join(' ')
 
 /**
@@ -97,6 +111,14 @@ function highlightMentions(children: ReactNode, members: readonly MentionMember[
   })
 }
 
+/** The text of a `code` node, which react-markdown hands over as children. */
+function codeText(children: ReactNode): string {
+  if (typeof children === 'string') return children
+  return Children.toArray(children)
+    .map((child) => (typeof child === 'string' ? child : ''))
+    .join('')
+}
+
 export interface MarkdownProps {
   /** The raw markdown. May be a partial document while a reply is streaming. */
   children: string
@@ -113,6 +135,41 @@ export function Markdown({ children, mentions = [] }: MarkdownProps): React.JSX.
     ),
     li: ({ node: _node, children: content, ...props }) => (
       <li {...props}>{highlightMentions(content, mentions)}</li>
+    ),
+    a: ({ node: _node, children: content, ...props }) => (
+      // See the header: the handler in the main process decides where this goes.
+      <a {...props} target="_blank" rel="noreferrer">
+        {content}
+      </a>
+    ),
+    // The fenced block is rendered by `code` below, so this is a passthrough
+    // rather than a `<pre>` that would wrap the card in a second scroll box.
+    pre: ({ node: _node, children: content }) => <>{content}</>,
+    code: ({ node: _node, className, children: content, ...props }) => {
+      const fence = /language-([\w+#-]+)/.exec(className ?? '')
+      const text = codeText(content)
+      // An indented block has no info string but does span lines; an inline span
+      // has neither. Either is enough to make it a block.
+      if (!fence && !text.includes('\n')) {
+        return (
+          <code className={className} {...props}>
+            {content}
+          </code>
+        )
+      }
+      return (
+        <CodeBlock
+          {...(fence?.[1] ? { language: fence[1] } : {})}
+          code={text.replace(/\n$/, '')}
+        />
+      )
+    },
+    // The wrapper, not the table, is what scrolls: `display: block` on a table
+    // would drop the column layout the markup exists for.
+    table: ({ node: _node, children: content, ...props }) => (
+      <div data-testid="message-table" className="max-w-full overflow-x-auto">
+        <table {...props}>{content}</table>
+      </div>
     )
   }
 

@@ -6,9 +6,15 @@
  * user-dragged handle would fight the layout.
  */
 import clsx from 'clsx'
-import type { TextareaHTMLAttributes } from 'react'
+import type { ComponentPropsWithRef } from 'react'
 
-export type TextAreaProps = TextareaHTMLAttributes<HTMLTextAreaElement>
+/**
+ * `ComponentPropsWithRef`, not `TextareaHTMLAttributes`: the composer holds a
+ * ref to the element so it can place the caret after an autocomplete insertion.
+ * React 19 passes `ref` through as a normal prop, so no `forwardRef` is needed —
+ * only a prop type that admits it.
+ */
+export type TextAreaProps = ComponentPropsWithRef<'textarea'>
 
 export function TextArea({ className, ...rest }: TextAreaProps): React.JSX.Element {
   return (

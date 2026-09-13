@@ -159,9 +159,30 @@ calling the second, `away · Ns` counted in the renderer, and Settings → Timeo
 drives a real Ollama member beside a provider pointing at a non-routable address.
 Docs in `docs/features/presence/`.
 
-### S2.5 Message rendering and composer polish `[ ]`
+### S2.5 Message rendering and composer polish `[x]` (2026-09-13)
 What: markdown and code highlighting, collapsible reasoning, tool cards, round and "replying to @who" labels, dimmed PASS, @ autocomplete, Enter / Shift+Enter.
 Acceptance: matches the mockup.
+Done: `shiki` (core build, JavaScript regex engine, `vitesse-dark`, fourteen
+grammars imported on demand) behind `lib/highlighter.ts` and
+`components/chat/code-language.ts`; `code-block.tsx` gives every fence a language
+header and a Copy button. `markdown.tsx` now routes fenced blocks to it, wraps
+tables in their own scroller and marks every link `target="_blank" rel="noreferrer"`,
+which `setWindowOpenHandler` in `src/main/index.ts` answers by handing http(s) to
+`shell.openExternal` and denying everything else. Reasoning is collapsed behind a
+one-line preview and auto-expands, pulsing, only while it is the thing streaming.
+`tool-call.ts` + `tool-card.tsx` render `tool-call` / `tool-result` parts as the
+mockup's one-line card (S3.1 produces the first real one; the pairing and the
+summaries are unit-tested against fixtures). A `system` message is now one centred
+dimmed line with no avatar, keeping `data-notice-key`. The list is virtualized with
+`react-virtuoso` over `buildTranscriptRows`, with day separators, `followOutput`
+only at the bottom and a "Jump to latest" pill. The composer grew an `@`
+autocomplete (`mention-query.ts`: token extraction, longest-name-first filtering,
+insertion), clickable mention chips plus `@all`, and an auto-growing textarea up to
+8 lines. The Actions card is real: both buttons compose an `@mention` plus a
+localized prompt and go through the normal `chat.send`. `e2e/composer.spec.ts`
+drives the popover, the chips and both rendering paths against a real Ollama model
+and captures `test-results/shots/chat-polish.png`. Docs updated in
+`docs/features/chats/` and `docs/features/ui-shell/`.
 
 ---
 

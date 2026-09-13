@@ -14,7 +14,7 @@ to every change.
 | Layer | Choice |
 |---|---|
 | Shell | Electron + electron-vite (ESM, `"type": "module"`) |
-| Frontend | React 19 + TypeScript + Tailwind v4 + zustand |
+| Frontend | React 19 + TypeScript + Tailwind v4 + zustand; `react-markdown` + `remark-gfm`, `shiki` and `react-virtuoso` in the message list |
 | Models | Vercel AI SDK (`ai`, `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/google`, `@ai-sdk/openai-compatible`) |
 | Tools | `@modelcontextprotocol/sdk` (stdio + Streamable HTTP) |
 | Storage | better-sqlite3 + drizzle-orm, database at `app.getPath('userData')/witena.db` |

@@ -2,10 +2,11 @@
  * One message in the transcript: the mockup's `.msg` row.
  *
  * Avatar with its presence dot, then a body column holding the header line
- * (name, model badge, timestamp) and the parts. The layout mirrors the artboard
- * exactly — 28px avatar, 12px gap, 6px between the header and the body — because
- * this row is repeated dozens of times per screen and is where a few pixels of
- * drift is most visible.
+ * (name, model badge, round, "replying to @who", timestamp) and the parts. The
+ * layout mirrors the artboard exactly — 28px avatar, 12px gap, 6px between the
+ * header and the body, 8px between the header's own items — because this row is
+ * repeated dozens of times per screen and is where a few pixels of drift is most
+ * visible.
  *
  * The four states the row has to carry, all of them from `Message.status`:
  *
@@ -13,11 +14,8 @@
  * |---|---|
  * | `streaming` | a blinking accent cursor after the text |
  * | `done` | plain |
- * | `passed` | the whole row dimmed, with the abstention label instead of the body |
+ * | `passed` / `skipped` | the whole row dimmed, with the label instead of the body |
  * | `error` | a red hint under whatever text arrived, saying stopped or failed |
- *
- * `skipped` renders like `passed` (dimmed) and gets its own label; the supervisor
- * that produces it lands in S2.4.
  *
  * The presence dot shows the agent's **current** state, not its state when the
  * message was sent (PLAN, "Presence dots"), which is why it comes from the
@@ -25,11 +23,28 @@
  * carry one: the human is always present, and a system notice has no provider
  * that could be offline.
  *
- * The header line also carries the round and, from S2.3, **who the reply
- * answers**: `Message.inReplyTo` holds the agent ids whose previous-round
- * messages mentioned this agent, plus the literal `user`. The names are resolved
- * against the agents store rather than stored, because an agent can be renamed
- * long after the message was written.
+ * ## System notices
+ *
+ * A `senderType: 'system'` message is not a participant speaking, so it is not
+ * drawn as one: no avatar, no name, no timestamp — a single centred dimmed line
+ * across the column, the way every chat client marks "X left the room". It keeps
+ * `data-notice-key` so the end-to-end specs can assert on which notice it is
+ * without depending on the active language.
+ *
+ * ## Reasoning
+ *
+ * Collapsed behind a toggle that shows a one-line preview, because reasoning is
+ * context for an answer and not the answer. While it is *streaming* — reasoning
+ * has arrived and the text part has not started — it is auto-expanded and
+ * pulsing, so the user can see the agent is thinking rather than stuck; the
+ * moment the first text token lands it collapses again. A manual toggle wins
+ * over both: once the user has said what they want, the stream stops deciding.
+ *
+ * ## Tool calls
+ *
+ * `tool-call` and `tool-result` parts render as `ToolCard`, paired by
+ * `toolCallId` in `collectToolCalls`. No tool exists until S3.1; the renderer
+ * handles the parts now so the first real call is visible on the day it happens.
  */
 import clsx from 'clsx'
 import { ChevronRight } from 'lucide-react'
@@ -37,13 +52,22 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type { MentionMember } from '@shared/mentions'
-import type { Agent, Message, MessagePart, PresenceState, ReasoningPart } from '@shared/types'
+import type {
+  Agent,
+  Message,
+  MessagePart,
+  PresenceState,
+  ReasoningPart,
+  SystemNoticePart
+} from '@shared/types'
 import { translateNotice } from '../../i18n/notices'
 import { messageText, wasStopped } from '../../lib/message-view'
 import { useAgent, useAgentsStore } from '../../stores/agents'
 import { useAgentPresence } from '../../stores/presence'
 import { Avatar, Badge } from '../ui'
 import { Markdown } from './markdown'
+import { ToolCard } from './tool-card'
+import { collectToolCalls } from './tool-call'
 
 /** Literal `t()` calls so the used-keys guard can see every status label. */
 function statusLabel(t: TFunction, message: Message): string | null {
@@ -87,6 +111,9 @@ function formatTime(timestamp: number, language: string): string {
 const USER_AVATAR_COLOR = 'var(--color-avatar-user)'
 const USER_AVATAR_TEXT_COLOR = 'var(--color-avatar-user-fg)'
 
+/** How much reasoning the collapsed toggle previews. One line, never wrapped. */
+const REASONING_PREVIEW_CHARS = 90
+
 /**
  * One or two characters for a monogram.
  *
@@ -100,6 +127,15 @@ function monogram(label: string): string {
 }
 
 const isReasoning = (part: MessagePart): part is ReasoningPart => part.type === 'reasoning'
+const isNotice = (part: MessagePart): part is SystemNoticePart => part.type === 'system-notice'
+
+/** The first line of the reasoning, short enough to sit beside the toggle. */
+function reasoningPreview(reasoning: string): string {
+  const line = reasoning.replace(/\s+/g, ' ').trim()
+  return line.length > REASONING_PREVIEW_CHARS
+    ? `${line.slice(0, REASONING_PREVIEW_CHARS)}…`
+    : line
+}
 
 /** The literal `Message.inReplyTo` carries for the human. */
 const USER_SOURCE = 'user'
@@ -114,13 +150,15 @@ export interface MessageItemProps {
 
 export function MessageItem({ message, chatId, members = [] }: MessageItemProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
-  const [reasoningOpen, setReasoningOpen] = useState(false)
+  // `null` means "the stream decides"; a boolean means the user has decided.
+  const [reasoningOverride, setReasoningOverride] = useState<boolean | null>(null)
 
   const isUser = message.senderType === 'user'
+  const isSystem = message.senderType === 'system'
   // Only an agent has presence. The human is always here, and a system notice is
   // written by the app itself — a dot on either would be claiming something.
   const isAgent = message.senderType === 'agent'
-  const agent = useAgent(isUser ? undefined : message.senderId)
+  const agent = useAgent(isUser || isSystem ? undefined : message.senderId)
   const agents = useAgentsStore((state) => state.agents)
   const presence = useAgentPresence(chatId, message.senderId)
 
@@ -143,9 +181,47 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
 
   const text = messageText(message)
   const reasoning = message.parts.filter(isReasoning).map((part) => part.text).join('')
-  const notices = message.parts.filter((part) => part.type === 'system-notice')
+  const notices = message.parts.filter(isNotice)
+  const toolCalls = collectToolCalls(message.parts)
   const label = statusLabel(t, message)
   const dimmed = message.status === 'passed' || message.status === 'skipped'
+
+  // Reasoning is arriving and the answer has not started: show it, pulsing.
+  const reasoningStreaming =
+    message.status === 'streaming' && reasoning.length > 0 && text.length === 0
+  const reasoningOpen = reasoningOverride ?? reasoningStreaming
+
+  if (isSystem) {
+    return (
+      <article
+        data-testid="message-item"
+        data-sender={message.senderType}
+        data-status={message.status}
+        data-round={message.round}
+        className="flex flex-col items-center gap-1 py-0.5"
+      >
+        {notices.map((part, index) => (
+          <p
+            key={index}
+            data-testid="message-notice"
+            // The notice key, not the sentence: an end-to-end spec asserting on
+            // copy would break the moment a translation is reworded. It lives on
+            // this one element only — a second copy on the `<article>` would make
+            // every `[data-notice-key=…]` selector match twice.
+            data-notice-key={part.key}
+            className="max-w-[80%] text-center text-[11px] text-fg-faint"
+          >
+            {translateNotice(t, part)}
+          </p>
+        ))}
+        {notices.length === 0 && text.length > 0 ? (
+          <p data-testid="message-notice" className="max-w-[80%] text-center text-[11px] text-fg-faint">
+            {text}
+          </p>
+        ) : null}
+      </article>
+    )
+  }
 
   return (
     <article
@@ -180,11 +256,16 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
       />
 
       <div className="flex min-w-0 grow flex-col gap-1.5">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
+        <div
+          data-testid="message-header"
+          className="flex flex-wrap items-center gap-2 text-xs leading-4"
+        >
           <span className="font-semibold text-fg">{name}</span>
           {agent ? <Badge>{agent.modelId}</Badge> : null}
           {message.round > 0 ? (
-            <span className="text-fg-faint">{t('chat.round', { round: message.round })}</span>
+            <span data-testid="message-round" className="text-fg-faint">
+              {t('chat.round', { round: message.round })}
+            </span>
           ) : null}
           {replyingTo.length > 0 ? (
             <span data-testid="message-replying-to" className="text-fg-faint">
@@ -200,14 +281,25 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
               type="button"
               data-testid="message-reasoning-toggle"
               aria-expanded={reasoningOpen}
-              onClick={() => setReasoningOpen((open) => !open)}
-              className="flex w-fit items-center gap-1 rounded text-[11px] text-fg-dim hover:text-fg"
+              onClick={() => setReasoningOverride(!reasoningOpen)}
+              className={clsx(
+                'flex w-full items-center gap-1 rounded text-left text-[11px] text-fg-dim hover:text-fg',
+                reasoningStreaming && 'animate-pulse'
+              )}
             >
               <ChevronRight
                 aria-hidden="true"
-                className={clsx('h-3 w-3 transition-transform', reasoningOpen && 'rotate-90')}
+                className={clsx(
+                  'h-3 w-3 shrink-0 transition-transform',
+                  reasoningOpen && 'rotate-90'
+                )}
               />
-              {t('chat.reasoning')}
+              <span className="shrink-0">{t('chat.reasoning')}</span>
+              {!reasoningOpen ? (
+                <span data-testid="message-reasoning-preview" className="truncate text-fg-faint">
+                  {reasoningPreview(reasoning)}
+                </span>
+              ) : null}
             </button>
             {reasoningOpen ? (
               <pre
@@ -220,16 +312,18 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
           </div>
         ) : null}
 
+        {toolCalls.map((call) => (
+          <ToolCard key={call.toolCallId} call={call} />
+        ))}
+
         {notices.map((part, index) => (
           <p
             key={index}
             data-testid="message-notice"
-            // The key, not the sentence: an end-to-end spec asserting on copy
-            // would break the moment a translation is reworded.
-            data-notice-key={part.type === 'system-notice' ? part.key : undefined}
+            data-notice-key={part.key}
             className="text-xs text-fg-dim"
           >
-            {part.type === 'system-notice' ? translateNotice(t, part) : null}
+            {translateNotice(t, part)}
           </p>
         ))}
 
@@ -262,6 +356,14 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
             className={clsx('text-xs', message.status === 'error' ? 'text-danger' : 'text-fg-dim')}
           >
             {label}
+          </p>
+        ) : null}
+
+        {/* The operator-facing detail behind a failure. Not translated: it is the
+            provider's own words, and a translated HTTP error helps nobody. */}
+        {message.status === 'error' && !wasStopped(message) && message.error ? (
+          <p data-testid="message-error-detail" className="text-[11px] text-danger/80">
+            {message.error}
           </p>
         ) : null}
       </div>

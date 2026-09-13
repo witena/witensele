@@ -77,6 +77,13 @@ the next round boundary rather than mid-turn.
 | Rename cancels on blur rather than committing | Commit on blur | A click elsewhere is far more often "never mind" than "save this" |
 | Chats are loaded with one `chats.members.list` call each | A batched method; a count column | N+1 over local IPC costs nothing at desktop list sizes, and it keeps the contract honest. S2.2 revisits it if a list ever grows enough to notice |
 | `selectedId` is not persisted | Remember the last open chat | A restart opening on "no chat selected" is predictable; restoring a chat that was mid-run when the app died is not |
+| Syntax highlighting covers fourteen languages, loaded lazily; anything else renders plain | Bundle every shiki grammar; guess from the content | Every grammar is megabytes in a renderer whose job is a chat window. Guessing is worse than not colouring: a Haskell block painted with Python's rules reads as wrong code |
+| `shiki` runs on the JavaScript regex engine, not Oniguruma/wasm | Ship `onig.wasm` beside the renderer | An Electron renderer loaded from `file://` would have to fetch the asset. The JS engine handles all fourteen grammars and costs one fewer moving part |
+| The code block renders plain text first and swaps in the highlighted markup | Wait for the grammar before showing anything | A block arrives **while a reply streams** and changes a dozen times a second. Waiting would make it blink for the whole answer |
+| Both Actions-card buttons send an ordinary `chat.send` | A dedicated backend "summarise" path | The transcript then records exactly what was asked, the orchestrator schedules the reply the usual way, and the user can edit the sentence next time. A second way to start a run is a second thing to keep correct |
+| The action prompts are locale keys, not English constants | One English sentence for both languages | An agent answers in the language it is addressed in; a Chinese UI asking in English gets an English summary |
+| The autocomplete's query may contain spaces, bounded at 40 characters | Stop the query at the first space | A member can be called `Ann Lee`, and a completion that stopped at the space could never reach her. The bound plus "closes when nothing matches" keeps a stray `@` from leaving a popover open behind a paragraph |
+| The autocomplete writes the textarea's value and caret **synchronously** | Restore the caret in `requestAnimationFrame` | The deferred version looks right by hand and races anything that reads or replaces the box in between — which is how it first showed up, as a flaky end-to-end assertion |
 
 ## Open questions
 
@@ -84,6 +91,8 @@ the next round boundary rather than mid-turn.
   order matters more since S2.3 and a keyboard path for it is still missing.
 - Whether the member count belongs on `Chat` after all: membership is now
   mutable and the left column re-reads `chats.members.list` per chat to follow it.
+- Upward paging: the transcript is virtualized but still loads one page of 100,
+  so reaching the top of a long chat fetches nothing older.
 - Whether `messages.list` should return oldest-first for the first page, given
   that every caller reverses it. Changing it would change a contract that already
   has a cursor semantics written around "newest first".

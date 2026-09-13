@@ -22,7 +22,7 @@
  */
 import type { TFunction } from 'i18next'
 import { MessagesSquare, Plus, Search } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_APP_SETTINGS,
@@ -34,8 +34,9 @@ import {
   type ChatSettings,
   type SpeakingMode
 } from '@shared/types'
+import { ActionsCard } from '../components/chat/actions-card'
 import { ChatList } from '../components/chat/chat-list'
-import { Composer } from '../components/chat/composer'
+import { Composer, type ComposerHandle } from '../components/chat/composer'
 import { MemberPanel } from '../components/chat/member-panel'
 import { MessageList } from '../components/chat/message-list'
 import { Column } from '../components/layout/column'
@@ -93,6 +94,9 @@ const MAX_ROUND_CHOICES = Array.from(
 
 export function ChatsPage(): React.JSX.Element {
   const { t } = useTranslation()
+  // The Actions card sends through the composer rather than around it, so both
+  // paths resolve `@Name` with the same parser and land in the same store.
+  const composer = useRef<ComposerHandle>(null)
 
   const chats = useChatsStore((state) => state.chats)
   const membersByChat = useChatsStore((state) => state.membersByChat)
@@ -269,6 +273,7 @@ export function ChatsPage(): React.JSX.Element {
 
         <Composer
           chatId={selectedId}
+          handleRef={composer}
           members={members}
           running={running}
           {...(runError
@@ -374,11 +379,11 @@ export function ChatsPage(): React.JSX.Element {
 
           <div className="flex-1" />
 
-          <div className="flex flex-col gap-1 rounded-lg border border-border-strong p-2.5 text-xs text-fg-dim">
-            <p className="text-fg-muted">{t('chat.actions')}</p>
-            <p>{t('chat.actionSummarize')}</p>
-            <p>{t('chat.actionVote')}</p>
-          </div>
+          <ActionsCard
+            chatId={selectedId}
+            members={members}
+            onSend={(text) => void composer.current?.submitText(text)}
+          />
         </div>
       </Column>
     </>
