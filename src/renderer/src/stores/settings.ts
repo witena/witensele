@@ -15,7 +15,7 @@
  *   "not loaded yet" and "load failed" need different UI.
  */
 import { create } from 'zustand'
-import type { AppSettings } from '@shared/types'
+import type { AppSettings, AppTimeouts } from '@shared/types'
 import { getNavigatorLanguage, i18n, resolveLanguage } from '../i18n'
 import { getBackend } from '../lib/backend-provider'
 
@@ -35,6 +35,15 @@ export interface SettingsState {
   load: () => Promise<void>
   /** Persists the language setting and applies it to i18next immediately. */
   setLanguage: (language: LanguageSetting) => Promise<void>
+  /**
+   * Persists one or more heartbeat budgets.
+   *
+   * A **partial** of `AppTimeouts`, because the backend merges `timeouts` field
+   * by field: the Timeouts section writes one field per control, so a value the
+   * user changed a moment earlier in another field is never overwritten by a
+   * stale copy of the whole object.
+   */
+  setTimeouts: (patch: Partial<AppTimeouts>) => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -63,6 +72,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     set({ settings, status: 'ready', error: undefined })
 
     await i18n.changeLanguage(resolveLanguage(settings.language, getNavigatorLanguage()))
+  },
+
+  async setTimeouts(patch) {
+    const settings = await getBackend().invoke('settings.update', { patch: { timeouts: patch } })
+    set({ settings, status: 'ready', error: undefined })
   }
 }))
 

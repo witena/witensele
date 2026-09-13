@@ -175,7 +175,7 @@ class ChatRunnerRegistry {
   send(input): Promise<Message>
   stop(chatId): void
   remove(chatId): void               // stop and forget; used by chats.delete
-  getState(chatId): RunState | null  // S2.4's supervisor reads this
+  getState(chatId): RunState | null  // the live round, its speakers and turns
   state(chatId): RunState | null     // alias kept from S1.7
   stopAll(): void                    // called by AppContext.close()
 }
@@ -210,7 +210,9 @@ wrapper that only reads the `message.created` of each turn to learn its
 
 ## Known limitations and TODOs
 
-- **No supervisor**, so a model that hangs hangs the round. S2.4.
+- A round that loses every speaker to `isOffline` finishes `completed` with the
+  `allOffline` notice. It is not `error`: nothing failed, there was simply nobody
+  left to ask.
 - **A failed turn does not retry**, and there is no "retry this agent" action.
 - **`run.finished { reason: 'error' }` carries no detail.** The errored message
   holds it; the event is a signal, not a report.

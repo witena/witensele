@@ -16,6 +16,7 @@ import { settingsHandlers } from './settings'
 import { providerHandlers } from './providers'
 import { agentHandlers } from './agents'
 import { chatHandlers } from './chats'
+import { presenceHandlers } from './presence'
 import type { HandlerMap, HandlerModule } from './types'
 
 /** Every namespace module, in merge order. Adding a namespace means adding a line here. */
@@ -24,7 +25,8 @@ const MODULES: HandlerModule[] = [
   settingsHandlers,
   providerHandlers,
   agentHandlers,
-  chatHandlers
+  chatHandlers,
+  presenceHandlers
 ]
 
 /** The rejection a declared-but-unimplemented method produces. */

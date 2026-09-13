@@ -36,7 +36,10 @@ describe('handlers/buildHandlers', () => {
   })
 
   afterEach(() => {
-    database.cleanup()
+    // `ctx.close()` rather than `database.cleanup()`: it also stops the
+    // `AgentSupervisor`'s heartbeat, which would otherwise keep ticking against
+    // a closed database for the rest of the suite.
+    ctx.close()
   })
 
   it('has an entry for every declared backend method', () => {
@@ -336,7 +339,10 @@ describe('handlers/stubs', () => {
       'chats.members.set',
       'messages.list',
       'chat.send',
-      'chat.stop'
+      'chat.stop',
+      // S2.4
+      'presence.list',
+      'presence.retry'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

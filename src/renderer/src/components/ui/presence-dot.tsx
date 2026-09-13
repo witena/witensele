@@ -60,6 +60,9 @@ export function PresenceDot({
   return (
     <span
       data-testid={testId}
+      // The state as data, not only as a colour: the end-to-end specs assert on
+      // it, and a class name would tie them to a Tailwind token.
+      data-state={state}
       role={label ? 'img' : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}

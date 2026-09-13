@@ -15,9 +15,10 @@
  *
  * Data comes from five stores and nothing is fetched here directly: `chats`,
  * `agents` and `providers` mirror the backend, `messages` holds the transcript,
- * `run` says whether the Stop button is showing and `presence` colours the dots.
- * Events reach them through `lib/event-bridge.ts`, which the bootstrap starts
- * once.
+ * `run` says whether the Stop button is showing and `presence` colours the dots —
+ * seeded from `presence.list` whenever a chat is opened, then kept current by
+ * `presence.changed`. Events reach them through `lib/event-bridge.ts`, which the
+ * bootstrap starts once.
  */
 import type { TFunction } from 'i18next'
 import { MessagesSquare, Plus, Search } from 'lucide-react'
@@ -54,6 +55,7 @@ import { translateError } from '../i18n/errors'
 import { useAgentsStore } from '../stores/agents'
 import { useChatMemberIds, useChatsStore } from '../stores/chats'
 import { useChatMessages, useMessagesStore } from '../stores/messages'
+import { usePresenceStore } from '../stores/presence'
 import { useIsRunning, useRunStore } from '../stores/run'
 import { useProvidersStore } from '../stores/providers'
 import { reorder } from '../lib/reorder'
@@ -124,6 +126,14 @@ export function ChatsPage(): React.JSX.Element {
     if (byChat[selectedId] === undefined && status[selectedId] !== 'loading') {
       void useMessagesStore.getState().load(selectedId)
     }
+  }, [selectedId])
+
+  // Presence is seeded on **every** visit, not only the first: the supervisor
+  // has been running since the app started, so a member can have gone offline
+  // while this chat was closed and no event about it was ever applied here.
+  useEffect(() => {
+    if (!selectedId) return
+    void usePresenceStore.getState().load(selectedId)
   }, [selectedId])
 
   const selected = chats.find((chat) => chat.id === selectedId) ?? null

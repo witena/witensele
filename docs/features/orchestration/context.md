@@ -5,7 +5,9 @@
 > into the full engine: rounds, roundrobin / mention-only, sequential / parallel
 > with a barrier, `@mention` scheduling, `[PASS]`, `maxAutoRounds`, and the
 > decided handling of a user message that arrives mid-run. What is still missing
-> is listed under "What S2.4 adds".
+> S2.4 then plugged in the supervisor: offline agents are dropped from a round's
+> speakers, and a turn the hard timeout skips releases the barrier like any other
+> terminal status.
 
 ## Problem
 
@@ -34,14 +36,14 @@ that owns the `AbortController` the Stop button reaches.
 - `RunState` through `ChatRunnerRegistry.getState(chatId)`: the round, its
   speakers, the turns in flight and the pending user messages.
 
-## What S2.4 adds
+## What S2.4 added
 
-| Missing | Where it goes |
+| Change | Where |
 |---|---|
-| **The supervisor.** A heartbeat that watches `RunState.activeTurns`, turns a stalled agent `away`, aborts it at the hard timeout, marks the message `skipped` and writes the `agentSkipped` notice | A new `presence/` module reading `getState` and the per-turn `messageId` this step already exposes |
-| **`skipped` in the barrier.** The barrier already treats every terminal status as complete, so a skipped speaker needs no change here — only the code that produces one | — |
-| **Excluding `offline` agents** from a round's speakers | `#members`, which is re-read every round precisely so this is a filter and not a rewrite |
-| **"Retry this agent"** | A handler on top of `runAgentTurn`, outside the runner's loop |
+| **Offline agents are not scheduled.** `supervisor.isOffline` is consulted at every round boundary, *after* the plan is computed so an `@mention` of an offline member still resolves | `#loop`, one filter over `plan.speakers` |
+| **`allOffline`.** A round that had speakers but lost all of them to that filter finishes `completed` with a notice, rather than in silence | `NOTICE_ALL_OFFLINE` |
+| **`skipped` in the barrier.** Nothing changed here: `allSettled` already treated every terminal status as complete, and `runAgentTurn` reports `aborted: false` for a timeout, so a skip is not read as a Stop | — |
+| **The supervisor, the heartbeat and "retry this agent"** | [`presence`](../presence/context.md) |
 
 ## Out of scope (permanently, for this feature)
 
@@ -50,7 +52,7 @@ that owns the `AbortController` the Stop button reaches.
 | What one agent does during its turn, including parsing its finished text for `@name` | [`agent-turn`](../agent-turn/context.md) |
 | The matching rule behind `@name` itself | `src/shared/mentions.ts`, shared with the composer |
 | Persisting chats and messages, and the chat UI | [`chats`](../chats/context.md) |
-| Heartbeat, timeouts, presence transitions | `presence` (S2.4) |
+| Heartbeat, timeouts, presence transitions, deciding *that* an agent is offline | [`presence`](../presence/context.md) |
 | Tool execution | `mcp` (S3.1) |
 
 ## Dependencies
@@ -77,15 +79,15 @@ that owns the `AbortController` the Stop button reaches.
 | **Membership and settings are re-read every round** | Once per run (S1.7); cached on the runner | A member added or the mode switched mid-run takes effect at the next boundary, which is the same boundary a pending message lands on. One rule, one moment |
 | A run with no members emits **nothing** | Emit `run.started` + `run.finished { error }` | A chat the user has emptied is not an error; emitting a run would make the composer wait for a reply that was never scheduled |
 | **`mention-only` with no mentions writes a notice** | Finish silently | Silence is indistinguishable from a failure. The notice says which rule applied, and `history.ts` renders it into later prompts so the models see it too |
-| Stop writes **no** notice | Write `runStopped` | The interrupted message already says "Stopped" on its own row, and a second line for the same fact would double every cancelled exchange in the transcript. The key stays in the locale files for S2.4 |
+| Stop writes **no** notice | Write `runStopped` | The interrupted message already says "Stopped" on its own row, and a second line for the same fact would double every cancelled exchange in the transcript. The key stays in the locale files, unused |
+| **Offline members are filtered out of `plan.speakers`, not out of `members`** | Drop them before the plan is computed | A reply that says `@Ghost` still resolves to a real member, so the round ends with the `allOffline` notice rather than with `noMentions` — the difference between "that agent is down" and "you mentioned nobody" |
 
 ## Open questions
 
 - Whether a `max-rounds` finish should offer a "continue" action rather than
   making the user type something. The notice currently tells them to send a
   message.
-- Whether an agent that errors in one round should be excluded from the next one
-  in the same run. Today it is not: S2.4's `offline` state is the mechanism that
-  will decide it.
+- Whether an agent that recovers should be re-invited to the round it was skipped
+  from. Today it simply speaks in the next one.
 - Whether `parallel` should also snapshot the *member list* per round, so a
   removal during a round cannot change the roster the briefing prints mid-round.

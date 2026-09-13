@@ -21,7 +21,9 @@
  *
  * The presence dot shows the agent's **current** state, not its state when the
  * message was sent (PLAN, "Presence dots"), which is why it comes from the
- * presence store by agent id rather than from the message.
+ * presence store by agent id rather than from the message. Only *agent* messages
+ * carry one: the human is always present, and a system notice has no provider
+ * that could be offline.
  *
  * The header line also carries the round and, from S2.3, **who the reply
  * answers**: `Message.inReplyTo` holds the agent ids whose previous-round
@@ -115,6 +117,9 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
   const [reasoningOpen, setReasoningOpen] = useState(false)
 
   const isUser = message.senderType === 'user'
+  // Only an agent has presence. The human is always here, and a system notice is
+  // written by the app itself — a dot on either would be claiming something.
+  const isAgent = message.senderType === 'agent'
   const agent = useAgent(isUser ? undefined : message.senderId)
   const agents = useAgentsStore((state) => state.agents)
   const presence = useAgentPresence(chatId, message.senderId)
@@ -165,8 +170,13 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
         // stretches to the full height of the message and the overlaid presence
         // dot — positioned against the wrapper's bottom edge — floats away from it.
         className="self-start"
-        // Only agents carry a presence dot: the user is always here.
-        {...(isUser ? {} : { presence, presenceLabel: presenceLabel(t, presence) })}
+        {...(isAgent
+          ? {
+              presence,
+              presenceLabel: presenceLabel(t, presence),
+              presenceTestId: 'message-presence'
+            }
+          : {})}
       />
 
       <div className="flex min-w-0 grow flex-col gap-1.5">

@@ -15,11 +15,13 @@
  */
 import type { BackendEvent } from '@shared/events'
 import { LOCAL_USER_ID } from '@shared/types'
-import type { AppContext } from './app-context'
+import type { AppContext, SupervisorOverrides } from './app-context'
+import { createSupervisor } from './app-context'
 import { createRepositories } from './db/repositories'
 import type { TestDatabase } from './db/testing'
 import { createEventBus } from './events/bus'
 import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat-runner'
+import type { AgentSupervisor } from './presence/supervisor'
 import type { FetchImpl } from './providers/discovery'
 import { createInsecureSecretStore, type SecretStore } from './secrets'
 
@@ -28,6 +30,15 @@ export interface TestAppContextOptions {
   fetchImpl?: FetchImpl
   /** Passed to every `ChatRunner`; a test injects `createModel` here. */
   runner?: ChatRunnerOptions
+  /**
+   * Clock, intervals and provider probe of the `AgentSupervisor`.
+   *
+   * The default is deliberately the real one: a suite that never stalls a turn
+   * must not have to think about presence at all, and the real timers are
+   * `unref`ed so a 1 s heartbeat cannot keep vitest alive. A test about the
+   * heartbeat passes `heartbeatIntervalMs` (and a fake `probeProvider`) here.
+   */
+  supervisor?: SupervisorOverrides
 }
 
 export interface TestAppContext {
@@ -55,10 +66,19 @@ export function createTestAppContext(
     userId: LOCAL_USER_ID,
     // Tied off immediately below, as in `createAppContext`.
     runners: undefined as unknown as ChatRunnerRegistry,
+    supervisor: undefined as unknown as AgentSupervisor,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-    close: () => database.cleanup()
+    close: () => {
+      ctx.supervisor.stop()
+      database.cleanup()
+    }
   }
   ctx.runners = new ChatRunnerRegistry(ctx, options.runner ?? {})
+  ctx.supervisor = createSupervisor(ctx, {
+    // Nothing real is probed from a unit test unless the test says otherwise.
+    probeProvider: () => Promise.resolve(false),
+    ...options.supervisor
+  })
 
   return { ctx, events, secrets }
 }

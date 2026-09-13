@@ -55,6 +55,8 @@ const EXPECTED_METHODS = [
   'chats.delete',
   'chats.members.list',
   'chats.members.set',
+  'presence.list',
+  'presence.retry',
   'messages.list',
   'chat.send',
   'chat.stop'
@@ -84,6 +86,7 @@ describe('BACKEND_METHODS', () => {
       'mcp',
       'memory',
       'messages',
+      'presence',
       'providers',
       'settings',
       'skills',

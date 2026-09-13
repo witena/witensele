@@ -137,12 +137,27 @@ shows "Round n · X, Y speaking" in the header. `e2e/orchestration.spec.ts`
 drives two real Ollama models through both speaking modes, `mention-only` and
 the `noMentions` notice. Docs rewritten in `docs/features/orchestration/`.
 
-### S2.4 Presence and heartbeat `[ ]`
+### S2.4 Presence and heartbeat `[x]` (2026-09-13)
 What: AgentSession, AgentSupervisor ticking every second, stall / hard timeouts, skip with a system message, provider probing; dots shown in the member panel and on message avatars.
 Acceptance:
 - Unit tests: transitions between the four states
 - Integration test: a mocked stuck agent turns orange at 30 s, grey at 120 s, is skipped, and the round continues
 - Dots change colour live in the UI
+Done: `src/main/presence/{supervisor,abort-reasons}.ts` — `AgentSupervisor` on
+`ctx.supervisor` with an injected `SupervisorClock`, `getTimeouts`,
+`listChatIdsForAgent`, `listAgentIdsForChat` and `probeProvider`, so the state
+machine is unit-tested on a fake clock with no storage and no network.
+`runAgentTurn` now chains an `AbortController` of its own to the run's signal and
+drives `beginTurn` / `activity` / `endTurn`; a `TimeoutAbortReason` makes the
+message `skipped` / `'timeout'` and inserts the `agentSkipped` notice, and it
+returns `aborted: false` so the barrier reads a skip as a completed turn. The
+runner filters `isOffline` speakers out of every round and writes `allOffline`
+when that leaves nobody. Two new handlers (`presence.list`, `presence.retry`),
+`stores/presence.ts` seeding from the first and the member panel's "Retry" button
+calling the second, `away · Ns` counted in the renderer, and Settings → Timeouts
+& heartbeat with the three budgets and the colour legend. `e2e/presence.spec.ts`
+drives a real Ollama member beside a provider pointing at a non-routable address.
+Docs in `docs/features/presence/`.
 
 ### S2.5 Message rendering and composer polish `[ ]`
 What: markdown and code highlighting, collapsible reasoning, tool cards, round and "replying to @who" labels, dimmed PASS, @ autocomplete, Enter / Shift+Enter.

@@ -21,7 +21,7 @@ temporary database file and a `MockLanguageModelV4` (CLAUDE.md rule #5).
 ChatRunner picks a speaker
   │
   ├─ messages.create({ parts: [], status: 'streaming', round })   → message.created
-  ├─ presence.changed { working }
+  ├─ supervisor.beginTurn → presence.changed { working }
   │
   ├─ system  = agent.systemPrompt + "\n\n" + buildGroupBriefing(...)
   ├─ messages = toModelMessages({ self, agentsById,
@@ -29,6 +29,7 @@ ChatRunner picks a speaker
   ├─ streamText({ model, system, messages, abortSignal, maxOutputTokens?, temperature? })
   │
   └─ for await (part of result.fullStream)
+        every part      → supervisor.activity   (emits only when it clears `away`)
         text-delta      → append to the in-memory parts → message.delta { kind: 'text' }
         reasoning-delta → …                            → message.delta { kind: 'reasoning' }
         finish          → usage = toUsage(part.totalUsage)
@@ -36,10 +37,17 @@ ChatRunner picks a speaker
         error           → failure = message
         ↳ every 500 ms or 40 deltas: messages.update({ parts })
 
-  ├─ mentions = status === 'passed' ? [] : parseMentions(text, members)
+  ├─ timedOut = isTimeoutAbort(turnSignal.reason)
+  ├─ mentions = passed || skipped ? [] : parseMentions(text, members)
   ├─ messages.update({ parts, status, mentions, usage?, error? })  → message.updated
-  └─ presence.changed { available }
+  ├─ timedOut → messages.create(agentSkipped notice)               → message.created
+  └─ supervisor.endTurn   → presence.changed { available | offline }
 ```
+
+`abortSignal` above is **not** the run's signal. The turn creates an
+`AbortController` of its own and forwards the run's abort into it, so Stop still
+reaches every speaker of a round while the supervisor's hard timeout reaches
+exactly one. `AbortSignal.reason` is what says which happened.
 
 The final block runs on **every** path — normal finish, abort, provider failure,
 even a signal that was already aborted before the first request — because a row
@@ -51,8 +59,13 @@ left in `streaming` shows a cursor forever.
 |---|---|---|
 | The stream finished and the trimmed text is exactly `[PASS]` | `passed` | — |
 | The stream finished otherwise | `done` | — |
-| `signal.aborted`, or an `abort` part arrived | `error` | `'aborted'` |
+| The turn was aborted with a `TimeoutAbortReason` (the supervisor's hard timeout) | `skipped` | `'timeout'` |
+| Otherwise aborted, or an `abort` part arrived (the user pressed Stop) | `error` | `'aborted'` |
 | Anything else failed | `error` | the provider's message |
+
+A `skipped` turn also inserts an `agentSkipped` system message and returns
+`aborted: false`, so the round barrier treats it as a completed turn rather than
+as the run having been stopped.
 
 ### History transform
 
@@ -102,10 +115,13 @@ Constants other modules and tests rely on: `FLUSH_INTERVAL_MS` (500),
 | `message.created` | `{ message }` | The empty `streaming` row is inserted |
 | `message.delta` | `{ chatId, messageId, delta }` | Once per `text-delta` / `reasoning-delta` |
 | `message.updated` | `{ message }` | The turn reaches its terminal status |
-| `presence.changed` | `{ presence }` | `working` at the start, `available` at the end |
+| `presence.changed` | `{ presence }` | `AgentSupervisor` emits it; the turn calls `beginTurn` / `activity` / `endTurn` |
+| `message.created` | the `agentSkipped` notice | The hard timeout skipped this turn |
 
-The presence pair is a plain emit, not a state machine: `AgentSupervisor` (S2.4)
-owns the session, the heartbeat and the `away` / `offline` transitions.
+Presence belongs to `AgentSupervisor` ([`presence`](../presence/implement.md)),
+not to this file: the turn only reports that a turn *began*, that something
+arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
+`away` / `offline` transitions and the abort that produces a `skipped` message.
 
 ## Tests
 

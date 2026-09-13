@@ -14,7 +14,12 @@
  */
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { BackendEvent, RunFinishedEvent, RunRoundEvent } from '@shared/events'
+import type {
+  BackendEvent,
+  PresenceChangedEvent,
+  RunFinishedEvent,
+  RunRoundEvent
+} from '@shared/events'
 import type { Agent, Chat, Message, SystemNoticePart } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
@@ -97,7 +102,10 @@ describe('ChatRunner', () => {
   })
 
   afterEach(() => {
-    database.cleanup()
+    // `ctx.close()` rather than `database.cleanup()`: it also stops the
+    // `AgentSupervisor`'s heartbeat, which would otherwise keep ticking against
+    // a closed database for the rest of the suite.
+    ctx.close()
   })
 
   const types = (): string[] => events.map((event) => event.type)
@@ -349,7 +357,10 @@ describe('ChatRunner (multi-agent)', () => {
   })
 
   afterEach(() => {
-    database.cleanup()
+    // `ctx.close()` rather than `database.cleanup()`: it also stops the
+    // `AgentSupervisor`'s heartbeat, which would otherwise keep ticking against
+    // a closed database for the rest of the suite.
+    ctx.close()
   })
 
   const settle = () => ctx.runners.for(chat.id).whenIdle()
@@ -610,7 +621,10 @@ describe('chats handlers', () => {
   })
 
   afterEach(() => {
-    database.cleanup()
+    // `ctx.close()` rather than `database.cleanup()`: it also stops the
+    // `AgentSupervisor`'s heartbeat, which would otherwise keep ticking against
+    // a closed database for the rest of the suite.
+    ctx.close()
   })
 
   it('creates a chat with the default title and emits chat.updated', async () => {
@@ -700,6 +714,216 @@ describe('chats handlers', () => {
     expect(finishedIn(events).at(-1)).toMatchObject({ reason: 'stopped' })
     await expect(handlers['chats.list'](ctx)).resolves.toEqual([])
     expect(ctx.runners.getState(chat.id)).toBeNull()
+  })
+})
+
+/**
+ * S2.4: one member that never emits anything, one that answers normally, and the
+ * supervisor between them.
+ *
+ * The timeouts are cut from 30 s / 120 s to 50 ms / 120 ms **on the chat**, and
+ * the heartbeat from 1 s to 10 ms on the supervisor, so the whole away → offline
+ * → skipped path plays out in a fraction of a second against the real clock.
+ * That is deliberate: a fake clock here would also have to fake the AI SDK's own
+ * stream scheduling, and the thing under test is precisely that an abort reaches
+ * a hung provider and releases the round barrier.
+ *
+ * The stalled model is a stream that enqueues its start part and then **never
+ * produces anything else** until the signal it was handed is aborted — the exact
+ * shape of a provider that accepted the request and then stopped talking.
+ */
+describe('ChatRunner + AgentSupervisor', () => {
+  const handlers = buildHandlers()
+
+  /** Per-chat overrides; the global settings are left at their defaults. */
+  const STALL_MS = 50
+  const HARD_MS = 120
+
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let ghost: Agent
+  let reviewer: Agent
+  let chat: Chat
+  /** Swapped per test, so one member can be made to answer after a retry. */
+  let models: Record<string, MockLanguageModelV4>
+  /** What the injected provider probe answers; the retry test flips it. */
+  let probeOk: boolean
+
+  /** A model that accepts the request and then goes silent until it is aborted. */
+  function stalling(): MockLanguageModelV4 {
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] } as StreamPart)
+            const fail = (): void => {
+              controller.error(abortSignal?.reason ?? new Error('aborted'))
+            }
+            if (abortSignal?.aborted) fail()
+            else abortSignal?.addEventListener('abort', fail, { once: true })
+          }
+        })
+      })
+    })
+  }
+
+  beforeEach(async () => {
+    database = createTestDatabase()
+    probeOk = false
+    const created = createTestAppContext(database, {
+      runner: { createModel: (_context, agent) => models[agent.id] as MockLanguageModelV4 },
+      supervisor: {
+        // Ten ticks inside the stall budget: the transitions are observed, not raced.
+        heartbeatIntervalMs: 10,
+        // Long enough never to fire on its own inside a test; `probe` is called directly.
+        probeIntervalMs: 60_000,
+        probeProvider: () => Promise.resolve(probeOk)
+      }
+    })
+    ctx = created.ctx
+    events = created.events
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    ghost = ctx.repos.agents.create(
+      agentInput({ name: 'Ghost', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    reviewer = ctx.repos.agents.create(
+      agentInput({ name: 'Reviewer', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    models = { [ghost.id]: stalling(), [reviewer.id]: saying('Mutual exclusion.') }
+
+    chat = await handlers['chats.create'](ctx, {
+      input: {
+        title: 'Stuck member',
+        memberAgentIds: [ghost.id, reviewer.id],
+        // Parallel, so the barrier is a real one: the stalled member must not
+        // delay the member that answered.
+        settings: { speaking: 'parallel', stallTimeoutMs: STALL_MS, hardTimeoutMs: HARD_MS }
+      }
+    })
+    events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+  })
+
+  const settle = () => ctx.runners.for(chat.id).whenIdle()
+
+  /** Presence states emitted for one agent, in order. */
+  const presenceOf = (agentId: string): string[] =>
+    events
+      .filter(
+        (event): event is PresenceChangedEvent =>
+          event.type === 'presence.changed' && event.presence.agentId === agentId
+      )
+      .map((event) => event.presence.state)
+
+  /** The stored messages of one sender. */
+  const messagesOf = (senderId: string): Message[] =>
+    ctx.repos.messages
+      .listForContext(chat.id, ctx.userId)
+      .filter((message) => message.senderId === senderId)
+
+  it('turns a silent member orange, then grey, and skips its message', async () => {
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is a mutex?' })
+    await settle()
+
+    expect(presenceOf(ghost.id)).toEqual(['working', 'away', 'offline'])
+
+    const skipped = messagesOf(ghost.id).at(-1) as Message
+    expect(skipped.status).toBe('skipped')
+    expect(skipped.error).toBe('timeout')
+  })
+
+  it('inserts the agentSkipped notice naming the member', async () => {
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is a mutex?' })
+    await settle()
+
+    expect(noticeKeys(ctx, chat)).toContain('agentSkipped')
+    expect(noticeParams(ctx, chat, 'agentSkipped')).toEqual({ agent: 'Ghost' })
+  })
+
+  it('lets the other member finish and ends the run as completed', async () => {
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is a mutex?' })
+    await settle()
+
+    const answer = messagesOf(reviewer.id).at(-1) as Message
+    expect(answer.status).toBe('done')
+    expect(firstText(answer)).toBe('Mutual exclusion.')
+    // The barrier released on the skip rather than on a stopped run.
+    expect(finishedIn(events).at(-1)).toMatchObject({ reason: 'completed' })
+    expect(ctx.runners.getState(chat.id)).toBeNull()
+  })
+
+  it('does not schedule the offline member in the next round', async () => {
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is a mutex?' })
+    await settle()
+    expect(ctx.supervisor.isOffline(ghost.id)).toBe(true)
+
+    events.length = 0
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'And a semaphore?' })
+    await settle()
+
+    expect(rounds(events).map((event) => event.speakers)).toEqual([[reviewer.id]])
+    // One more message from the member that works, none from the one that does not.
+    expect(messagesOf(ghost.id)).toHaveLength(1)
+    expect(messagesOf(reviewer.id)).toHaveLength(2)
+  })
+
+  it('finishes with the allOffline notice when nobody is left to ask', async () => {
+    await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ghost.id] })
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is a mutex?' })
+    await settle()
+
+    events.length = 0
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Anyone?' })
+    await settle()
+
+    expect(rounds(events)).toEqual([])
+    expect(noticeKeys(ctx, chat)).toContain('allOffline')
+    expect(finishedIn(events).at(-1)).toMatchObject({ reason: 'completed' })
+  })
+
+  it('puts the member back after a retry whose probe succeeds', async () => {
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is a mutex?' })
+    await settle()
+
+    probeOk = true
+    await expect(
+      handlers['presence.retry'](ctx, { chatId: chat.id, agentId: ghost.id })
+    ).resolves.toMatchObject({ chatId: chat.id, agentId: ghost.id, state: 'available' })
+    expect(ctx.supervisor.isOffline(ghost.id)).toBe(false)
+
+    // …and it speaks again. Its model is swapped for one that answers, because
+    // the point being proven is the scheduling, not a second timeout.
+    models[ghost.id] = saying('Back.')
+    events.length = 0
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Still there?' })
+    await settle()
+
+    expect(rounds(events).map((event) => event.speakers)).toEqual([[ghost.id, reviewer.id]])
+    expect((messagesOf(ghost.id).at(-1) as Message).status).toBe('done')
+  })
+
+  it('reports every member of the chat through presence.list', async () => {
+    await expect(handlers['presence.list'](ctx, { chatId: chat.id })).resolves.toEqual([
+      expect.objectContaining({ agentId: ghost.id, state: 'available' }),
+      expect.objectContaining({ agentId: reviewer.id, state: 'available' })
+    ])
+
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What is a mutex?' })
+    await settle()
+
+    await expect(handlers['presence.list'](ctx, { chatId: chat.id })).resolves.toEqual([
+      expect.objectContaining({ agentId: ghost.id, state: 'offline' }),
+      expect.objectContaining({ agentId: reviewer.id, state: 'available' })
+    ])
   })
 })
 

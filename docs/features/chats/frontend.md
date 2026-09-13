@@ -10,7 +10,7 @@
 | `src/renderer/src/components/chat/message-item.tsx` | One message row: avatar + presence dot, name, model badge, round, time, body, reasoning toggle, streaming cursor, status hint |
 | `src/renderer/src/components/chat/markdown.tsx` | `react-markdown` + `remark-gfm` with the mockup's prose rules as descendant utilities |
 | `src/renderer/src/components/chat/composer.tsx` | Textarea (Enter sends, Shift+Enter newline, IME-safe), mention hint, Send / Stop |
-| `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover, the member rows (avatar with presence dot, name, `model · presence`, usage placeholder, remove on hover) and native HTML5 drag-and-drop reordering |
+| `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover, the member rows (avatar with presence dot, name, `model · presence` — counting up as `away · Ns` — the usage placeholder or, while the member is offline, a Retry button, and remove on hover) and native HTML5 drag-and-drop reordering |
 | `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested |
 | `src/renderer/src/components/agents/agent-display.ts` | `agentModelLabel`, shared with the Agents page so both screens name a model the same way |
 | `src/renderer/src/lib/event-bridge.ts` | The single backend subscription; fans every event into the stores |
@@ -30,7 +30,7 @@
 | `run` | `activeByChat` | `Record<string, ActiveRun>` | Backend-owned; set by `run.started` / `run.round`, cleared by `run.finished`. Drives the Stop button |
 | `run` | `sendingByChat` | `Record<string, boolean>` | Local; covers the `chat.send` round trip before `run.started` arrives |
 | `run` | `error` / `errorCode` | | The last refused send, shown under the composer. Cleared on a new send, on a chat switch and when the membership changes |
-| `presence` | `byChatAgent` | `Record<string, AgentPresence>` | Runtime only, keyed `chatId:agentId`, never persisted |
+| `presence` | `byChatAgent` | `Record<string, AgentPresence>` | Runtime only, keyed `chatId:agentId`, never persisted. Seeded from `presence.list` when a chat is opened; see [`presence`](../presence/frontend.md) |
 | `agents` | `agents` | `Agent[]` | Backend-owned; the Agents page (S2.1) writes it, this page only reads |
 | `providers` | `providers` | `Provider[]` | Backend-owned; the member picker prints the provider's name beside the model |
 
