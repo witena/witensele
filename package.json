@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "npm run build && playwright test",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
@@ -38,6 +39,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.0",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",

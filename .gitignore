@@ -4,6 +4,10 @@ dist
 *.local
 .DS_Store
 
+# Playwright output
+test-results
+playwright-report
+
 # Local-only Chinese copies of committed English docs
 *.zh.md
 CLAUDE.local.md

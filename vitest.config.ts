@@ -8,7 +8,10 @@ export default defineConfig({
     }
   },
   test: {
+    // Unit tests only. `e2e/` is Playwright's (`npm run e2e`) and must never be
+    // picked up here: it launches a real Electron binary.
     include: ['src/**/*.test.ts'],
+    exclude: ['node_modules/**', 'out/**', 'e2e/**'],
     environment: 'node'
   }
 })

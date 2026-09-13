@@ -1,11 +1,15 @@
 // Electron entry point.
-// Only this file (and later `src/main/ipc/`) may import electron. All other main
-// process business logic must stay Electron-free so it can be lifted into a Node
-// server later on.
+// Only this file and `src/main/ipc/` may import electron. All other main process
+// business logic must stay Electron-free so it can be lifted into a Node server
+// later on (CLAUDE.md rule #5).
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { APP_NAME } from '@shared/version'
-import { openDatabase, type DatabaseHandle } from './db/database'
+import { createAppContext, type AppContext } from './app-context'
+import { buildHandlers } from './handlers'
+import { createElectronSecretStore } from './ipc/secret-store'
+import { forwardEvents, registerIpc } from './ipc/register'
 
 const isDev = !app.isPackaged
 
@@ -13,11 +17,31 @@ const isDev = !app.isPackaged
 const DATABASE_FILE = 'witena.db'
 
 /**
- * The one database handle for the process. This file is the only place allowed to
- * ask electron where it lives (CLAUDE.md rule #5); everything under `src/main/db/`
- * receives the path or the handle by injection.
+ * Test hook: redirects the whole userData directory, database included.
+ *
+ * The Playwright harness in `e2e/` sets it to a fresh temporary directory so a
+ * test run can never read, write or delete the developer's real database. It must
+ * be applied before `whenReady`, because electron resolves `userData` lazily but
+ * caches it on first use.
  */
-let database: DatabaseHandle | null = null
+const USER_DATA_ENV = 'WITENA_USER_DATA'
+
+/**
+ * Everything the backend needs, built once on ready. This file is the only place
+ * allowed to ask electron where things live; the context receives the resolved
+ * path and builds the Electron-free layer from it.
+ */
+let context: AppContext | null = null
+let stopForwarding: (() => void) | null = null
+
+function applyUserDataOverride(): void {
+  const override = process.env[USER_DATA_ENV]
+  if (!override) return
+  // setPath requires an existing directory.
+  mkdirSync(override, { recursive: true })
+  app.setPath('userData', override)
+  console.log(`[witena] userData overridden by ${USER_DATA_ENV}: ${override}`)
+}
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -59,12 +83,19 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-void app.whenReady().then(() => {
-  app.setName(APP_NAME)
+app.setName(APP_NAME)
+applyUserDataOverride()
 
+void app.whenReady().then(() => {
+  const secrets = createElectronSecretStore()
   const databasePath = join(app.getPath('userData'), DATABASE_FILE)
-  database = openDatabase(databasePath)
+  context = createAppContext({ databasePath, secrets })
   console.log(`[witena] database: ${databasePath}`)
+
+  // The transport is up before the first window exists, so a renderer that calls
+  // `invoke` in its first effect can never race the registration.
+  registerIpc(ipcMain, context, buildHandlers())
+  stopForwarding = forwardEvents(context.events, () => BrowserWindow.getAllWindows())
 
   createWindow()
 
@@ -79,6 +110,8 @@ app.on('window-all-closed', () => {
 
 // Close the database explicitly so WAL is checkpointed before the process exits.
 app.on('before-quit', () => {
-  database?.close()
-  database = null
+  stopForwarding?.()
+  stopForwarding = null
+  context?.close()
+  context = null
 })
