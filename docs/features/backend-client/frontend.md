@@ -1,9 +1,10 @@
 # backend-client — Frontend
 
-> Status: S1.3 implemented the renderer half and S1.4 added the first store.
-> `src/renderer/src/lib/backend.ts` exists and works; the remaining zustand
-> stores below still arrive with the feature steps that own them. `App.tsx`
-> currently holds a throwaway smoke screen that S1.5 replaces.
+> Status: S1.3 implemented the renderer half, S1.4 added the first store and
+> S1.5 replaced `App.tsx` with the real shell. `src/renderer/src/lib/backend.ts`
+> exists and works; the remaining zustand stores below still arrive with the
+> feature steps that own them. The smoke widgets now live in Settings ->
+> Developer (`pages/settings/developer-section.tsx`).
 
 ## Pages and components
 
@@ -11,7 +12,7 @@
 |---|---|
 | `src/shared/backend.ts` | The `BackendClient` interface every renderer file depends on |
 | `src/renderer/src/lib/backend.ts` | The Electron implementation — wraps the preload bridge, unwraps the response envelope, rebuilds the error. The **only** renderer file allowed to touch `window.witena` |
-| `src/renderer/src/App.tsx` | Temporary: the smoke screen that exercises both directions, translated in S1.4. Replaced by the real shell in S1.5 |
+| `src/renderer/src/pages/settings/developer-section.tsx` | The smoke surface that exercises both directions, translated in S1.4 and moved here from `App.tsx` in S1.5. A deliberate test surface, not product UI |
 | `src/renderer/src/lib/backend-provider.ts` | S1.4: `getBackend()` / `setBackend()`. The injection point stores use instead of importing the singleton, so a store is testable in plain Node with a fake client. It replaced the planned `backendContext.tsx` — the bootstrap needs the client *before* the React tree exists, which a context cannot provide |
 | `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, the rest from S1.7 |
 
@@ -65,9 +66,9 @@ follows.
 
 | Call / subscription | Called from | Purpose |
 |---|---|---|
-| `invoke('system.ping')` | `App.tsx` on mount (S1.3 smoke screen) | Proves the bridge is alive end to end |
-| `invoke('system.emitTestEvent', { payload })` | The smoke screen's button | Proves the push direction |
-| `subscribeTo('system.test', …)` | `App.tsx` effect | Renders the last payload received |
+| `invoke('system.ping')` | `DeveloperSection` on mount (S1.3 smoke widgets) | Proves the bridge is alive end to end |
+| `invoke('system.emitTestEvent', { payload })` | The Developer section's button | Proves the push direction |
+| `subscribeTo('system.test', …)` | `DeveloperSection` effect | Renders the last payload received |
 | `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher | Language, theme, timeouts |
 | `subscribe(…)` | Once at app start, from the module that fans events into the stores (deferred) | Fans every `BackendEvent` out to the stores; the returned function unsubscribes on unmount |
 | `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test |
@@ -92,11 +93,12 @@ Event handling worth writing down once:
 
 ## Interaction states
 
-The smoke screen shows `…` until `system.ping` resolves, `—` until the first
+Settings -> Developer shows `…` until `system.ping` resolves, `—` until the first
 `system.test` event arrives, and the raw error message under
-`data-testid="error"` if a call rejects. Settings are no longer fetched there:
-S1.4 moved them into `stores/settings.ts`, which the bootstrap loads before the
-first render. It is a test surface, not a design.
+`data-testid="error"` if a call rejects. Settings are not fetched there: S1.4
+moved them into `stores/settings.ts`, which the bootstrap loads before the first
+render. It is a test surface, not a design — the rest of the shell landed in S1.5
+(see [`../ui-shell/frontend.md`](../ui-shell/frontend.md)).
 
 The states the real UI implements:
 
@@ -120,9 +122,10 @@ the renderer:
 - `BackendError.code` maps to `errors.<code>` in the locale files, added to both
   in S1.4; `BackendError.message` is for logs only and is never rendered.
 
-S1.4 removed the last exception: the smoke screen's literals now live under
-`smoke.*` in both locale files and the `TODO(S1.4): i18n` comment is gone. The
-whole `smoke` namespace disappears with the screen in S1.5. See
+S1.4 removed the last exception: the smoke widgets' literals moved into the
+locale files and the `TODO(S1.4): i18n` comment is gone. S1.5 retired the `smoke`
+namespace with the screen it was named after — those strings are the
+`settings.developer.*` subtree now. See
 [`../i18n/frontend.md`](../i18n/frontend.md).
 
 ## Accessibility and keyboard
@@ -132,8 +135,10 @@ backend text arrives as keys rather than strings, screen-reader output follows
 the UI language automatically, and no message rendered from a stored
 `system-notice` can become stale in the wrong language after a language switch.
 
-The smoke screen's `data-testid` attributes (`smoke-title`, `ping`, `language`,
-`resolved-language`, `last-event`, `emit-test-event`, `lang-system`, `lang-zh-CN`,
-`lang-en`, `error`) exist for Playwright; the real UI is located by role and
-accessible name instead. Each testid wraps a **value only**, never its translated
-label, so the assertions do not depend on the active language.
+The smoke widgets' `data-testid` attributes (`ping`, `language`,
+`resolved-language`, `last-event`, `emit-test-event`, `error`) exist for
+Playwright. Each wraps a **value only**, never its translated label, so the
+assertions do not depend on the active language. Since S1.5 they are no longer on
+the first screen: a spec calls `openDeveloperSettings(window)` from
+`e2e/helpers.ts` to get there, and the language switcher's testids (`lang-system`,
+`lang-zh-CN`, `lang-en`) moved with it to the bottom of the settings nav.

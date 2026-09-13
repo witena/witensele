@@ -24,9 +24,9 @@ already-translated tree, instead of rendering first and correcting afterwards.
 i18next cannot be set to. `resolveLanguage(setting, navigatorLanguage)` is the
 one function that maps the stored setting onto `SUPPORTED_LANGUAGES`: anything
 starting with `zh` becomes `zh-CN`, everything else `en`. The store keeps the
-setting, i18next keeps the resolved language, and the smoke screen shows both
-(`data-testid="language"` and `resolved-language`) precisely because confusing
-them is the easy mistake.
+setting, i18next keeps the resolved language, and Settings -> Developer shows
+both (`data-testid="language"` and `resolved-language`) precisely because
+confusing them is the easy mistake.
 
 ## Data flow
 
@@ -103,14 +103,17 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 | `nav` | The three navigation rail entries |
 | `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped` |
 | `agents` | Agent list and configuration form labels |
-| `settings` | Section names plus the language switcher's own copy |
+| `settings` | Section names, the language switcher's own copy, the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` |
 | `presence` | The four presence states |
 | `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` |
 | `notices` | Backend-authored notices — the keys `SystemNoticePart.key` may take |
-| `smoke` | The temporary S1.3/S1.4 smoke screen; deleted with it in S1.5 |
 
-Most of `chat`, `agents` and `settings` is not rendered by anything yet. That is
-deliberate: S1.5–S2.5 add components, not vocabulary.
+S1.5 was the first step to render most of `nav`, `chat`, `agents` and `settings`,
+and it added the copy the shell needed (empty states, orchestration labels,
+section placeholders) rather than only consuming what was here. It also removed
+the ninth namespace, `smoke`: its screen became Settings -> Developer and its
+strings are the `settings.developer.*` subtree now. The rest of `chat` and
+`agents` still waits for S1.7–S2.5.
 
 ## Tests
 
@@ -120,12 +123,15 @@ deliberate: S1.5–S2.5 add components, not vocabulary.
 | `src/renderer/src/i18n/used-keys.test.ts` | Every literal `t('…')` / `i18nKey="…"` resolves in `en.json`; no JSX text node is a hard-coded string |
 | `src/renderer/src/i18n/notices.test.ts` | `translateNotice` prefixes, interpolates, follows the active language, and falls back to the raw key |
 | `src/renderer/src/stores/settings.test.ts` | `load` populates and records failure instead of throwing; `setLanguage` sends the right patch, stores the answer, switches i18next, resolves `'system'` through the navigator, and updates optimistically |
-| `e2e/i18n.spec.ts` | Switching re-renders immediately; the choice survives a restart, including `<html lang>` |
+| `e2e/i18n.spec.ts` | Switching re-renders immediately; the quick toggle and the Appearance select are the same setting; the choice survives a restart, including `<html lang>` |
 
 `used-keys.test.ts` is a heuristic and documents itself as one — read its header
 before trusting or extending it. Both guards were verified to fail on purpose: a
 bogus `t('smoke.nonexistentKey')` and a literal `<p>Backend status below</p>`
-temporarily added to `App.tsx` each produced exactly one failure.
+temporarily added to `App.tsx` each produced exactly one failure. It caught two
+more for free during S1.5: a `switch` whose arms returned adjacent JSX elements
+(read as a text node between two tags) and, indirectly, the `count` placeholder
+trap described in [frontend.md](./frontend.md).
 
 ## Known limitations and TODOs
 

@@ -6,13 +6,20 @@
  * It runs against the built output in `out/`, which is why `npm run e2e` is
  * `npm run build && playwright test`.
  *
- * Each `data-testid` wraps a value with no label (S1.4 translated the labels), so
- * these assertions are independent of the language the machine resolves to.
+ * Since S1.5 the app opens on the chat shell rather than on a smoke screen, so
+ * the widgets this spec drives live in Settings → Developer and it navigates
+ * there first. Each `data-testid` still wraps a value with no label, so these
+ * assertions are independent of the language the machine resolves to.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
-import { createUserDataDir, launchWitena, removeUserDataDir } from './helpers'
+import {
+  createUserDataDir,
+  launchWitena,
+  openDeveloperSettings,
+  removeUserDataDir
+} from './helpers'
 
 let app: ElectronApplication
 let window: Page
@@ -21,6 +28,7 @@ let userDataDir: string
 test.beforeAll(async () => {
   userDataDir = createUserDataDir()
   ;({ app, window } = await launchWitena(userDataDir))
+  await openDeveloperSettings(window)
 })
 
 // Always tear the app down, including when a test above failed, so no Electron

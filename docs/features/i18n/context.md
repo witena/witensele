@@ -30,7 +30,7 @@ S1.4 delivers the whole mechanism, not just the two files:
 
 | Not done here | Owner |
 |---|---|
-| The Settings → Appearance & language screen; S1.4 ships a three-button switcher on the smoke screen | `ui-shell` (S1.5) and the settings page (S1.6) |
+| The Settings → Appearance & language screen; S1.4 shipped a three-button switcher on the smoke screen, and S1.5 turned it into the settings-nav quick toggle plus the Appearance select | `ui-shell` (S1.5) `[x]` |
 | The bilingual **group briefing** injected into the models' system prompt — a prompt, not UI copy, and it needs the prompt assembly that does not exist yet | `agent-turn` (S1.7) |
 | `zh-TW` or any third language. `resolveLanguage` folds every `zh*` tag into `zh-CN` for now | A later step; the mechanism already supports adding a resource |
 | Date, number and plural formatting beyond i18next's defaults | Whichever feature first needs it |

@@ -53,7 +53,13 @@ export async function launchWitena(
 
 /** The part of a locale file the specs assert against. */
 export interface LocaleFile {
-  smoke: Record<string, string>
+  nav: Record<string, string>
+  chat: Record<string, string>
+  agents: Record<string, string>
+  settings: {
+    title: string
+    sections: Record<string, string>
+  }
 }
 
 /**
@@ -66,4 +72,18 @@ export interface LocaleFile {
 export function locale(language: 'en' | 'zh-CN'): LocaleFile {
   const path = join(repoRoot, 'src', 'renderer', 'src', 'locales', `${language}.json`)
   return JSON.parse(readFileSync(path, 'utf8')) as LocaleFile
+}
+
+/**
+ * Opens Settings → Developer, where the transport smoke widgets live.
+ *
+ * S1.5 replaced the standalone smoke screen with the real shell, so `ping`,
+ * `last-event` and the two language read-outs are no longer on the first screen:
+ * every spec that asserts on them has to navigate there first. Keeping that walk
+ * in one helper means a later change to the settings nav breaks one function
+ * rather than three specs.
+ */
+export async function openDeveloperSettings(window: Page): Promise<void> {
+  await window.getByTestId('nav-settings').click()
+  await window.getByTestId('settings-section-developer').click()
 }

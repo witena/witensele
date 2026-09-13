@@ -53,8 +53,8 @@ Acceptance:
 - Unit test: both locale files have identical key sets
 - Switching the language in settings takes effect immediately and survives a restart
 
-### S1.5 UI shell `[ ]`
-What: navigation rail, three page shells (Chats / Agents / Settings), three-column layout, dark theme with the mockup colours.
+### S1.5 UI shell `[x]` (2026-09-13)
+What: navigation rail, three page shells (Chats / Agents / Settings), three-column layout, dark theme with the mockup colours, plus the reusable primitives (`components/ui/`) and layout helpers (`components/layout/`) every later screen is built from. The S1.3 smoke widgets moved to Settings -> Developer.
 Acceptance: a screenshot matches the mockup in layout and colours; docs under `docs/features/ui-shell/`.
 
 ### S1.6 Providers `[ ]`
