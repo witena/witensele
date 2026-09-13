@@ -41,6 +41,8 @@ export interface AvatarProps {
   presence?: PresenceState | undefined
   /** Translated presence name for the overlaid dot. */
   presenceLabel?: string | undefined
+  /** Forwarded to the overlaid dot, so a row's presence stays addressable. */
+  presenceTestId?: string | undefined
   className?: string | undefined
 }
 
@@ -51,6 +53,7 @@ export function Avatar({
   size = 'md',
   presence,
   presenceLabel,
+  presenceTestId,
   className
 }: AvatarProps): React.JSX.Element {
   return (
@@ -65,7 +68,14 @@ export function Avatar({
       >
         {text}
       </span>
-      {presence ? <PresenceDot state={presence} label={presenceLabel} overlay /> : null}
+      {presence ? (
+        <PresenceDot
+          state={presence}
+          label={presenceLabel}
+          overlay
+          data-testid={presenceTestId}
+        />
+      ) : null}
     </span>
   )
 }

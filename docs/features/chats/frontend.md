@@ -4,13 +4,15 @@
 
 | File | Responsibility |
 |---|---|
-| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the two list loads, the per-chat transcript load, and the group-settings block that is still local state |
+| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, and the group-settings block, which now writes straight through to `chats.update` |
 | `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete |
 | `src/renderer/src/components/chat/message-list.tsx` | The scroller and the auto-scroll rule (follow the bottom only while already at the bottom) |
 | `src/renderer/src/components/chat/message-item.tsx` | One message row: avatar + presence dot, name, model badge, round, time, body, reasoning toggle, streaming cursor, status hint |
 | `src/renderer/src/components/chat/markdown.tsx` | `react-markdown` + `remark-gfm` with the mockup's prose rules as descendant utilities |
 | `src/renderer/src/components/chat/composer.tsx` | Textarea (Enter sends, Shift+Enter newline, IME-safe), mention hint, Send / Stop |
-| `src/renderer/src/components/chat/member-panel.tsx` | The right column's member rows: name, model, live presence dot |
+| `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover, the member rows (avatar with presence dot, name, `model · presence`, usage placeholder, remove on hover) and native HTML5 drag-and-drop reordering |
+| `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested |
+| `src/renderer/src/components/agents/agent-display.ts` | `agentModelLabel`, shared with the Agents page so both screens name a model the same way |
 | `src/renderer/src/lib/event-bridge.ts` | The single backend subscription; fans every event into the stores |
 | `src/renderer/src/lib/message-view.ts` | `wasStopped`, `messageText` and the stored `'aborted'` detail |
 | `src/renderer/src/main.tsx` | Starts the event bridge before the first render |
@@ -20,15 +22,17 @@
 | Store | Field | Type | Meaning |
 |---|---|---|---|
 | `chats` | `chats` | `Chat[]` | Backend-owned, newest `updatedAt` first. Replaced by `chats.list`, upserted by `chat.updated`, filtered by `chat.deleted` |
-| `chats` | `membersByChat` | `Record<string, string[]>` | Backend-owned member agent ids, in speaking order |
+| `chats` | `membersByChat` | `Record<string, string[]>` | Backend-owned member agent ids, in speaking order. Written only by `setMembers`, which goes through the backend first |
 | `chats` | `selectedId` | `string \| null` | Local UI state, not persisted |
 | `chats` | `status` / `error` / `errorCode` | | Load state and the last failure |
 | `messages` | `byChat` | `Record<string, Message[]>` | Backend-owned, **oldest first** |
 | `messages` | `status` | `Record<string, MessagesStatus>` | Per chat, so one failed load does not blank the others |
 | `run` | `activeByChat` | `Record<string, ActiveRun>` | Backend-owned; set by `run.started` / `run.round`, cleared by `run.finished`. Drives the Stop button |
 | `run` | `sendingByChat` | `Record<string, boolean>` | Local; covers the `chat.send` round trip before `run.started` arrives |
+| `run` | `error` / `errorCode` | | The last refused send, shown under the composer. Cleared on a new send, on a chat switch and when the membership changes |
 | `presence` | `byChatAgent` | `Record<string, AgentPresence>` | Runtime only, keyed `chatId:agentId`, never persisted |
-| `agents` | `agents` | `Agent[]` | Backend-owned, read-only until S2.1 |
+| `agents` | `agents` | `Agent[]` | Backend-owned; the Agents page (S2.1) writes it, this page only reads |
+| `providers` | `providers` | `Provider[]` | Backend-owned; the member picker prints the provider's name beside the model |
 
 Selectors worth knowing: `useChatMessages(chatId)`, `useChatMemberIds(chatId)`,
 `useIsRunning(chatId)`, `useAgentPresence(chatId, agentId)`, `useAgent(id)`. Each
@@ -46,6 +50,9 @@ selector re-renders on every store write.
 | `invoke('messages.list')` | The page's `selectedId` effect, once per chat | The first (and for now only) page of the transcript |
 | `invoke('agents.list')` | `agents.load()` on mount and after a chat is created | Author name, avatar and model badge |
 | `invoke('chat.send')` | Composer, Enter or the Send button | Stores the message and schedules a run |
+| `invoke('chats.members.set')` | The picker, the row's "×", and a drop | Replaces the whole member list, order included |
+| `invoke('chats.update')` | Every group-settings control | Persists one `ChatSettings` field immediately; no Save button and no debounce |
+| `invoke('providers.list')` | `providers.load()` on mount | The provider name in the member picker |
 | `invoke('chat.stop')` | The Stop button | Aborts the run |
 | `subscribe(...)` | `startEventBridge()` in `main.tsx`, once at bootstrap | Fans `message.*`, `chat.*`, `run.*` and `presence.changed` into the stores |
 
@@ -74,6 +81,9 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | error (call) | The left column shows the translated `BackendError.code` under the list — the first-run "no provider with models" path lands here |
 | error (message) | The row keeps whatever text arrived and adds a red hint: "Stopped" when `error === 'aborted'`, otherwise "The reply failed" |
 | passed / skipped | The whole row is dimmed and the body is replaced by the "Passed" / "Skipped" label |
+| no members | The member panel shows its empty state plus an accent hint ("Add at least one agent"), and a send is refused with a red line under the composer. The composer itself stays enabled |
+| picker open | A popover under "+ Add" listing the agents that are not members yet (avatar, name, `model · provider`); it closes on a pick, on an outside click, and when the chat changes |
+| dragging a member | The dragged row is at 50% opacity; dropping on another row writes the new order through `chats.members.set` |
 
 Sending during a run is deliberately allowed: the message appears immediately and
 is answered after the current run (see `../orchestration/context.md`).
@@ -90,6 +100,10 @@ New keys, all under the existing namespaces:
 | `chat.emptyMessagesTitle`, `chat.emptyMessagesDescription` | A chat with no messages yet |
 | `chat.reasoning` | The collapsible reasoning toggle |
 | `chat.stopped`, `chat.failed` | The two `error` hints |
+| `chat.addMember`, `chat.addMemberAll`, `chat.addMemberEmpty` | The picker's button and its two "nothing to add" cases |
+| `chat.removeMember`, `chat.reorderMember` | The row's "×" and the drag tooltip |
+| `chat.noMembersHint` | The accent hint under the empty member list |
+| `chat.memberUsage` | The per-member token placeholder (an em dash until S4.1) |
 
 Already present and now actually used: `chat.today` / `yesterday` / `earlier`,
 `chat.round`, `chat.passed`, `chat.skipped`, `chat.send`, `chat.stop`,
@@ -109,8 +123,11 @@ is never translated.
 - Every icon-only control has a translated `aria-label` (`IconButton` requires
   one): the "+" button, the row kebab, Send.
 - The reasoning toggle is a `button` with `aria-expanded`.
-- Presence dots on message avatars carry a translated `role="img"` name; the dot
-  in the member panel is decorative, because the name and model are already read
-  out beside it.
+- Presence dots on message avatars and on member avatars carry a translated
+  `role="img"` name; the member row also prints the state in words next to the
+  model.
+- Reordering is mouse-only for now. That is a known gap: it is the one control on
+  this screen with no keyboard path, and S2.3 — which also reads `position` — is
+  where a keyboard reorder belongs.
 - Each message is an `<article>` carrying `data-sender` and `data-status`, which
   is also what the end-to-end spec asserts on so it stays language-independent.

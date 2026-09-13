@@ -96,6 +96,11 @@ export interface InitialAvatar {
   text: string
   /** CSS colour, e.g. `#c2653a`. */
   color: string
+  /**
+   * Foreground CSS colour paired with `color`. Optional so records written before
+   * the avatar picker existed still render, on the renderer's neutral fallback.
+   */
+  textColor?: string
 }
 
 /**
@@ -201,6 +206,36 @@ export interface Chat extends EntityBase {
 
 /** Create / update payload for a chat. */
 export type ChatInput = Omit<Chat, keyof EntityBase>
+
+/**
+ * An update payload for a chat.
+ *
+ * `settings` is a **partial of a partial**: the backend merges it field by field,
+ * so a single control (the speaking toggle, the round count) can be persisted on
+ * its own without the caller having to resend the rest and risk overwriting a
+ * field another control changed a moment earlier.
+ */
+export interface ChatPatch extends Partial<Omit<ChatInput, 'settings'>> {
+  settings?: Partial<ChatSettings>
+}
+
+/**
+ * What `chats.create` accepts: a partial `ChatInput` plus the members the chat
+ * starts with.
+ *
+ * Membership is a separate table, so it is not part of `Chat` and cannot be part
+ * of `ChatInput` — but a chat created from the member picker has to be born with
+ * its members rather than saved twice. Omitting the field means "no members",
+ * except on an installation whose agent library is still empty, where the backend
+ * falls back to the bootstrap agent (see `src/main/agents/default-agent.ts`).
+ */
+export interface ChatCreateInput extends ChatPatch {
+  memberAgentIds?: string[]
+}
+
+/** How many automatic rounds a chat may be configured for. */
+export const MIN_AUTO_ROUNDS = 1
+export const MAX_AUTO_ROUNDS = 10
 
 /**
  * Membership of an agent in a chat. `position` is the speaking order in

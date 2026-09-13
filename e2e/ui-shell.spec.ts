@@ -65,7 +65,10 @@ test('the rail navigates between the three pages', async () => {
   await expect(window.getByTestId('page-agents')).toBeVisible()
   // One page is mounted at a time: the previous one is gone, not hidden.
   await expect(window.getByTestId('page-chats')).toHaveCount(0)
-  await window.screenshot({ path: join(SHOTS_DIR, 'agents.png') })
+  // `shell-agents.png`, not `agents.png`: the latter is the S2.1 acceptance shot
+  // of the configuration editor, taken by `agents.spec.ts`, and this file runs
+  // after it. Two specs writing one path means the last one wins.
+  await window.screenshot({ path: join(SHOTS_DIR, 'shell-agents.png') })
 
   await window.getByTestId('nav-settings').click()
   await expect(window.getByTestId('page-settings')).toBeVisible()

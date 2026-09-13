@@ -47,11 +47,11 @@ describe('handlers/buildHandlers', () => {
   })
 
   it('rejects with internal and a pointer to STEPS.md for a method that is not implemented yet', async () => {
-    const unimplemented: BackendMethod = 'agents.create'
+    const unimplemented: BackendMethod = 'mcp.list'
 
-    await expect(handlers[unimplemented](ctx, { input: {} as never })).rejects.toMatchObject({
+    await expect(handlers[unimplemented](ctx)).rejects.toMatchObject({
       code: 'internal',
-      message: 'Not implemented yet: agents.create (see docs/STEPS.md)'
+      message: 'Not implemented yet: mcp.list (see docs/STEPS.md)'
     })
   })
 
@@ -322,6 +322,11 @@ describe('handlers/stubs', () => {
       'providers.testConnection',
       // S1.7
       'agents.list',
+      // S2.1
+      'agents.get',
+      'agents.create',
+      'agents.update',
+      'agents.delete',
       'chats.list',
       'chats.get',
       'chats.create',

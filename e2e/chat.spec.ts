@@ -87,12 +87,27 @@ const agentMessages = () =>
   window.locator('[data-testid="message-item"][data-sender="agent"]')
 const userMessages = () => window.locator('[data-testid="message-item"][data-sender="user"]')
 
-/** Creates a chat with the "+" button and waits for it to be selected. */
+/**
+ * Creates a chat with the "+" button, waits for it to be selected, and makes sure
+ * it has a member.
+ *
+ * Since S2.2 only the **first** chat of an empty install gets the bootstrap agent
+ * automatically; once the agent library is non-empty, a new chat starts with
+ * nobody in it and picking the members is the user's job. So this helper does
+ * what the user would: if the member panel is empty, it opens the picker and adds
+ * the first candidate — which on this fixture is the bootstrap agent.
+ */
 async function newChat(): Promise<void> {
   const before = await window.getByTestId('chat-item').count()
   await window.getByTestId('chats-new').click()
   await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
   await expect(window.getByTestId('composer-input')).toBeEnabled()
+
+  if ((await window.getByTestId('member-row').count()) === 0) {
+    await window.getByTestId('member-add').click()
+    await window.getByTestId('member-candidate').first().click()
+    await expect(window.getByTestId('member-row')).toHaveCount(1)
+  }
 }
 
 test.beforeAll(async () => {
@@ -137,7 +152,8 @@ test('sends a message and streams one agent reply token by token', async () => {
   // The chat was created with the default agent, so the member panel has one row
   // showing the model the reply will come from.
   await expect(window.getByTestId('member-row')).toHaveCount(1)
-  await expect(window.getByTestId('member-model')).toHaveText(MODEL_ID)
+  // Since S2.2 the row prints `model · provider · presence`, not the model alone.
+  await expect(window.getByTestId('member-model')).toContainText(MODEL_ID)
 
   await window.getByTestId('composer-input').fill('Reply with the single word hello')
   await window.getByTestId('composer-input').press('Enter')

@@ -10,6 +10,10 @@
  *
  * ## What is deliberately fixed now, and what S2.3 replaces
  *
+ * Membership is read **per run** (`#runOnce` calls `#members`), never cached on
+ * the runner: a member added or reordered while a reply is streaming takes effect
+ * from the next run, which is the same boundary a queued user message lands on.
+ *
  * | Now (S1.7) | S2.3 |
  * |---|---|
  * | `#speakersFor` returns the first member | roundrobin / mention-only, `memberOrder` |
@@ -113,6 +117,14 @@ export class ChatRunner {
 
     // Throws `not_found` for a chat that is gone, before anything is written.
     const chat = this.#ctx.repos.chats.get(this.chatId, this.#ctx.userId)
+
+    // A chat nobody is in cannot answer. Rejecting here — rather than storing the
+    // message and finishing a run with no speakers — keeps the transcript free of
+    // questions that were never asked of anyone, and gives the composer an error
+    // the member panel's "add at least one agent" hint explains.
+    if (this.#ctx.repos.chats.listMembers(chat.id, this.#ctx.userId).length === 0) {
+      throw validation('chat has no members')
+    }
 
     const message = this.#ctx.repos.messages.create(
       {

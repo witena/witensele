@@ -46,16 +46,20 @@ export interface PresenceDotProps {
    */
   overlay?: boolean | undefined
   className?: string | undefined
+  /** Forwarded to the dot; the member panel addresses its rows' dots by it. */
+  'data-testid'?: string | undefined
 }
 
 export function PresenceDot({
   state,
   label,
   overlay = false,
-  className
+  className,
+  'data-testid': testId
 }: PresenceDotProps): React.JSX.Element {
   return (
     <span
+      data-testid={testId}
       role={label ? 'img' : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
