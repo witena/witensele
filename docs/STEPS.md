@@ -23,7 +23,7 @@ Acceptance:
 What: `docs/README.md` index, `docs/features/` directory with the four-document template, root `CLAUDE.md` stating the conventions (four docs per feature, test gate, no hard-coded UI strings, English-only repository, `CLAUDE.local.md` as the gitignored Chinese copy).
 Acceptance: files exist; CLAUDE.md is picked up by later sessions.
 
-### S0.3 First commit and push `[~]`
+### S0.3 First commit and push `[x]` (2026-09-13, PR #1)
 Acceptance: `git log` has commits; the GitHub repository's main branch shows the code.
 
 ---
