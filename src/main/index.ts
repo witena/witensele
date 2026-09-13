@@ -5,8 +5,19 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
 import { APP_NAME } from '@shared/version'
+import { openDatabase, type DatabaseHandle } from './db/database'
 
 const isDev = !app.isPackaged
+
+/** File name of the SQLite database inside the userData directory. */
+const DATABASE_FILE = 'witena.db'
+
+/**
+ * The one database handle for the process. This file is the only place allowed to
+ * ask electron where it lives (CLAUDE.md rule #5); everything under `src/main/db/`
+ * receives the path or the handle by injection.
+ */
+let database: DatabaseHandle | null = null
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -50,6 +61,11 @@ function createWindow(): BrowserWindow {
 
 void app.whenReady().then(() => {
   app.setName(APP_NAME)
+
+  const databasePath = join(app.getPath('userData'), DATABASE_FILE)
+  database = openDatabase(databasePath)
+  console.log(`[witena] database: ${databasePath}`)
+
   createWindow()
 
   app.on('activate', () => {
@@ -59,4 +75,10 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// Close the database explicitly so WAL is checkpointed before the process exits.
+app.on('before-quit', () => {
+  database?.close()
+  database = null
 })

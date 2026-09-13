@@ -34,7 +34,7 @@ Acceptance: `git log` has commits; the GitHub repository's main branch shows the
 What: `src/shared/types.ts` (domain types), `events.ts` (typed events), `backend.ts` (BackendClient interface).
 Acceptance: typecheck passes; the four docs under `docs/features/backend-client/` are written.
 
-### S1.2 Database `[ ]`
+### S1.2 Database `[x]` (2026-09-13)
 What: drizzle schema (providers, agents, mcp_servers, chats, chat_members, messages, settings; all with userId / UUID / timestamps), migrations, opening `userData/witena.db`.
 Acceptance:
 - Unit tests run CRUD on every table against a temporary database file
