@@ -21,13 +21,41 @@
 | `src/main/db/repositories/settings.ts` | Settings get and merge-update |
 | `src/main/db/repositories/index.ts` | `createRepositories(db, { encrypt })` and the `Repositories` type |
 | `src/main/db/testing.ts` | Temporary-file fixtures and input builders; imported only by tests |
-| `src/main/errors.ts` | `BackendFailure`, `isBackendFailure`, `notFound()`, `validation()` |
+| `src/main/errors.ts` | `BackendFailure`, `isBackendFailure`, `notFound()`, `validation()`, `keyUnreadable()` (S7.6) |
 | `drizzle.config.ts` (repository root) | drizzle-kit input for `npm run db:generate`; never connects to a database |
 | `src/main/index.ts` | The only electron-aware part: opens `app.getPath('userData')/witena.db`, logs the path, closes on `before-quit` |
 
 Nothing under `src/main/db/` imports electron. `openDatabase` takes a path,
 `createRepositories` takes a handle, and services take a `Repositories`, so the
 whole layer moves to a Node server by changing only who calls `openDatabase`.
+
+## The secret formats (S7.6)
+
+`api_key_encrypted` is opaque to this layer — the repository is handed an
+`encrypt(plain)` and hands the ciphertext back out through
+`getApiKeyCiphertext` — but **which** format a row holds is a storage fact, and
+it is readable from the first four characters:
+
+| Prefix | Written by | Readable by |
+|---|---|---|
+| `fk1:` | `createFileKeySecretStore` (S7.6) | Any build that still has `userData/secrets.key` |
+| `djEw…` / `djEx…` | Electron `safeStorage`, everything before S7.6 | Only the application identity the Keychain item was granted to — which an unsigned rebuild changes |
+| `plain:` | The insecure fallback, on a machine with no key storage | Anyone |
+
+`migrateProviderSecrets` (`src/main/providers/migrate-secrets.ts`) runs once per
+launch, reads each of the last two with the store that wrote it and re-encrypts
+it through `ProviderRepository.update({ apiKey })` — the same injected `encrypt`
+as every other write, so there is exactly one path to ciphertext. A row it
+**cannot** read is left byte-for-byte as it is: the key is unreachable from this
+installation, not gone from the world, and a row blanked here could never be
+recovered. Those ids go into `AppContext.unreadableSecrets`, which the
+`providers.*` handlers report as `Provider.keyState` — a runtime field, **no
+column and no migration**.
+
+`secrets.key` itself lives beside `witena.db` in `userData`, mode `0600`, and is
+created by the first key that is saved. It is not a database artefact, but it is
+the reason the database's ciphertext is readable at all, so anything that copies
+or backs up `witena.db` has to copy it too (see "Known limitations").
 
 ## Database
 
@@ -47,7 +75,7 @@ names are snake_case, the TypeScript properties camelCase. JSON columns are
 | `base_url` | text null | Absent means the adapter default |
 | `preset_id` | text null | Entry in `shared/presets.ts` (S1.6) |
 | `models` | text json not null | `string[]` |
-| `api_key_encrypted` | text null | **Ciphertext only.** Never mapped into a `Provider`; its presence becomes `hasApiKey` |
+| `api_key_encrypted` | text null | **Ciphertext only.** Never mapped into a `Provider`; its presence becomes `hasApiKey`. Three formats have existed and the prefix says which: `fk1:` (S7.6, AES-256-GCM under `userData/secrets.key`), base64 of `v10…` (Electron `safeStorage`, everything written before S7.6) and `plain:` (the insecure fallback). Startup re-encrypts the last two into the first — see "The secret formats" below |
 | `auth` | text null | `apiKey \| oauth` (S5.3). **Null means `apiKey`**, which is what every row written before S5.3 holds; read it through `providerAuth()` in `shared/presets.ts` rather than comparing it by hand. An `oauth` row stores no credential of any kind — the Anthropic CLI owns the token — so `api_key_encrypted` is null and `hasApiKey` is false |
 | `created_at` / `updated_at` | integer not null | |
 

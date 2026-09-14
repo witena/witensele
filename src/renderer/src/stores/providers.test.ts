@@ -16,6 +16,7 @@ import type {
   ProviderInput
 } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
+import { BackendClientError } from '../lib/backend'
 import { resetBackend, setBackend } from '../lib/backend-provider'
 import { DRAFT_TEST_KEY, emptyAuthStatuses, useProvidersStore } from './providers'
 
@@ -66,6 +67,9 @@ function fakeBackend(initial: Provider[] = []): Fake {
           name: payload.name,
           models: payload.models,
           hasApiKey: Boolean(payload.apiKey),
+          // Filled by the handler in the real backend (S7.6), so the fake fills
+          // it too: a key this build just wrote is readable by definition.
+          keyState: payload.apiKey ? 'ok' : 'none',
           ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}),
           ...(payload.presetId ? { presetId: payload.presetId } : {})
         }
@@ -87,7 +91,14 @@ function fakeBackend(initial: Provider[] = []): Fake {
           ...(patch.type !== undefined ? { type: patch.type } : {}),
           ...(patch.models !== undefined ? { models: patch.models } : {}),
           ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-          hasApiKey: keys[id] !== undefined
+          hasApiKey: keys[id] !== undefined,
+          // A patch that touched the key replaced whatever could not be read.
+          keyState:
+            patch.apiKey !== undefined
+              ? keys[id] !== undefined
+                ? ('ok' as const)
+                : ('none' as const)
+              : current.keyState ?? ('ok' as const)
         }
         rows = rows.map((row) => (row.id === id ? updated : row))
         return updated
@@ -433,6 +444,33 @@ describe('fetchModels', () => {
   })
 })
 
+/**
+ * S7.6: what the settings screen needs in order to explain an unreadable key,
+ * and what makes the explanation go away.
+ *
+ * The notice itself is one `keyState === 'unreadable'` check
+ * (`components/settings/provider-display.ts`), so what is worth testing here is
+ * that the store carries the field at all and that saving a pasted key replaces
+ * the record with one that no longer carries it.
+ */
+describe('an unreadable key', () => {
+  it('is mirrored from the backend and cleared by saving a new key', async () => {
+    const backend = fakeBackend([stored({ keyState: 'unreadable' })])
+    setBackend(backend.client)
+    await state().load()
+
+    expect(state().providers[0]?.keyState).toBe('unreadable')
+
+    state().startEdit('p1')
+    state().patchDraft({ apiKey: 'sk-pasted-again' })
+    const saved = await state().saveDraft()
+
+    expect(saved?.keyState).toBe('ok')
+    expect(state().providers[0]?.keyState).toBe('ok')
+    expect(backend.keys()['p1']).toBe('sk-pasted-again')
+  })
+})
+
 describe('testConnection', () => {
   it('remembers the result under the provider id', async () => {
     const backend = fakeBackend([stored()])
@@ -479,6 +517,28 @@ describe('testConnection', () => {
 
     await expect(state().testConnection({ id: 'p1' })).resolves.toMatchObject({ ok: false })
     expect(state().testResults['p1']).toMatchObject({ ok: false })
+  })
+
+  /**
+   * S7.6. `providers.testConnection` normally answers with a value, but a stored
+   * key this build cannot decrypt is refused by `resolveProvider` *before* the
+   * probe runs — so it arrives as a rejection, and the class has to survive it
+   * or the line under the button reads "something went wrong inside the app".
+   */
+  it('keeps the failure class of a rejected probe', async () => {
+    const backend = fakeBackend([stored({ keyState: 'unreadable' })])
+    setBackend(backend.client)
+    await state().load()
+    backend.fail(
+      new BackendClientError({
+        code: 'key_unreadable',
+        message: 'The stored API key of provider p1 cannot be decrypted'
+      })
+    )
+
+    const result = await state().testConnection({ id: 'p1' })
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'key_unreadable' } })
   })
 
   it('turns a transport failure into the same shape', async () => {

@@ -109,9 +109,9 @@ Witena.app/Contents/
 ```
 
 Outside it, unchanged: the app still writes only to `app.getPath('userData')` —
-`witena.db`, `skills/`, `memory/` — and the `WITENA_USER_DATA` override still
-works in a packaged build, which is what lets `e2e/packaged.spec.ts` run against
-a throwaway directory.
+`witena.db`, `skills/`, `memory/` and, since S7.6, `secrets.key` — and the
+`WITENA_USER_DATA` override still works in a packaged build, which is what lets
+`e2e/packaged.spec.ts` run against a throwaway directory.
 
 ## The unsigned caveat
 
@@ -138,6 +138,53 @@ concludes the app is broken.
 Removing the caveat is a purchase, not a code change: a Developer ID certificate,
 `hardenedRuntime: true`, `identity` set to the certificate name, and the
 `notarize` block with an App Store Connect key.
+
+### What being unsigned does to the stored secrets (S7.6)
+
+The caveat is not only a Gatekeeper dialog. macOS grants the `safeStorage`
+Keychain item ("Witena Safe Storage") **per application identity**, and an
+unsigned bundle's identity is whatever this particular packaging run produced —
+so the next dmg is, as far as the Keychain is concerned, a different application.
+That is not theoretical: when the S7.1 dmg replaced the S4.4 one, every provider
+key already in the user's database (`v10…`, genuine `safeStorage` ciphertext)
+became undecryptable, and the app reported it as "no key" and a failed probe.
+
+S7.6's answer is to stop keying the secrets off the bundle at all. The
+encryption key is 32 random bytes in `userData/secrets.key` (mode `0600`,
+created on first use), provider keys are AES-256-GCM under it, and a startup
+pass re-encrypts anything still in the old format — leaving a row it cannot read
+untouched and explaining it in the UI. The file is part of the user's data, so
+an update, a reinstall and a rebuild all leave it alone.
+
+**The security posture, stated exactly.** On an unsigned build the key file is
+plain on disk: anyone who can read the user's home directory can read it and
+every API key it protects. That is the same class of exposure the Keychain item
+of an *unsigned* app already had — it is granted to an identity nothing vouches
+for — and it buys the property the Keychain could not give: the keys survive the
+next build. It is a deliberate trade, not an oversight, and it is documented in
+`docs/features/providers/context.md` as well as here.
+
+**The S7.3 hand-off: signing turns the wrapper on.** When the release workflow
+sets `WITENA_SIGNED_BUILD` (any non-empty value other than `0` / `false`), the
+key file is stored **wrapped** by `safeStorage` instead of plain — the Keychain
+protects the key file, and because the build is signed the identity it is granted
+to stops changing between releases. Nothing else about the secret path changes:
+the same `fk1:` ciphertext, the same column, the same migration. Wrapping is off
+by default precisely because doing it on an unsigned build would recreate the
+bug S7.6 fixed.
+
+Two things S7.3 has to remember:
+
+- **Set the variable for the packaged app, not only for the build.** It is read
+  by the running process (`isSignedBuild`, `src/main/secrets.ts`), so exporting
+  it in the workflow shell protects nothing by itself; it has to reach the
+  launched application — the simplest honest way being a signed-build constant
+  injected at build time, which is a change to make *with* S7.3, not before it.
+- **Existing key files are not re-wrapped.** A machine that has been running
+  unsigned builds keeps its plain `secrets.key` after the first signed build;
+  only a file created afterwards is wrapped. Rewriting the user's stored secrets
+  silently on launch is not something to do as a side effect of an update —
+  whether to offer it as an action is in the Phase 6 backlog.
 
 ## Building the icon
 
@@ -263,8 +310,10 @@ happens to hold. The `CSC_*` and `APPLE_*` secrets are passed to the packaging
 step unconditionally; absent, they arrive as empty strings and are ignored.
 
 What S7.3 still has to change is `electron-builder.yml` — `identity`,
-`hardenedRuntime: true`, an entitlements file and a `notarize` block — and the
-README's Gatekeeper note. Not this workflow.
+`hardenedRuntime: true`, an entitlements file and a `notarize` block — the
+README's Gatekeeper note, and `WITENA_SIGNED_BUILD` reaching the packaged app so
+the key file is wrapped (see "What being unsigned does to the stored secrets").
+Not this workflow's structure.
 
 ## Cutting a release
 

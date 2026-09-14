@@ -201,18 +201,34 @@ function mergedAuthFields(
   }
 }
 
+/**
+ * The provider as the renderer sees it, with S7.6's `keyState` filled in.
+ *
+ * Runtime rather than stored: `ctx.unreadableSecrets` holds the ids whose
+ * ciphertext this installation could not decrypt (the startup migration puts
+ * them there, and `resolveProvider` adds any that fail later), and that is a
+ * fact about this build's encryption key rather than about the row. Every
+ * `providers.*` method that returns a record goes through here, so the card, the
+ * editor and the agent form all learn the same thing at the same time.
+ */
+function withKeyState(ctx: AppContext, provider: Provider): Provider {
+  if (!provider.hasApiKey) return { ...provider, keyState: 'none' }
+  return { ...provider, keyState: ctx.unreadableSecrets.has(provider.id) ? 'unreadable' : 'ok' }
+}
+
 export const providerHandlers: HandlerModule = {
-  'providers.list': async (ctx) => ctx.repos.providers.list(ctx.userId),
+  'providers.list': async (ctx) =>
+    ctx.repos.providers.list(ctx.userId).map((provider) => withKeyState(ctx, provider)),
 
   'providers.get': async (ctx, input) => {
     assertId(input)
-    return ctx.repos.providers.get(input.id, ctx.userId)
+    return withKeyState(ctx, ctx.repos.providers.get(input.id, ctx.userId))
   },
 
   'providers.create': async (ctx, input) => {
     assertProviderInput(input?.input)
     if (providerAuth(input.input) === 'oauth') await assertSignedIn(ctx, input.input.type)
-    return ctx.repos.providers.create(input.input, ctx.userId)
+    return withKeyState(ctx, ctx.repos.providers.create(input.input, ctx.userId))
   },
 
   'providers.update': async (ctx, input) => {
@@ -221,12 +237,18 @@ export const providerHandlers: HandlerModule = {
     const merged = mergedAuthFields(ctx.repos.providers.get(input.id, ctx.userId), input.patch)
     assertAuthRules(merged)
     if (providerAuth(merged) === 'oauth') await assertSignedIn(ctx, merged.type)
-    return ctx.repos.providers.update(input.id, input.patch, ctx.userId)
+    const updated = ctx.repos.providers.update(input.id, input.patch, ctx.userId)
+    // A patch that touched the key replaced (or cleared) the unreadable
+    // ciphertext, so whatever the row holds now was written by this build. That
+    // is what makes "paste it again" actually fix the card.
+    if (input.patch.apiKey !== undefined) ctx.unreadableSecrets.delete(input.id)
+    return withKeyState(ctx, updated)
   },
 
   'providers.delete': async (ctx, input) => {
     assertId(input)
     ctx.repos.providers.delete(input.id, ctx.userId)
+    ctx.unreadableSecrets.delete(input.id)
   },
 
   'providers.fetchModels': async (ctx, input) => {

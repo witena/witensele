@@ -6,7 +6,10 @@
 |---|---|
 | `src/shared/presets.ts` | The preset table and the three questions asked of it. Shared, not main-only: the renderer imports it directly |
 | `src/shared/pricing.ts` | The **model price table** plus `estimateCost`, `contextWindowFor`, `formatTokens` and `formatCost` (S4.1, S4.2). Shared for the same reason as the presets, and edited by hand — see "Editing the price table" below |
-| `src/main/providers/resolve.ts` | `ProviderRef` → `ResolvedProvider`. The **only** place a stored key is decrypted |
+| `src/main/providers/resolve.ts` | `ProviderRef` → `ResolvedProvider`. The **only** place a stored key is decrypted, and (S7.6) the place a failed decrypt becomes `key_unreadable` |
+| `src/main/providers/migrate-secrets.ts` | **S7.6.** The startup pass that moves every pre-S7.6 key onto the file-held key, and records the ones it could not read |
+| `src/main/secrets.ts` | **S7.6.** `createFileKeySecretStore` — AES-256-GCM under `userData/secrets.key` — plus the prefix rules (`fk1:`, `djEw…`, `plain:`). Electron-free: `node:crypto` and `node:fs` |
+| `src/main/ipc/secret-store.ts` | **S7.6.** `createSafeStorageStore()` returns the `safeStorage` store **or `null`**: the legacy reader for old rows, and the key file's wrapper on a signed build |
 | `src/main/providers/registry.ts` | `ResolvedProvider` + model id → an AI SDK `LanguageModel` |
 | `src/main/providers/discovery.ts` | `fetchModels` (raw `/models`) and `testConnection` (`generateText`) |
 | `src/main/providers/cli-process.ts` | **S5.13.** Binary resolution (`PATH`, then the vendor's install locations, then the override variable) and one child process per command, shared by both CLI wrappers |
@@ -24,6 +27,12 @@ None of them imports electron (CLAUDE.md rule #5). `resolve.ts` takes an
 `cli-process.ts` imports `node:child_process`, `node:fs` and `node:path`, which
 the rule says nothing about — it is about electron, and the main process already
 spawns stdio MCP servers.
+
+**S7.6 changed how the key is protected, not where it is stored.** The column,
+the write-only contract and `getApiKeyCiphertext` are untouched; what changed is
+which store produces the ciphertext, plus one new runtime field on `Provider`
+(`keyState`) and one new error code (`key_unreadable`). See "The secret store"
+at the end of this file.
 
 **S7.5 added nothing here.** The first-run card is a second *renderer* of the
 same draft and the same seven methods: it calls `providers.fetchModels` and
@@ -71,6 +80,13 @@ keeps the stored key, `''` clears it, any other string replaces it.
 | `providers.login` | `{ type }` | `ProviderAuthStatus` | rejects `*_missing` with no binary, `*_not_logged_in` for a flow the user abandoned |
 | `providers.logout` | `{ type }` | `ProviderAuthStatus` | rejects `*_missing` only; "there was nothing to log out of" is the state the caller asked for |
 | `providers.setQuotaProject` | `{ project }` | `ProviderAuthStatus` | **S5.13**, Google only. Non-empty id; rejects `gcloud_no_project` when the CLI refuses it, usually for want of `serviceusage.services.use` on that project |
+
+Every method that returns a record passes it through `withKeyState(ctx, …)`
+(S7.6), which fills `Provider.keyState` from `ctx.unreadableSecrets`: `none` for
+a provider that stores no key, `unreadable` for one whose ciphertext this
+installation could not decrypt, `ok` otherwise. `providers.update` **clears** the
+mark when the patch touched `apiKey` — that is what makes "paste it again"
+actually fix the card — and `providers.delete` drops it with the row.
 
 No event is emitted. Provider changes are the answer to the call that made them,
 and the store updates from that answer; nothing else in the app is watching.
@@ -365,13 +381,78 @@ token. The preparer is called **per request** rather than captured, so a model
 instance built once and used for an hour keeps working — each CLI refreshes its
 credential and caches it until just before it expires.
 
-### `SecretStore`
+### The secret store
 
 **Untouched by S5.3**: a provider that signs in stores no secret, so the sign-in
 path never reaches this store at all.
 
-`safeStorage` in the app (`src/main/ipc/secret-store.ts`), the base64
-`plain:` fallback in tests and on a machine with no OS key storage. The fallback
-logs once, loudly. Note for anyone writing a handler test: the repository's
-`encrypt` and the context's `secrets.decrypt` must come from the *same* store, or
-nothing round-trips — `handlers.test.ts` builds its repositories for that reason.
+Note for anyone writing a handler test, and the oldest trap here: the
+repository's `encrypt` and the context's `secrets.decrypt` must come from the
+*same* store, or nothing round-trips — `createTestAppContext` builds its
+repositories for that reason, and takes a `secrets` option so a suite about
+encryption can swap the store without unbinding them.
+
+#### Why it is a file and not the Keychain (S7.6)
+
+The store the app writes provider keys with is `createFileKeySecretStore`:
+
+| | |
+|---|---|
+| Key | 32 random bytes in `userData/secrets.key`, mode `0600`, created on first use |
+| Cipher | AES-256-GCM, a fresh 12-byte IV per value |
+| Stored form | `fk1:` + base64(iv ‖ tag ‖ ciphertext), one string for a `text` column |
+| Failure | `BackendFailure('key_unreadable')` on a wrong key, a failed tag, a truncated value or a value that is not `fk1:` at all |
+| Key file form | `fkkey1:` + base64(key), or `fkkey1w:` + `safeStorage` ciphertext when `WITENA_SIGNED_BUILD` is set |
+
+`safeStorage` was the store until S7.6 and is the reason this changed. Its
+Keychain item ("Witena Safe Storage") is granted **per application identity**,
+and an unsigned build has a new identity every time it is packaged — so when the
+S7.1 dmg replaced the S4.4 one, the DeepSeek and Moonshot ciphertexts already in
+the database (`v10…`, genuine `safeStorage` output) could no longer be
+decrypted. Nothing was lost except the key to the data. A file under `userData`
+belongs to the user's data rather than to the bundle, so an update leaves it
+exactly where it was.
+
+What that costs, stated plainly so nobody has to rediscover it: **on an unsigned
+build, anyone who can read the user's files can read `secrets.key`, and
+therefore every stored API key.** That was already true of an unsigned app's
+Keychain item — it is granted to an identity nothing vouches for — and the file
+buys something the Keychain item does not, which is surviving the next rebuild.
+The stronger form is one environment variable away: with `WITENA_SIGNED_BUILD`
+set (S7.3's release workflow), the key file is stored **wrapped** by
+`safeStorage`, so the Keychain protects the key and the identity it is granted
+to has stopped changing. Wrapping is off by default on purpose — wrapping on an
+unsigned build would reintroduce the very bug this fixes.
+
+Three things worth knowing before changing `src/main/secrets.ts`:
+
+- **The key file records how it is stored.** `fkkey1:` versus `fkkey1w:`, rather
+  than inferring it from the environment variable at read time: the variable
+  describes the running build, not the file it found, and a mismatch would hand
+  the wrong 32 bytes to AES.
+- **`djEw` is not a magic string.** It is base64 of `v10`, Chromium's `OSCrypt`
+  version prefix, and base64 maps three bytes to four characters with no padding
+  in between — so the prefix survives the encoding. `djEx` is `v11`, which Linux
+  writes when there is no keyring.
+- **Nothing in this module may import electron**, which is what lets the whole
+  store move to a Node server and what makes `wrapper` an injected `SecretStore`
+  rather than a `safeStorage` import.
+
+#### The startup migration
+
+`migrateProviderSecrets(ctx, { legacy })` runs once per launch, from
+`src/main/index.ts`, after the context exists:
+
+- Rows already holding `fk1:`, and rows with no key, are skipped — so every
+  launch after the first writes nothing.
+- A `plain:` row is read by the insecure store (no platform support needed) and a
+  `djEw…` row by the injected `safeStorage` store; both are re-encrypted through
+  `ProviderRepository.update({ apiKey })`, which uses the same injected `encrypt`
+  as every other write.
+- A row that **cannot** be read is left byte-for-byte as it is and its id is added
+  to `ctx.unreadableSecrets`. Never overwrite a ciphertext you could not read:
+  the key is unreachable from this installation, not gone from the world, and the
+  user may still restore the Keychain item or open the database where it was
+  written.
+- It never throws. The app has to start, and the ids it collected are what the UI
+  turns into a sentence.

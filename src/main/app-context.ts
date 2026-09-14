@@ -167,6 +167,21 @@ export interface AppContext {
   events: EventBus
   /** Encryption for provider API keys; decryption is used only when calling a model. */
   secrets: SecretStore
+  /**
+   * Ids of providers whose stored key this build cannot decrypt (S7.6).
+   *
+   * Filled by `migrateProviderSecrets` at startup and by `resolveProvider` when
+   * a decrypt fails later; read by the `providers.*` handlers, which turn it
+   * into `Provider.keyState` so the UI can ask for the key again. In memory
+   * rather than a column, because it is a fact about *this installation's*
+   * encryption key and not about the row: restoring the Keychain item or moving
+   * the database to the machine that wrote it makes the same row readable again.
+   *
+   * On the context rather than in a module singleton, for the same reason the
+   * runners and the supervisor are: two contexts (a test's and the app's) must
+   * never share one.
+   */
+  unreadableSecrets: Set<string>
   /** The implicit single user of the desktop build. */
   userId: UserId
   /**
@@ -311,6 +326,7 @@ export function createAppContext(options: AppContextOptions): AppContext {
     repos,
     events,
     secrets,
+    unreadableSecrets: new Set<string>(),
     userId: options.userId ?? LOCAL_USER_ID,
     // Replaced immediately below: the registry needs the finished context, and
     // the context declares the registry, so one of the two has to be tied off

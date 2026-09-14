@@ -121,7 +121,10 @@ building a model for a chat turn, which is nobody's form, so `ant_missing` and
 `ant_not_logged_in` are codes — and so are S5.13's `gcloud_missing`,
 `gcloud_not_logged_in` and `gcloud_no_project`, the last of them most clearly of
 all: it is raised by the OAuth `fetch` wrapper in the middle of a request, where
-there is no request-shaped refusal to narrow. The same rule applies to the next one: if only the
+there is no request-shaped refusal to narrow. S7.6's `key_unreadable` is on the
+same side: a stored key encrypted by a previous installation is a fact about this
+machine's data, and it is raised while resolving a provider for a chat turn as
+much as while probing one from a form. The same rule applies to the next one: if only the
 sender of this request can be wrong, it is a reason; if the *machine* is in that
 state, it is a code.
 

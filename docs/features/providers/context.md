@@ -24,8 +24,12 @@ mean something.
   (`/models` and the connection probe), `resolve.ts` (`ProviderRef` → record with
   a decrypted key), `cli-process.ts` (S5.13: binary resolution and child-process
   handling, shared by both CLI wrappers), `anthropic-cli.ts` (S5.3: the `ant`
-  wrapper behind "Sign in with Anthropic") and `google-cli.ts` (S5.13: the
-  `gcloud` wrapper behind "Sign in with Google").
+  wrapper behind "Sign in with Anthropic"), `google-cli.ts` (S5.13: the
+  `gcloud` wrapper behind "Sign in with Google") and `migrate-secrets.ts`
+  (S7.6: the startup pass that moves stored keys onto the file-held key).
+- `src/main/secrets.ts` (S7.6): `createFileKeySecretStore`, the AES-256-GCM store
+  whose key lives in `userData/secrets.key`, and the prefix rules that tell the
+  three stored ciphertext formats apart.
 - `src/main/handlers/providers.ts`: the eleven `providers.*` methods and all input
   validation.
 - Settings → Providers: the 520px card list and the add/edit panel, plus the
@@ -65,7 +69,7 @@ mean something.
 | [`../backend-client/context.md`](../backend-client/context.md) | `ProviderRef`, the eleven declared methods, `BackendError`, and the handler/transport split |
 | [`../ui-shell/context.md`](../ui-shell/context.md) | `Column`, `PageHeader`, `Avatar`, `Field`, `Input`, `Select`, `Button`, `EmptyState` and the design tokens |
 | [`../i18n/context.md`](../i18n/context.md) | Every string, and the "backend sends codes, renderer picks words" contract |
-| `SecretStore` (`src/main/secrets.ts`) | Encrypting the key on write, decrypting it for one call at a time |
+| `SecretStore` (`src/main/secrets.ts`) | Encrypting the key on write, decrypting it for one call at a time. Since S7.6 the implementation the app uses is the **file-key** one, not `safeStorage` |
 | `ai`, `@ai-sdk/{anthropic,openai,google,openai-compatible}` | Building the model client and running the probe |
 
 Depending on it in return: `agents` (S2.1) reads `providers.list` to populate its
@@ -102,6 +106,13 @@ model dropdown, and `agent-turn` (S1.7) calls `createLanguageModel` for every tu
 | An `oauth` provider may not carry a custom base URL | Allow it and trust the user | The account token is issued for Anthropic's own API; sending it to a proxy would hand a credential to somewhere the user never authorised |
 | The "signed in" badge is neutral, not green | Paint it like a successful probe | The record says this provider signs in. That is not a claim that the login is still valid — only a probe can make that claim, and it then shows "Connected" |
 | The token is cached in memory until 60 s before it expires | Ask the CLI per request; keep it for a fixed interval | Every request would otherwise spawn a process. The CLI refreshes the credential itself, so honouring its own `expires_at` is both correct and free |
+| **S7.6: the encryption key lives in a file under `userData`, not in the Keychain** | Keep `safeStorage`; ask the user to re-enter keys after every update; a passphrase the user types on launch | macOS grants the "Witena Safe Storage" Keychain item **per application identity**, and an unsigned build has a new identity every time it is packaged — so every stored key became unreadable the moment a rebuilt dmg replaced the previous one. The file belongs to the user's data rather than to the bundle, so it survives exactly what the Keychain item does not. A passphrase is the only strictly stronger answer and it is a different product decision: it would be asked for on every launch of a single-user desktop app |
+| **The trade that makes, stated plainly** | Pretend the file is as strong as the Keychain | On an unsigned build, anyone who can read the user's files can read `secrets.key` and therefore the stored API keys. That was **already true** of the Keychain item of an unsigned app — it is granted to an identity nothing vouches for, and one "Always Allow" away from any process that asks — and unlike the Keychain item, the file survives the next rebuild. The stronger form is not unavailable, only unpurchased: `WITENA_SIGNED_BUILD` makes `safeStorage` wrap the key file, and S7.3 is what sets it |
+| Wrapping is **off** unless the build is signed | Always wrap; wrap when `safeStorage.isEncryptionAvailable()` | Wrapping on an unsigned build reintroduces the exact bug: the wrapper's key is granted to an identity that changes, so the key file would become unreadable on the next update and take every API key with it. "Is a key store available" is the wrong question; "is the identity it grants to stable" is the right one, and only the release workflow knows the answer |
+| The key file records **how** it is stored (`fkkey1:` / `fkkey1w:`) | Infer it from `WITENA_SIGNED_BUILD` at read time | The variable is a fact about the running build, not about the file it found. A build whose flag disagrees with the file that is already there would hand 32 bytes of the wrong thing to AES — and that failure looks exactly like "your keys are gone", which is the failure this step exists to remove |
+| A key that cannot be read leaves its row **untouched** | Clear it, so the card honestly says "no key"; delete the provider | The key is unreachable *from this installation*, not gone: restoring the Keychain item, or opening the same database on the machine that wrote it, reads it back. A row cleared here could never be recovered, and the user loses nothing by keeping ciphertext nobody can use |
+| `keyState` is a runtime field filled by the handler | A column; a separate `providers.keyStates` method | It is a fact about this build's encryption key, not about the row, so a stored copy would be a cached answer that is wrong the moment anything changes. A second method would mean the card and the editor could disagree about the same provider, which is the one thing this notice must never do |
+| `key_unreadable` is a `BackendErrorCode`, not a `ValidationReason` | Reuse `provider_error`; a validation reason | It is the same kind of thing as `ant_missing`: the state of something on the user's machine, raised by the model layer in the middle of a chat turn as well as by a probe. `provider_error` would blame the vendor for a failure that happened before a single byte left the machine |
 
 ## Open questions
 
@@ -148,6 +159,18 @@ model dropdown, and `agent-turn` (S1.7) calls `createLanguageModel` for every tu
   **not** added speculatively: it changes a login that is known to complete into
   one that might be refused at the consent screen, and proving it needs a browser
   and the user's own account. Recorded in the Phase 6 backlog.
+- **The key file is not rotated, and nothing re-wraps it when the build becomes
+  signed.** A machine that has been running unsigned builds keeps a plain
+  `secrets.key` after S7.3 lands, because rewriting it silently on first launch
+  is a change to the user's stored secrets that nobody asked for. The wrapper is
+  applied to key files created *after* the flag exists. Whether to offer "protect
+  the key file with the Keychain" as an action is an open question, recorded in
+  the Phase 6 backlog.
+- **A key that was written on another machine is indistinguishable from a
+  corrupted one.** Both are `key_unreadable`, and the sentence the user reads
+  names the likely cause (an update) rather than the certain one. Telling them
+  apart would need the key file's own identity stored beside every ciphertext,
+  which is a lot of machinery for one extra sentence.
 - **No provider is validated against its own model list.** A user can type a
   model id that does not exist and only find out when they press Test (or, from
   S1.7, when an agent speaks). Validating on save would need a network call on a

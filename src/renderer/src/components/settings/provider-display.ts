@@ -72,6 +72,19 @@ export function providerStatus(
   return 'untested'
 }
 
+/**
+ * Whether this provider's stored key cannot be read by this build (S7.6).
+ *
+ * A predicate rather than a comparison spelled out in three components, and a
+ * pure one so the rule is tested without a DOM — the same reason `authControl`
+ * lives here. `keyState` is absent on a provider that did not come from a
+ * `providers.*` answer (an editor draft, an older backend), and absent means
+ * "not determined", which must never render the notice.
+ */
+export function keyUnreadable(provider: Pick<Provider, 'keyState'> | undefined | null): boolean {
+  return provider?.keyState === 'unreadable'
+}
+
 /** Which `StatusPill` tone a status wears. Total over `ProviderStatus`. */
 export function providerStatusTone(status: ProviderStatus): StatusTone {
   switch (status) {
