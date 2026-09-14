@@ -7,6 +7,7 @@
  * pasted into the Chinese file.
  */
 import { describe, expect, it } from 'vitest'
+import { AGENT_TEMPLATES } from '@shared/agent-templates'
 import { MCP_PRESETS } from '@shared/mcp-presets'
 import en from '../locales/en.json'
 import zhCN from '../locales/zh-CN.json'
@@ -102,6 +103,20 @@ describe('locale files', () => {
 
     // Both directions: no preset without copy, and no copy left behind by a
     // preset that was renamed or removed.
+    expect(described(flatEn)).toEqual(expected)
+    expect(described(flatZh)).toEqual(expected)
+  })
+
+  it('describes every agent template in both languages', () => {
+    // Same shape as the connector presets above, and for the same reason: the
+    // first-run card looks a template's description up with a runtime key
+    // (`agents.templates.<id>`), which `used-keys.test.ts` cannot see. Both
+    // directions, so a template added without copy and copy left behind by a
+    // template that was renamed both fail here.
+    const expected = AGENT_TEMPLATES.map((template) => `agents.templates.${template.id}`).sort()
+    const described = (flat: Map<string, string>): string[] =>
+      [...flat.keys()].filter((key) => key.startsWith('agents.templates.')).sort()
+
     expect(described(flatEn)).toEqual(expected)
     expect(described(flatZh)).toEqual(expected)
   })

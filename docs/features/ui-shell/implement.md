@@ -35,7 +35,28 @@ living under a hidden title bar).
 **Shell and pages.** `App.tsx` is a composition root and nothing else; it renders
 `AppShell`, which renders `NavRail` plus the page named by `stores/ui.ts`. The
 three pages sit in `pages/`, with every settings section that has content in
-`pages/settings/` (providers, appearance, timeouts, developer).
+`pages/settings/` (providers, appearance, timeouts, **about**, developer).
+
+**Settings → About (S7.5)** is one more entry in `SETTINGS_SECTIONS` and one
+more `if` in `SectionBody`; it needed no new primitive and no backend call. Its
+only unusual ingredient is the licence list, which is **generated rather than
+written**:
+
+```
+scripts/generate-licenses.mjs          reads package.json + node_modules/*/package.json
+  → src/renderer/src/generated/licenses.json     (gitignored)
+      → src/renderer/src/lib/licenses.ts          the only file that knows its shape
+          → pages/settings/about-section.tsx      counts first, then the rows
+```
+
+The script walks the **transitive closure of `dependencies`** — what actually
+ships — never `devDependencies`, reads both of npm's licence spellings
+(`license`, and the pre-2014 `licenses` array), writes `UNKNOWN` rather than
+hiding a package that declares neither, and warns about a declared dependency
+that is not installed instead of silently dropping it. `package.json` runs it
+from `pretypecheck`, `pretest`, `predev` and `prebuild`, so every path that
+needs the file makes it first — including a clean `npm ci && npm run typecheck`
+on CI, which is why the file can be gitignored at all.
 
 Two conventions that are worth knowing before adding a screen:
 
@@ -49,6 +70,18 @@ Two conventions that are worth knowing before adding a screen:
   two tags. `AppShell` uses a `Record<Page, Component>` for exactly this reason.
 
 ## Data flow
+
+Settings → About has no data flow: `APP_VERSION`, `APP_REPOSITORY_URL` and the
+generated licence array are all compile-time constants. The only runtime edge is
+the repository link, which leaves the app entirely:
+
+```
+click the repository link (target="_blank")
+  → Chromium asks to open a window
+  → setWindowOpenHandler in src/main/index.ts
+      isExternalUrl(url) ? shell.openExternal(url) : nothing
+  → { action: 'deny' }                     no second BrowserWindow, ever
+```
 
 The appearance setting, the shell's second backend path (S5.8):
 
@@ -115,6 +148,8 @@ Everything new is renderer-local; no shared type and no IPC channel was added.
 | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` | `components/layout/window-chrome.ts` | Class names, not styles |
 | `applyLanguageSetting(setting)` | `pages/settings/language.ts` | The single handler both language controls call |
 | `applyThemeSetting(setting)` | `pages/settings/theme.ts` | Its counterpart for the appearance control (S5.8) |
+| `BUNDLED_LICENSES`, `licenseSummary`, `LicenseEntry` | `src/renderer/src/lib/licenses.ts` | The typed view of the generated JSON, and the per-licence counts About leads with (S7.5) |
+| `APP_REPOSITORY_URL` | `src/shared/version.ts` | Next to `APP_VERSION`, because About renders the two together (S7.5) |
 | `resolveTheme`, `ResolvedTheme`, `WINDOW_BACKGROUND` | `src/shared/theme.ts` | The rule and the one duplicated colour, shared with the main process |
 | `applyTheme`, `activateTheme`, `stampTheme`, `prefersDarkScheme`, `THEME_ATTRIBUTE` | `src/renderer/src/lib/theme.ts` | `activateTheme` owns the window's single `matchMedia` subscription |
 | `openDeveloperSettings(window)` | `e2e/helpers.ts` | Navigates a spec to Settings → Developer |
@@ -137,6 +172,8 @@ S5.8 added one `BackendClient` method, `system.applyTheme` — see
 | `e2e/theme.spec.ts` | The three-segment control, `prefers-color-scheme` through `page.emulateMedia`, the choice surviving a restart including `BrowserWindow.getBackgroundColor()`, and five light screenshots |
 | `src/renderer/src/i18n/locales.test.ts` | Updated: `EXPECTED_NAMESPACES` no longer lists `smoke`. Still guards the key trees, CJK, placeholders |
 | `src/renderer/src/i18n/used-keys.test.ts` | Unchanged, and it did its job twice during S1.5 — once on a runtime-assembled key, once on a `switch` returning adjacent JSX |
+| `src/main/licenses.test.ts` | `scripts/generate-licenses.mjs` driven as an executable against a fixture `node_modules`: the production closure and nothing else, transitive edges and a cycle, both licence spellings, `UNKNOWN`, a normalised git URL, the warning for a package that is not installed — plus that the generated file the renderer imports actually exists, which is also the check that the `pretest` hook is still wired up (S7.5) |
+| `e2e/onboarding.spec.ts` | Its last case: About shows `package.json`'s version, an `https://github.com/…` link and a non-trivial licence list (S7.5) |
 | `e2e/ui-shell.spec.ts` | Rail navigation with one page mounted at a time, section switching, the section surviving a page change, and the three 1440×900 screenshots |
 | `e2e/smoke.spec.ts` | Unchanged assertions, now reached through Settings → Developer |
 | `e2e/i18n.spec.ts` | The quick toggle, the Appearance select as the same setting, and survival across a restart |
@@ -168,5 +205,14 @@ Screenshots land in `$WITENA_SHOTS_DIR` (default: `test-results/shots`, gitignor
   `import.meta.glob('../index.css', { query: '?raw' })`, which is how the token
   test reads the palette. No plugin is configured in that file, so the cost is
   reading one file.
+- **The licence list is names and versions, not licence *texts*.** Several
+  licences (MIT, BSD, Apache-2.0 with a NOTICE) ask for the text to travel with
+  the distribution. Shipping 244 `LICENSE` files is a packaging decision rather
+  than a screen, so About links the package's homepage instead; the full-text
+  question is recorded under "Release and distribution" in Phase 6.
+- **Nothing regenerates the list while `npm run dev` is already running.** The
+  hook runs at start-up (`predev`), so a dependency installed mid-session shows
+  up on the next start. That is the right trade for a file that changes only
+  when `package.json` does.
 - **The renderer bundle is ~795 kB.** Mostly React plus the lucide icons that are
   actually imported. Worth a look at S4.4 (packaging), not before.

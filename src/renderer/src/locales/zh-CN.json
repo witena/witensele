@@ -36,6 +36,19 @@
     "emptyChatsDescription": "新建一个对话，开始讨论。",
     "emptyConversationTitle": "这里还没有内容",
     "emptyConversationDescription": "新建对话，邀请几位智能体，然后向他们提问。",
+    "onboarding": {
+      "title": "让第一个群聊跑起来",
+      "description": "五个小步骤，都在这里完成。你也可以随时跳过，改到设置里配置。",
+      "stepPreset": "选择模型服务商",
+      "stepCredential": "粘贴密钥，或登录账号",
+      "stepModels": "选好模型并保存服务商",
+      "stepAgent": "创建第一个智能体",
+      "stepChat": "开始对话",
+      "saveProvider": "保存服务商",
+      "startChat": "开始对话",
+      "skip": "跳过",
+      "skipHint": "这些稍后都能在设置里完成。"
+    },
     "emptyMessagesTitle": "还没有消息",
     "emptyMessagesDescription": "发送第一条消息,开始这场讨论。",
     "members": "群成员",
@@ -151,6 +164,11 @@
     "empty": "先创建一个，再开始讨论。",
     "selectOrCreateTitle": "选择或新建一位智能体",
     "selectOrCreateDescription": "从左侧列表中选择一位智能体，配置它的模型、参数、技能与记忆。",
+    "templates": {
+      "assistant": "回答清楚直接，推动讨论继续往前。",
+      "critic": "专找最站不住脚的假设，并直接说出来。",
+      "planner": "把达成一致的内容变成可逐条核对的步骤。"
+    },
     "inChats": "在 {{chats}} 个对话中",
     "duplicate": "复制",
     "deleteConfirm": "再点一次确认删除",
@@ -216,6 +234,7 @@
       "timeouts": "超时与心跳",
       "appearanceLanguage": "外观与语言",
       "dataBackup": "数据与备份",
+      "about": "关于",
       "developer": "开发者"
     },
     "comingSoonTitle": "尚未实现",
@@ -382,6 +401,14 @@
     "themeLight": "浅色",
     "themeDark": "深色",
     "themeHint": "选择“跟随系统”后，应用会在系统切换深浅色时同步变化。",
+    "about": {
+      "version": "版本",
+      "versionHint": "反馈问题时请附上这一行。",
+      "repository": "代码仓库",
+      "repositoryHint": "源码、发行版与问题追踪，会在系统浏览器中打开。",
+      "licenses": "开源许可",
+      "licensesHint": "Witena 构建在 {{packages}} 个开源软件包之上。该列表在构建时根据已安装的依赖生成。"
+    },
     "developer": {
       "backend": "后端：",
       "languageSetting": "语言设置：",

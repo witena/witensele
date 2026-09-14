@@ -206,6 +206,27 @@ describe('handlers/buildHandlers', () => {
       await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
     })
 
+    it('stores the first-run Skip flag and keeps it (S7.5)', async () => {
+      const updated = await handlers['settings.update'](ctx, {
+        patch: { onboardingDismissed: true }
+      })
+
+      expect(updated.onboardingDismissed).toBe(true)
+      // The flag is what makes Skip belong to the installation rather than to
+      // one window, so it has to survive the next read.
+      await expect(handlers['settings.get'](ctx)).resolves.toMatchObject({
+        onboardingDismissed: true
+      })
+    })
+
+    it('refuses a Skip flag that is not a boolean', async () => {
+      await expect(
+        handlers['settings.update'](ctx, { patch: { onboardingDismissed: 'yes' as never } })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
     it('rejects unknown keys instead of storing them', async () => {
       await expect(
         handlers['settings.update'](ctx, { patch: { nope: true } as never })

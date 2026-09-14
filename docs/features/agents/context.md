@@ -33,6 +33,12 @@ the name is an **identifier the models will type**, not a label.
   that gates Save.
 - `components/agents/agent-display.ts`: the derived strings two screens print
   about an agent, and the avatar palette.
+- **The agent templates (S7.5)**: `src/shared/agent-templates.ts` — three
+  entries of name, description, system prompt, model hints and a palette index —
+  and `agentsStore.createFromTemplate`, the one action that writes an agent
+  without opening the editor. The tiles that render them belong to the first-run
+  card ([`../chats/context.md`](../chats/context.md)); the records they produce
+  are ordinary agents this page then edits like any other.
 
 ## Out of scope
 

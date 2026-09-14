@@ -84,6 +84,14 @@ persisted on its own:
 
 ### Who a new chat starts with
 
+**Unchanged by S7.5**, which is why the first-run card has to name its agent:
+the card's "Start chat" passes `memberAgentIds` because by then the agents table
+holds the template agent, and rule 2 below would give it an empty chat. The one
+stored thing S7.5 added on this side is `AppSettings.onboardingDismissed` — a
+boolean in the settings row, validated in `src/main/handlers/settings.ts` and
+merged over the defaults on read, so no migration was needed and a row written
+by an older version simply answers `false`.
+
 `chats.create` seeds members in exactly two ways:
 
 1. `memberAgentIds` is given — those agents, in that order.

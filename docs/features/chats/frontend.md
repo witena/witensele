@@ -5,6 +5,8 @@
 | File | Responsibility |
 |---|---|
 | `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, the group-settings block (which writes straight through to `chats.update`) including the S5.2 "Working directory" row, the folder chip beside the header title, and — since S5.10 — the goal-status load and the two goal surfaces it hosts |
+| `src/renderer/src/components/onboarding/onboarding-card.tsx` | **S7.5.** The first-run card, drawn in the conversation column in place of the "no chat selected" empty state. Five steps done in place, the first three of them the provider editor's own components (see [`providers`](../providers/frontend.md)), then the agent templates and the button that creates the first chat. Exports `useOnboarding()`, which the page calls to decide which of the two to render |
+| `src/renderer/src/lib/onboarding.ts` | `onboardingState(input)` and `credentialReady(draft, authStatus)`: which step is current, and whether the card should be on screen at all. Pure and unit-tested, like `handoff.ts` and `goal.ts` |
 | `src/renderer/src/components/chat/goal-settings.tsx` | The **Goal** block (S5.10) under the Working directory row: the kind `SegmentedControl` (Document and Codebase disabled without a folder, with the reason under them), the description, the deliverable and its "Choose…", and the materials list with "Add…". The one block in the panel that holds a **draft**, because a goal is one JSON column and two of its fields are free text; it writes on blur |
 | `src/renderer/src/components/chat/goal-chip.tsx` | The goal chip in the header (S5.10). Four states, one of which is a button: a **delivered** document opens in the editor through S5.7's `openInEditor`, and a refused open paints the chip red for 2.5 s |
 | `src/renderer/src/components/chat/goal.ts` | `goalChipState(goal, status)`: which of those four states to draw, and what to open. Pure and unit-tested; the component turns it into `t()` copy |
@@ -46,6 +48,7 @@
 | `chats` | `membersByChat` | `Record<string, string[]>` | Backend-owned member agent ids, in speaking order. Written only by `setMembers`, which goes through the backend first |
 | `chats` | `goalStatusByChat` | `Record<string, ChatGoalStatus>` | Backend-owned (S5.10), from `chats.goalStatus`. A chat with no entry has simply not been asked about yet, which the chip draws as "not delivered" rather than as a third state |
 | `chats` | `selectedId` | `string \| null` | Local UI state, not persisted |
+| `settings` | `settings.onboardingDismissed` | `boolean` | Backend-owned (S7.5). Read by `useOnboarding`, written once by the card's Skip link through `dismissOnboarding()` |
 | `chats` | `status` / `error` / `errorCode` / `errorDetails` | | Load state and the last failure. `errorDetails` is the rejection's own `details`, which may carry a `ValidationReason` — that is what turns "the request was rejected as invalid" into "that folder no longer exists" |
 | `messages` | `byChat` | `Record<string, Message[]>` | Backend-owned, **oldest first** |
 | `messages` | `status` | `Record<string, MessagesStatus>` | Per chat, so one failed load does not blank the others |
@@ -62,7 +65,10 @@
 | `messages` | `complete` | `Record<string, boolean>` | True when the store holds the **whole** transcript rather than a page. The usage store recomputes locally only when it does |
 
 Selectors worth knowing: `useChatMessages(chatId)`, `useChatMemberIds(chatId)`,
-`useIsRunning(chatId)`, `useAgentPresence(chatId, agentId)`, `useAgent(id)`. Each
+`useIsRunning(chatId)`, `useAgentPresence(chatId, agentId)`, `useAgent(id)`, and
+since S7.5 `useHasChatWithMembers()` — a boolean, because it is the single fact
+that ends the first-run card and a derived array would re-render it on every
+write. Each
 returns a stable reference for the empty case, because a fresh array from a
 selector re-renders on every store write.
 
@@ -71,7 +77,9 @@ selector re-renders on every store write.
 | Call / subscription | Called from | Purpose |
 |---|---|---|
 | `invoke('chats.list')` + `invoke('chats.members.list')` | `chats.load()`, from the page's mount effect | The left column and its "N members" subtitles |
-| `invoke('chats.create')` | The "+" button | Creates and selects a chat; also reloads `agents` because the bootstrap agent may have just been created |
+| `invoke('chats.create')` | The "+" button, and (S7.5) the first-run card's "Start chat" | Creates and selects a chat; also reloads `agents` because the bootstrap agent may have just been created. The card passes `memberAgentIds`: once the agent library is non-empty the backend creates an **empty** chat, so the card names the agent it has just made rather than producing a chat nobody can speak in |
+| `invoke('agents.create')` | The card's template tiles (S7.5), through `agents.createFromTemplate` | The first agent, from `@shared/agent-templates` |
+| `invoke('settings.update', { patch: { onboardingDismissed: true } })` | The card's Skip link (S7.5) | Hides the card for this installation |
 | `invoke('chats.update')` | Inline rename | Title change; the row floats to the top |
 | `invoke('chats.delete')` | The menu's second Delete click | Removes the chat and its transcript |
 | `invoke('messages.list')` | The page's `selectedId` effect, once per chat | The first (and for now only) page of the transcript |
@@ -122,6 +130,7 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | tool call | A one-line card — wrench, `serverName · toolName(argsPreview)`, and "running…" / "n results · expand" / "error" — which expands to the pretty-printed input and output. Real from S3.1; `data-tool` is the tool's own name and `data-server` the MCP server it came from |
 | system notice | A centred dimmed line across the column, with no avatar, no name and no timestamp. It keeps `data-notice-key` |
 | empty | "No chats yet" in the left column, "Nothing here yet" with no chat selected, "No messages yet" in a new chat, "No members yet" if a chat somehow has none |
+| first run (S7.5) | With no chat selected and nothing set up yet, the conversation column shows the **onboarding card** instead of "Nothing here yet": five numbered steps, the current one expanded with its controls, the finished ones ticked, Skip in the footer. `data-step` on the card names the current step and each row carries `data-state` (`done` / `current` / `todo`). It disappears the moment a chat has a member, and for good once Skip is pressed |
 | error (call) | The left column shows the translated `BackendError.code` under the list — the first-run "no provider with models" path lands here |
 | error (message) | The row keeps whatever text arrived and adds a red hint: "Stopped" when `error === 'aborted'`, otherwise "The reply failed" |
 | passed / skipped | The whole row is dimmed and the body is replaced by the "Passed" / "Skipped" label |
@@ -185,6 +194,7 @@ New keys, all under the existing namespaces:
 | `chat.permissionTitle`, `chat.permissionRequest`, `chat.permissionAllow`, `chat.permissionAllowAlways`, `chat.permissionDeny`, `chat.permissionKeyHint`, `chat.permissionTruncated`, `chat.permissionCommandHint` | The permission card (S5.5). The **call itself is never translated**: a path, a command line and a patch are data |
 | `chat.diffExpand`, `chat.diffCollapse` | The diff block's toggle |
 | `chat.fileRefTitle`, `chat.fileRefFailed`, `chat.openInEditor` | The file-reference chip's two tooltips, and the one on the diff header and the tool card's "open" icon (S5.7, [`editor`](../editor/frontend.md)) |
+| `chat.onboarding.*` (S7.5) | The first-run card: `title`, `description`, the five `step*` labels, `saveProvider`, `startChat`, `skip`, `skipHint`. The agent templates' **names** are not here — they are stored content (`@shared/agent-templates`), like a chat's title; only their descriptions are copy, under `agents.templates.<id>` |
 | `chat.actions.summarizePrompt`, `chat.actions.votePrompt` | The **message text** each action sends, after the `@mention`. A locale key rather than a constant, because an agent answers in the language it is addressed in |
 
 Already present and now actually used: `chat.today` / `yesterday` / `earlier`,

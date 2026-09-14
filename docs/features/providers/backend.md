@@ -19,6 +19,13 @@ None of them imports electron (CLAUDE.md rule #5). `resolve.ts` takes an
 `node:path`, which the rule says nothing about — it is about electron, and the
 main process already spawns stdio MCP servers.
 
+**S7.5 added nothing here.** The first-run card is a second *renderer* of the
+same draft and the same seven methods: it calls `providers.fetchModels` and
+`providers.create` exactly as the settings editor does, and a provider it saves
+is indistinguishable from one added in Settings. No handler, no column, no
+validation rule changed — which is the point of having put the rules in the
+handler rather than in the form.
+
 ## Database
 
 S1.2 created the table; S5.3 added one column

@@ -38,6 +38,8 @@ S1.4 delivers the whole mechanism, not just the two files:
 | `zh-TW` or any third language. `resolveLanguage` folds every `zh*` tag into `zh-CN` for now | A later step; the mechanism already supports adding a resource |
 | Date, number and plural formatting beyond i18next's defaults | Whichever feature first needs it |
 | Lazy-loaded namespaces. Both files are bundled; the whole UI is a few kilobytes of JSON | Not planned |
+| The **licence list** in Settings → About (S7.5): 244 `name@version · licence` rows, generated at build time. Identifiers, not sentences, so they never enter the locale files — only the labels around them do | `ui-shell` (S7.5) `[x]` |
+| An agent **template's name** (S7.5). It is stored in `agents.name`, `@mentions` resolve against it and every model sees it, so it is an English literal in `@shared/agent-templates`; its description is a runtime key here | `agents` (S7.5) `[x]` |
 
 ## Dependencies
 

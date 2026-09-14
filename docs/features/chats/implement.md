@@ -40,6 +40,34 @@ before deciding what to do with it) without the store having to guess.
     refused until the chat has a member
 ```
 
+### The first run, which is the same flow with the steps drawn (S7.5)
+
+```
+empty installation, chat page, no chat selected
+  → useOnboarding()  =  onboardingState({ dismissed, providerCount, draft,
+                                          authStatus, agentCount,
+                                          hasChatWithMembers })
+  → visible → <OnboardingCard /> instead of the "Nothing here yet" EmptyState
+
+step 1-3  the provider editor's own components against the one draft
+          (PresetGrid → ProviderCredential → ProviderModels + Save)
+            → providers.saveDraft() → providers.create
+step 4    a template tile
+            → agents.createFromTemplate(template, providerId, provider.models)
+            → agents.create                    // the editor is NOT opened
+step 5    "Start chat"
+            → chats.create([agent.id])
+            → invoke('chats.create', { input: { memberAgentIds: [id] } })
+  → the chat has a member → hasChatWithMembers → the card returns null
+```
+
+The member list is the part worth remembering: **the backend only adds the
+bootstrap agent when the agents table is empty**, and by step 5 it is not, so a
+card that called `create()` with no argument would produce a chat with nobody in
+it — and then a send refused with "this chat has no members" on the very first
+try. `ChatsState.create` therefore takes an optional `memberAgentIds`; the "+"
+button still passes nothing and still lets the backend decide.
+
 ### Changing the members
 
 ```
@@ -387,6 +415,8 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/lib/workdir.test.ts` | `folderName`: the last segment, trailing separators, Windows separators, the filesystem root, a bare name, a name with a dot or a space. S5.10 adds `relativeToWorkdir`: the conversion, a path outside the folder, a sibling whose name starts with the same characters, the folder itself, no folder bound, and both separators |
 | `src/renderer/src/components/chat/goal.test.ts` | `goalChipState` (S5.10): nothing without a goal, the kind for `discussion` and `codebase` (including a stale `document` status arriving for one), the file name and path for a `document`, openable **only** once delivered, and not delivered while the query has not answered |
 | `src/renderer/src/stores/chats.test.ts` (S5.12) | `loadGoalStatus` keeping the **same object** when the answer has not changed, and writing a new one the moment `delivered` really flips |
+| `src/renderer/src/lib/onboarding.test.ts` | `onboardingState` (S7.5): the first step of an empty installation, staying hidden while the settings row is still loading, hidden after Skip, hidden once a chat has a member, **still visible** with a provider saved, each of the five steps becoming current in turn, a local preset passing the credential step with an empty field, the models step needing a *stored* provider rather than a full draft, and a user who added a provider in Settings never being asked for one. Plus `credentialReady` over the sign-in states and a whitespace-only key |
+| `src/renderer/src/stores/chats.test.ts` (S7.5) | `create(['agent-1'])` sending `memberAgentIds` and `create()` still sending `{}` |
 | `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker` (S5.6): the enabled case, each of the three refusals, a blank `workdir`, and the order the rules are applied in when more than one is broken |
 | `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` and every `ValidationReason` resolving to distinct real copy; `validationReasonOf` narrowing a known reason and ignoring everything else; `translateFailure` preferring a reason only under `validation` |
 | `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
@@ -396,6 +426,7 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/stores/messages.test.ts` | `applyDeltaToParts` (append, kind switch, first part, whole part, no mutation); created / delta / updated reduction; ignored deltas; page reversal; failed load as state |
 | `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
+| `e2e/onboarding.spec.ts` | S7.5's acceptance sentence: an empty `userData` reaching a streamed reply **through the card alone** — preset, model typed in, provider saved, template agent, first chat, one reply — plus the card staying gone after a restart, Skip hiding it on its own installation across a restart, and Settings → About. Gated on a local Ollama like `chat.spec.ts` |
 | `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
 | `e2e/editor.spec.ts` | S5.7, offline and always run: a path in a message body becomes a chip in a chat bound to a folder and nothing outside it does, the chat's folder is what decides, and the Editor setting round-trips through a restart. Owned by [`editor`](../editor/implement.md) |
 | `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client. S5.5 adds the acceptance sentence: a chat with no executor shows no card (offline, always runs) and — behind the same `qwen2.5:3b` guard `mcp.spec.ts` uses — an executor asked for a file raises the card, nothing is on disk while it waits, Allow writes the file, the card disappears and the diff block appears and opens onto a `diff` code block. S5.6 adds two more: offline, the hand-off button is enabled with a folder and an executor and carries `data-blocked` naming the rule when either is missing (with the backend refusing on the same rule); behind the guard, two participants and an executor hold a short discussion, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again with nothing typed |

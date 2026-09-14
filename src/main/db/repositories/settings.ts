@@ -52,6 +52,9 @@ export function createSettingsRepository(db: DrizzleDb): SettingsRepository {
         ...current,
         ...(patch.language !== undefined ? { language: patch.language } : {}),
         ...(patch.theme !== undefined ? { theme: patch.theme } : {}),
+        ...(patch.onboardingDismissed !== undefined
+          ? { onboardingDismissed: patch.onboardingDismissed }
+          : {}),
         editor: { ...current.editor, ...patch.editor },
         timeouts: { ...current.timeouts, ...patch.timeouts }
       }

@@ -40,10 +40,32 @@ and one handler module:
 uses the same function against `matchMedia`, which is what keeps the window's
 first frame and the page's first frame the same colour.
 
+## The build step Settings → About depends on (S7.5)
+
+About renders a list this feature does not write by hand, and the file it reads
+does not exist in a fresh checkout:
+
+| Where | What |
+|---|---|
+| `scripts/generate-licenses.mjs` | Walks the transitive closure of `package.json`'s `dependencies` through `node_modules/*/package.json` and writes `src/renderer/src/generated/licenses.json`. Plain Node, no electron, part of neither TypeScript project |
+| `package.json` | The `licenses` script, plus the `pretypecheck` / `pretest` / `pretest:watch` / `predev` / `prebuild` hooks that run it |
+| `.gitignore` | `src/renderer/src/generated` — the file is derived, so it is reproduced rather than reviewed |
+| `src/main/licenses.test.ts` | Runs the script against a fixture tree, and checks the real output exists |
+
+Two environment variables exist for the test and for nothing else:
+`WITENA_LICENSES_ROOT` (which project to read) and `WITENA_LICENSES_OUT` (where
+to write). Neither is read at runtime — by the time the app starts, the JSON is
+part of the renderer bundle.
+
 ## Database
 
 None. Navigation state is deliberately not persisted: `stores/ui.ts` is local
 state and the app opens on Chats every time.
+
+`AppSettings.onboardingDismissed` (S7.5) is stored, but it belongs to the
+first-run card: the flag is described in
+[`../chats/backend.md`](../chats/backend.md), and the settings row it lives in is
+[`../i18n/backend.md`](../i18n/backend.md)'s.
 
 The only stored value the shell reads or writes is `AppSettings.language`, which
 belongs to [`../i18n/backend.md`](../i18n/backend.md) and reaches the renderer

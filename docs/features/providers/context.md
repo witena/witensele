@@ -24,7 +24,10 @@ mean something.
 - `src/main/handlers/providers.ts`: the seven `providers.*` methods and all input
   validation.
 - Settings → Providers: the 520px card list and the add/edit panel, plus the
-  three primitives it needed (`Chip`, `Spinner`, `StatusPill`).
+  three primitives it needed (`Chip`, `Spinner`, `StatusPill`). Since S7.5 the
+  panel's preset grid, credential block and model block are three components
+  (`preset-grid.tsx`, `provider-credential.tsx`, `provider-models.tsx`) that the
+  first-run card renders as well — **the same components, not copies**.
 - `src/renderer/src/stores/providers.ts`: the list, the editor draft, both probes
   and (S5.3) the CLI's login status.
 - `src/renderer/src/i18n/errors.ts`: `BackendErrorCode` → a sentence, which every
@@ -68,6 +71,7 @@ model dropdown, and `agent-turn` (S1.7) calls `createLanguageModel` for every tu
 |---|---|---|
 | Presets are static shared data, imported by the renderer directly | A `providers.presets` backend method | The table is frozen at build time. A round trip would add a loading state to a list that cannot change, and a third place to keep in sync |
 | One `ProviderRef` = `{ id } \| { draft }` for both probes | Save first, then probe; or a separate "probe these settings" method | The user must be able to test a key *before* committing it, and fetch a model list for an endpoint that has no row yet. One union keeps that to one method each |
+| **S7.5: the first-run card reuses these components rather than its own form** | A dedicated, simpler onboarding form; a wizard with its own state | The rules that matter here are subtle — an empty key field *clears* a stored key, a fetch *replaces* the list, sign-in *replaces* the field — and a second implementation would eventually disagree with one of them, in the screen a brand-new user sees first. One draft, one set of controls, two places they are laid out |
 | The API key is write-only end to end | Return a masked key; return the key to a "reveal" button | `Provider` has no key field at all, so no accident at any layer can leak one. The cost is the "a key is stored" hint, which is a smaller price than a key in a renderer heap snapshot |
 | `''` clears the key, absent keeps it | A separate `clearApiKey` flag | The repository already had these semantics from S1.2. A second mechanism for the same thing is worse than one documented rule |
 | The probe runs `generateText`, not a `/models` ping | Reuse `fetchModels` as the health check | `/models` answers for a key that cannot generate, a model id that does not exist, and an endpoint that only proxies listings. "Can this exact model answer?" is the question the user is actually asking |

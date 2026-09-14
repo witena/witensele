@@ -32,6 +32,10 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
   language, both writing the setting S1.4 already persists.
 - Settings → Developer, the new home of the transport smoke widgets the
   end-to-end specs drive.
+- **Settings → About (S7.5)**: the version, the repository link and the
+  licences of every bundled dependency. It is the shell's section because
+  nothing else owns it — it describes the application itself rather than a
+  feature — and because the settings navigation it joins is this feature's.
 
 ## Out of scope
 
@@ -43,7 +47,9 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
 | Member add / remove / reorder, persisting chat settings | S2.2 (`chats`) |
 | Message rendering, tool cards, `@` autocomplete | S2.5 |
 | Live presence dots | S2.4 (`presence`) — the `PresenceDot` component exists, nothing feeds it yet |
-| The Data & backup settings section | S4.x — it renders an empty state naming the step. Providers (S1.6), MCP servers (S3.1), Skills (S3.2), Appearance & language (S1.5), Timeouts & heartbeat (S2.4) and Developer have content |
+| The Data & backup settings section | S4.x — it renders an empty state naming the step. Providers (S1.6), MCP servers (S3.1), Skills (S3.2), Appearance & language (S1.5), Timeouts & heartbeat (S2.4), About (S7.5) and Developer have content |
+| The first-run card itself | S7.5, split between [`../chats/context.md`](../chats/context.md) (it is drawn in the conversation column, in place of this feature's empty state) and [`../providers/context.md`](../providers/context.md) (the controls it drives). The shell's part is one line: the column asks whether the card is visible and renders the `EmptyState` only when it is not |
+| "Check for updates" in About | S7.4 — the updater is not written yet, so About shows the version without offering to change it |
 | ~~A light theme~~ | **Shipped in S5.8**, and it was the swap this row predicted: one override block in `index.css` plus `data-theme` on `<html>`. No component changed |
 
 The group-settings controls in the member panel are the one grey area: they are
@@ -76,6 +82,9 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | `'system'` is stored as itself and resolved at use (S5.8) | Resolve once and store `light` / `dark` | Exactly the language decision from S1.4. A machine that flips at sunset should take the app with it |
 | Avatar and provider-logo colours stay dark in both themes (S5.8) | A second palette keyed by theme | They are **data** — an agent's `avatar.color` is a stored row — so theming them means rewriting records. A dark tile with a light monogram reads as a brand chip on white |
 | `drag-region` / `no-drag` as `@utility` in `index.css` | Tailwind arbitrary properties `[-webkit-app-region:drag]`, inline styles | The leading `-` of the vendor prefix collides with Tailwind's negative-value syntax, and `WebkitAppRegion` is not in React's `CSSProperties` |
+| The licence list is generated at build time, gitignored, and imported as JSON (S7.5) | A hand-maintained Markdown list; a runtime scan of `node_modules`; committing the generated file | The list is derived from the installed tree, so a hand-written copy is wrong the first time a dependency moves and **nothing fails** — a stale licence list looks exactly like a correct one. A packaged app has no `node_modules` to scan at runtime. Committing it would mean reviewing a 244-entry diff on every `npm update`, so it is produced by `pretypecheck` / `pretest` / `prebuild` instead and ignored by git |
+| About prints the version, the package names and the repository URL as data, never through `t()` (S7.5) | Translate "Witena {{version}}" | Every label around them *is* translated; the values are identifiers. `0.1.0`, `react@19.3.0` and a URL are the same in both languages, and a placeholder would only add a way for them to differ |
+| The repository is a real `target="_blank"` link | Print the URL as selectable text, like the `ant` install command | A URL is meant to be followed, and the shell already has the machinery: `setWindowOpenHandler` in `src/main/index.ts` hands http(s) to the system browser and denies everything else, which is the same path a link inside a message body takes. The URL is printed *as* the link text, so it can still be read or copied |
 | The smoke widgets moved to Settings → Developer rather than deleted | Delete them; keep a hidden debug route | `smoke.spec.ts` and `i18n.spec.ts` are the only end-to-end proof the transport works, and nothing else is observable until S1.7. A visible settings section is cheaper than a hidden one and survives being forgotten |
 | `smoke.*` strings moved under `settings.developer.*` | Keep the `smoke` namespace | The namespace belonged to a screen that no longer exists. `locales.test.ts`'s `EXPECTED_NAMESPACES` was updated with it, which is the deliberate decision its comment asks for |
 | Group settings are live local state, not disabled controls | Render them `disabled` | A page of dead controls is hard to judge against the mockup. Local state shows the real interaction and is obviously temporary |

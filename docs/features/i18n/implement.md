@@ -102,7 +102,7 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 | `common` | App name, OK / Cancel / Save / Delete / Add / Search, loading, generic error |
 | `nav` | The three navigation rail entries |
 | `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, and since S5.5 the executor's permission card, the diff block and the file-reference chip |
-| `agents` | Agent list and configuration form labels |
+| `agents` | Agent list and configuration form labels, plus the `templates.*` subtree (S7.5): one description per entry of `@shared/agent-templates`, looked up by a **runtime** key, so `locales.test.ts` checks the subtree against the table in both directions the way it already does for the MCP presets |
 | `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` and S5.7 extended with the Editor block's seven `editor*` keys |
 | `presence` | The four presence states |
 | `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`). `errors.test.ts` asserts the namespace holds **exactly** the codes plus the reasons, in both directions, so a code added to the shared union without copy fails there rather than on screen (S5.3 added two of each; S5.6 three more reasons, for the hand-off's three refusals; S5.7 two more, for the two ways a path can be refused by `system.openInEditor`; S5.10 nine more, one per field of a chat goal that can be wrong — two of which the **renderer** raises itself, because a native dialog cannot be confined to a folder and the conversion is where that is noticed) |
@@ -151,6 +151,18 @@ the rule this feature keeps coming back to: a parameter is for a value inside a
 sentence, and these are two different sentences — one says "implement what the
 group decided", the other names a file. The error key follows the S5.2 shape
 exactly, so the disabled tooltip and the backend's rejection are one string.
+
+S7.5 added three groups and one rule worth repeating. `chat.onboarding.*` is the
+first-run card; `agents.templates.*` is described above; `settings.about.*` plus
+`settings.sections.about` is the About screen, whose only interpolation is
+`licensesHint`'s `{{packages}}`. The rule: **the things About prints are not
+copy**. `Witena 0.1.0`, `react@19.3.0`, `MIT` and the repository URL are
+identifiers — the same in both languages — so they are rendered as data with
+translated labels around them, exactly as the `ant` install command and a
+working-directory path are. The same goes for a template's **name**: it is
+stored in `agents.name`, `@mentions` resolve against it and every model sees it,
+so it lives in `@shared/agent-templates` as an English literal and only its
+description is a key.
 
 S5.8 added five `settings.theme*` keys next to the language ones, and nothing
 else: the theme is an attribute on `<html>`, so the only translated text it

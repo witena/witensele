@@ -36,13 +36,21 @@ machine whose language changes should keep following it.
 | Channel | Input | Output | Errors |
 |---|---|---|---|
 | `settings.get` | — | `AppSettings` | None; an absent row is the defaults |
-| `settings.update` | `{ patch: { language } }` | `AppSettings` | `validation` when `patch` is not an object or carries a key other than `language` / `theme` / `timeouts` |
+| `settings.update` | `{ patch: { language } }` | `AppSettings` | `validation` when `patch` is not an object or carries a key other than `language` / `theme` / `editor` / `timeouts` / `onboardingDismissed` |
 
 The handler does **not** validate the language value itself. The renderer only
 ever sends one of the three, the type system enforces it on both sides, and an
 unknown value would be corrected on read by `resolveLanguage`'s fallback rather
 than corrupt anything. Add a runtime check here if a non-TypeScript client ever
 appears.
+
+S7.5 added the fifth key, `onboardingDismissed` — the first-run card's Skip flag
+([`../chats/backend.md`](../chats/backend.md)). It is validated like `theme` and
+`editor` rather than trusted like the language: it is read back as a boolean by
+code with no other branch, and a stored `'no'` is truthy, which would hide the
+first-run card on a machine where nothing is set up. No migration was needed —
+reads merge the stored object over `DEFAULT_APP_SETTINGS`, so a row written
+before it existed answers `false`.
 
 S5.8 made `theme` the exception: `assertPatch` checks it against
 `THEME_SETTINGS` and refuses anything else with `validation`. The asymmetry is

@@ -156,6 +156,16 @@ export interface ProvidersState {
   testConnection: (ref: ProviderRef, modelId?: string) => Promise<ConnectionTestResult>
 
   startCreate: () => void
+  /**
+   * Makes sure a draft exists **without opening the settings editor** (S7.5).
+   *
+   * The first-run card edits the same draft as the provider form, but it lives
+   * on the chat page: `startCreate` would also set `mode`, and a user who then
+   * opened Settings → Providers would find the Add form already open on a
+   * screen they had never touched. `mode` is the *settings editor's* state, so
+   * only the settings editor sets it.
+   */
+  ensureDraft: () => void
   startEdit: (id: string) => void
   closeEditor: () => void
   patchDraft: (patch: Partial<ProviderInput>) => void
@@ -284,6 +294,10 @@ export const useProvidersStore = create<ProvidersState>()((set, get) => ({
       draft: emptyDraft(),
       ...NO_FAILURE
     })
+  },
+
+  ensureDraft() {
+    if (get().draft === null) set({ draft: emptyDraft() })
   },
 
   startEdit(id) {

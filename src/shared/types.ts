@@ -611,6 +611,17 @@ export interface AppSettings {
   /** Where a `path:line` chip, a diff header or a file tool card opens (S5.7). */
   editor: EditorSettings
   timeouts: AppTimeouts
+  /**
+   * True once the user pressed Skip on the first-run card (S7.5).
+   *
+   * A setting rather than browser storage: it is a fact about this
+   * installation, it has to survive a cleared web storage and a different
+   * window, and the server version of the app (Phase 8) will want it per
+   * account. It is never set back to `false` by the UI — the card is not a
+   * feature to switch on and off, and a user who wants it again has an empty
+   * installation anyway.
+   */
+  onboardingDismissed: boolean
 }
 
 /** Settings a fresh installation starts with. */
@@ -625,7 +636,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,
     toolTimeoutMs: 60_000
-  }
+  },
+  onboardingDismissed: false
 }
 
 /**
@@ -641,6 +653,7 @@ export interface AppSettingsPatch {
   theme?: AppSettings['theme']
   editor?: Partial<EditorSettings>
   timeouts?: Partial<AppTimeouts>
+  onboardingDismissed?: boolean
 }
 
 /* -------------------------------------------------------------------------- */

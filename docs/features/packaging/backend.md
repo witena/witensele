@@ -16,6 +16,7 @@
 | `.github/workflows/ci.yml` | The gate on every push and pull request, plus the `actionlint` job that lints both workflow files |
 | `.github/workflows/release.yml` | A `v*` tag → checks → both dmgs → a draft GitHub Release |
 | `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
+| `scripts/generate-licenses.mjs` | **S7.5.** Writes `src/renderer/src/generated/licenses.json` (gitignored) from the production dependency tree, for Settings → About. Run by the `pretypecheck` / `pretest` / `predev` / `prebuild` hooks, so it happens before anything that reads the file — including `npm ci && npm run typecheck` on CI. Owned by [`../ui-shell/backend.md`](../ui-shell/backend.md); listed here because it is part of every build |
 | `src/main/packaging.test.ts` | The unit test over `electron-builder.yml` and the two copies of the version number |
 
 `package.json` carries no `build` key: electron-builder finds

@@ -164,7 +164,10 @@ describe('defaults', () => {
         stallTimeoutMs: 30000,
         hardTimeoutMs: 120000,
         toolTimeoutMs: 60000
-      }
+      },
+      // S7.5: the first-run card has not been skipped on an installation that
+      // has never been opened, which is the only way it can ever be shown.
+      onboardingDismissed: false
     })
     expect(DEFAULT_APP_SETTINGS.editor.command).toBe(DEFAULT_EDITOR_COMMAND)
     expect(EDITOR_KINDS).toEqual(['vscode', 'cursor', 'custom'])

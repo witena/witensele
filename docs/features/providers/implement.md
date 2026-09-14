@@ -37,6 +37,15 @@ not editable field by field: a preset rewrites three fields at once, a key must
 not be sent before Save, and a model list must be fetchable for an endpoint that
 has no row yet.
 
+Since S7.5 that draft has a **second editor**: the first-run card on the chat
+page. It is not a second form — the three blocks that matter (`PresetGrid`,
+`ProviderCredential`, `ProviderModels`) were extracted from
+`provider-editor.tsx` and are rendered by both screens, reading and writing the
+one draft in the store. That is what keeps the write-only key rule, the "a fetch
+replaces the list" rule and the sign-in panel from existing twice. The one thing
+the card must not touch is `mode`, which is the settings editor's own state,
+hence `ensureDraft` (see [frontend.md](./frontend.md)).
+
 ## Data flow
 
 Adding a provider, end to end:
@@ -155,6 +164,7 @@ Shared-contract changes made by S1.6:
 | `src/renderer/src/components/settings/provider-logo.test.ts` | The initials rules and the stability of the derived colour |
 | `src/renderer/src/components/settings/provider-display.test.ts` | Host derivation including the unparseable case; the status rule, especially "a local provider is never `no-key`" and "untested is not connected". S5.3: `signed-in` replacing the key indicator and a probe outranking it; `authControl`'s three outcomes, which is how the editor's mode switch is tested without a DOM; `signedInName`'s fallbacks and `formatExpiry` |
 | `src/renderer/src/components/ui/status-pill.test.ts` | The tone → token mapping, and that the classes are literal rather than interpolated |
+| `e2e/onboarding.spec.ts` | S7.5: the same three controls driven from the **chat page** — the Ollama tile, the local preset satisfying the credential step on its own, the model typed into `provider-add-model-input`, and the card's Save producing a stored provider |
 | `e2e/providers.spec.ts` | The Ollama flow against a real local server (skipped assertions are annotated when it is not running), survival across a restart, the write-only key contract, clearing a key, and the `providers.png` screenshot. S5.3 adds a case that relaunches the app with `WITENA_ANT_BIN` pointing at nothing: the panel reports `not-installed`, the key field is gone, the install command is printed verbatim, Save is refused with a translated `ant_missing` and stores nothing, and switching back to the key field restores the form |
 
 `MockLanguageModelV4` is the right mock, not `MockLanguageModelV3`: the installed
@@ -176,6 +186,11 @@ are structured objects rather than a string and three numbers.
 - **No base-URL validation on save.** A malformed URL is accepted and fails at the
   first probe with the provider's own error. `providerHost` falls back to echoing
   the raw string so the card still says something useful.
+- **The first-run card and the settings editor share one draft.** Filling half
+  the card, then opening Settings → Providers and pressing "Add provider",
+  discards what the card held — `startCreate` replaces the draft, exactly as it
+  does between two cards. It is the same silent discard as the row below and has
+  the same answer, whenever that answer is built.
 - **The editor has no dirty-state guard.** Selecting another card discards an
   unsaved draft silently. A confirm prompt needs the dialog layer this step
   deliberately did not build.

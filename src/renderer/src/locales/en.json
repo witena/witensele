@@ -36,6 +36,19 @@
     "emptyChatsDescription": "Create one to start a discussion.",
     "emptyConversationTitle": "Nothing here yet",
     "emptyConversationDescription": "Create a chat, invite a few agents and ask them a question.",
+    "onboarding": {
+      "title": "Get your first chat running",
+      "description": "Five short steps, all of them here. You can leave at any point and set things up in Settings instead.",
+      "stepPreset": "Pick a model provider",
+      "stepCredential": "Paste a key, or sign in",
+      "stepModels": "Choose the models and save the provider",
+      "stepAgent": "Create your first agent",
+      "stepChat": "Start the chat",
+      "saveProvider": "Save provider",
+      "startChat": "Start chat",
+      "skip": "Skip",
+      "skipHint": "You can do all of this in Settings later."
+    },
     "emptyMessagesTitle": "No messages yet",
     "emptyMessagesDescription": "Send the first message to start the discussion.",
     "members": "Members",
@@ -151,6 +164,11 @@
     "empty": "Create one to start a discussion.",
     "selectOrCreateTitle": "Select or create an agent",
     "selectOrCreateDescription": "Pick an agent from the list to configure its model, parameters, skills and memory.",
+    "templates": {
+      "assistant": "Answers clearly and keeps the discussion moving.",
+      "critic": "Looks for the weakest assumption and says so.",
+      "planner": "Turns what was agreed into ordered, checkable steps."
+    },
     "inChats": "In {{chats}} chats",
     "duplicate": "Duplicate",
     "deleteConfirm": "Click again to confirm",
@@ -216,6 +234,7 @@
       "timeouts": "Timeouts & heartbeat",
       "appearanceLanguage": "Appearance & language",
       "dataBackup": "Data & backup",
+      "about": "About",
       "developer": "Developer"
     },
     "comingSoonTitle": "Not built yet",
@@ -382,6 +401,14 @@
     "themeLight": "Light",
     "themeDark": "Dark",
     "themeHint": "Follow the system switches with the operating system while the app is running.",
+    "about": {
+      "version": "Version",
+      "versionHint": "Quote this line in a bug report.",
+      "repository": "Repository",
+      "repositoryHint": "Source code, releases and the issue tracker. Opens in your browser.",
+      "licenses": "Open-source licences",
+      "licensesHint": "Witena is built on {{packages}} open-source packages. The list is generated from the installed dependencies at build time."
+    },
     "developer": {
       "backend": "backend:",
       "languageSetting": "language setting:",

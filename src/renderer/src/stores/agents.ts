@@ -30,6 +30,7 @@
  * when an agent is renamed or deleted from the other page.
  */
 import { create } from 'zustand'
+import { suggestedModel, type AgentTemplate } from '@shared/agent-templates'
 import type { Agent, AgentInput, AgentParams, BackendErrorCode } from '@shared/types'
 import { AGENT_AVATAR_COLORS, DEFAULT_AGENT_AVATAR, avatarInitial } from '../components/agents/agent-display'
 import { BackendClientError } from '../lib/backend'
@@ -211,6 +212,20 @@ export interface AgentsState {
   remove: (id: string) => Promise<void>
   /** Copies the selected agent under a free name and opens it. Never rejects. */
   duplicate: (id: string) => Promise<Agent | null>
+  /**
+   * Creates an agent from one of `AGENT_TEMPLATES` (S7.5). Never rejects.
+   *
+   * Deliberately does **not** open the editor: the caller is the first-run card
+   * on the chat page, and leaving the agents page holding a draft the user
+   * never asked for would be a surprise the next time they went there. The name
+   * is uniquified the way `duplicate` does, so pressing the same tile twice
+   * yields `Critic copy` rather than the handler's `name taken` refusal.
+   */
+  createFromTemplate: (
+    template: AgentTemplate,
+    providerId: string,
+    models: readonly string[]
+  ) => Promise<Agent | null>
 
   startCreate: () => void
   startEdit: (id: string) => void
@@ -291,6 +306,43 @@ export const useAgentsStore = create<AgentsState>()((set, get) => ({
       const created = await get().create(input)
       set({ mode: 'edit', selectedId: created.id, draft: draftFromAgent(created), dirty: false })
       return created
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause) })
+      return null
+    }
+  },
+
+  async createFromTemplate(template, providerId, models) {
+    const modelId = suggestedModel(template, models)
+    // No model means no provider worth pointing at; the card keeps the step open
+    // rather than writing an agent that cannot speak.
+    if (!providerId || !modelId) return null
+
+    const palette = AGENT_AVATAR_COLORS[template.paletteIndex] ?? DEFAULT_AGENT_AVATAR
+    // The tile's own name unless something already holds it, in which case the
+    // same `<name> copy` rule the duplicate button uses. `agents.create` refuses
+    // a clash, and a refusal on a first-run card explains nothing.
+    const taken = get().agents.map((agent) => agent.name)
+    const clash = taken.some(
+      (name) => name.trim().toLowerCase() === template.name.toLowerCase()
+    )
+
+    const input: AgentInput = {
+      name: clash ? duplicateName(template.name, taken) : template.name,
+      avatar: { kind: 'initial', text: avatarInitial(template.name), ...palette },
+      description: template.description,
+      systemPrompt: template.systemPrompt,
+      providerId,
+      modelId,
+      params: {},
+      skillNames: [],
+      mcpServerIds: [],
+      memoryEnabled: false,
+      role: 'participant'
+    }
+
+    try {
+      return await get().create(input)
     } catch (cause) {
       set({ error: describe(cause), errorCode: classify(cause) })
       return null

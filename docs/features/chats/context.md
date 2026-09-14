@@ -32,6 +32,13 @@ can hold a real conversation and still holds it after a restart.
 - `ensureDefaultAgent`: the bootstrap agent a chat is given **only** while the
   agent library is empty, so a fresh install can hold a conversation before
   anyone opens the Agents page.
+- The **first-run card** (S7.5): the conversation column draws it in place of
+  its empty state until the installation has a chat with a member, or until
+  Skip. The state machine (`lib/onboarding.ts`) and the card
+  (`components/onboarding/onboarding-card.tsx`) are this feature's; the controls
+  inside its first three steps are [`providers`](../providers/context.md)'s own
+  components, and the templates behind step four are
+  [`agents`](../agents/context.md)'s.
 - The chat's **working directory** (S5.2): `ChatPatch.workdir`, the handler's
   filesystem check, the "Working directory" row in the group settings with
   "Choose…" and "Clear", and the folder chip in the header.
@@ -97,6 +104,9 @@ the next round boundary rather than mid-turn.
 | `workdir` is checked against the **real filesystem**, not merely parsed | Store whatever string arrives and fail at the first tool call | The path is a boundary, not a label: S5.4 resolves every executor path inside it. A folder that is not there confines nothing, and "the write failed" three screens later is a far worse answer than "that folder does not exist" at the moment it is picked |
 | A chat with an `executor` member and **no** `workdir` is allowed | Refuse the member until a folder is bound | Configuration order is the user's. S5.4 simply attaches no executor tools, which is the same outcome with none of the ordering rules |
 | The second-executor refusal lives in `chats.members.set` | Refuse it in `agents.update`; enforce it when tools are attached | `members.set` replaces the whole list and is the only place that sees the resulting set, so it is the only place the rule can be *checked* rather than guessed. The cost is the promotion gap recorded in `backend.md` |
+| **S7.5: the card is gone once a chat has a member**, not once a provider exists | Hide it as soon as the first provider is saved, which is what the step's first sentence says | Both sentences in the step are true of the same journey — it *appears* because no provider exists and *disappears* once a chat has a member. Hiding it at the provider would drop the user back onto an empty screen three steps from a working chat |
+| The card's "Start chat" names its member explicitly | Let `chats.create` decide, as the "+" button does | The backend only adds the bootstrap agent while the agents table is **empty**, and by that step it holds the template agent. Saying nothing would produce a chat with no members and a first send refused |
+| Skip is a settings row, not `localStorage` | `localStorage`; a `dismissed` column on something | It is a fact about the installation, it has to survive cleared web storage, and the server version (Phase 8) will want it per account. It also costs no migration: settings reads merge over the defaults |
 | A refused `workdir` or member carries a `ValidationReason` in `details` | One more `BackendErrorCode` each; a generic `validation` line | The seven codes are a failure *taxonomy*, not a message catalogue, and four new ones would dilute it. A reason is an identifier the renderer translates, which is the same contract `SystemNoticePart` already uses for stored text |
 | The hand-off button sits **above the composer**, not in the Actions card | A third row in the Actions card; a header button | The Actions card's two actions are ordinary messages and say so in their own header comment — nothing there bypasses `chat.send`. A hand-off is a backend path of its own that schedules rounds the chat's `mode` does not describe, so it belongs beside Send, where the user already is when they decide the talking is over |
 | It is **disabled, never hidden**, and the tooltip names the missing rule | Hide it until the chat qualifies | A control that vanishes teaches nothing: "where is hand to executor?" has no answer on screen. The disabled button plus "choose a working directory first" is the answer |

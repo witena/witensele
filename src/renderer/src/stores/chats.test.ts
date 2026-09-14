@@ -167,6 +167,31 @@ describe('chats store', () => {
     expect(useChatsStore.getState().error).toContain('no provider with models')
   })
 
+  it('names its members when the caller has one, and stays silent otherwise (S7.5)', async () => {
+    const created = chat('new', 9)
+    const calls: unknown[] = []
+    setBackend({
+      invoke: (async (method: BackendMethod, input: unknown) => {
+        if (method === 'chats.create') {
+          calls.push(input)
+          return created
+        }
+        if (method === 'chats.members.list') return []
+        throw new Error(`unexpected method ${method}`)
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    // The first-run card's call: once the agent library is non-empty the
+    // backend creates an empty chat, so the member has to be named here.
+    await useChatsStore.getState().create(['agent-1'])
+    expect(calls.at(-1)).toEqual({ input: { memberAgentIds: ['agent-1'] } })
+
+    // The "+" button's call is unchanged: the backend decides.
+    await useChatsStore.getState().create()
+    expect(calls.at(-1)).toEqual({ input: {} })
+  })
+
   it('upserts on chat.updated and keeps the list sorted', () => {
     useChatsStore.setState({ chats: [chat('a', 5), chat('b', 2)] })
 

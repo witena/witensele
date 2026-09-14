@@ -52,6 +52,7 @@ Delete (first click arms, second acts)
 | `agents.get / create / update / delete` | `src/shared/backend.ts` | Declared since S1.1; implemented in S2.1 |
 | `AgentDraftErrors`, `validateDraft`, `duplicateName` | `src/renderer/src/stores/agents.ts` | Pure, exported, and unit-tested |
 | `AGENT_AVATAR_COLORS`, `avatarInitial`, `agentModelLabel` | `src/renderer/src/components/agents/agent-display.ts` | Shared by the Agents page and the chat's member panel |
+| `AgentTemplate`, `AGENT_TEMPLATES`, `getAgentTemplate`, `suggestedModel` | `src/shared/agent-templates.ts` | S7.5. Static data like `presets.ts` and `mcp-presets.ts`: no electron, no node, imported by the renderer directly. The **name and the system prompt are stored content** and are English literals here, exactly like `DEFAULT_AGENT_NAME`; only the one-line description is copy, under `agents.templates.<id>` in both locale files |
 
 ## Validation rules
 
@@ -89,6 +90,8 @@ of the name, uppercased, when the user did not type one.
 |---|---|
 | `src/main/handlers/agents.test.ts` | Every validation case, case-insensitive uniqueness, the reserved `executor` role, the membership cascade, the `chat.updated` fan-out, and "delete stops a running chat" against a mock model that never finishes |
 | `src/renderer/src/stores/agents.test.ts` | `validateDraft` (including that it says nothing about `temperature` / `maxTokens` since S5.9), `duplicateName`, the draft lifecycle (create → save → edit), `dirty` going true and back, a params field being removed rather than set to `undefined`, a stored temperature surviving an edit untouched, and the editor closing when its agent is deleted |
+| `src/shared/agent-templates.test.ts` | S7.5's invariants: two or three entries, unique ids and names (a clash would make the second tile fail on click), a name every `@mention` rule accepts, an English prompt and description, lowercase model hints, a palette index the editor offers — plus `suggestedModel` preferring the earliest matching hint, matching case-insensitively, falling back to the provider's first model and answering `undefined` for none |
+| `src/renderer/src/stores/agents.test.ts` (S7.5) | `createFromTemplate`: the template written verbatim on the model its hints prefer, the editor left closed, nothing written when there is no model or no provider, the `<name> copy` rename when the name is taken, and each template landing on a different avatar colour |
 | `src/renderer/src/components/agents/agent-display.test.ts` | `agentModelLabel` with and without a provider, `avatarInitial` including an astral-plane character, the palette's size, and `isExecutor` / `hasExecutor` over an empty list, a list of participants and a mixed one |
 | `e2e/agents.spec.ts` | The whole screen: empty library, create, the absence of the S5.9 sampling fields, duplicate name refused, a second agent on a second model, duplicate, two-click delete, restart |
 | `e2e/executor.spec.ts` | S5.2: the role control writing `executor` and surviving a save and a restart, the explanation rendered under it, and the badge appearing in the agent list for the executors and only for them. The rest of that spec is [`chats`](../chats/implement.md)'s half of the step |

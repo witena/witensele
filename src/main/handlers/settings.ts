@@ -48,7 +48,7 @@ function assertEditorPatch(editor: unknown): asserts editor is Partial<EditorSet
 }
 
 /**
- * Accepts only the four documented keys; anything else is a client bug.
+ * Accepts only the five documented keys; anything else is a client bug.
  *
  * `theme` is the first value whose *content* is checked as well (S5.8), and
  * `editor` the second (S5.7). Both are worth the lines because they are the
@@ -62,7 +62,7 @@ function assertPatch(patch: unknown): asserts patch is AppSettingsPatch {
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
     throw validation('settings.update requires a patch object')
   }
-  const allowed = new Set(['language', 'theme', 'editor', 'timeouts'])
+  const allowed = new Set(['language', 'theme', 'editor', 'timeouts', 'onboardingDismissed'])
   const unknownKeys = Object.keys(patch).filter((key) => !allowed.has(key))
   if (unknownKeys.length > 0) {
     throw validation(`settings.update received unknown keys: ${unknownKeys.join(', ')}`)
@@ -75,6 +75,16 @@ function assertPatch(patch: unknown): asserts patch is AppSettingsPatch {
   }
   const editor = (patch as AppSettingsPatch).editor
   if (editor !== undefined) assertEditorPatch(editor)
+
+  // S7.5's Skip flag. Checked like the two above because it is read back as a
+  // boolean by code with no other branch: a stored `'no'` is truthy and would
+  // hide the first-run card on a machine that has nothing set up.
+  const dismissed = (patch as AppSettingsPatch).onboardingDismissed
+  if (dismissed !== undefined && typeof dismissed !== 'boolean') {
+    throw validation(
+      `settings.update: onboardingDismissed must be a boolean, received ${typeof dismissed}`
+    )
+  }
 }
 
 export const settingsHandlers: HandlerModule = {

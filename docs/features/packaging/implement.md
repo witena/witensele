@@ -21,6 +21,11 @@ Six pieces, none of which touches runtime behaviour except the third:
 6. **`scripts/sync-version.mjs`** (S7.2), the one line of glue that makes
    `npm version` enough to cut a release: it rewrites `APP_VERSION` from the
    manifest between npm's bump and npm's commit.
+7. **`scripts/generate-licenses.mjs`** (S7.5), which runs from `prebuild` — so
+   `npm run build`, and therefore `npm run dist`, starts by regenerating the
+   licence list Settings → About renders. It reads `node_modules`, which a
+   packaged app does not have, which is exactly why it runs at build time. See
+   [`../ui-shell/implement.md`](../ui-shell/implement.md).
 
 ## Data flow
 
@@ -28,7 +33,9 @@ There is no user action here; the flow is the build.
 
 ```
 npm run dist
-  └─ npm run build                      electron-vite → out/{main,preload,renderer}
+  └─ npm run build
+       ├─ prebuild                      scripts/generate-licenses.mjs → licenses.json
+       └─ electron-vite build           → out/{main,preload,renderer}
   └─ electron-builder --mac             once per arch: arm64, then x64
        ├─ @electron/rebuild             better-sqlite3 checked for electron 44 / <arch>
        ├─ collect files                 out/** + package.json + production node_modules

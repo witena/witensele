@@ -44,6 +44,9 @@ function fakeBackend(initial: AppSettings = DEFAULT_APP_SETTINGS): {
           ...stored,
           ...(patch.language !== undefined ? { language: patch.language } : {}),
           ...(patch.theme !== undefined ? { theme: patch.theme } : {}),
+          ...(patch.onboardingDismissed !== undefined
+            ? { onboardingDismissed: patch.onboardingDismissed }
+            : {}),
           editor: { ...stored.editor, ...patch.editor },
           timeouts: { ...stored.timeouts, ...patch.timeouts }
         }
@@ -284,5 +287,36 @@ describe('settings store (editor)', () => {
 
     // `pages/settings/editor.ts` is what turns this into the store's `error`.
     await expect(useSettingsStore.getState().setEditor({ command: ' ' })).rejects.toThrow()
+  })
+})
+
+describe('settings store (first run)', () => {
+  it('starts with the first-run card not skipped', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await useSettingsStore.getState().load()
+
+    expect(useSettingsStore.getState().settings?.onboardingDismissed).toBe(false)
+  })
+
+  it('persists Skip as one boolean, and hides the card before the round trip', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    const pending = useSettingsStore.getState().dismissOnboarding()
+    // The card has to disappear under the cursor, not a round trip later.
+    expect(useSettingsStore.getState().settings?.onboardingDismissed).toBe(true)
+    await pending
+
+    expect(backend.calls.at(-1)).toEqual({
+      method: 'settings.update',
+      input: { patch: { onboardingDismissed: true } }
+    })
+    expect(backend.stored().onboardingDismissed).toBe(true)
+    // Nothing else in the row was touched on the way.
+    expect(backend.stored().language).toBe(DEFAULT_APP_SETTINGS.language)
+    expect(backend.stored().editor).toEqual(DEFAULT_APP_SETTINGS.editor)
   })
 })

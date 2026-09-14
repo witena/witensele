@@ -8,6 +8,7 @@
 | `src/main/db/repositories/agents.ts` | Straight CRUD over the `agents` table (S1.2) |
 | `src/main/db/repositories/chats.ts` | `listChatIdsForAgent`, added in S2.1 so deletion and rename know which chats to announce |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, now reached only while the agents table is empty |
+| `src/shared/agent-templates.ts` | **S7.5.** The three first-run templates. Shared rather than main-only, and read by nothing in the main process: it is listed here because its `name` and `systemPrompt` are *stored content* subject to the same rules as `DEFAULT_AGENT_NAME` next to it — committed English, no `@` in a name, and a prompt short enough that the group briefing stays the explanation of the protocol |
 
 Nothing here imports electron (CLAUDE.md rule #5): the handlers take an
 `AppContext` and reach the world through `ctx.repos`, `ctx.events` and
@@ -34,7 +35,7 @@ what makes `agents.delete` remove memberships. That requires
 |---|---|
 | `agents.list` | Every agent of the user, oldest first |
 | `agents.get` | One agent; `not_found` for an unknown id |
-| `agents.create` | Validates the whole input, trims the name, inserts |
+| `agents.create` | Validates the whole input, trims the name, inserts. **S7.5 added no path around it**: an agent made from a template is this method with an input the renderer assembled, so the name rules, the provider check and the model check apply to a template exactly as to the form |
 | `agents.update` | `not_found` first, then validates only the fields the patch carries; emits `chat.updated` for every chat the agent is in |
 | `agents.delete` | Stops the run of every chat the agent is in, deletes the row, then emits `chat.updated` for those chats |
 

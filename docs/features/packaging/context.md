@@ -25,7 +25,11 @@ database that opens on the first launch.
 - **Since S7.2**, the two GitHub Actions workflows: `ci.yml` (the gate on every
   push and pull request) and `release.yml` (a `v*` tag → two dmgs in a draft
   Release), plus the version bump that produces such a tag —
-  `scripts/sync-version.mjs` behind npm's `version` lifecycle.
+  `scripts/sync-version.mjs` behind npm's `version` lifecycle. S7.5 added a
+  second build-time script, `scripts/generate-licenses.mjs`, behind `prebuild`:
+  the licence list Settings → About renders is derived from `node_modules`,
+  which a packaged app does not carry, so it has to be turned into data before
+  the bundle is made.
 
 ## Out of scope
 

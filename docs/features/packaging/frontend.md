@@ -6,13 +6,20 @@ and release workflows — added none either. A packaged build renders exactly wh
 `npm run dev` renders; nothing in the UI branches on `app.isPackaged`, and
 nothing in it branches on how the bundle was built.
 
-The version number is the one thing a release changes that the renderer could
-one day show. It does not today: `APP_VERSION` (`src/shared/version.ts`, kept in
-step with `package.json` by `scripts/sync-version.mjs`) is read only by
-`src/main/mcp/manager.ts`, for the MCP client handshake. Settings → About, where
-a user would read it, arrives with S7.4/S7.5 — and when it does, the string it
-renders must still go through `t()` with the number interpolated, not a
-hardcoded "Witena 0.2.0" (CLAUDE.md rule 4).
+The version number is the one thing a release changes that the renderer shows.
+**Settings → About arrived in S7.5** and reads `APP_VERSION` and
+`APP_REPOSITORY_URL` from `src/shared/version.ts`, the former kept in step with
+`package.json` by `scripts/sync-version.mjs`; `src/main/mcp/manager.ts` reads the
+same constant for the MCP client handshake. The screen belongs to
+[`../ui-shell/frontend.md`](../ui-shell/frontend.md). Its labels go through
+`t()`; the version string, the repository URL and the licence rows are printed
+as **data**, because an identifier is the same in both languages — which is the
+same call the `ant` install command and a working-directory path already make.
+
+The other renderer-visible thing a build now produces is that licence list:
+`prebuild` regenerates `src/renderer/src/generated/licenses.json` from the
+production dependency tree, so a packaged app ships the list of what it was
+actually built from.
 
 The three renderer-visible facts it does produce, and where they belong:
 
@@ -21,6 +28,7 @@ The three renderer-visible facts it does produce, and where they belong:
 | The application icon in the Dock, the Finder and the About panel | `build/icon.icns`, referenced by `mac.icon` in `electron-builder.yml`. It is **not** the window icon — macOS takes that from the bundle, and `createWindow` sets none. See [`backend.md`](./backend.md), "Building the icon" |
 | The window's size, colour and title bar | Unchanged from S1.5; the contract is written out in [`../ui-shell/backend.md`](../ui-shell/backend.md), "Window options" |
 | The skills a fresh installation opens with | Seeded before the first window exists, and then read through the ordinary `skills.list` handler. The screen is [`../skills/frontend.md`](../skills/frontend.md)'s Settings → Skills |
+| The version, the repository link and the licences of the bundled dependencies | Settings → About (S7.5), from `@shared/version` and the generated `licenses.json` |
 
 ## Screenshots and the demo recording
 

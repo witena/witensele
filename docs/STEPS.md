@@ -2033,6 +2033,43 @@ adds a line here in the same commit.
   a release whose author skips them is packaged and uploaded exactly as one
   whose author does not.
 
+### First run and About (S7.5)
+
+- **The licence list carries names, versions and SPDX ids, not licence texts.**
+  MIT, BSD and Apache-2.0 all ask for the licence text (and, for Apache, a
+  NOTICE) to travel with a binary distribution. Settings → About links each
+  package's homepage instead. Collecting 244 `LICENSE` files into the bundle and
+  rendering them — or shipping one concatenated `THIRD-PARTY-NOTICES.txt` next
+  to the app — is a packaging decision of its own, and it should be made before
+  the first public dmg rather than after.
+- **The generated list is never regenerated while the app is running.** The
+  hooks run at `predev` / `prebuild`, so a dependency installed mid-session
+  appears at the next start. Fine for a file that changes only when
+  `package.json` does; worth remembering when a licence question is urgent.
+- **A dependency that `node_modules` does not hold is warned about and
+  omitted.** An `npm ci --omit=optional` or a platform-specific package that is
+  not installed on the machine doing the build therefore never reaches the
+  screen. A stricter mode — fail the build instead — is the alternative, and it
+  is the right one once the list is a legal artifact rather than a courtesy.
+- **The first-run card and the settings provider editor share one draft.**
+  Filling half the card, then opening Settings → Providers and pressing "Add
+  provider", discards what the card held — the same silent discard as switching
+  between two providers in the editor, and it needs the same dirty-state guard
+  the editor has never had.
+- **Skip cannot be undone from the UI.** `onboardingDismissed` is written once
+  and nothing writes it back: a user who skips and then wants the walkthrough
+  has no control for it. A "show the first-run steps again" row in Settings →
+  About is the obvious shape, and costs one action.
+- **The three agent templates were not reviewed by anyone but their author.**
+  Their prompts are short and plausible; whether Assistant / Critic / Planner is
+  the *right* first trio — and whether `modelHints` picks sensible models on a
+  provider other than Ollama — has not been tried against a real discussion.
+- **`e2e/chat.spec.ts` still races a warm Ollama.** Its cursor assertion reads
+  `data-status` and then checks the cursor, and a 1.5B model can finish between
+  the two lines; it failed once in the S7.5 full-suite run and passed on a
+  re-run. The file's other assertions already avoid the race (see the commit
+  that introduced them); this one line did not get the same treatment.
+
 ### Open questions carried from the feature documents
 
 - `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
@@ -2173,7 +2210,7 @@ Acceptance: an older installed build sees a newer draft-published Release,
 downloads it and restarts into it. Docs: `docs/features/packaging/` and the
 settings owner (all four each).
 
-### S7.5 First run `[ ]`
+### S7.5 First run `[x] (2026-09-13)`
 What: a new user reaches a working chat without reading the README.
 - When no provider exists, the chats page shows an onboarding card: pick a
   preset, paste a key or sign in (S5.3), fetch models, create the first agent
@@ -2182,6 +2219,107 @@ What: a new user reaches a working chat without reading the README.
 Acceptance: e2e from an empty `userData` to a streamed reply through the
 card alone. Docs: `docs/features/ui-shell/` and `docs/features/providers/`
 (all four each).
+Done: the card is **not a second provider form**. The three blocks that matter
+were extracted out of `provider-editor.tsx` into `provider-credential.tsx` and
+`provider-models.tsx` (the preset grid was already one), and both screens render
+those same components against the one draft in `stores/providers.ts`. The rules
+that could have been re-implemented subtly differently are exactly the ones a
+first-time user would be hurt by — an empty key field *clears* a stored key, a
+fetch *replaces* the model list, sign-in *replaces* the field rather than sitting
+beside it — so there is one implementation and two layouts. The extraction cost
+one new store action: `ensureDraft`, which makes a draft without touching `mode`.
+`startCreate` sets `mode` too, and `e2e/providers.spec.ts` caught the
+consequence within a minute — a user who had never visited Settings → Providers
+found the Add form already open on it, because a card on the *chat* page had
+opened it. `mode` is the settings editor's own state; only the settings editor
+sets it.
+
+`lib/onboarding.ts` is the whole state machine, pure and unit-tested: five steps,
+the current one is the first incomplete one, and completion is read from the
+stores rather than counted. The first three steps are complete the moment a
+provider is **stored** — not when the draft looks full — which is what makes the
+card correct for a user who added a provider in Settings and never saw step one,
+and which is why the models step's action is Save. Visibility reconciles the two
+sentences in this step: it *appears* because no provider exists and *disappears*
+once a chat has a member, and the card has to survive the four steps in between
+or it would vanish the moment the first provider was saved and leave the user on
+an empty screen three clicks from a working chat. `dismissed === null` (settings
+still loading) renders nothing rather than flashing a card that is about to be
+hidden.
+
+Two smaller decisions the walk forced. `chats.create` grew an optional
+`memberAgentIds` because the backend only adds the bootstrap agent while the
+agents table is **empty** — by step five it holds the template agent, so a
+card that said nothing would have produced a chat with no members and a first
+send refused with "this chat has no members". And `agentsStore.createFromTemplate`
+deliberately does **not** open the editor, unlike every other way an agent is
+created: its caller is on the chat page, and a draft left behind on the Agents
+page is a surprise the next time someone goes there. It uniquifies the name with
+the same `<name> copy` rule Duplicate uses, because `agents.create` refuses a
+clash and a refusal on a first-run card explains nothing.
+
+`@shared/agent-templates.ts` is static data beside `presets.ts` and
+`mcp-presets.ts`: three entries — Assistant, Critic, Planner — each with a name,
+a description, a system prompt, `modelHints` and a palette index. **The name and
+the prompt are stored content, not copy**, so they are English literals exactly
+like `DEFAULT_AGENT_NAME`: the name goes into `agents.name`, `@mentions` resolve
+against it and every model sees it, and a name that changed with the UI language
+would break both. Only the one-line description is a key
+(`agents.templates.<id>`), and because it is a *runtime* key the usage guard
+cannot see it, `locales.test.ts` checks the subtree against the table in both
+directions — the shape S5.1 established for the connector gallery. `modelHints`
+is ordered lowercase substrings rather than model ids, because a template cannot
+know whether the user's provider is Ollama or Anthropic; `suggestedModel` falls
+back to the provider's first model, which is what `default-agent.ts` does too.
+
+Skip is `AppSettings.onboardingDismissed`, a settings row rather than
+`localStorage`: it is a fact about the installation, it must survive cleared web
+storage, and Phase 8 will want it per account. It needed **no migration** —
+settings reads merge the stored object over `DEFAULT_APP_SETTINGS`, so a row
+written by an older version answers `false` — and it is validated like `theme`
+and `editor` rather than trusted like the language, because it is read back as a
+boolean by code with no other branch and a stored `'no'` is truthy. It is
+one-way on purpose; nothing writes `false` back, and the "show it again" control
+that would is in the Phase 6 backlog.
+
+**Settings → About** is `about` in `SETTINGS_SECTIONS`, directly above
+`developer`. The version and the repository URL come from `@shared/version`
+(`APP_REPOSITORY_URL` is new beside `APP_VERSION`); the licences are
+**generated, not maintained**. `scripts/generate-licenses.mjs` walks the
+transitive closure of `package.json`'s `dependencies` through
+`node_modules/*/package.json` — 244 packages here — reads both of npm's licence
+spellings, writes `UNKNOWN` rather than hiding a package that declares neither,
+warns about a declared dependency that is not installed, and produces
+`src/renderer/src/generated/licenses.json`. That file is **gitignored**: it is
+derived, a hand-maintained copy would be wrong the first time a dependency moved
+and *nothing would fail*, and committing it would mean reviewing a 244-entry
+diff on every `npm update`. It exists everywhere it is needed because
+`package.json` runs the script from `pretypecheck`, `pretest`, `pretest:watch`,
+`predev` and `prebuild` — which is what lets a clean `npm ci && npm run
+typecheck` on CI work without the workflow file being touched. `licenses.test.ts`
+drives the script as an **executable** against a fixture `node_modules`, the way
+`anthropic-cli.test.ts` drives a fake `ant`, because what ships is the script and
+because a plain `.mjs` under `scripts/` belongs to neither TypeScript project.
+About prints the version, the package rows and the URL as **data** with
+translated labels around them: an identifier is the same in both languages, the
+call `ANT_INSTALL_COMMAND` already made. The repository is a real
+`target="_blank"` anchor, which `setWindowOpenHandler` in `src/main/index.ts`
+hands to the system browser and otherwise denies — the path a link in a message
+body already takes.
+
+Verified: `npm run typecheck` clean, `npm test` `Test Files 89 passed`,
+`Tests 1426 passed`, `npm run build`, and `e2e/onboarding.spec.ts` **9 passed**
+against a real local Ollama — an empty `userData` to a streamed `Hello!` from
+`qwen2.5:1.5b` through the card alone, the card staying gone after a restart,
+Skip hiding it on a second installation across a restart, and About showing the
+manifest's version, a GitHub link and a non-trivial licence list. The full
+`npm run e2e` is 91 passed with one re-run: `e2e/chat.spec.ts`'s cursor
+assertion raced a warm Ollama (it reads `data-status` and then checks the
+cursor, and a 1.5B model can finish between the two lines) and passed on its own
+immediately afterwards; that pre-existing race is recorded in the Phase 6
+backlog rather than patched from inside this step. Docs:
+`docs/features/{ui-shell,providers,chats,agents,i18n,packaging}/` (all four
+each) and the `docs/README.md` index.
 
 ## Phase 8: Online version (PLAN "Local release and online version")
 

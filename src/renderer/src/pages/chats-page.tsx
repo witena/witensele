@@ -47,6 +47,7 @@ import { GoalChip } from '../components/chat/goal-chip'
 import { GoalSettings } from '../components/chat/goal-settings'
 import { HandoffButton } from '../components/chat/handoff-button'
 import { MemberPanel } from '../components/chat/member-panel'
+import { OnboardingCard, useOnboarding } from '../components/onboarding/onboarding-card'
 import { MessageList } from '../components/chat/message-list'
 import { PermissionCard } from '../components/chat/permission-card'
 import { Column } from '../components/layout/column'
@@ -155,6 +156,10 @@ export function ChatsPage(): React.JSX.Element {
   )
   // What the box holds right now; the store only ever sees the debounced value.
   const [query, setQuery] = useState('')
+  // Whether a fresh installation is still being walked through its first chat
+  // (S7.5). Asked here because this column draws either the card or the bare
+  // "no chat selected" state, never both.
+  const onboarding = useOnboarding()
 
   // The page owns all three lists: the chat list needs them, every message row
   // needs the author's name, avatar and model, and the member panel prints the
@@ -405,11 +410,20 @@ export function ChatsPage(): React.JSX.Element {
           <MessageList chatId={selected.id} messages={messages} members={members} />
         ) : (
           <div className="flex flex-1 items-center justify-center overflow-y-auto px-7 py-5">
-            <EmptyState
-              icon={MessagesSquare}
-              title={t('chat.emptyConversationTitle')}
-              description={t('chat.emptyConversationDescription')}
-            />
+            {/* On a fresh installation the bare empty state is replaced by the
+                first-run card (S7.5): "no chat selected" is true and useless
+                when the reason is that nothing is set up yet. The card renders
+                `null` as soon as a chat has a member, or once Skip was pressed,
+                and the empty state is what is left. */}
+            {onboarding.visible ? (
+              <OnboardingCard />
+            ) : (
+              <EmptyState
+                icon={MessagesSquare}
+                title={t('chat.emptyConversationTitle')}
+                description={t('chat.emptyConversationDescription')}
+              />
+            )}
           </div>
         )}
 

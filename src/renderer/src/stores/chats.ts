@@ -169,8 +169,16 @@ export interface ChatsState {
   load: () => Promise<void>
   /** Reads one chat's members. Never rejects. */
   loadMembers: (chatId: string) => Promise<void>
-  /** Creates a chat and selects it. Returns `null` and sets `error` on failure. */
-  create: () => Promise<Chat | null>
+  /**
+   * Creates a chat and selects it. Returns `null` and sets `error` on failure.
+   *
+   * `memberAgentIds` is what the first-run card passes (S7.5). Without it the
+   * backend decides: an empty chat, unless the agent library is empty too, in
+   * which case the bootstrap agent is written and added. Once the user owns
+   * agents, picking who is in a chat is theirs — which is exactly why the card
+   * has to name the agent it just created rather than hope.
+   */
+  create: (memberAgentIds?: readonly string[]) => Promise<Chat | null>
   rename: (id: string, title: string) => Promise<void>
   /**
    * Replaces a chat's member list, order included.
@@ -289,12 +297,15 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
     }
   },
 
-  async create() {
+  async create(memberAgentIds) {
     try {
-      // No title and no members: `chats.create` fills in both (see
-      // `src/main/handlers/chats.ts`). It rejects with `validation` when no
-      // provider has a model, which is the first-run path.
-      const chat = await getBackend().invoke('chats.create', { input: {} })
+      // No title, and members only when the caller named them: `chats.create`
+      // fills in both otherwise (see `src/main/handlers/chats.ts`). It rejects
+      // with `validation` when no provider has a model, which is the first-run
+      // path.
+      const chat = await getBackend().invoke('chats.create', {
+        input: memberAgentIds ? { memberAgentIds: [...memberAgentIds] } : {}
+      })
       get().applyUpdated(chat)
       set({ selectedId: chat.id, error: undefined, errorCode: undefined, errorDetails: undefined })
       await get().loadMembers(chat.id)
@@ -504,6 +515,19 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
 
 /** Stable empty array, so a selector never hands React a fresh reference. */
 const NO_MEMBERS: string[] = []
+
+/**
+ * Whether any chat has at least one member — the fact that ends the first-run
+ * card (S7.5).
+ *
+ * A boolean, so the card re-renders when the answer changes rather than on
+ * every write that replaced the members map.
+ */
+export function useHasChatWithMembers(): boolean {
+  return useChatsStore((state) =>
+    Object.values(state.membersByChat).some((members) => members.length > 0)
+  )
+}
 
 /** The member agent ids of one chat, in speaking order. */
 export function useChatMemberIds(chatId: string | null): string[] {

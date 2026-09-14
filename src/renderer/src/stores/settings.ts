@@ -61,6 +61,15 @@ export interface SettingsState {
    * stale copy of the whole object.
    */
   setTimeouts: (patch: Partial<AppTimeouts>) => Promise<void>
+  /**
+   * Hides the first-run card for this installation (S7.5).
+   *
+   * Optimistic like the language and the theme: Skip is a click on a card that
+   * has to disappear under the cursor, not a round trip later. One-way on
+   * purpose — nothing writes `false` back, because the card is a guide through
+   * an empty installation rather than a feature to switch on and off.
+   */
+  dismissOnboarding: () => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -118,6 +127,16 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
   async setTimeouts(patch) {
     const settings = await getBackend().invoke('settings.update', { patch: { timeouts: patch } })
+    set({ settings, status: 'ready', error: undefined })
+  },
+
+  async dismissOnboarding() {
+    const previous = get().settings
+    if (previous) set({ settings: { ...previous, onboardingDismissed: true } })
+
+    const settings = await getBackend().invoke('settings.update', {
+      patch: { onboardingDismissed: true }
+    })
     set({ settings, status: 'ready', error: undefined })
   }
 }))

@@ -17,6 +17,8 @@ main-process fact it depends on.
 | `src/renderer/src/pages/chats-page.tsx` | Chat list (264px) · conversation · member panel (288px), with the composer and the group-settings block |
 | `src/renderer/src/pages/agents-page.tsx` | Agent list (264px) and the editor area's empty state |
 | `src/renderer/src/pages/settings-page.tsx` | Section nav (220px) with the language quick toggle, and the content area |
+| `src/renderer/src/pages/settings/about-section.tsx` | Settings → About (S7.5): the version, the repository link and the generated licence list. No state, no backend call, no primitive of its own |
+| `src/renderer/src/lib/licenses.ts` | The typed view of `generated/licenses.json` plus `licenseSummary()`, the per-licence counts About leads with. The only file that knows the generator's output shape |
 | `src/renderer/src/pages/settings/appearance-section.tsx` | The appearance `SegmentedControl` (System / Light / Dark, S5.8) and the language `Select` |
 | `src/renderer/src/pages/settings/theme.ts` | `applyThemeSetting` — the appearance control's counterpart to `language.ts` |
 | `src/renderer/src/lib/theme.ts` | `applyTheme` / `activateTheme`: `data-theme` on `<html>`, plus the `matchMedia` subscription `'system'` needs |
@@ -34,10 +36,11 @@ That is what keeps an untranslated literal from hiding inside a shared component
 | Store | Field | Type | Meaning |
 |---|---|---|---|
 | `ui` | `page` | `'chats' \| 'agents' \| 'settings'` | Purely local. Which page the shell renders; starts on `chats` |
-| `ui` | `settingsSection` | `'providers' \| 'mcp' \| 'skills' \| 'timeouts' \| 'appearance' \| 'data' \| 'developer'` | Purely local. Kept while another page is showing, so returning to Settings lands where the user left |
+| `ui` | `settingsSection` | `'providers' \| 'mcp' \| 'skills' \| 'timeouts' \| 'appearance' \| 'data' \| 'about' \| 'developer'` | Purely local. Kept while another page is showing, so returning to Settings lands where the user left. `about` joined in S7.5, directly above `developer` |
 | `settings` | `settings.language` | `Language \| 'system'` | Backend-owned (S1.4). Read by both language controls, written through `applyLanguageSetting` |
 | `settings` | `settings.theme` | `'system' \| 'light' \| 'dark'` | Backend-owned (S5.8). Read by the appearance control, written through `applyThemeSetting`. The *painted* theme is not state at all — it is an attribute on `<html>` |
 | `settings` | `error` | `string \| undefined` | Backend-owned. Rendered by the Developer section under `data-testid="error"` |
+| `settings` | `settings.onboardingDismissed` | `boolean` | Backend-owned (S7.5). Written once, by the first-run card's Skip link; the shell only reads it through [`../chats/frontend.md`](../chats/frontend.md)'s `useOnboarding` |
 
 Actions: `setPage(page)`, `setSettingsSection(section)`. Neither touches the
 backend and neither persists — nothing about "which page was open" is worth a row
@@ -84,7 +87,7 @@ Keys added, by namespace:
 | `nav` | `primary` (the rail's accessible name) |
 | `chat` | `noChatSelected`, `emptyChatsTitle`, `emptyChatsDescription`, `emptyConversationTitle`, `emptyConversationDescription`, `emptyMembersTitle`, `emptyMembersDescription`, `mode`, `modeRoundrobin`, `modeMentionOnly`, `speaking`, `speakingSequential`, `speakingParallel`, `maxAutoRounds`, `maxRoundsShort`, `timeout`, `secondsValue`, `speakingOrder`, `speakingOrderHint`, `actions.*` (S2.5 turned the flat `actions` / `actionSummarize` / `actionVote` into the nested `actions.title` / `.summarize` / `.vote` plus the two prompts the buttons send), `mentionHint` |
 | `agents` | `emptyTitle`, `selectOrCreateTitle`, `selectOrCreateDescription` (and `empty` reworded into a description, since it now sits under a title) |
-| `settings` | `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint` (S5.8), `sections.developer`, `comingSoonTitle`, `comingSoonDescription`, `interfaceLanguage`, `languageHint`, `languageSystemShort`, `languageZhShort`, `languageEnShort`, and the `developer.*` subtree (`backend`, `languageSetting`, `resolvedLanguage`, `lastEvent`, `emitTestEvent`, `pending`, `noEvent`) |
+| `settings` | `sections.about` and the `about.*` subtree — `version`, `versionHint`, `repository`, `repositoryHint`, `licenses`, `licensesHint` (`{{packages}}`) — all added in S7.5; `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint` (S5.8), `sections.developer`, `comingSoonTitle`, `comingSoonDescription`, `interfaceLanguage`, `languageHint`, `languageSystemShort`, `languageZhShort`, `languageEnShort`, and the `developer.*` subtree (`backend`, `languageSetting`, `resolvedLanguage`, `lastEvent`, `emitTestEvent`, `pending`, `noEvent`) |
 
 Removed: the whole `smoke` namespace. Its strings are the `settings.developer.*`
 subtree now, and `EXPECTED_NAMESPACES` in `locales.test.ts` was updated to match —
@@ -122,6 +125,22 @@ brand mark. It is below the guard's three-letter threshold, so it needs no
   No focus traps. (S1.7 added the composer's own Enter / Shift+Enter handling; the
   shell itself still has none.) Enter/Shift+Enter in the composer is
   S2.5.
+
+### Opening an external link
+
+Settings → About is the shell's first real hyperlink. Two halves, and both are
+needed:
+
+- the anchor carries `target="_blank" rel="noreferrer"`, which makes the click a
+  *window-open request* rather than an in-place navigation — an in-place one
+  would replace the whole application with a web page and there is no back
+  button to return from it;
+- `setWindowOpenHandler` in `src/main/index.ts` denies every such request and
+  hands http(s) to `shell.openExternal` first. It was installed for links inside
+  a message body and needed no change here.
+
+A relative or `file:` URL would therefore do nothing at all, which is the
+intended answer: only the two constants in `@shared/version` reach this anchor.
 
 ### Window chrome
 

@@ -24,7 +24,17 @@
 
 Actions: `load`, `create`, `update`, `remove`, `duplicate`, `startCreate`,
 `startEdit`, `closeEditor`, `patchDraft`, `patchParams`, `pickAvatarColor`,
-`saveDraft`, `draftErrors`.
+`saveDraft`, `draftErrors`, and since S7.5 `createFromTemplate`.
+
+`createFromTemplate(template, providerId, models)` is the only action that
+creates an agent **without opening the editor**: its caller is the first-run
+card on the chat page, and leaving a draft behind on a page the user has not
+visited would be a surprise the next time they went there. It picks the model
+with `suggestedModel` (the template's hints, then the provider's first model),
+uniquifies the name with the same `<name> copy` rule as Duplicate — `agents.create`
+refuses a clash, and a refusal on a first-run card explains nothing — and
+answers `null` rather than writing an agent that would have no model to speak
+through.
 
 `patchParams` accepts `undefined` for a field, which **removes** it — under
 `exactOptionalPropertyTypes` an absent key and a key holding `undefined` are

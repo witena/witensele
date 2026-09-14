@@ -208,6 +208,27 @@ describe('the editor draft', () => {
     expect(state().draft).toEqual({ type: 'openai-compatible', name: '', models: [] })
   })
 
+  it('makes a draft without opening the settings editor (S7.5)', () => {
+    // The first-run card lives on the chat page and edits this same draft. If it
+    // used `startCreate`, Settings → Providers would open on a half-filled Add
+    // form the user never asked for.
+    state().ensureDraft()
+
+    expect(state().draft).toEqual({ type: 'openai-compatible', name: '', models: [] })
+    expect(state().mode).toBe('idle')
+  })
+
+  it('never replaces a draft that is already being edited', () => {
+    state().startEdit('missing')
+    state().startCreate()
+    state().patchDraft({ name: 'Half typed' })
+
+    state().ensureDraft()
+
+    expect(state().draft?.name).toBe('Half typed')
+    expect(state().mode).toBe('create')
+  })
+
   it('fills type, name, base URL and models from a preset', () => {
     state().startCreate()
     state().applyPreset('deepseek')

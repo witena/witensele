@@ -7,7 +7,9 @@
 | `src/renderer/src/pages/settings/providers-section.tsx` | The section: a 520px card list (with the header that carries `settings-section-title`) and the editor column beside it |
 | `src/renderer/src/pages/settings-page.tsx` | Renders `ProvidersSection` **in place of** the generic content pane, because this section owns both of its columns |
 | `src/renderer/src/components/settings/provider-card.tsx` | One card: monogram, name, endpoint, status pill, model chips. A `<button>`, because it is the selection control |
-| `src/renderer/src/components/settings/provider-editor.tsx` | The add / edit form, including (S5.3) the Authentication control and the panel that replaces the key field |
+| `src/renderer/src/components/settings/provider-editor.tsx` | The add / edit form's layout and its Test / Save / Delete row. Since S7.5 the preset grid, the credential block and the model block are the three components below, not inline JSX |
+| `src/renderer/src/components/settings/provider-credential.tsx` | **S7.5**, extracted from the editor: the Authentication control (S5.3) and, under it, either the write-only key field or the sign-in panel. Takes no props — it reads and writes the one draft in the store — so the first-run card renders *this component*, not a copy |
+| `src/renderer/src/components/settings/provider-models.tsx` | **S7.5**, extracted likewise: "Fetch models", the chips and the inline "add a model" field, with the documented rule that a fetch *replaces* what the form held |
 | `src/renderer/src/components/settings/anthropic-sign-in.tsx` | **S5.3.** The sign-in panel: the three states, the install command, the Sign in / Sign out buttons |
 | `src/renderer/src/components/settings/preset-grid.tsx` | The three-column preset picker, rendered straight from `PROVIDER_PRESETS` |
 | `src/renderer/src/components/settings/provider-logo.ts` | Monogram initials and the colour derived from the preset id |
@@ -28,7 +30,7 @@
 | `status` | `'idle' \| 'loading' \| 'ready' \| 'error'` | Explicit, because "not loaded" and "load failed" need different UI |
 | `error` / `errorCode` / `errorDetails` | `string?` / `BackendErrorCode?` / `unknown` | Developer detail, its failure class, and the failing call's `details`. The UI shows `translateFailure(t, errorCode, errorDetails)` as the sentence and `error` as a dimmed mono line; `details` is what lets a refusal name the rule it broke (S5.2's `ValidationReason`) instead of saying "rejected as invalid" |
 | `selectedId` | `string \| null` | The record the editor is bound to; `null` while creating |
-| `mode` | `'idle' \| 'create' \| 'edit'` | `idle` renders the placeholder, the others render the form |
+| `mode` | `'idle' \| 'create' \| 'edit'` | `idle` renders the placeholder, the others render the form. It is the **settings editor's** state: the first-run card edits the same draft without touching it |
 | `draft` | `ProviderInput \| null` | The editor's working copy. **Never carries a loaded key** — see below |
 | `testResults` | `Record<string, ConnectionTestResult>` | Keyed by provider id, plus `'draft'` for an unsaved one. Runtime only, never persisted |
 | `testing` / `fetchingModels` / `saving` | `boolean` | Drive the three spinners |
@@ -36,10 +38,19 @@
 | `authBusy` / `authErrorCode` | `boolean` / `BackendErrorCode?` | The sign-in spinner, and the class of the last attempt that was refused |
 
 Actions: `load`, `create`, `update`, `remove`, `fetchModels(ref)`,
-`testConnection(ref, modelId?)`, plus the editor set `startCreate`, `startEdit`,
-`closeEditor`, `patchDraft`, `applyPreset`, `addModel`, `removeModel`,
-`saveDraft`, and the S5.3 set `loadAuthStatus`, `signIn`, `signOut` — none of
-which rejects: a sign-in that failed is a line in the panel, not a thrown error.
+`testConnection(ref, modelId?)`, plus the editor set `startCreate`,
+`ensureDraft` (S7.5), `startEdit`, `closeEditor`, `patchDraft`, `applyPreset`,
+`addModel`, `removeModel`, `saveDraft`, and the S5.3 set `loadAuthStatus`,
+`signIn`, `signOut` — none of which rejects: a sign-in that failed is a line in
+the panel, not a thrown error.
+
+**Why `ensureDraft` exists beside `startCreate` (S7.5).** The first-run card on
+the chat page edits this same draft, but `startCreate` also sets `mode`, and a
+user who then opened Settings → Providers would find the Add form open on a
+screen they had never visited — which `e2e/providers.spec.ts` noticed
+immediately. `ensureDraft` creates the draft when there is none and leaves
+`mode` alone, so "is the settings editor open" stays the settings editor's own
+answer.
 
 **Why a draft.** A provider is not editable field by field: choosing a preset
 rewrites three fields at once, a typed key must not be sent until Save, and the
@@ -53,8 +64,9 @@ stored; typing replaces it, and emptying a field that was typed into sends `''`,
 which clears it.
 
 Component-local state, deliberately not in the store: the half-typed model id and
-whether the inline input is open, the delete latch, and which model the probe
-should target (empty means "the first one", which is the backend's own default).
+whether the inline input is open (now inside `ProviderModels`), the delete latch,
+and which model the probe should target (empty means "the first one", which is
+the backend's own default).
 
 ## Backend calls
 
@@ -87,6 +99,7 @@ No subscription: this feature emits no events.
 | signed out | One sentence saying Witena signs in through the CLI and keeps no token, and a Sign in button |
 | `ant` not installed | The same shape plus the install command in monospace. The Sign in button stays clickable on purpose: it doubles as "look again" for a user who installs the CLI in another window |
 | sign-in refused | A red line under the panel with the translated `ant_missing` / `ant_not_logged_in` sentence; Save then refuses too, and the editor's error line carries `data-error-code` |
+| first run (S7.5) | The same three controls, on the chat page instead. `PresetGrid`, `ProviderCredential` and `ProviderModels` are rendered by `components/onboarding/onboarding-card.tsx` one step at a time, against the same draft, and the card's own Save calls `saveDraft`. Only one of the two screens is ever mounted — the shell renders a single page at a time — so every `data-testid` here stays unique |
 
 Card status is derived, never stored: `no-key` when a key is required and missing,
 otherwise `connected` / `probe failed` from this session's probe, otherwise

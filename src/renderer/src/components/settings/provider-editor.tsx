@@ -8,36 +8,33 @@
  * What is local here is only what dies with the panel: the half-typed model id
  * and the "click again to confirm" delete latch.
  *
- * Three behaviours worth knowing before changing this file:
+ * Since S7.5 three of its blocks are components of their own — `PresetGrid`,
+ * `ProviderCredential` (the Authentication control plus the key field or the
+ * sign-in panel) and `ProviderModels` — because the first-run card on the chat
+ * page drives **the same controls**, not copies of them. They all read and
+ * write the one draft in `stores/providers.ts`, so this file is now the form's
+ * layout and its Test / Save / Delete row.
  *
- * - **The key field is write-only.** A stored key never comes back from the
- *   backend, so the input is empty even when one exists and a hint says so.
- *   Typing replaces the key; emptying a field that was typed into clears it.
+ * Behaviours worth knowing before changing this file:
+ *
  * - **Both probes run against the draft, not the record.** That is the whole
  *   point of `ProviderRef`: a key the user just typed is testable before Save,
  *   and so is an endpoint that has no row yet.
  * - **Delete confirms with a second click**, not a modal. A modal needs focus
  *   management and an escape route the shell does not have yet (S4.x); a latch
  *   that resets after a few seconds is honest and costs nothing.
- * - **The Authentication control is rendered for the three first-party types
- *   only** (S5.3), and is disabled with a hint for the two that have no sign-in
- *   flow yet. An `openai-compatible` endpoint has no account to sign in to at
- *   all, so it gets no control rather than a disabled one — a control that can
- *   never become available is noise.
  */
 import clsx from 'clsx'
 import { Check, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderRef } from '@shared/backend'
-import { getPreset, providerAuth } from '@shared/presets'
-import type { ProviderAuth } from '@shared/types'
-import { Button, Chip, Field, Input, SegmentedControl, Select, Spinner } from '../ui'
+import { Button, Field, Input, Select, Spinner } from '../ui'
 import { translateError, translateFailure } from '../../i18n/errors'
 import { useProvidersStore } from '../../stores/providers'
-import { AnthropicSignIn } from './anthropic-sign-in'
-import { authControl } from './provider-display'
 import { PresetGrid } from './preset-grid'
+import { ProviderCredential } from './provider-credential'
+import { ProviderModels } from './provider-models'
 
 /** How long the delete latch stays armed before it forgets it was clicked. */
 const CONFIRM_DELETE_MS = 4_000
@@ -48,17 +45,13 @@ export function ProviderEditor(): React.JSX.Element | null {
   const draft = useProvidersStore((state) => state.draft)
   const mode = useProvidersStore((state) => state.mode)
   const selectedId = useProvidersStore((state) => state.selectedId)
-  const providers = useProvidersStore((state) => state.providers)
   const testResults = useProvidersStore((state) => state.testResults)
   const testing = useProvidersStore((state) => state.testing)
-  const fetchingModels = useProvidersStore((state) => state.fetchingModels)
   const saving = useProvidersStore((state) => state.saving)
   const error = useProvidersStore((state) => state.error)
   const errorCode = useProvidersStore((state) => state.errorCode)
   const errorDetails = useProvidersStore((state) => state.errorDetails)
 
-  const [newModel, setNewModel] = useState('')
-  const [addingModel, setAddingModel] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   /**
    * Which model the probe goes to. Empty means "the first one", which is what the
@@ -67,7 +60,6 @@ export function ProviderEditor(): React.JSX.Element | null {
    * happens to sort first turns "Test connection" into a several-minute wait.
    */
   const [probeModel, setProbeModel] = useState('')
-  const modelInput = useRef<HTMLInputElement>(null)
 
   // The latch must not stay armed while the user is off doing something else.
   useEffect(() => {
@@ -78,40 +70,19 @@ export function ProviderEditor(): React.JSX.Element | null {
 
   // Switching records must not carry the previous one's half-finished state.
   useEffect(() => {
-    setNewModel('')
-    setAddingModel(false)
     setConfirmingDelete(false)
     setProbeModel('')
   }, [selectedId, mode])
 
-  useEffect(() => {
-    if (addingModel) modelInput.current?.focus()
-  }, [addingModel])
-
   if (!draft) return null
 
   const store = useProvidersStore.getState
-  const record = providers.find((provider) => provider.id === selectedId)
-  const preset = getPreset(draft.presetId)
   const result = testResults[selectedId ?? 'draft']
   const ref: ProviderRef = { draft }
 
-  const auth = providerAuth(draft)
-  // The two first-party types that will gain a sign-in later keep the control,
-  // greyed: "not yet" and "never" are different statements and the hint says so.
-  const { shown: showsAuthControl, available: authAvailable } = authControl(draft.type)
   const needsBaseUrl = draft.type === 'openai-compatible'
   const hasBaseUrl = Boolean(draft.baseUrl?.trim())
   const canProbe = !needsBaseUrl || hasBaseUrl
-  // A key typed into the field is `''` once emptied, which *clears* the stored
-  // key; the hint only applies while the field has never been touched.
-  const showStoredKeyHint = Boolean(record?.hasApiKey) && draft.apiKey === undefined
-
-  function commitModel(): void {
-    store().addModel(newModel)
-    setNewModel('')
-    setAddingModel(false)
-  }
 
   return (
     <div data-testid="provider-editor" className="flex max-w-2xl flex-col gap-4.5">
@@ -149,144 +120,9 @@ export function ProviderEditor(): React.JSX.Element | null {
         />
       </Field>
 
-      {showsAuthControl ? (
-        <Field
-          label={t('settings.providers.auth')}
-          hint={authAvailable ? undefined : t('settings.providers.authUnavailable')}
-          layout="column"
-        >
-          <SegmentedControl<ProviderAuth>
-            className="max-w-md"
-            value={auth}
-            disabled={!authAvailable}
-            onChange={(next) => store().patchDraft({ auth: next })}
-            options={[
-              {
-                value: 'apiKey',
-                label: t('settings.providers.authApiKey'),
-                testId: 'provider-auth-apiKey'
-              },
-              {
-                value: 'oauth',
-                label: t('settings.providers.authSignIn'),
-                testId: 'provider-auth-oauth'
-              }
-            ]}
-          />
-        </Field>
-      ) : null}
+      <ProviderCredential />
 
-      {auth === 'oauth' ? (
-        <AnthropicSignIn />
-      ) : (
-        <Field
-          label={t('settings.providers.apiKey')}
-          hint={t('settings.providers.apiKeyHint')}
-          htmlFor="provider-api-key"
-          layout="column"
-        >
-          <Input
-            id="provider-api-key"
-            data-testid="provider-api-key-input"
-            type="password"
-            autoComplete="off"
-            className="font-mono text-[12px]"
-            value={draft.apiKey ?? ''}
-            placeholder={
-              // Only a *local* preset can honestly say a key is pointless. `custom`
-              // also declares `requiresApiKey: false`, but that means "we cannot
-              // know", and a key is usually exactly what such an endpoint wants.
-              preset?.local
-                ? t('settings.providers.apiKeyNotNeeded')
-                : t('settings.providers.apiKeyPlaceholder')
-            }
-            onChange={(event) => store().patchDraft({ apiKey: event.target.value })}
-          />
-          {showStoredKeyHint ? (
-            <p data-testid="provider-api-key-stored" className="text-[11px] text-fg-faint">
-              {t('settings.providers.apiKeyStored')}
-            </p>
-          ) : null}
-        </Field>
-      )}
-
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-xs text-fg-muted">{t('settings.providers.models')}</span>
-          <button
-            type="button"
-            data-testid="provider-fetch-models"
-            disabled={fetchingModels || !canProbe}
-            onClick={() => {
-              void store()
-                .fetchModels(ref)
-                // The store already recorded it; this only stops the unhandled
-                // rejection warning the browser would otherwise print.
-                .catch(() => undefined)
-            }}
-            className={clsx(
-              'inline-flex items-center gap-1.5 rounded text-xs text-accent transition-colors',
-              'hover:text-accent-hover focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none',
-              'disabled:cursor-not-allowed disabled:text-fg-faint'
-            )}
-          >
-            {fetchingModels ? <Spinner /> : null}
-            {t('settings.providers.fetchModels')}
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          {draft.models.map((model) => (
-            <Chip
-              key={model}
-              data-testid="provider-model-chip"
-              removeLabel={t('settings.providers.removeModel')}
-              onRemove={() => store().removeModel(model)}
-            >
-              {model}
-            </Chip>
-          ))}
-
-          {addingModel ? (
-            <Input
-              ref={modelInput}
-              data-testid="provider-add-model-input"
-              wrapperClassName="w-52 py-0.5"
-              className="font-mono text-[11px]"
-              value={newModel}
-              placeholder={t('settings.providers.addModelPlaceholder')}
-              onChange={(event) => setNewModel(event.target.value)}
-              onBlur={commitModel}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') commitModel()
-                if (event.key === 'Escape') {
-                  setNewModel('')
-                  setAddingModel(false)
-                }
-              }}
-            />
-          ) : (
-            <Chip
-              tone="accent"
-              font="sans"
-              data-testid="provider-add-model"
-              onClick={() => setAddingModel(true)}
-            >
-              {/*
-                The leading "+" is part of the copy rather than a lucide icon:
-                Tailwind's preflight gives every `svg` `display: block`, which
-                inside the chip's truncating text span forces the label onto a
-                second line. The artboard draws it as text anyway.
-              */}
-              {t('settings.providers.addModel')}
-            </Chip>
-          )}
-        </div>
-
-        {draft.models.length === 0 && !addingModel ? (
-          <p className="text-[11px] text-fg-faint">{t('settings.providers.noModels')}</p>
-        ) : null}
-      </div>
+      <ProviderModels />
 
       {result ? (
         <p

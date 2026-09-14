@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod } from '@shared/backend'
 import type { Agent, AgentInput } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
+import { AGENT_TEMPLATES, getAgentTemplate, type AgentTemplate } from '@shared/agent-templates'
 import { resetBackend, setBackend } from '../lib/backend-provider'
 import {
   draftFromAgent,
@@ -306,5 +307,80 @@ describe('agents store', () => {
 
     expect(useAgentsStore.getState().agents[0]?.name).toBe('Ada')
     expect(draftFromAgent(ada).skillNames).not.toBe(ada.skillNames)
+  })
+})
+
+describe('createFromTemplate (S7.5)', () => {
+  const template = (id: string): AgentTemplate => {
+    const found = getAgentTemplate(id)
+    if (!found) throw new Error(`missing template: ${id}`)
+    return found
+  }
+
+  it('writes the template verbatim, on the model its hints prefer', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    const assistant = template('assistant')
+
+    const created = await useAgentsStore
+      .getState()
+      .createFromTemplate(assistant, 'p1', ['deepseek-r1:7b', 'qwen2.5:3b-instruct'])
+
+    expect(created?.name).toBe(assistant.name)
+    expect(created?.systemPrompt).toBe(assistant.systemPrompt)
+    expect(created?.description).toBe(assistant.description)
+    expect(created?.providerId).toBe('p1')
+    // The hint wins over the provider's own order.
+    expect(created?.modelId).toBe('qwen2.5:3b-instruct')
+    expect(created?.role).toBe('participant')
+    expect(created?.avatar.text).toBe('A')
+    expect(useAgentsStore.getState().agents).toHaveLength(1)
+  })
+
+  it('leaves the editor closed, unlike every other way an agent is created', async () => {
+    setBackend(fakeBackend().client)
+
+    await useAgentsStore.getState().createFromTemplate(template('critic'), 'p1', ['x'])
+
+    const state = useAgentsStore.getState()
+    expect(state.mode).toBe('idle')
+    expect(state.draft).toBeNull()
+  })
+
+  it('does not write an agent that would have no model to speak through', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    expect(await useAgentsStore.getState().createFromTemplate(template('planner'), 'p1', [])).toBe(
+      null
+    )
+    expect(await useAgentsStore.getState().createFromTemplate(template('planner'), '', ['x'])).toBe(
+      null
+    )
+    expect(backend.calls).toEqual([])
+  })
+
+  it('renames rather than colliding when the template name is taken', async () => {
+    const assistant = template('assistant')
+    const backend = fakeBackend([agentFrom('a1', validDraft({ name: assistant.name }))])
+    setBackend(backend.client)
+    await useAgentsStore.getState().load()
+
+    const created = await useAgentsStore.getState().createFromTemplate(assistant, 'p1', ['x'])
+
+    // `agents.create` refuses a duplicate name, and a refusal on a first-run
+    // card explains nothing to the person reading it.
+    expect(created?.name).toBe(`${assistant.name} copy`)
+  })
+
+  it('gives each template a different avatar colour', async () => {
+    setBackend(fakeBackend().client)
+
+    for (const entry of AGENT_TEMPLATES) {
+      await useAgentsStore.getState().createFromTemplate(entry, 'p1', ['x'])
+    }
+
+    const colors = useAgentsStore.getState().agents.map((agent) => agent.avatar.color)
+    expect(new Set(colors).size).toBe(AGENT_TEMPLATES.length)
   })
 })

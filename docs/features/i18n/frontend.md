@@ -36,6 +36,10 @@ Actions:
 - `setLanguage(language)` — optimistic local write, then `settings.update`, then
   replace with the authoritative answer, then `i18n.changeLanguage(resolve(…))`.
   It *does* reject if the write fails, so the caller can surface it.
+- `dismissOnboarding()` (S7.5) — the same shape as `setTheme`: an optimistic
+  local write so the card disappears under the cursor, then `settings.update`
+  with `{ onboardingDismissed: true }`, then the authoritative row. One-way by
+  design; nothing writes `false` back.
 - `useLanguage()` — the stored **setting** (`'system'` included), which is what
   the switcher highlights. The *active* language is `i18n.language` from
   `useTranslation()`; the two are different things.
@@ -118,7 +122,16 @@ both languages. A shell command (S5.3's `brew install anthropics/tap/ant`) is
 data, so it is a constant in `@shared/presets` rendered inside `{…}` — braces are
 invisible to the JSX scan — rather than a key that would have to be duplicated
 identically in both files and then drift. The same rule already covers a working
-directory path and a model id.
+directory path and a model id, and S7.5 added three more: the version string and
+the repository URL in Settings → About, every `name@version · licence` row of
+its generated licence list, and an agent template's **name**, which is stored in
+`agents.name` and resolved against by `@mentions`.
+
+Two runtime keys now exist, and both are checked in `locales.test.ts` rather
+than by the usage guard, which cannot see a key that is assembled:
+`settings.mcp.presets.<id>` (S5.1) and `agents.templates.<id>` (S7.5). Each is
+asserted **in both directions** — no entry without copy, no copy left behind by
+an entry that was renamed.
 
 ## Accessibility and keyboard
 
