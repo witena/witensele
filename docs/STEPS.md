@@ -1753,6 +1753,78 @@ to fail three times out of three on `3688233` under the same conditions. Docs:
 `docs/features/{orchestration,executor,chats}/` (all four each) plus
 `docs/features/{agent-turn,backend-client,editor,i18n}/`.
 
+### S5.13 Google sign-in `[ ]`
+What: the Google provider gains the same authentication choice the Anthropic
+one has (S5.3): paste a Gemini API key, or sign in with a Google account. The
+mechanism mirrors S5.3 exactly — delegate to the official CLI, store no token
+of our own, only rewrite request headers.
+- **Mechanism: `gcloud` application-default credentials.** `gcloud auth
+  application-default login` runs Google's OAuth flow in the browser and
+  stores a refresh token under `~/.config/gcloud/application_default_credentials.json`;
+  `gcloud auth application-default print-access-token` prints a short-lived
+  access token, refreshing it when needed; `gcloud auth application-default
+  revoke` signs out; `gcloud config get-value project` and `gcloud auth
+  application-default set-quota-project <id>` name the Google Cloud project
+  the usage is billed to. Requests then carry `Authorization: Bearer <token>`
+  and `x-goog-user-project: <project>` and must **not** carry
+  `x-goog-api-key`. The user needs the Google Cloud SDK installed (`brew
+  install --cask google-cloud-sdk`) and a project with the Generative
+  Language API enabled and billing attached — the sign-in panel says so.
+  Not used, deliberately: the Gemini CLI / Antigravity OAuth client and the
+  `cloudcode-pa.googleapis.com` Code Assist endpoint that pi's extension
+  reuses. Those tokens are first-party to Google's own tools and are the same
+  shape as the Claude Code tokens Anthropic now refuses; Witena uses only the
+  public Gemini API with credentials the user's own CLI holds.
+- Data: `ProviderInput.auth` (S5.3) accepts `'oauth'` for `type === 'google'`
+  as well, with no custom `baseUrl`; the S5.3 validation reasons apply. No
+  migration (the column exists). `providerRequiresApiKey` returns false.
+- `src/main/providers/google-cli.ts` (Electron-free, `node:child_process`):
+  a `GoogleCli` interface injected into the registry — `status()`, `login()`,
+  `logout()`, `accessToken()`, `project()` — with the real implementation
+  spawning `gcloud`. Resolve the binary as S5.3 does for `ant` (`PATH`, then
+  `/opt/homebrew/bin`, `/usr/local/bin`, `~/google-cloud-sdk/bin`, with a
+  `WITENA_GCLOUD_BIN` override). Status is derived from
+  `print-access-token` succeeding plus the ADC file's presence and the
+  configured project; a missing binary maps to `gcloud_missing`, no ADC to
+  `gcloud_not_logged_in`, no project to `gcloud_no_project` (new
+  `BackendErrorCode`s, translated in the renderer). The status sent to the
+  renderer carries `account` (from `gcloud auth application-default
+  print-access-token` is opaque — read the account from `gcloud config
+  get-value account`) and `project` only; tokens never leave the main
+  process. Tokens are cached in memory until 60 s before their expiry
+  (`gcloud auth application-default print-access-token --format=json`
+  reports it if available; otherwise assume 55 minutes).
+- Model construction: `createGoogleGenerativeAI({ apiKey: '', fetch })`
+  with a wrapper that deletes `x-goog-api-key`, sets `Authorization` and
+  `x-goog-user-project`. `providers.fetchModels` and
+  `providers.testConnection` go through the same wrapper. Generalise the
+  S5.3 header-rewriting `fetch` helper so both providers share it.
+- Backend methods: extend `providers.authStatus` / `login` / `logout` to
+  take `{ type: 'anthropic' | 'google' }` (keep the contract test in step)
+  rather than adding three more methods.
+- Provider editor: the S5.3 "Authentication" control is enabled for the
+  Google type (it was disabled with a hint); the sign-in panel shows the
+  account and project, "Sign in", "Sign out", and — when no project is set —
+  a project id `Input` that calls `set-quota-project`. OpenAI stays disabled
+  with its hint.
+- Unit tests: the shared fetch wrapper for both header sets; `google-cli.ts`
+  against a fake `gcloud` script on `PATH` (missing, logged in, not logged
+  in, no project, failing exit); validation (`oauth` accepted for google,
+  still rejected for openai); the registry building an oauth Google model;
+  the editor's control enabled for google.
+- e2e: `e2e/providers.spec.ts` gains the Google sign-in panel's "not
+  installed" state (launch with `WITENA_GCLOUD_BIN` pointing nowhere).
+- Real-API check, as in S5.3: `gcloud` 553 is installed on the development
+  machine; if the developer has run `gcloud auth application-default login`
+  and set a quota project, build the provider through the registry and run
+  `fetchModels` and one `generateText`; report what came back. If ADC is
+  absent, say so — do not run the login yourself (it needs the browser and
+  the user's account).
+Acceptance: with ADC present and a project set, a Google provider in sign-in
+mode passes Test connection, lists models and completes a chat turn with no
+key stored; without `gcloud` the panel explains what to install; the tests
+above pass. Docs: `docs/features/providers/` (all four).
+
 ## Phase 6: Backlog (decided, not yet scheduled)
 
 Everything below is agreed work that is deliberately **not** in Phase 5. Each
