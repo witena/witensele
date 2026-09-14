@@ -24,13 +24,18 @@
  *   Google's on). An `openai-compatible` endpoint has no account to sign in to,
  *   so it gets no control rather than a dead one.
  * - **In sign-in mode the panel replaces the key field**, never sits beside it.
+ * - **A key this build cannot decrypt is explained, not hidden** (S7.6). The
+ *   "a key is stored" hint would be true and useless — the key is stored, it
+ *   just cannot be read — so the notice takes its place and the field takes the
+ *   focus, because pasting the key again is the whole fix.
  */
+import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getPreset, providerAuth, supportsOAuth } from '@shared/presets'
 import type { ProviderAuth } from '@shared/types'
 import { Field, Input, SegmentedControl } from '../ui'
 import { useProvidersStore } from '../../stores/providers'
-import { authControl } from './provider-display'
+import { authControl, keyUnreadable } from './provider-display'
 import { ProviderSignIn } from './provider-sign-in'
 
 export function ProviderCredential(): React.JSX.Element | null {
@@ -40,16 +45,30 @@ export function ProviderCredential(): React.JSX.Element | null {
   const selectedId = useProvidersStore((state) => state.selectedId)
   const providers = useProvidersStore((state) => state.providers)
 
+  const keyField = useRef<HTMLInputElement>(null)
+  const record = providers.find((provider) => provider.id === selectedId)
+  const unreadableKey = keyUnreadable(record)
+
+  // S7.6: opening a provider whose key cannot be read puts the caret where the
+  // fix is. The only thing the user can do about it is paste the key again, and
+  // the notice above the field says so — asking them to find the field as well
+  // would be one step of ceremony for no reason.
+  useEffect(() => {
+    if (unreadableKey) keyField.current?.focus()
+  }, [selectedId, unreadableKey])
+
   if (!draft) return null
 
   const store = useProvidersStore.getState
-  const record = providers.find((provider) => provider.id === selectedId)
   const preset = getPreset(draft.presetId)
   const auth = providerAuth(draft)
   const { shown: showsAuthControl, available: authAvailable } = authControl(draft.type)
   // A key typed into the field is `''` once emptied, which *clears* the stored
   // key; the hint only applies while the field has never been touched.
-  const showStoredKeyHint = Boolean(record?.hasApiKey) && draft.apiKey === undefined
+  // A key that cannot be decrypted is *stored*, so the hint would be true — and
+  // it would also tell the user everything is fine. The S7.6 notice replaces it.
+  const showStoredKeyHint =
+    Boolean(record?.hasApiKey) && draft.apiKey === undefined && !unreadableKey
 
   return (
     <>
@@ -95,9 +114,18 @@ export function ProviderCredential(): React.JSX.Element | null {
           htmlFor="provider-api-key"
           layout="column"
         >
+          {unreadableKey ? (
+            <p
+              data-testid="provider-key-unreadable"
+              className="text-[11px] leading-snug text-status-warn"
+            >
+              {t('settings.providers.keyUnreadable')}
+            </p>
+          ) : null}
           <Input
             id="provider-api-key"
             data-testid="provider-api-key-input"
+            ref={keyField}
             type="password"
             autoComplete="off"
             className="font-mono text-[12px]"

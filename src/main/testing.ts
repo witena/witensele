@@ -36,6 +36,16 @@ import { createInsecureSecretStore, type SecretStore } from './secrets'
 export interface TestAppContextOptions {
   /** Injected outbound HTTP, so a test never opens a socket. */
   fetchImpl?: FetchImpl
+  /**
+   * The secret store, for a suite that is about encryption itself (S7.6).
+   *
+   * Defaults to the insecure `plain:` fallback, which is what every other suite
+   * wants: it needs no key file and no platform support. A test that exercises
+   * the file key or the migration passes `createFileKeySecretStore` here, and
+   * the repositories are bound to whatever arrives — `encrypt` and
+   * `secrets.decrypt` must always be two halves of the same store.
+   */
+  secrets?: SecretStore
   /** Passed to every `ChatRunner`; a test injects `createModel` here. */
   runner?: ChatRunnerOptions
   /**
@@ -77,6 +87,29 @@ export interface TestAppContextOptions {
    * and it makes the assertions readable (`request-1`).
    */
   newRequestId?: () => string
+}
+
+/**
+ * A stand-in for Electron's `safeStorage` (S7.6).
+ *
+ * Used two ways: as the **wrapper** around the key file on a signed build, and
+ * as the **legacy reader** the secret migration decrypts pre-S7.6 rows with. It
+ * reproduces the one property that matters — a value is only readable by a store
+ * built with the same `identity`, which is exactly what repackaging an unsigned
+ * build changes — and produces the same `djEw…` shape the user's database holds,
+ * so the prefix rules are tested against realistic input.
+ */
+export function fakeSafeStorage(identity = 'build-1'): SecretStore {
+  return {
+    isAvailable: () => true,
+    encrypt: (plain) => Buffer.from(`v10:${identity}:${plain}`, 'utf8').toString('base64'),
+    decrypt: (cipher) => {
+      const raw = Buffer.from(cipher, 'base64').toString('utf8')
+      const prefix = `v10:${identity}:`
+      if (!raw.startsWith(prefix)) throw new Error('decryption failed')
+      return raw.slice(prefix.length)
+    }
+  }
 }
 
 /**
@@ -128,7 +161,7 @@ export function createTestAppContext(
   const bus = createEventBus()
   const events: BackendEvent[] = []
   bus.subscribe((event) => events.push(event))
-  const secrets = createInsecureSecretStore()
+  const secrets = options.secrets ?? createInsecureSecretStore()
 
   const ctx: AppContext = {
     db: database.handle,
@@ -138,6 +171,7 @@ export function createTestAppContext(
     repos: createRepositories(database.handle.db, { encrypt: (plain) => secrets.encrypt(plain) }),
     events: bus,
     secrets,
+    unreadableSecrets: new Set<string>(),
     userId: LOCAL_USER_ID,
     // Tied off immediately below, as in `createAppContext`.
     runners: undefined as unknown as ChatRunnerRegistry,

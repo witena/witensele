@@ -36,6 +36,11 @@
  * `gcloud_not_logged_in` and `gcloud_no_project` are all facts about the
  * machine's Google Cloud SDK, and the third of them is raised by the fetch
  * wrapper mid-request, which is nobody's form.
+ *
+ * S7.6 added `key_unreadable` on the same side again: a key encrypted by a
+ * previous installation is a fact about this machine's stored data, and it is
+ * raised while resolving a provider for a chat turn as well as while probing one
+ * from the settings form.
  */
 import type { BackendError, BackendErrorCode, ValidationReason } from '@shared/types'
 import { VALIDATION_REASONS } from '@shared/types'
@@ -70,6 +75,8 @@ export function errorMessage(t: TranslateFn, code: BackendErrorCode): string {
       return t('errors.gcloud_not_logged_in')
     case 'gcloud_no_project':
       return t('errors.gcloud_no_project')
+    case 'key_unreadable':
+      return t('errors.key_unreadable')
   }
 }
 

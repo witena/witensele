@@ -58,6 +58,15 @@ All three migrations after the initial schema are the same shape and it is the
 shape to copy: **one nullable column, no default, no rewrite**
 (`0001` added `messages.in_reply_to`, `0002` added `providers.auth` in S5.3,
 `0003` added `chats.goal` in S5.10).
+
+**S7.6 added none, on purpose.** Moving every provider key off `safeStorage` and
+onto the file-held key changes the *contents* of `api_key_encrypted`, which SQL
+cannot do — it would have to decrypt — and which is allowed to fail for one row
+and succeed for the next. It is therefore a startup pass in ordinary code
+(`src/main/providers/migrate-secrets.ts`, called from `src/main/index.ts` after
+the context exists), idempotent because a row already holding a `fk1:` value is
+skipped, and it never writes a row it could not read. See
+[backend.md](./backend.md), "The secret formats".
 SQLite can add a nullable column in place, so an existing database is upgraded
 in microseconds and a row written by an older build stays readable — `NULL` maps
 through `optional()` to an absent field, and the shared type's documented
@@ -197,3 +206,8 @@ because half the point is that a close and reopen behaves correctly.
 - **`DEFAULT_CHAT_TITLE` is English**, stored rather than translated; see the open
   question in `context.md`.
 - **No backup, export or vacuum** and no `PRAGMA optimize` on close. S4.4.
+- **A copy of `witena.db` alone is not a complete backup any more** (S7.6). Every
+  `fk1:` ciphertext in it is readable only with `userData/secrets.key`; a backup
+  that leaves the key file behind restores a database whose every provider says
+  "paste the key again". Whatever S4.x builds for export has to include it, or
+  deliberately exclude the keys and say so.

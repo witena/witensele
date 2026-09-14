@@ -2266,6 +2266,35 @@ adds a line here in the same commit.
   re-run. The file's other assertions already avoid the race (see the commit
   that introduced them); this one line did not get the same treatment.
 
+### API keys and the key file (S7.6)
+
+- **The dmg-over-dmg case is verified by hand, not by a spec.** The end-to-end
+  suite proves the two halves separately — a key survives a relaunch on the same
+  `userData`, and a row the build cannot decrypt is left alone and explained —
+  because producing a genuine reinstall needs two differently packaged unsigned
+  dmgs and a Gatekeeper prompt. The first S7.6 dmg that replaces an older one is
+  the first real observation.
+- **Nothing re-wraps an existing key file when the build becomes signed** (S7.3).
+  A machine that has been running unsigned builds keeps a plain `secrets.key`;
+  only a file created after `WITENA_SIGNED_BUILD` exists is wrapped. Rewriting
+  the user's stored secrets silently on launch is not a side effect an update
+  should have, so the shape of the answer is an offer — "protect the key file
+  with the Keychain" — in Settings, and it needs a screen and a confirmation.
+- **`WITENA_SIGNED_BUILD` has to reach the packaged app**, not only the build
+  shell. It is read by the running process, so S7.3 has to inject it into the
+  bundle (a build-time constant is the obvious form) rather than exporting it in
+  a workflow step and assuming the app sees it.
+- **The key is never rotated**, and there is no way to re-encrypt every stored
+  key under a new one. Nothing needs it today; a compromised key file would.
+- **A copy of `witena.db` alone is no longer a complete backup.** Every `fk1:`
+  value in it needs `secrets.key`. Whatever S4.x builds for export and backup has
+  to take the key file with it, or exclude the keys deliberately and say so on
+  the screen that offers it.
+- **A key written on another machine is indistinguishable from a corrupted one.**
+  Both read as `key_unreadable`, and the sentence names the likely cause (an
+  update) rather than the certain one. Telling them apart would mean storing the
+  key file's identity beside every ciphertext.
+
 ### Open questions carried from the feature documents
 
 - `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
@@ -2608,7 +2637,7 @@ backlog rather than patched from inside this step. Docs:
 `docs/features/{ui-shell,providers,chats,agents,i18n,packaging}/` (all four
 each) and the `docs/README.md` index.
 
-### S7.6 API keys that survive an unsigned update `[ ]`
+### S7.6 API keys that survive an unsigned update `[x] (2026-09-13)`
 What: provider keys must not become unreadable when the app is rebuilt.
 Today they are encrypted with Electron `safeStorage`, whose key lives in the
 macOS Keychain item "Witena Safe Storage"; the Keychain grants access per
@@ -2655,6 +2684,53 @@ build from the same `userData`; an unreadable legacy key is explained, not
 reported as a failed probe. Docs: `docs/features/providers/` and
 `docs/features/database/` (all four each), `docs/features/packaging/backend.md`
 (the security posture and the S7.3 hand-off).
+Done: `createFileKeySecretStore` in `src/main/secrets.ts` — AES-256-GCM with a
+fresh 12-byte IV per value, under 32 random bytes in `userData/secrets.key`
+(mode `0600`, created on first use, `wx` so two processes starting at once
+cannot each write one), stored as `fk1:` + base64(iv‖tag‖ciphertext) and failing
+with a typed `key_unreadable` on a wrong key, a failed tag, a truncated value or
+a value that is not its own. `src/main/ipc/secret-store.ts` now exposes
+`createSafeStorageStore()`, which returns the store **or `null`**, and is used
+for exactly two things: reading the old rows, and wrapping the key file when
+`WITENA_SIGNED_BUILD` is set. `migrateProviderSecrets`
+(`src/main/providers/migrate-secrets.ts`, Electron-free, called from
+`index.ts` after the context exists) re-encrypts every `djEw…` / `plain:` row
+through the repository's own `encrypt`, skips anything already `fk1:` — so the
+second launch writes nothing — and **never overwrites a ciphertext it could not
+read**, collecting those ids in `AppContext.unreadableSecrets` instead.
+`Provider.keyState` (`ok` / `unreadable` / `none`) is filled from that set by the
+`providers.*` handlers and cleared by a patch that touches `apiKey`; it is a
+runtime field, so there is no column and no migration.
+
+**The key file records how it is stored** (`fkkey1:` versus `fkkey1w:`) rather
+than trusting the environment variable at read time — the variable describes the
+running build, not the file it found, and a mismatch would hand the wrong 32
+bytes to AES, which fails exactly like "your keys are gone". **Wrapping is off
+unless the build is signed**, because `safeStorage` on an unsigned build is
+granted to an identity that changes with every package: wrapping there would
+recreate the bug. `djEw` is not a magic string either — it is base64 of `v10`,
+Chromium's `OSCrypt` prefix, which survives the encoding because base64 maps
+three bytes to four characters; `djEx` is `v11`, Linux's keyring-less fallback.
+
+`resolve.ts` maps a failed decrypt to `key_unreadable` (new `BackendErrorCode`,
+translated in the renderer) and marks the provider, so a probe, a model fetch and
+a chat turn all say the same thing — and the card and the editor explain it with
+nothing probed at all: one line under the card, one above the key field, the
+field focused, and the "a key is stored" hint replaced rather than shown beside
+it, because it would be true and reassuring. The renderer store also stopped
+flattening a **rejected** probe to `internal`, which is what made the new code
+visible under the Test button.
+
+Verified: `npm test` (93 files, 1521 tests, all passing) and `npm run typecheck`,
+plus the full Playwright suite (99 passed) with a local Ollama running, so
+`e2e/providers.spec.ts`'s new "a key saved in one launch is still readable by the
+next" really does save a key, relaunch the app on the same `userData` and probe
+green through the restored key — and its companion seeds a `djEw…` row with the
+`sqlite3` CLI while the app is closed and watches the UI ask for it again. What
+is **not** verified is the reinstall itself: that needs two differently packaged
+unsigned dmgs, so the relaunch is the automated half and the dmg-over-dmg case
+stays a manual check. Recorded, with the two follow-ups the step deliberately did
+not do, in "API keys and the key file (S7.6)" in the Phase 6 backlog.
 
 ## Phase 8: Online version (PLAN "Local release and online version")
 

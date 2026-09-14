@@ -106,6 +106,10 @@ actually wanted.
    is log detail and is never shown. When the rejection carries a
    `ValidationReason` in `details`, `translateFailure` prefers `errors.<reason>`
    over the generic `errors.validation` — the narrower half of the same contract.
+   A code may also have a *second*, longer piece of copy in the feature that owns
+   the screen: S7.6's `errors.key_unreadable` is the one-line failure class, and
+   `settings.providers.keyUnreadable` is the sentence the provider card and the
+   editor show, which says what to do about it.
    Since S5.10 a store may fill those same three fields **itself**, with a reason
    and no rejection behind it: a path picked outside the chat's folder is refused
    by the renderer, because no native dialog can be confined to a directory, and

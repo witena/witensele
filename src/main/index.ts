@@ -10,8 +10,10 @@ import { DEFAULT_APP_SETTINGS, type ThemeSetting } from '@shared/types'
 import { APP_NAME } from '@shared/version'
 import { createAppContext, skillsDir, type AppContext } from './app-context'
 import { buildHandlers } from './handlers'
-import { createElectronSecretStore } from './ipc/secret-store'
+import { createSafeStorageStore } from './ipc/secret-store'
 import { forwardEvents, registerIpc } from './ipc/register'
+import { migrateProviderSecrets } from './providers/migrate-secrets'
+import { createFileKeySecretStore, SECRETS_KEY_FILE } from './secrets'
 import { seedSkills } from './skills/loader'
 
 const isDev = !app.isPackaged
@@ -161,11 +163,40 @@ app.setName(APP_NAME)
 applyUserDataOverride()
 
 void app.whenReady().then(() => {
-  const secrets = createElectronSecretStore()
   const userDataDir = app.getPath('userData')
   const databasePath = join(userDataDir, DATABASE_FILE)
+
+  // S7.6: provider keys are encrypted with a key held in `userData`, not with a
+  // Keychain item the next unsigned rebuild would lose. `safeStorage` is still
+  // constructed — it reads the rows written before S7.6, and on a signed build
+  // (S7.3, `WITENA_SIGNED_BUILD`) it wraps the key file. This file is the only
+  // one allowed to know where either of them lives.
+  const legacySecrets = createSafeStorageStore()
+  if (!legacySecrets) {
+    console.warn('[witena] safeStorage reports no encryption backend on this machine')
+  }
+  const secrets = createFileKeySecretStore({
+    keyPath: join(userDataDir, SECRETS_KEY_FILE),
+    ...(legacySecrets ? { wrapper: legacySecrets } : {})
+  })
+
   context = createAppContext({ databasePath, userDataDir, secrets })
   console.log(`[witena] database: ${databasePath}`)
+
+  // Once per launch, and a no-op from the second one on: every key still stored
+  // in the pre-S7.6 format is read with the store that wrote it and re-encrypted
+  // with the file key. A row that cannot be read is left untouched and its id is
+  // reported to the UI as `keyState: 'unreadable'`.
+  const moved = migrateProviderSecrets(context, { legacy: legacySecrets })
+  if (moved.migrated.length > 0) {
+    console.log(`[witena] re-encrypted ${moved.migrated.length} provider key(s) with the file key`)
+  }
+  if (moved.unreadable.length > 0) {
+    console.warn(
+      `[witena] ${moved.unreadable.length} provider key(s) cannot be decrypted by this build; ` +
+        'they were left untouched and have to be pasted again'
+    )
+  }
 
   // First launch only: an empty library is filled with the skills shipped with
   // the build, so a new installation has something real to look at under

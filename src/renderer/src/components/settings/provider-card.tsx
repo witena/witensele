@@ -8,12 +8,18 @@
  *
  * It takes its labels already translated, like every other primitive, so no
  * shared component can hide an untranslated literal.
+ *
+ * S7.6 added one line to it: a provider whose stored key this build cannot
+ * decrypt says so under its name. The status pill cannot carry that — the key
+ * *is* stored, so "no key" would be a lie and "untested" says nothing — and the
+ * user needs a sentence, not a colour.
  */
 import clsx from 'clsx'
 import type { Provider } from '@shared/types'
 import { Avatar, Chip, StatusPill } from '../ui'
 import { providerLogo } from './provider-logo'
 import {
+  keyUnreadable,
   providerHost,
   providerStatusTone,
   type ProviderStatus
@@ -30,6 +36,13 @@ export interface ProviderCardProps {
   statusLabel: string
   /** Already translated "+N more" chip, or absent when everything fits. */
   overflowLabel?: string | undefined
+  /**
+   * Already translated explanation for a key this build cannot decrypt (S7.6).
+   *
+   * Rendered only when the provider's `keyState` says so, so the caller may
+   * always pass it; the card decides whether the sentence applies.
+   */
+  keyUnreadableLabel?: string | undefined
   onSelect: () => void
 }
 
@@ -39,6 +52,7 @@ export function ProviderCard({
   status,
   statusLabel,
   overflowLabel,
+  keyUnreadableLabel,
   onSelect
 }: ProviderCardProps): React.JSX.Element {
   const logo = providerLogo(provider.name, provider.presetId)
@@ -76,6 +90,15 @@ export function ProviderCard({
           label={statusLabel}
         />
       </div>
+
+      {keyUnreadable(provider) && keyUnreadableLabel ? (
+        <p
+          data-testid="provider-card-key-unreadable"
+          className="text-[11px] leading-snug text-status-warn"
+        >
+          {keyUnreadableLabel}
+        </p>
+      ) : null}
 
       {provider.models.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">

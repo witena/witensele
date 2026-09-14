@@ -108,6 +108,7 @@ export function ProvidersSection(): React.JSX.Element {
                 overflowLabel={
                   hidden > 0 ? t('settings.providers.moreModels', { extra: hidden }) : undefined
                 }
+                keyUnreadableLabel={t('settings.providers.keyUnreadable')}
                 onSelect={() => useProvidersStore.getState().startEdit(provider.id)}
               />
             )

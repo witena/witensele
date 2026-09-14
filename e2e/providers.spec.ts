@@ -1,8 +1,9 @@
 /**
  * The S1.6 acceptance test: a provider can be added, probed, saved and found
- * again after a restart — plus S5.3's sign-in mode at the end of the file.
+ * again after a restart — plus S7.6's two key-survival cases and S5.3's sign-in
+ * mode at the end of the file.
  *
- * Three flows, deliberately different in what they touch:
+ * Five flows, deliberately different in what they touch:
  *
  * 1. **Ollama**, which is the only provider that can be probed for real without a
  *    secret — it runs on localhost and needs no key. The spec checks whether
@@ -13,7 +14,16 @@
  * 2. **The `custom` preset**, entirely offline: a fake endpoint and a fake key,
  *    saved and reopened, to prove the write-only key contract — the key never
  *    comes back, and the form says one is stored instead of showing a fake value.
- * 3. **Sign-in mode with neither vendor CLI installed** (S5.3, S5.13), which
+ * 3. **A key across a relaunch** (S7.6): a provider saved *with* a key, found
+ *    again after the app is restarted on the same `userData`, and probed. That is
+ *    the flow an unsigned rebuild used to break, because `safeStorage`'s Keychain
+ *    item is granted per application identity; the key now lives in
+ *    `userData/secrets.key`, which a relaunch and an update both leave alone.
+ * 4. **A key a previous installation wrote** (S7.6), seeded into the database by
+ *    hand as base64 of `v10…` while the app is closed — the exact shape the
+ *    user's own rows held. Nothing can decrypt it, so the row must be left
+ *    untouched and the UI must ask for the key again.
+ * 5. **Sign-in mode with neither vendor CLI installed** (S5.3, S5.13), which
  *    relaunches the app with `WITENA_ANT_BIN` and `WITENA_GCLOUD_BIN` pointing
  *    at nothing. Neither browser flow is driven; the panels, the two install
  *    commands and the two refused Saves are.
@@ -24,6 +34,7 @@
  * them depends on the active language — and no Chinese appears in this file
  * (CLAUDE.md rule #1).
  */
+import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
@@ -42,7 +53,8 @@ const SHOTS_DIR = process.env['WITENA_SHOTS_DIR'] ?? join(repoRoot, 'test-result
 const WINDOW_SIZE = { width: 1440, height: 900 }
 
 /** Ollama's OpenAI-compatible endpoint, the same URL the `ollama` preset stores. */
-const OLLAMA_MODELS_URL = 'http://localhost:11434/v1/models'
+const OLLAMA_BASE_URL = 'http://localhost:11434/v1'
+const OLLAMA_MODELS_URL = `${OLLAMA_BASE_URL}/models`
 
 const zhCN = locale('zh-CN')
 
@@ -76,6 +88,24 @@ async function prepare(): Promise<void> {
   await expect(window.getByTestId('page-settings')).toHaveText(zhCN.settings.title)
 }
 
+/**
+ * Points the probe at a small model when the editor offers the choice.
+ *
+ * An Ollama install commonly holds a 70B model as well, and whichever id happens
+ * to sort first is not a sensible probe target — which is why the editor offers
+ * the control at all. Shared by the S1.6 flow and S7.6's restart.
+ */
+async function selectSmallProbeModel(): Promise<void> {
+  const probe = window.getByTestId('provider-probe-model')
+  if ((await probe.count()) === 0) return
+  // Read the labels rather than the DOM values: `e2e/` is type-checked by
+  // `tsconfig.node.json`, which has no DOM lib, and the option's label is the
+  // model id anyway.
+  const values = await probe.locator('option').allTextContents()
+  const small = values.find((value) => /:(1|1\.5|2|3|4)b\b/i.test(value))
+  if (small) await probe.selectOption(small)
+}
+
 test.beforeAll(async () => {
   ollamaUp = await probeOllama()
   userDataDir = createUserDataDir()
@@ -105,9 +135,7 @@ test('adds the Ollama preset, fetches its models and saves it', async () => {
   await window.getByTestId('preset-ollama').click()
   // The preset fills the form: name from the preset, base URL from its endpoint.
   await expect(window.getByTestId('provider-name-input')).toHaveValue('Ollama')
-  await expect(window.getByTestId('provider-base-url-input')).toHaveValue(
-    'http://localhost:11434/v1'
-  )
+  await expect(window.getByTestId('provider-base-url-input')).toHaveValue(OLLAMA_BASE_URL)
   // A local preset needs no key, so Save must be reachable with the field empty.
   await expect(window.getByTestId('provider-api-key-input')).toHaveValue('')
 
@@ -117,18 +145,9 @@ test('adds the Ollama preset, fetches its models and saves it', async () => {
     await expect(window.getByTestId('provider-model-chip').first()).toBeVisible({ timeout: 20_000 })
     expect(await window.getByTestId('provider-model-chip').count()).toBeGreaterThan(0)
 
-    // Pick a small model on purpose. An Ollama install commonly holds a 70B model
-    // as well, and whichever id happens to sort first is not a sensible probe
-    // target — which is exactly why the editor offers this control at all.
-    const probe = window.getByTestId('provider-probe-model')
-    if ((await probe.count()) > 0) {
-      // Read the labels rather than the DOM values: `e2e/` is type-checked by
-      // `tsconfig.node.json`, which has no DOM lib, and the option's label is the
-      // model id anyway.
-      const values = await probe.locator('option').allTextContents()
-      const small = values.find((value) => /:(1|1\.5|2|3|4)b\b/i.test(value))
-      if (small) await probe.selectOption(small)
-    }
+    // Pick a small model on purpose, or "Test connection" becomes a
+    // several-minute model load.
+    await selectSmallProbeModel()
 
     // The probe runs a real `generateText` against the chosen model.
     await window.getByTestId('provider-test').click()
@@ -219,6 +238,132 @@ test('clearing a key puts the card back into the "no key" state', async () => {
   await window.getByTestId('provider-save').click()
 
   await expect(card.getByTestId('provider-card-status')).toHaveAttribute('data-status', 'no-key')
+})
+
+/**
+ * S7.6, the acceptance criterion: a key saved by one launch is readable by the
+ * next one from the same `userData`.
+ *
+ * This is the flow that used to break. `safeStorage` keys its Keychain item off
+ * the application identity, so the *next* unsigned build could not decrypt what
+ * this one wrote; the key now lives in `userData/secrets.key`, which a relaunch —
+ * and an update — leaves alone. A relaunch is as close as an end-to-end spec can
+ * get to a reinstall, and it is exactly what the file has to survive.
+ *
+ * The endpoint is Ollama's, reached through the `custom` preset so the provider
+ * genuinely carries a key: the `ollama` preset needs none, and a provider with
+ * no key proves nothing about keys. Ollama ignores the `Authorization` header,
+ * which is what makes the probe runnable at all without a real secret.
+ */
+test('a key saved in one launch is still readable by the next', async () => {
+  await window.getByTestId('providers-add').click()
+  await window.getByTestId('preset-custom').click()
+  await window.getByTestId('provider-name-input').fill('Key round trip')
+  await window.getByTestId('provider-base-url-input').fill(OLLAMA_BASE_URL)
+  await window.getByTestId('provider-api-key-input').fill('sk-file-key-round-trip')
+
+  if (ollamaUp) {
+    await window.getByTestId('provider-fetch-models').click()
+    await expect(window.getByTestId('provider-model-chip').first()).toBeVisible({ timeout: 20_000 })
+    await selectSmallProbeModel()
+  } else {
+    await window.getByTestId('provider-add-model').click()
+    await window.getByTestId('provider-add-model-input').fill('llama3.2:3b')
+    await window.getByTestId('provider-add-model-input').press('Enter')
+  }
+
+  await window.getByTestId('provider-save').click()
+  const index = (await window.getByTestId('provider-card').count()) - 1
+
+  await app?.close()
+  ;({ app, window } = await launchWitena(userDataDir))
+  await prepare()
+  await openProviderSettings(window)
+  // Locators are bound to a `Page`, and the relaunch produced a new one, so
+  // every locator below has to be built from the current `window`.
+  await window.getByTestId('provider-card').nth(index).click()
+
+  // The key is still stored, and this build can read it: `keyState` would be
+  // `unreadable` otherwise and the editor would be asking for it again.
+  await expect(window.getByTestId('provider-api-key-stored')).toBeVisible()
+  await expect(window.getByTestId('provider-key-unreadable')).toHaveCount(0)
+  await expect(window.getByTestId('provider-card-key-unreadable')).toHaveCount(0)
+
+  if (ollamaUp) {
+    await selectSmallProbeModel()
+    await window.getByTestId('provider-test').click()
+    await expect(window.getByTestId('provider-test-result')).toHaveAttribute('data-ok', 'true', {
+      timeout: 40_000
+    })
+  } else {
+    test.info().annotations.push({
+      type: 'skipped',
+      description:
+        `${OLLAMA_MODELS_URL} did not answer; the probe after the restart was ` +
+        'skipped. The stored-key assertions ran.'
+    })
+  }
+})
+
+/**
+ * S7.6, the other half: a key this build genuinely cannot read is explained.
+ *
+ * The row is written by hand with the `sqlite3` CLI while the app is closed,
+ * holding base64 of `v10…` — the real shape of `safeStorage` output, and exactly
+ * what the user's own database held after the S7.1 dmg replaced the S4.4 one.
+ * Nothing can decrypt it, which is the point: the startup migration has to leave
+ * it alone and the UI has to say what to do about it.
+ */
+test('a key from a previous installation asks to be pasted again', async () => {
+  await window.getByTestId('providers-add').click()
+  await window.getByTestId('preset-custom').click()
+  await window.getByTestId('provider-name-input').fill('Left behind')
+  await window.getByTestId('provider-base-url-input').fill('https://example.invalid/v1')
+  await window.getByTestId('provider-api-key-input').fill('sk-will-be-replaced-by-hand')
+  await window.getByTestId('provider-save').click()
+
+  const index = (await window.getByTestId('provider-card').count()) - 1
+  const id = await window
+    .getByTestId('provider-card')
+    .nth(index)
+    .getAttribute('data-provider-id')
+  expect(id).not.toBeNull()
+
+  // Closed first: the write has to land in the same file the next launch opens.
+  await app?.close()
+  const unreadable = Buffer.from('v10-from-a-keychain-this-build-cannot-reach', 'utf8').toString(
+    'base64'
+  )
+  expect(unreadable.startsWith('djEw')).toBe(true)
+  execFileSync('sqlite3', [
+    join(userDataDir, 'witena.db'),
+    `UPDATE providers SET api_key_encrypted = '${unreadable}' WHERE id = '${id}';`
+  ])
+
+  ;({ app, window } = await launchWitena(userDataDir))
+  await prepare()
+  await openProviderSettings(window)
+
+  // Rebuilt from the relaunched window, for the reason above.
+  const card = window.getByTestId('provider-card').nth(index)
+  // The card says so without anything being probed: "no key" would be false —
+  // a key *is* stored — and a failed probe would blame the provider.
+  await expect(card.getByTestId('provider-card-key-unreadable')).toBeVisible()
+  await expect(card.getByTestId('provider-card-status')).toHaveAttribute('data-status', 'untested')
+
+  await card.click()
+  await expect(window.getByTestId('provider-key-unreadable')).toBeVisible()
+  // The "a key is stored" hint would be true and reassuring, which is wrong.
+  await expect(window.getByTestId('provider-api-key-stored')).toHaveCount(0)
+  // The field has the focus, because pasting the key is the whole fix.
+  await expect(window.getByTestId('provider-api-key-input')).toBeFocused()
+
+  await window.getByTestId('provider-api-key-input').fill('sk-pasted-again')
+  await window.getByTestId('provider-save').click()
+
+  await expect(window.getByTestId('provider-key-unreadable')).toHaveCount(0)
+  await expect(card.getByTestId('provider-card-key-unreadable')).toHaveCount(0)
+  await expect(window.getByTestId('provider-api-key-stored')).toBeVisible()
 })
 
 /**

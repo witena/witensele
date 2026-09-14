@@ -12,6 +12,7 @@ import { LOCAL_USER_ID } from '@shared/types'
 import {
   authControl,
   formatExpiry,
+  keyUnreadable,
   providerHost,
   providerStatus,
   providerStatusTone,
@@ -178,5 +179,25 @@ describe('formatExpiry', () => {
 
   it('says nothing when the CLI did not say', () => {
     expect(formatExpiry(undefined, 'en-US')).toBe('')
+  })
+})
+
+/**
+ * S7.6. The notice under the card and above the key field is one predicate, and
+ * this is it — absent `keyState` must never render it, because a provider that
+ * did not come from a `providers.*` answer (an editor draft, an older backend)
+ * simply has not been asked.
+ */
+describe('keyUnreadable', () => {
+  it('is true only for a key this build could not decrypt', () => {
+    expect(keyUnreadable({ keyState: 'unreadable' })).toBe(true)
+    expect(keyUnreadable({ keyState: 'ok' })).toBe(false)
+    expect(keyUnreadable({ keyState: 'none' })).toBe(false)
+  })
+
+  it('says nothing when nobody has determined it', () => {
+    expect(keyUnreadable({})).toBe(false)
+    expect(keyUnreadable(undefined)).toBe(false)
+    expect(keyUnreadable(null)).toBe(false)
   })
 })

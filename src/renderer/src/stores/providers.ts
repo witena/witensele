@@ -300,11 +300,14 @@ export const useProvidersStore = create<ProvidersState>()((set, get) => ({
       set((state) => ({ testResults: { ...state.testResults, [key]: result } }))
       return result
     } catch (cause) {
-      // The handler answers with a value rather than a rejection, but a transport
-      // failure is still possible and must look the same to the UI.
+      // The handler answers with a value rather than a rejection, but a rejection
+      // is still possible — a transport failure, or (S7.6) a stored key this
+      // build cannot decrypt, which `resolveProvider` refuses before the probe
+      // can run. The class is carried over rather than flattened to `internal`,
+      // so the line under the button says what actually happened.
       const result: ConnectionTestResult = {
         ok: false,
-        error: { code: 'internal', message: describe(cause) }
+        error: { code: classify(cause), message: describe(cause) }
       }
       set((state) => ({ testResults: { ...state.testResults, [key]: result } }))
       return result

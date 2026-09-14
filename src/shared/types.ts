@@ -66,6 +66,17 @@ export type ProviderAuth = 'apiKey' | 'oauth'
 export const PROVIDER_AUTH_MODES = ['apiKey', 'oauth'] as const
 
 /**
+ * Whether this provider's stored key can still be decrypted (S7.6).
+ *
+ * `none` is a provider that stores no key — a local endpoint, or one that signs
+ * in — and is therefore not a problem. `unreadable` is a key written by an
+ * earlier installation whose encryption key is gone; the row is left exactly as
+ * it is (never overwritten with something unreadable) and the UI asks for the
+ * key again.
+ */
+export type ProviderKeyState = 'ok' | 'unreadable' | 'none'
+
+/**
  * A configured model provider. Deliberately has no key field: the encrypted key
  * lives in the backend's `SecretStore` and only its presence is reported here.
  */
@@ -80,6 +91,17 @@ export interface Provider extends EntityBase {
   models: string[]
   /** True when a key is stored for this provider. The key itself never leaves main. */
   hasApiKey: boolean
+  /**
+   * Whether the stored key can still be read (S7.6).
+   *
+   * **Runtime only, not a column**: the `providers.*` handlers fill it from the
+   * set of ids the startup migration could not decrypt, so it is absent from a
+   * provider built anywhere else (a repository row, an editor draft) and a
+   * reader must treat absent as "not determined". `unreadable` is the state the
+   * UI explains — a key encrypted by a previous installation, which has to be
+   * pasted again.
+   */
+  keyState?: ProviderKeyState
   /**
    * Absent means `apiKey`, which is what every row written before S5.3 holds.
    * Read it through `providerAuth()` in `shared/presets.ts` rather than
@@ -802,6 +824,17 @@ export type BackendErrorCode =
    * credential. The sign-in panel offers a field that sets one.
    */
   | 'gcloud_no_project'
+  /**
+   * A stored API key cannot be decrypted by this build (S7.6).
+   *
+   * The key was encrypted by an earlier installation whose encryption key is
+   * gone — an unsigned rebuild loses the `safeStorage` Keychain item, because
+   * macOS grants it per application identity. Nothing is broken and nothing was
+   * lost except the key itself: pasting it again fixes the provider for good,
+   * since every key written since S7.6 is held by `userData/secrets.key`, which
+   * updates do not touch.
+   */
+  | 'key_unreadable'
 
 /** Serializable error shape: an `Error` cannot survive the transport intact. */
 export interface BackendError {

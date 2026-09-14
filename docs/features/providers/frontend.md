@@ -6,14 +6,14 @@
 |---|---|
 | `src/renderer/src/pages/settings/providers-section.tsx` | The section: a 520px card list (with the header that carries `settings-section-title`) and the editor column beside it |
 | `src/renderer/src/pages/settings-page.tsx` | Renders `ProvidersSection` **in place of** the generic content pane, because this section owns both of its columns |
-| `src/renderer/src/components/settings/provider-card.tsx` | One card: monogram, name, endpoint, status pill, model chips. A `<button>`, because it is the selection control |
+| `src/renderer/src/components/settings/provider-card.tsx` | One card: monogram, name, endpoint, status pill, model chips — and, since S7.6, one line when the stored key cannot be decrypted. A `<button>`, because it is the selection control |
 | `src/renderer/src/components/settings/provider-editor.tsx` | The add / edit form's layout and its Test / Save / Delete row. Since S7.5 the preset grid, the credential block and the model block are the three components below, not inline JSX |
-| `src/renderer/src/components/settings/provider-credential.tsx` | **S7.5**, extracted from the editor: the Authentication control (S5.3) and, under it, either the write-only key field or the sign-in panel. Takes no props — it reads and writes the one draft in the store — so the first-run card renders *this component*, not a copy |
+| `src/renderer/src/components/settings/provider-credential.tsx` | **S7.5**, extracted from the editor: the Authentication control (S5.3) and, under it, either the write-only key field or the sign-in panel. Takes no props — it reads and writes the one draft in the store — so the first-run card renders *this component*, not a copy. **S7.6** added the unreadable-key notice above the field and the focus that goes with it |
 | `src/renderer/src/components/settings/provider-models.tsx` | **S7.5**, extracted likewise: "Fetch models", the chips and the inline "add a model" field, with the documented rule that a fetch *replaces* what the form held |
 | `src/renderer/src/components/settings/provider-sign-in.tsx` | **S5.3**, generalised in **S5.13** (it was `anthropic-sign-in.tsx`). The sign-in panel for whichever vendor its `type` prop names: the three states, that vendor's install command, the Sign in / Sign out buttons, and — for a Google login with no quota project — the project field |
 | `src/renderer/src/components/settings/preset-grid.tsx` | The three-column preset picker, rendered straight from `PROVIDER_PRESETS` |
 | `src/renderer/src/components/settings/provider-logo.ts` | Monogram initials and the colour derived from the preset id |
-| `src/renderer/src/components/settings/provider-display.ts` | `providerHost`, `providerStatus`, `providerStatusTone`, and (S5.3) `authControl`, `signedInName`, `formatExpiry` — the editor's decisions as pure functions, because the suite has no DOM |
+| `src/renderer/src/components/settings/provider-display.ts` | `providerHost`, `providerStatus`, `providerStatusTone`, (S5.3) `authControl`, `signedInName`, `formatExpiry` and (S7.6) `keyUnreadable` — the editor's decisions as pure functions, because the suite has no DOM |
 | `src/renderer/src/components/ui/chip.tsx` | New primitive: an item in an editable set, optionally removable or clickable |
 | `src/renderer/src/components/ui/spinner.tsx` | New primitive: the indeterminate ring |
 | `src/renderer/src/components/ui/status-pill.tsx` | New primitive: dot + label in three tones, with the exported tone → token mapping |
@@ -32,7 +32,7 @@
 | `selectedId` | `string \| null` | The record the editor is bound to; `null` while creating |
 | `mode` | `'idle' \| 'create' \| 'edit'` | `idle` renders the placeholder, the others render the form. It is the **settings editor's** state: the first-run card edits the same draft without touching it |
 | `draft` | `ProviderInput \| null` | The editor's working copy. **Never carries a loaded key** — see below |
-| `testResults` | `Record<string, ConnectionTestResult>` | Keyed by provider id, plus `'draft'` for an unsaved one. Runtime only, never persisted |
+| `testResults` | `Record<string, ConnectionTestResult>` | Keyed by provider id, plus `'draft'` for an unsaved one. Runtime only, never persisted. A probe that was *rejected* rather than answered — S7.6's `key_unreadable`, or a transport failure — is stored in the same shape with its own code, so the line under the button never flattens to "something went wrong inside the app" |
 | `testing` / `fetchingModels` / `saving` | `boolean` | Drive the three spinners |
 | `authStatus` | `Record<OAuthProviderType, ProviderAuthStatus \| null>` | What each vendor CLI reports; `null` for one until its panel asks. One status **per vendor**, not one per provider — it is a fact about the machine, and two Anthropic providers share the one `ant` profile — but `ant` and `gcloud` are independent facts, which is why S5.13 made it a record |
 | `authBusy` / `authErrorCode` | `boolean` / `BackendErrorCode?` | The sign-in spinner, and the class of the last attempt that was refused. One flag, not one per vendor: exactly one panel is on screen at a time, because it belongs to the one draft the editor holds |
@@ -101,7 +101,15 @@ No subscription: this feature emits no events.
 | CLI not installed | The same shape plus **that vendor's** install command in monospace. The Sign in button stays clickable on purpose: it doubles as "look again" for a user who installs the CLI in another window |
 | signed in to Google with no project | A warning line and a project-id field with its own button, which calls `providers.setQuotaProject`. It is not an error state — the login worked — but the Gemini API refuses an end-user credential that names no project, so the fix is offered where the gap is noticed (S5.13) |
 | sign-in refused | A red line under the panel with the translated `ant_*` / `gcloud_*` sentence; Save then refuses too, and the editor's error line carries `data-error-code` |
+| key unreadable (S7.6) | One warning-toned line on the card (`provider-card-key-unreadable`) and another above the key field in the editor (`provider-key-unreadable`), both saying the key was saved by a previous version and has to be pasted again. The field takes the focus when such a provider is opened, and the "a key is stored" hint is **replaced** rather than shown beside it — it would be true and reassuring, which is exactly wrong. Saving a new key clears all of it, because the backend drops the id the moment a patch touches `apiKey` |
 | first run (S7.5) | The same three controls, on the chat page instead. `PresetGrid`, `ProviderCredential` and `ProviderModels` are rendered by `components/onboarding/onboarding-card.tsx` one step at a time, against the same draft, and the card's own Save calls `saveDraft`. Only one of the two screens is ever mounted — the shell renders a single page at a time — so every `data-testid` here stays unique |
+
+The unreadable-key notice is deliberately **not** a sixth status: the pill
+answers "can this provider be used", and a provider whose key cannot be read is
+in exactly the state the four existing answers describe — it has a key
+(`hasApiKey` is true, so not `no-key`) and nobody has probed it (`untested`).
+What the user needs is a sentence saying what to do, which a coloured dot cannot
+be.
 
 Card status is derived, never stored: `no-key` when a key is required and missing,
 otherwise `connected` / `probe failed` from this session's probe, otherwise
@@ -121,6 +129,13 @@ respect: the **install command is data, not copy** — `ANT_INSTALL_COMMAND` fro
 `@shared/presets`, rendered in a `<code>` exactly like a working directory path —
 and the expiry is formatted **in the renderer** with the active language, because
 the backend does not know which one that is.
+
+S7.6 added two keys: `settings.providers.keyUnreadable`, the sentence on the
+card and in the editor, and `errors.key_unreadable`, the failure class a probe or
+a model fetch reports. Two rather than one because they are said in different
+places for different reasons — the first is advice on a screen where the fix is
+one field away, the second is the translation of a `BackendErrorCode` that can
+reach the user from the middle of a chat turn.
 
 S5.13 split `authSignIn` into `authSignInAnthropic` / `authSignInGoogle` — the
 user is about to hand an account to a named company and the control should say

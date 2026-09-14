@@ -317,6 +317,51 @@ describe('handlers/buildHandlers', () => {
       await expect(handlers['providers.get'](ctx, { id: created.id })).resolves.toEqual(created)
     })
 
+    /**
+     * S7.6. `keyState` is filled by the handler from `ctx.unreadableSecrets`,
+     * which the startup migration and `resolveProvider` write to — so the three
+     * cases here are "no key at all", "a key this build wrote" and "a key it
+     * cannot read", and the third is the only one the UI explains.
+     */
+    it('reports keyState for every provider it returns', async () => {
+      const keyed = await handlers['providers.create'](ctx, { input: deepseek })
+      const keyless = await handlers['providers.create'](ctx, {
+        input: { type: 'openai-compatible', name: 'Ollama', baseUrl: 'http://x/v1', models: [] }
+      })
+
+      expect(keyed.keyState).toBe('ok')
+      expect(keyless.keyState).toBe('none')
+
+      ctx.unreadableSecrets.add(keyed.id)
+
+      await expect(handlers['providers.get'](ctx, { id: keyed.id })).resolves.toMatchObject({
+        hasApiKey: true,
+        keyState: 'unreadable'
+      })
+      const listed = await handlers['providers.list'](ctx)
+      expect(listed.map((provider) => provider.keyState)).toEqual(['unreadable', 'none'])
+    })
+
+    it('clears the unreadable mark when a new key is saved over it', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+      ctx.unreadableSecrets.add(created.id)
+
+      // A patch that does not touch the key changes nothing about the problem.
+      const renamed = await handlers['providers.update'](ctx, {
+        id: created.id,
+        patch: { name: 'DeepSeek (work)' }
+      })
+      expect(renamed.keyState).toBe('unreadable')
+
+      const pasted = await handlers['providers.update'](ctx, {
+        id: created.id,
+        patch: { apiKey: 'sk-pasted-again' }
+      })
+
+      expect(pasted.keyState).toBe('ok')
+      expect(ctx.unreadableSecrets.has(created.id)).toBe(false)
+    })
+
     it('rejects a provider with no name', async () => {
       await expect(
         handlers['providers.create'](ctx, { input: { ...deepseek, name: '  ' } })
