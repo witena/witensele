@@ -126,3 +126,59 @@ test('the selected settings section survives leaving the page', async () => {
     zhCN.settings.sections['developer'] as string
   )
 })
+
+/**
+ * Just enough of the DOM to type the one `locator.evaluate` callback below, the
+ * same shim and for the same reason as `theme.spec.ts`: the callback is
+ * serialised and runs **inside the renderer**, while `tsconfig.node.json` — which
+ * owns `e2e/` — has no `DOM` lib, because everything else here is Node code
+ * driving Electron from the outside. Adding `DOM` to that project to type two
+ * lines would let every spec reach for a browser global that is not there.
+ */
+declare function getComputedStyle(element: object): { color: string; fill: string }
+
+/**
+ * The brand mark on the rail, in both palettes (S7.1).
+ *
+ * The assertion is that the mark is *there* and that its blades take their
+ * colour from the palette in force — the mark carries no tile of its own, so a
+ * missing `currentColor` would render it invisible against the rail rather than
+ * wrong, which is the failure a screenshot alone would not name. The two crops
+ * are the part a human looks at: an inlined SVG can be present, correctly
+ * coloured and still mush, and only an eye can say so.
+ */
+test('the rail shows the brand mark in both themes', async () => {
+  const rail = window.getByRole('navigation').first()
+  const mark = window.getByTestId('brand-mark')
+
+  await window.getByTestId('nav-settings').click()
+  await window.getByTestId('settings-section-appearance').click()
+
+  await window.getByTestId('theme-dark').click()
+  await expect(window.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(mark).toBeVisible()
+  // 28 CSS pixels square: a whole-pixel box and a square viewBox, so the blades
+  // are never scaled non-uniformly or landed on a half pixel.
+  expect(await mark.boundingBox()).toMatchObject({ width: 28, height: 28 })
+  await rail.screenshot({ path: join(SHOTS_DIR, 'rail-dark.png') })
+
+  await window.getByTestId('theme-light').click()
+  await expect(window.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(mark).toBeVisible()
+  await rail.screenshot({ path: join(SHOTS_DIR, 'rail-light.png') })
+
+  // The mark inherits the rail's foreground, so it is a different ink in each
+  // theme without a second asset — and the point is the same terracotta in both.
+  const colours = await mark.evaluate((node) => {
+    const style = getComputedStyle(node)
+    const circle = node.querySelector('circle')
+    return {
+      blades: style.color,
+      point: circle ? getComputedStyle(circle).fill : null
+    }
+  })
+  expect(colours.point).toBe('rgb(217, 119, 87)')
+  expect(colours.blades).not.toBe('rgb(217, 119, 87)')
+
+  await window.getByTestId('theme-dark').click()
+})

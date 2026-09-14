@@ -5,7 +5,8 @@
 | File | Responsibility |
 |---|---|
 | `electron-builder.yml` | The whole build configuration: app id, product name, file selection, asar unpacking, extra resources, the macOS target and the signing decision |
-| `build/icon.svg` | The mark, drawn by hand: a rounded square in the accent colour `#d8a656` with a white stroked "W" |
+| `build/icon.svg` | The mark: the Aperture — six near-black blades closing on a terracotta point inside an eased hexagon, on a white rounded tile (S7.1) |
+| `build/icon-dark.svg` | The same geometry on an ink tile with white blades. **Not** the shipped icon; kept for the README and other dark surfaces |
 | `build/icon.png` | The 1024 px rasterisation of it, and the only input to the iconset |
 | `build/icon.icns` | What `mac.icon` points at. Binary, committed, regenerated only when the mark changes |
 | `build/icon.iconset/` | The ten intermediate PNGs `iconutil` reads. **Gitignored** — derived and reproducible in one loop |
@@ -18,6 +19,7 @@
 | `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
 | `scripts/generate-licenses.mjs` | **S7.5.** Writes `src/renderer/src/generated/licenses.json` (gitignored) from the production dependency tree, for Settings → About. Run by the `pretypecheck` / `pretest` / `predev` / `prebuild` hooks, so it happens before anything that reads the file — including `npm ci && npm run typecheck` on CI. Owned by [`../ui-shell/backend.md`](../ui-shell/backend.md); listed here because it is part of every build |
 | `src/main/packaging.test.ts` | The unit test over `electron-builder.yml` and the two copies of the version number |
+| `src/renderer/src/components/ui/brand-mark.test.ts` | The other half of the icon's gate: it proves `build/icon.svg` and the rail's inlined mark are the same drawing. Owned by [`../ui-shell/implement.md`](../ui-shell/implement.md); listed here because it is the only test that looks at `build/` at all |
 
 `package.json` carries no `build` key: electron-builder finds
 `electron-builder.yml` on its own, and one configuration in two places is the
@@ -145,10 +147,37 @@ Electron window and writing `webContents.capturePage()`, downsampled to 1024 px
 with `sips`, expanded into `build/icon.iconset/` at the five sizes plus their
 `@2x` variants, and packed with `iconutil -c icns`.
 
+Three things about that pipeline are load-bearing, and S7.1 is the step that
+found out why:
+
+- **The rasteriser has to be a real one.** `sips` converts images; it cannot
+  render an SVG's curves. Chromium (the Electron binary in `node_modules`) draws
+  the mark with Skia, which anti-aliases properly, and `shape-rendering="geometricPrecision"`
+  on the `<svg>` root tells it not to snap the diagonals to the pixel grid. Every
+  edge in this mark is a diagonal meeting another at a shallow angle, so that hint
+  is the difference between a smooth blade and a staircase.
+- **Every size below 1024 is a downscale, never a re-render.** Rendering directly
+  at 32 px would anti-alias a 0.9 px stroke against nothing; downscaling a 1024 px
+  bitmap with `sips -z` averages the supersampled pixels instead. The render
+  itself is the same idea one level up: Chromium captures at 2048 on a Retina
+  display and `sips` takes it to 1024.
+- **The 16 px variant is drawn with a thicker stroke, and only that variant.**
+  30 px on a 1024 canvas is 0.47 px at 16 — the blades average to a uniform grey
+  and the mark becomes a smudge. It is re-rendered from the same `icon.svg` with
+  `stroke-width` substituted to **56**, which is ~0.9 px at 16 and gives a legible
+  dark aperture with the terracotta point still readable. 56 was picked by
+  rendering 44 / 56 / 68 / 80 and looking at all four: 44 is still washed out and
+  68 upwards closes the white gaps into a blob. Nothing else in the iconset is
+  touched — 32 px and up are legible at the drawn weight — and the substitution is
+  a `sed` over the committed SVG rather than a second committed file, so there is
+  still exactly one drawing.
+
 The 64 px inset in the SVG is the padding macOS expects around an app icon — an
-icon drawn edge to edge looks oversized next to every other one in the Dock —
-and the 76 px stroke on the "W" is what keeps the mark legible at the 16 px
-variant.
+icon drawn edge to edge looks oversized next to every other one in the Dock. The
+tile carries **no border**: a hairline around a white tile is invisible on a light
+Dock and a grey fuzz at 16 px, and the tile's own anti-aliased edge is one pixel
+of partial alpha with no colour fringe (verified by reading the pixels either side
+of x=64 in the 1024 px render).
 
 ## Continuous integration
 

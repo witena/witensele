@@ -1,3 +1,5 @@
+<img src="build/icon.png" alt="" width="96" height="96">
+
 # Witena
 
 A macOS desktop app where several AI agents — each on its own model — discuss

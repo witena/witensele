@@ -9,11 +9,11 @@ main-process fact it depends on.
 |---|---|
 | `src/renderer/src/App.tsx` | Composition root. Renders `AppShell` and nothing else (it used to hold the smoke screen) |
 | `src/renderer/src/components/layout/app-shell.tsx` | The frame: `NavRail` plus the page named by the store. A `Record<Page, Component>` lookup, one page mounted at a time |
-| `src/renderer/src/components/layout/nav-rail.tsx` | 56px rail: app mark, Chats, Agents, Settings pinned to the bottom. The window's drag handle |
+| `src/renderer/src/components/layout/nav-rail.tsx` | 56px rail: the brand mark, Chats, Agents, Settings pinned to the bottom. The window's drag handle |
 | `src/renderer/src/components/layout/column.tsx` | One vertical strip: fixed width, one border, its own scroll context |
 | `src/renderer/src/components/layout/page-header.tsx` | The 52px title bar; drag region, with `actions` opted back out |
 | `src/renderer/src/components/layout/window-chrome.ts` | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` and why they exist |
-| `src/renderer/src/components/ui/*` | `Button`, `IconButton`, `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Chip`, `Avatar`, `PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, `StatusPill`, `Spinner`, plus the `index.ts` barrel. S2.5 added no primitive: the code block, the tool card and the mention popover are chat-specific and live under `components/chat/`. S5.10 added no primitive either, and widened one: a `SegmentedOption` may now be `disabled` on its own, so the chat Goal block can offer Document and Codebase while a chat has no folder to write into — disabled with the reason under them, rather than hidden |
+| `src/renderer/src/components/ui/*` | `Button`, `IconButton`, `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Chip`, `Avatar`, `PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, `StatusPill`, `Spinner`, `BrandMark`, plus the `index.ts` barrel. S7.1 added `BrandMark` — the tile-less Aperture mark the rail shows, inlined as SVG so its blades can be `currentColor`. S2.5 added no primitive: the code block, the tool card and the mention popover are chat-specific and live under `components/chat/`. S5.10 added no primitive either, and widened one: a `SegmentedOption` may now be `disabled` on its own, so the chat Goal block can offer Document and Codebase while a chat has no folder to write into — disabled with the reason under them, rather than hidden |
 | `src/renderer/src/pages/chats-page.tsx` | Chat list (264px) · conversation · member panel (288px), with the composer and the group-settings block |
 | `src/renderer/src/pages/agents-page.tsx` | Agent list (264px) and the editor area's empty state |
 | `src/renderer/src/pages/settings-page.tsx` | Section nav (220px) with the language quick toggle, and the content area |
@@ -103,15 +103,21 @@ Two traps worth repeating, both hit while writing this feature:
    `used-keys.test.ts` cannot see it. Every label goes through a `switch` of
    literal `t()` calls, which also makes the compiler prove the mapping is total.
 
-The only untranslated text in the shell is the `W` of the app mark, which is a
-brand mark. It is below the guard's three-letter threshold, so it needs no
-`ALLOWED_JSX_TEXT` entry — that list is still empty, as intended.
+The shell now has **no** untranslated text at all. Until S7.1 the one exception
+was the `W` of the placeholder app mark, which survived only because a single
+letter is below the guard's three-letter threshold. `BrandMark` is a drawing
+rather than a glyph, so there is nothing left to exempt and `ALLOWED_JSX_TEXT` is
+still empty, as intended.
 
 ## Accessibility and keyboard
 
 - Every icon-only control has a translated accessible name: `IconButton` requires
   `label` and sets both `aria-label` and `title`; every decorative lucide icon is
   `aria-hidden`.
+- `BrandMark` is `aria-hidden` with `focusable="false"`. The rail is already
+  labelled and the product name is in the window title; announcing "Witena" ahead
+  of every navigation would be noise, so the mark contributes no accessible name
+  and therefore no locale key.
 - The rail marks the current destination with `aria-current="page"`, the settings
   nav does the same, and both segmented controls use `aria-pressed`.
 - `Toggle` is `role="switch"` with `aria-checked`, not a repainted checkbox.

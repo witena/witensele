@@ -16,6 +16,7 @@ import clsx from 'clsx'
 import type { TFunction } from 'i18next'
 import { MessagesSquare, Settings, Users, type LucideIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { BrandMark } from '../ui/brand-mark'
 import { useUiStore, type Page } from '../../stores/ui'
 import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from './window-chrome'
 
@@ -80,12 +81,14 @@ export function NavRail(): React.JSX.Element {
         DRAG_REGION
       )}
     >
-      <div
-        aria-hidden="true"
-        className="mb-3.5 flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-[13px] font-bold text-bg-base"
-      >
-        W
-      </div>
+      {/*
+        The brand mark, not a letter (S7.1). It carries no tile of its own: the
+        blades are `currentColor` and `text-fg` is the rail's own foreground, so
+        the mark is ink on the light palette and near-white on the dark one with
+        no branch and no second asset. `h-7 w-7` is 28 whole pixels square, which
+        is what keeps the blades off half-pixels at 1x.
+      */}
+      <BrandMark className="mt-0.5 mb-3.5 h-7 w-7 text-fg" />
 
       <NavButton
         page="chats"

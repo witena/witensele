@@ -78,7 +78,10 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | `presenceColorClass` as an exported pure function | Inline `switch` inside the component | The state → token mapping is the only logic in the file; pulling it out makes it testable with no jsdom and no React, and totality over `PresenceState` is enforced by the compiler and the test together |
 | Class names written out in full, never interpolated | `` `bg-presence-${state}` `` | Tailwind scans source text. An interpolated class compiles and then renders transparent |
 | One attribute on `<html>` switches the theme (S5.8) | A React context with a `theme` value; a `dark:` variant on every utility; two stylesheets | A utility already compiles to `var(--color-…)`, so redefining the variables repaints everything that is mounted, everything that is not, and everything a later step adds. A context would have to be consumed to matter, and `dark:` doubles every class in the app |
-| The light palette keeps each dark step's contrast, and *darkens* the accent (S5.8) | Invert the lightness of every token; keep the amber accent | Inversion puts the rail above the panels and turns a 1.9:1 amber into body text on white. Roles, not lightness, are what the palette encodes |
+| The light palette keeps each dark step's contrast, and *darkens* the accent (S5.8) | Invert the lightness of every token; keep the accent as drawn | Inversion puts the rail above the panels and turns a pale accent into body text on white. Roles, not lightness, are what the palette encodes |
+| The interface accent **is** the brand colour (S7.1) | Keep the amber `#d8a656` beside a terracotta mark; pick a third colour that harmonises with both | Two warm colours a hue apart do not read as a palette, they read as a mistake. The mark's terracotta `#d97757` is the accent in the dark palette unchanged (5.79:1 on `bg-base`) and darkened to `#a13917` in the light one (6.15:1), so every accent surface in the app is the same colour as the icon in the Dock |
+| `--color-brand-point` is the same value in both palettes | Give it a light override like every other token; hard-code the terracotta in the component | It is an **identity**, not a role: a mark whose colour shifted with the appearance would be two marks. It is still declared in both blocks so `theme.test.ts` keeps watching it, and `CONSTANT_TOKENS` in that file is the named, deliberately tiny exception to "every override differs" |
+| The rail mark is an inlined SVG with `currentColor` blades | Two PNG assets; one SVG per theme; an `<img>` pointing at `build/icon.svg` | `currentColor` is what makes one drawing work in both palettes, which is the same argument S5.8 makes for the whole theme. An `<img>` cannot inherit a colour, and two assets is two things to keep in step with the icon |
 | `'system'` is stored as itself and resolved at use (S5.8) | Resolve once and store `light` / `dark` | Exactly the language decision from S1.4. A machine that flips at sunset should take the app with it |
 | Avatar and provider-logo colours stay dark in both themes (S5.8) | A second palette keyed by theme | They are **data** — an agent's `avatar.color` is a stored row — so theming them means rewriting records. A dark tile with a light monogram reads as a brand chip on white |
 | `drag-region` / `no-drag` as `@utility` in `index.css` | Tailwind arbitrary properties `[-webkit-app-region:drag]`, inline styles | The leading `-` of the vendor prefix collides with Tailwind's negative-value syntax, and `WebkitAppRegion` is not in React's `CSSProperties` |
@@ -103,6 +106,13 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
   same) but it is a real difference from the artboards; a custom title bar strip
   spanning the full width is the alternative if it ever looks wrong with data in
   the columns.
+- The mark reads as a solid ring rather than as six blades below about 20 px.
+  The rail renders it at 28 px, where the blades separate cleanly, and the
+  application icon's 16 px variant is drawn with a thickened stroke for exactly
+  this reason (see [`../packaging/backend.md`](../packaging/backend.md)). Nothing
+  in the app renders it smaller than 28 px today; a favicon or a menu-bar item
+  would be the first thing that does, and is recorded under "Appearance" in Phase
+  6 of STEPS.md.
 - "New chat" became live in S1.7; "New agent" and "Add member" are still rendered `disabled`
   because they have nothing to do yet, which reads as dimmer than the mockup's
   accent. They light up in S2.1 and S2.2.

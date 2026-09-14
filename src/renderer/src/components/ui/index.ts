@@ -7,6 +7,15 @@
  */
 export { Avatar, DEFAULT_AVATAR_COLOR, DEFAULT_AVATAR_TEXT_COLOR } from './avatar'
 export type { AvatarProps, AvatarSize } from './avatar'
+export {
+  BrandMark,
+  BRAND_MARK_BLADES,
+  BRAND_MARK_HEXAGON,
+  BRAND_MARK_POINT,
+  BRAND_MARK_STROKE_WIDTH,
+  BRAND_MARK_VIEWBOX
+} from './brand-mark'
+export type { BrandMarkBlade, BrandMarkProps } from './brand-mark'
 export { Badge } from './badge'
 export type { BadgeProps, BadgeTone } from './badge'
 export { Button } from './button'

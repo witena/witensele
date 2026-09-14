@@ -1991,6 +1991,33 @@ adds a line here in the same commit.
   second palette keyed by theme, which is a step of its own.
 - **`prefers-contrast` and `prefers-reduced-transparency` are not honoured**, and
   there is no high-contrast variant of either palette.
+- **The new accent has not been seen on every accent surface (S7.1).** The rail,
+  the settings screens, the agents screens and both themes' chat screens were
+  looked at, and every accent pair was computed against all six surface tokens
+  (worst case 4.71:1 dark, 5.14:1 light — both AA). What was *not* seen is the
+  accent on the surfaces that only exist mid-run: the streaming cursor, S5.5's
+  permission card, the "Jump to latest" pill and the `@mention` chips in a live
+  transcript. They take the token like everything else, so the risk is a hue that
+  reads warm next to `presence-working` rather than an unreadable control — the
+  two are 1.15:1 apart, which is fine for a dot beside text and would be wrong if
+  they ever had to be told apart on their own.
+- **The mark is only drawn at 28 px and up inside the app (S7.1).** Below roughly
+  20 px the six blades merge into a ring; the application icon's 16 px variant is
+  re-rendered with a thickened stroke for exactly that reason, and no in-app
+  surface renders it smaller than the rail's 28 px today. A favicon, a menu-bar
+  item or a notification icon would be the first thing that does, and would need
+  the same treatment or a simplified mark.
+- **The agent avatar palette was left on the amber-era hues (S7.1).** The eight
+  pairs in `agent-display.ts` are **data** — they are copied into `agents.avatar`
+  and stored in SQLite — so changing them would restyle new agents while every
+  existing one kept its old pair, which is worse than leaving all of them alone.
+  None of them was derived from the old accent (they are the mockup's five agents
+  plus three in the same family) and none clashes with terracotta. Re-picking them
+  is a step of its own, with a migration, if it is ever wanted.
+- **The dmg has no custom background.** S7.1's brief allowed for one; nothing was
+  added, because `dmg.background` also fixes the window size and the icon
+  positions, and the default Finder layout electron-builder produces is correct
+  today. It is a design task rather than a packaging one.
 
 ### Server and editor
 
@@ -2093,7 +2120,7 @@ adds a line here in the same commit.
 A double-click app. Steps S7.3 and S7.4 need an Apple Developer account; S7.1
 and S7.2 do not and come first.
 
-### S7.1 Brand mark and application icon `[ ]`
+### S7.1 Brand mark and application icon `[x] (2026-09-13)`
 What: replace the placeholder "W" tile with the chosen mark.
 - Pick one of the proposed marks (modern, minimal; see the proposal page
   linked in the `Done:` paragraph) and commit it as `build/icon.svg`; render
@@ -2106,6 +2133,97 @@ What: replace the placeholder "W" tile with the chosen mark.
 Acceptance: `npm run dist:dir` produces an app whose Dock and Finder icon is
 the new mark at 16–1024 px; the rail shows it in both themes. Docs:
 `docs/features/packaging/` and `docs/features/ui-shell/` (all four each).
+Done: the mark is the **Aperture** — six near-black blades closing on a single
+terracotta point inside a hexagon whose corners are eased with a 52 px radius.
+The design record is the proposal page
+<https://claude.ai/code/artifact/f20594f0-f036-43fc-83b6-ba891bd36df8>, where it
+was picked from the alternatives; "Aperture" is the internal name for the drawing
+and the product is still Witena. It reads as what the app does — many separate
+members converging on one answer — which is the only reason to prefer it to a
+letter.
+
+**One drawing, two cuts.** `build/icon.svg` is the tiled version the application
+icon is rendered from; `components/ui/brand-mark.tsx` inlines the identical
+geometry with no tile, so the rail can colour the blades `currentColor` and the
+mark becomes ink on the light palette and near-white on the dark one with no
+branch, no `data-theme` lookup and no second asset — the same argument S5.8 makes
+for the whole theme. The two are held together by `brand-mark.test.ts`, which
+compares the hexagon path, all six blade endpoints, the point and the stroke
+weight against `build/icon.svg` read as text. That is the **only** gate the icon
+has: nothing in `npm test` rasterises anything, so without it the Dock icon and
+the app's own rail could drift apart silently. The same file asserts the S7.1
+acceptance criterion against `nav-rail.tsx`'s source — `<BrandMark` is rendered,
+the `W` tile's exact classes are gone — because the repository has **no DOM test
+setup** (`vitest.config.ts` is `environment: 'node'`, no jsdom, no
+testing-library), and `PresenceDot` had already established the answer: export the
+checkable part as values and test those.
+
+**The accent became the brand colour.** `--color-accent` is the mark's terracotta
+`#d97757` in the dark palette (5.79:1 on `bg-base`, 4.71:1 at worst on `bg-hover`)
+with `--color-accent-hover` lightened to `#e1937a` (7.45:1); the light palette
+darkens the same hue to `#a13917` (6.15:1 on `bg-base`, 6.75:1 on `bg-elevated`,
+5.14:1 at worst on `bg-hover`) with `#812e12` as its hover (8.20:1). Every pair is
+AA on every one of the six surface tokens, in both directions where the accent is
+a background carrying `text-bg-base`. Keeping the old amber beside a terracotta
+mark was the alternative and it is the wrong one: two warm colours a hue apart do
+not read as a palette. **No other token moved.** The presence, status and danger
+hues are a different axis (green / red / amber / grey as *states*) and none of them
+was derived from the accent; the eight agent-avatar pairs are stored data, so
+re-picking them would restyle new agents and leave existing ones behind — both are
+recorded under "Appearance" in Phase 6 with the reasoning.
+
+`--color-brand-point` is new and is the **one** token deliberately identical in
+both palettes. It is an identity, not a role, and a mark whose colour shifted with
+the appearance would be two marks. S5.8's palette test says every token is
+overridden *and* every override differs, so the second half gained a named
+exception set, `CONSTANT_TOKENS`, plus a new assertion that a constant token is
+still *declared* in both blocks — exempting it from the difference check without
+exempting it from the existence check, which is the half that catches a token
+silently staying dark.
+
+**Rasterisation was the part with real content.** `sips` cannot render an SVG, so
+the pipeline S4.4 documented — Chromium in `node_modules` as the rasteriser,
+captured at 2048 and downsampled to 1024 — is exactly right, and every iconset
+size is a downscale of that 1024 bitmap rather than a fresh render at a tiny size.
+`shape-rendering="geometricPrecision"` was added to both SVGs and to the inlined
+component, because every edge in this mark is a diagonal meeting another at a
+shallow angle and the default lets a renderer snap them to the pixel grid. The
+tile carries **no border**: the proposal drew a hairline on its light-rail preview
+and it is not in the shipped mark, because a hairline is invisible on a light Dock
+and grey fuzz at 16 px. The 1024 px render was checked pixel by pixel across the
+tile edge — transparent, one pixel at alpha 198, then opaque white, with no colour
+fringe.
+
+One variant needed help. 30 px of stroke on a 1024 canvas is 0.47 px at 16, and
+the blades averaged to a uniform grey smudge — smooth, but unreadable.
+`icon_16x16.png` alone is now re-rendered from the same `icon.svg` with
+`stroke-width` substituted to **56** (~0.9 px at 16), chosen by rendering 44 / 56 /
+68 / 80 and looking at all four blown up: 44 is still washed out, 68 and up close
+the white gaps into a blob. It is a `sed` over the committed SVG rather than a
+second committed file, so there is still exactly one drawing. Nothing from 32 px
+up is touched.
+
+**Verified.** `npm run typecheck` clean; `npm test` 90 files / 1441 tests passed.
+`npm run dist:dir` built `dist/mac-arm64/Witena.app`, whose
+`Contents/Resources/icon.icns` is byte-identical to `build/icon.icns` (same
+SHA-256) and whose `Info.plist` names `icon.icns`. The icns round-trips through
+`iconutil -c iconset` to all ten expected PNGs, and the 16 / 32 / 64 / 128 px
+variants were blown up with nearest-neighbour and looked at: anti-aliased
+diagonals, no stair-stepping, no halo, the point still a point. `e2e/ui-shell.spec.ts`
+and `e2e/theme.spec.ts` pass (9 tests), the former with a new case that screenshots
+the rail into `test-results/shots/rail-{dark,light}.png`, asserts the mark's box is
+exactly 28x28 CSS pixels, and reads the computed colours back — the point is
+`rgb(217, 119, 87)` in both themes and the blades are not. Both crops were looked
+at. The README header now carries `build/icon.png` at 96 px, checked against
+GitHub's light, dark and dark-dimmed page grounds.
+
+**Deviations from the brief, both deliberate.** The geometry is byte-for-byte the
+approved file except for `shape-rendering="geometricPrecision"` on the `<svg>`
+root, which the "no rough edges" instruction asked for explicitly and which
+changes no coordinate. And the rail avatar had **no** test id to keep — the old
+tile was an `aria-hidden` div with none — so `data-testid="brand-mark"` was added,
+which is what the new e2e case addresses. Docs in `docs/features/packaging/` and
+`docs/features/ui-shell/` (all four each).
 
 ### S7.2 Release workflow `[x] (2026-09-13)`
 What: a tag builds the dmg.

@@ -19,9 +19,19 @@ is themed the day it is written. The rule this creates: **a token added to
 `@theme static` must be added to the light block as well**, and
 `lib/theme.test.ts` fails when it is not.
 
+S7.1 changed the accent and added one token. The accent is now the brand
+terracotta — `#d97757` in the dark palette, `#a13917` in the light one — so the
+colour every button, focus ring, chip and link in the app uses is the colour at
+the centre of the icon in the Dock. The new token is `--color-brand-point`, and
+it is the **one** token that is deliberately identical in both palettes: it is an
+identity rather than a role. It is still declared in both blocks, so the "every
+token is overridden" check still sees it; the "every override differs" check has
+a named exception set, `CONSTANT_TOKENS`, which the test's own comment asks to
+keep tiny.
+
 **Primitives.** `components/ui/` holds the vocabulary: `Button`, `IconButton`,
 `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Avatar`,
-`PresenceDot`, `EmptyState`, `SectionTitle`, `Field`. They are presentational and
+`PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, `BrandMark`. They are presentational and
 stateless — every one takes already-translated strings, so no primitive imports
 `react-i18next` and none of them can leak an untranslated literal.
 `SegmentedControl`'s options carry an optional per-option `disabled` since S5.10,
@@ -166,7 +176,8 @@ S5.8 added one `BackendClient` method, `system.applyTheme` — see
 |---|---|
 | `src/renderer/src/stores/ui.test.ts` | Defaults, both setters over every value, and that the two fields are independent — leaving Settings must not reset the section |
 | `src/renderer/src/components/ui/presence-dot.test.ts` | `presenceColorClass`: the four mappings, that they are distinct, and that each is a literal token utility rather than an interpolated class |
-| `src/renderer/src/lib/theme.test.ts` | `resolveTheme` over all six combinations; `applyTheme` / `activateTheme` against a faked `document` and `matchMedia` (including that leaving `'system'` unsubscribes); and the palette itself — every `--color-*` token overridden, every override a different value, `color-scheme` on both roots, and `--color-bg-base` equal to `WINDOW_BACKGROUND` |
+| `src/renderer/src/lib/theme.test.ts` | `resolveTheme` over all six combinations; `applyTheme` / `activateTheme` against a faked `document` and `matchMedia` (including that leaving `'system'` unsubscribes); and the palette itself — every `--color-*` token overridden, every override a different value **except the `CONSTANT_TOKENS` set**, which must instead be repeated verbatim, `color-scheme` on both roots, and `--color-bg-base` equal to `WINDOW_BACKGROUND` |
+| `src/renderer/src/components/ui/brand-mark.test.ts` | The mark in the rail and the mark the application icon is cut from are the same drawing: hexagon path, six blade endpoints, point, stroke weight and the `geometricPrecision` hint all compared against `build/icon.svg` and `build/icon-dark.svg`. Plus the S7.1 acceptance criterion — `nav-rail.tsx` renders `<BrandMark`, no longer renders the `W` tile, sizes it `h-7 w-7` and colours it `text-fg` |
 | `src/renderer/src/lib/highlighter.test.ts` | That `highlightCode` emits `--shiki-light` and `--shiki-dark` and no literal `color:` — the contract the two `.shiki` rules in `index.css` depend on |
 | `src/renderer/src/stores/settings.test.ts` | `setTheme`: the patch, the optimistic repaint, `system.applyTheme`, and that `'system'` is stored unresolved |
 | `e2e/theme.spec.ts` | The three-segment control, `prefers-color-scheme` through `page.emulateMedia`, the choice surviving a restart including `BrowserWindow.getBackgroundColor()`, and five light screenshots |
@@ -193,6 +204,16 @@ Screenshots land in `$WITENA_SHOTS_DIR` (default: `test-results/shots`, gitignor
   adds the supervisor. One layout note learnt there: an `Avatar` inside a flex row
   needs `self-start`, or the wrapper stretches to the row's height and the
   overlaid dot — positioned against its bottom edge — floats away from it.
+- **The mark is tested as values, not as markup.** There is no jsdom in this
+  repository (`vitest.config.ts` runs everything in `environment: 'node'`), so
+  `BrandMark` follows `PresenceDot`: the part worth asserting is exported as
+  plain data (`BRAND_MARK_HEXAGON`, `BRAND_MARK_BLADES`, `BRAND_MARK_POINT`) and
+  the test compares it with `build/icon.svg` read as text. That is a **stronger**
+  test than rendering would have been — rendering proves the component draws
+  something, while this proves the Dock icon and the rail are the same mark,
+  which is the thing nothing else in the build checks. "The rail renders the mark
+  rather than a letter" is asserted against `nav-rail.tsx`'s source text, the same
+  technique `used-keys.test.ts` uses on every component.
 - **Two tokens were added in S1.7**: `--color-avatar-user` and
   `--color-avatar-user-fg`, the human's monogram tile from the mockup. Agent
   avatar colours are *data* (each record stores its own), but the user has no

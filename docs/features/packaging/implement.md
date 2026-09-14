@@ -8,9 +8,11 @@ Six pieces, none of which touches runtime behaviour except the third:
    without being told to; `package.json` carries no `build` key, so there is one
    place to look.
 2. **`build/`** holds the icon: the `icon.svg` the mark is drawn in, the
-   1024 px `icon.png` it renders to, and the `icon.icns` macOS actually reads.
-   `build/icon.iconset/` — the ten intermediate PNGs — is gitignored, because it
-   is derived from the PNG and reproducible in one command.
+   1024 px `icon.png` it renders to, and the `icon.icns` macOS actually reads,
+   plus `icon-dark.svg`, the same mark on an ink tile for the README and other
+   dark surfaces (S7.1). `build/icon.iconset/` — the ten intermediate PNGs — is
+   gitignored, because it is derived from the PNG and reproducible in one
+   command.
 3. **`bundledSkillsDir()`** in `src/main/index.ts`, the one function whose answer
    differs between a checkout and a bundle.
 4. **`e2e/packaged.spec.ts`** plus `playwright.packaged.config.ts`, which assert
@@ -84,22 +86,62 @@ Retina display that capture comes out at 2048 px, which is then downsampled to
 1024 — supersampling the mark rather than rendering it at final size.
 
 ```sh
-# 1. SVG → PNG (2048 on a Retina display), then down to 1024
+# 1. SVG → PNG (2048 on a Retina display), then down to 1024.
+#    Chromium is the rasteriser; `sips` only ever resizes an existing bitmap.
 electron scripts/render-icon.cjs build/icon.svg build/icon.png 1024
 sips -z 1024 1024 build/icon.png --out build/icon.png
 
-# 2. PNG → iconset → icns
+# 2. PNG → iconset → icns. Every variant is a downscale of the 1024, never a
+#    fresh render at a tiny size.
 mkdir -p build/icon.iconset
 for s in 16 32 128 256 512; do
   sips -z $s $s build/icon.png --out build/icon.iconset/icon_${s}x${s}.png
   sips -z $((s*2)) $((s*2)) build/icon.png --out build/icon.iconset/icon_${s}x${s}@2x.png
 done
+
+# 3. The 16px variant only: re-render with a thicker stroke, because 30px on a
+#    1024 canvas is 0.47px at 16 and averages to grey mush. 56 was chosen by
+#    eye against 44 / 68 / 80. See backend.md, "Building the icon".
+sed 's/stroke-width="30"/stroke-width="56"/' build/icon.svg > /tmp/icon-16.svg
+electron scripts/render-icon.cjs /tmp/icon-16.svg /tmp/icon-16.png 512
+sips -z 16 16 /tmp/icon-16.png --out build/icon.iconset/icon_16x16.png
+
 iconutil -c icns build/icon.iconset -o build/icon.icns
 ```
 
 The render script is a throwaway, not a committed tool: it runs once per icon
 change and the three artifacts it produces are in the repository, so a normal
-build never needs it.
+build never needs it. `scripts/render-icon.cjs` is CommonJS despite the
+package's `"type": "module"`, because it is fed straight to the Electron binary
+rather than to node.
+
+### Checking the result
+
+`npm test` proves the SVG and the rail's inlined mark agree
+(`brand-mark.test.ts`), and that is the whole automated gate. The rest is an eye,
+and it is worth using:
+
+```sh
+# Unpack the icns back into the ten PNGs macOS will actually draw, then look at
+# the small ones blown up with nearest-neighbour — a smooth downscale hides
+# exactly the stair-stepping you are checking for.
+iconutil -c iconset build/icon.icns -o /tmp/verify.iconset
+```
+
+What to look for at 16 and 32 px: the blades separate rather than merge, the
+terracotta point is still a point rather than a pink pixel, the diagonals are
+anti-aliased rather than stepped, and the tile edge is one pixel of partial alpha
+with no coloured fringe and no border.
+
+Then the real check — `npm run dist:dir` and
+
+```sh
+shasum -a 256 build/icon.icns dist/mac-arm64/Witena.app/Contents/Resources/icon.icns
+/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" dist/mac-arm64/Witena.app/Contents/Info.plist
+```
+
+The two hashes must match and the plist must say `icon.icns`; electron-builder
+copies the file verbatim, so a mismatch means it read a different one.
 
 ## Making a release
 

@@ -184,6 +184,22 @@ function valueOf(block: string, token: string): string | undefined {
   return new RegExp(`${token}\\s*:\\s*([^;]+);`).exec(block)?.[1]?.trim()
 }
 
+/**
+ * Tokens that are the same colour in both palettes, on purpose.
+ *
+ * The rule S5.8 wrote is "every token is overridden, and the override differs" —
+ * the second half catches a block pasted across without being re-picked. A brand
+ * colour is the one thing that legitimately fails it: `--color-brand-point` is
+ * the terracotta at the centre of the mark (S7.1), and a mark whose colour
+ * shifted with the appearance would be two marks rather than one identity. It is
+ * still required to be *declared* in both blocks, which is what the test below
+ * this one asserts, so it stays visible to the check rather than exempt from it.
+ *
+ * Keep this set tiny. A colour is a candidate only if it is an identity — never
+ * because a light value was hard to pick.
+ */
+const CONSTANT_TOKENS = new Set(['--color-brand-point'])
+
 describe('the light palette', () => {
   const dark = tokensIn(themeBlock())
   const light = tokensIn(lightBlock())
@@ -202,7 +218,21 @@ describe('the light palette', () => {
     const darkBlock = themeBlock()
     const overrides = lightBlock()
     for (const token of dark) {
+      if (CONSTANT_TOKENS.has(token)) continue
       expect(valueOf(overrides, token), token).not.toBe(valueOf(darkBlock, token))
+    }
+  })
+
+  it('repeats the constant tokens verbatim rather than dropping them', () => {
+    // The exception has to be *stated* in both blocks, not inferred from a
+    // missing line: the check above is what proves the override exists at all,
+    // and a brand colour that silently fell back to the dark block would be a
+    // token this file no longer watches.
+    const darkBlock = themeBlock()
+    const overrides = lightBlock()
+    for (const token of CONSTANT_TOKENS) {
+      expect(dark, token).toContain(token)
+      expect(valueOf(overrides, token), token).toBe(valueOf(darkBlock, token))
     }
   })
 

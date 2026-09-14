@@ -79,6 +79,21 @@ implemented in `src/main/ipc/theme.ts`; see
 `system.ping`, `system.emitTestEvent` and `settings.update` — through the
 `BackendClient`, exactly as the smoke screen did before it moved.
 
+## The brand mark, which is not a main-process fact either
+
+S7.1 put the Aperture mark on the rail and changed the accent, and added **no**
+main-process code for it: the mark is an inlined SVG in
+`components/ui/brand-mark.tsx` and the accent is two lines of `index.css`.
+
+The one thing worth naming here is what did **not** change. `WINDOW_BACKGROUND`
+in `@shared/theme` and the `backgroundColor` the table above describes are
+`bg-base`, not `accent`, so the new accent does not touch the first frame and the
+duplicated-colour test in `lib/theme.test.ts` needed no edit. The application
+icon is likewise a **build** input rather than a runtime one — `electron-builder`
+copies `build/icon.icns` into the bundle and macOS reads it from there; no
+Electron API sets it, and `src/main/index.ts` never names it. See
+[`../packaging/backend.md`](../packaging/backend.md), "Building the icon".
+
 ## Events emitted
 
 None added.

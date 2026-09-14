@@ -35,8 +35,21 @@
   --color-fg-faint: #6f6a62;
 
   /* Accent */
-  --color-accent: #d8a656;
-  --color-accent-hover: #e6b96f;
+  --color-accent: #d97757;
+  --color-accent-hover: #e1937a;
+
+  /*
+   * The terracotta point at the centre of the brand mark (S7.1), and the **one**
+   * token that is deliberately identical in both palettes: it is the brand
+   * colour, not a role, and a mark whose colour shifted with the appearance
+   * would be two marks. `components/ui/brand-mark.tsx` reads it directly, and
+   * `build/icon.svg` carries the same literal, because an SVG on disk cannot
+   * reference a CSS variable.
+   *
+   * The blades around it are `currentColor` instead, so they take the
+   * foreground token of whatever palette is painted.
+   */
+  --color-brand-point: #d97757;
 
   /*
    * The human's monogram tile in the message list and the member panel. The
@@ -79,10 +92,13 @@
  * 4.05:1 on `bg-base` against the dark one's 3.37:1), so a screen that was
  * readable stays readable. Three things are not a plain inversion:
  *
- * - **The accent is darkened, not lightened.** `#d8a656` is a 1.9:1 amber on
- *   white — unusable as text and unusable behind `text-bg-base`. `#92600f` keeps
- *   the hue and reaches 4.9:1 on `bg-base` and 5.4:1 on white, and `bg-accent`
- *   with `text-bg-base` on it is AA in both directions.
+ * - **The accent is darkened, not lightened.** The terracotta `#d97757` (S7.1)
+ *   is a 2.6:1 wash on white — unusable as text and unusable behind
+ *   `text-bg-base`. `#a13917` is the same hue at a third of the lightness and
+ *   reaches 6.15:1 on `bg-base` (6.75:1 on `bg-elevated`, 5.14:1 on the darkest
+ *   surface it can land on, `bg-hover`), and `bg-accent` with `text-bg-base` on
+ *   it is AA in both directions. The dark accent is the brand colour unchanged:
+ *   5.79:1 on `bg-base`, 4.71:1 at worst on `bg-hover`.
  * - **The rail is the *darker* surface in both themes.** In the dark palette the
  *   rail is below the base and panels are above it; in light the panels go up to
  *   near-white and the rail keeps a warmer tint, so the chrome stays recessed and
@@ -122,8 +138,11 @@
   --color-fg-faint: #7d776b;
 
   /* Accent */
-  --color-accent: #92600f;
-  --color-accent-hover: #744b07;
+  --color-accent: #a13917;
+  --color-accent-hover: #812e12;
+
+  /* The brand point does not follow the appearance; see the base block. */
+  --color-brand-point: #d97757;
 
   /* The human's monogram tile: the same green, read as a tint rather than a slab. */
   --color-avatar-user: #d3e8dc;
