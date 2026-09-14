@@ -6,7 +6,7 @@
  * trailing `[PASS]` on a real answer is protocol noise and not content.
  */
 import { describe, expect, it } from 'vitest'
-import { PASS_TOKEN } from '@shared/pass'
+import { PASS_TOKEN } from '@shared/markers'
 import type { Message, MessagePart } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import { ABORTED_MESSAGE_ERROR, messageText, wasStopped } from './message-view'

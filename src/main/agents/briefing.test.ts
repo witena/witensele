@@ -14,7 +14,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatGoal, Language } from '@shared/types'
 import {
+  AGREED_TOKEN,
   buildGroupBriefing,
+  CONTINUE_TOKEN,
   PASS_TOKEN,
   resolveMainLanguage,
   toBriefingMember,
@@ -60,6 +62,12 @@ describe('buildGroupBriefing', () => {
 
       it('states the PASS rule', () => {
         expect(briefing).toContain(PASS_TOKEN)
+      })
+
+      // S5.14: the pair that lets a discussion end by itself.
+      it('states both closure markers', () => {
+        expect(briefing).toContain(AGREED_TOKEN)
+        expect(briefing).toContain(CONTINUE_TOKEN)
       })
     })
   }
@@ -208,6 +216,47 @@ describe('buildGroupBriefing (review)', () => {
     expect(brief('en', true)).toMatch(/executor of this chat has just changed files/)
     expect(brief('en', true)).toMatch(/judge it against the goal of this chat/)
     expect(brief('en', true, null)).toMatch(/judge it against the conclusion the group reached/)
+  })
+
+  it('says it in a different language in each, as the rest of the briefing does', () => {
+    expect(brief('en', true)).not.toBe(brief('zh-CN', true))
+  })
+})
+
+/**
+ * The closing block (S5.14), which is the one block that **replaces** a rule
+ * rather than adding to it: the turn that writes the group's conclusion must not
+ * also be told to end with a marker.
+ */
+describe('buildGroupBriefing (closing)', () => {
+  const brief = (language: Language, closing: boolean): string =>
+    buildGroupBriefing({ language, self: architect, members: [architect, reviewer], closing })
+
+  for (const language of LANGUAGES) {
+    describe(language, () => {
+      it('says nothing at all in an ordinary round', () => {
+        expect(brief(language, false)).toBe(
+          buildGroupBriefing({ language, self: architect, members: [architect, reviewer] })
+        )
+      })
+
+      it('drops the marker rule and adds the closing block', () => {
+        const closing = brief(language, true)
+
+        expect(closing).not.toContain(AGREED_TOKEN)
+        expect(closing).not.toContain(CONTINUE_TOKEN)
+        // Everything else about the room is still there.
+        expect(closing).toContain(architect.name)
+        expect(closing).toContain(reviewer.name)
+        expect(closing).toContain(PASS_TOKEN)
+      })
+    })
+  }
+
+  it('tells the closing turn in English what it is writing', () => {
+    expect(brief('en', true)).toMatch(/This is the closing turn/)
+    expect(brief('en', true)).toMatch(/State the conclusion the group reached/)
+    expect(brief('en', true)).toMatch(/do not end with a marker/)
   })
 
   it('says it in a different language in each, as the rest of the briefing does', () => {

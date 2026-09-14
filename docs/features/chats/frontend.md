@@ -29,7 +29,7 @@
 | `src/renderer/src/components/chat/tool-call.ts` | `describeToolCall` / `collectToolCalls`: pairing a `tool-call` with its `tool-result` and summarising both. Pure and unit-tested |
 | `src/renderer/src/components/chat/composer.tsx` | Auto-growing textarea (Enter sends, Shift+Enter newline, IME-safe, up to 8 lines), the `@` autocomplete popover, the clickable mention chips plus `@all`, Send / Stop |
 | `src/renderer/src/components/chat/mention-query.ts` | `extractMentionQuery` / `filterMentionCandidates` / `insertMention` / `appendMention`: everything the autocomplete could get wrong. Pure and unit-tested |
-| `src/renderer/src/components/chat/actions-card.tsx` | The right column's Actions card: the summarise picker and the vote button, both sending an ordinary message — and, since S5.12, "Write the deliverable" (`chat-write-deliverable`), the one row that does **not**: it is `chat.handoff` with `intent: 'deliver'`, owned by [`orchestration`](../orchestration/frontend.md) and disabled by the same `handoffBlocker` as the button above the composer |
+| `src/renderer/src/components/chat/actions-card.tsx` | The right column's Actions card: the summarise picker and the vote button, both sending an ordinary message — the vote with `VOTE_ROUNDS` (`1`, S5.14), so it runs one round whatever the chat's Max automatic rounds says — and, since S5.12, "Write the deliverable" (`chat-write-deliverable`), the one row that does **not**: it is `chat.handoff` with `intent: 'deliver'`, owned by [`orchestration`](../orchestration/frontend.md) and disabled by the same `handoffBlocker` as the button above the composer |
 | `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover (which since S5.2 greys out a second executor and says why in its sub-line), the member rows (avatar with presence dot, name, the executor badge, `model · presence` — counting up as `away · Ns` — the usage placeholder or, while the member is offline, a Retry button, and remove on hover) and native HTML5 drag-and-drop reordering |
 | `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested |
 | `src/renderer/src/lib/workdir.ts` | `folderName(path)`: the last segment of a path, for the header chip and the settings row. Hand-written rather than `node:path`, because the renderer has no Node types. Pure and unit-tested |
@@ -86,7 +86,7 @@ selector re-renders on every store write.
 | `invoke('messages.usageSummary')` | The page's `selectedId` effect, on **every** visit | Seeds the header and member-row token counts over the whole transcript, not just the loaded page |
 | `invoke('chats.search')` | The search box, debounced 200 ms | The ids the left column keeps while a query is active |
 | `invoke('agents.list')` | `agents.load()` on mount and after a chat is created | Author name, avatar and model badge |
-| `invoke('chat.send')` | Composer, Enter or the Send button — and the Actions card, through the composer's `submitText` handle | Stores the message and schedules a run |
+| `invoke('chat.send')` | Composer, Enter or the Send button — and the Actions card, through the composer's `submitText` handle, which since S5.14 also carries an optional `rounds` | Stores the message and schedules a run |
 | `invoke('chats.members.set')` | The picker, the row's "×", and a drop | Replaces the whole member list, order included |
 | `invoke('chats.update')` | Every group-settings control | Persists one `ChatSettings` field immediately; no Save button and no debounce |
 | `invoke('system.pickFolder')` + `invoke('chats.update')` | "Choose…" in the Working directory row, through `chooseWorkdir` | The native modal, then the binding. A cancelled dialog writes nothing and leaves no error |
@@ -196,6 +196,8 @@ New keys, all under the existing namespaces:
 | `chat.fileRefTitle`, `chat.fileRefFailed`, `chat.openInEditor` | The file-reference chip's two tooltips, and the one on the diff header and the tool card's "open" icon (S5.7, [`editor`](../editor/frontend.md)) |
 | `chat.onboarding.*` (S7.5) | The first-run card: `title`, `description`, the five `step*` labels, `saveProvider`, `startChat`, `skip`, `skipHint`. The agent templates' **names** are not here — they are stored content (`@shared/agent-templates`), like a chat's title; only their descriptions are copy, under `agents.templates.<id>` |
 | `chat.actions.summarizePrompt`, `chat.actions.votePrompt` | The **message text** each action sends, after the `@mention`. A locale key rather than a constant, because an agent answers in the language it is addressed in |
+| `notices.consensus`, `notices.voteClosed` | The two dimmed lines S5.14 added to the transcript, written by the runner and translated like every other notice — see [`orchestration`](../orchestration/frontend.md) |
+| `agents.reasoning`, `agents.reasoningHint` | Renamed by S5.14 to "Show thinking" and its hint; the control is [`agents`](../agents/frontend.md)'s, and what the transcript then holds is [`agent-turn`](../agent-turn/frontend.md)'s |
 
 Already present and now actually used: `chat.today` / `yesterday` / `earlier`,
 `chat.round`, `chat.passed`, `chat.skipped`, `chat.send`, `chat.stop`,

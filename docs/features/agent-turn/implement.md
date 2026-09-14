@@ -42,7 +42,9 @@ ChatRunner picks a speaker
   └─ for await (part of result.fullStream)
         every part      → supervisor.activity   (emits only when it clears `away`)
         text-delta      → append to the in-memory parts → message.delta { kind: 'text' }
-        reasoning-delta → …                            → message.delta { kind: 'reasoning' }
+        reasoning-delta → if showsThinking(ctx, agent)  → message.delta { kind: 'reasoning' }
+                          otherwise discarded (S5.14): not stored, not emitted,
+                          still counted as activity above
         finish          → usage = toUsage(part.totalUsage)
         abort           → aborted = true
         error           → failure = message
@@ -97,6 +99,21 @@ Per PLAN's "One agent turn": the member list with descriptions, which member the
 agent is, that other members arrive as `[name]:` prefixed user messages, `@name`
 to call on someone, and `[PASS]` to abstain. Both language files say the same
 things in the same order, so they can be diffed side by side.
+
+Since **S5.14** the rules carry one more line, immediately after the `[PASS]`
+one: end every reply with `[AGREED]` or `[CONTINUE]` on its own last line, and
+once everyone writes `[AGREED]` the discussion stops and the conclusion goes to
+the user. It is **one** line rather than the two it started as, and that is not
+tidying: two lines of marker protocol measurably pulled a 3B participant's
+attention away from the workspace briefing, and `e2e/executor.spec.ts`'s "answers
+from the materials, and reads an unmarked file when asked" started failing
+because the model reached for `read_file` instead of the context it had been
+given. A briefing is a budget.
+
+The line is **absent** for the closing turn, which gets `closingSection()`
+instead — the last block of the prompt, and the only one that contradicts the
+rules above: the group has agreed, write the conclusion for the user, no new
+argument, no `@`, no marker.
 
 Since **S3.3** they take a `memoryEnabled` flag and add one more rule when it is
 set: save durable facts about the user or the project with `memory_save`. It is
@@ -242,6 +259,9 @@ runAgentTurn({
   ctx, chat, agent, members, round, signal,
   inReplyTo?,    // agent ids (plus 'user') stored on the message for the UI label
   history?,      // a transcript snapshot; omitted, the turn reads listForContext itself
+  handoff?,      // S5.6/S5.12: this turn was handed the work; extends the executor section
+  reviewing?,    // S5.12: this round reviews what the executor changed
+  closing?,      // S5.14: this turn writes the group's conclusion; swaps the marker rule
   model?,        // already built; otherwise createModel builds one
   createModel?,  // default: resolveProvider + createLanguageModel
   onEvent?       // default: ctx.events.emit
@@ -262,12 +282,14 @@ by construction rather than by timing.
 
 Constants other modules and tests rely on: `FLUSH_INTERVAL_MS` (500),
 `FLUSH_EVERY_DELTAS` (40), `ABORTED_ERROR` (`'aborted'`), `PASS_TOKEN`
-(`'[PASS]'`), `DEFAULT_USER_NAME` (`'User'`), `SYSTEM_SENDER_NAME` (`'system'`).
+(`'[PASS]'`), `AGREED_TOKEN` (`'[AGREED]'`), `CONTINUE_TOKEN` (`'[CONTINUE]'`),
+`DEFAULT_USER_NAME` (`'User'`), `SYSTEM_SENDER_NAME` (`'system'`). The three
+markers are re-exported from `briefing.ts` and defined in `@shared/markers`.
 
 | Event | Payload | Emitted when |
 |---|---|---|
 | `message.created` | `{ message }` | The empty `streaming` row is inserted |
-| `message.delta` | `{ chatId, messageId, delta }` | Once per `text-delta` / `reasoning-delta` |
+| `message.delta` | `{ chatId, messageId, delta }` | Once per `text-delta`; once per `reasoning-delta` only when this agent shows its thinking (S5.14) |
 | `message.updated` | `{ message }` | The turn reaches its terminal status |
 | `presence.changed` | `{ presence }` | `AgentSupervisor` emits it; the turn calls `beginTurn` / `activity` / `endTurn` |
 | `message.created` | the `agentSkipped` notice | The hard timeout skipped this turn |
@@ -294,7 +316,11 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | `src/main/agents/materials.test.ts` (S5.11) | `buildMaterialsSection` against a real temporary folder: nothing for an empty list, one file inlined under its path, several in list order, a folder expanded into its tree and then its files, a budget too small for anything, a budget that takes a prefix and lists "the rest" (including a small file behind a large one that is *not* rescued), the share respected across twenty files, a binary file listed and not spending the budget, a missing material dropped, a material that resolves outside the folder dropped, and one enormous file cut at the per-file cap; plus `hasBinaryExtension` and the null-byte fallback in `readMaterialText` |
 | `src/main/agents/context-budget.test.ts` | `estimateTokens` against ASCII, CJK and a real sentence (with a tolerance, because it is an approximation), and every `fitHistory` rule: nothing dropped when it fits, oldest first, the last user message protected, the note prepended once, the reserve and the system prompt both counted, and a window smaller than its own system prompt not looping |
 | `src/main/agents/title.test.ts` | `sanitizeTitle` (whitespace, quotes in both scripts, trailing punctuation, a `Title:` preamble, the 60-character cap, and the empty result that triggers the fallback) and `fallbackTitle` |
-| `src/shared/pass.test.ts` | `isPassOnly` versus `stripTrailingPass`: a bare token is an abstention and survives, a token after real content is a sign-off and goes |
+| `src/shared/markers.test.ts` | `isPassOnly` versus `closureMarker` versus `stripTrailingMarkers`: a bare `[PASS]` is an abstention and survives, a marker after real content is a sign-off and goes, a marker quoted mid-sentence is neither, two trailing markers are both removed, `closureMarker` reads only the very end, is case-sensitive, and answers `null` for `[PASS]` — which is what keeps an abstention out of the consensus test |
+| `src/main/agents/agent-turn.test.ts` (S5.14 cases) | Reasoning deltas **stored** when the agent chose to show its thinking, **dropped** when it chose not to and when it made no choice on an `openai-compatible` provider, and stored again for an agent with no choice on an `anthropic` one — with the answer, the status and the delta kinds asserted in each |
+| `src/main/agents/briefing.test.ts` (S5.14 cases) | Both markers present in the rules in both languages; the closing block absent byte for byte in an ordinary turn, and replacing the marker rule when `closing` is set — the roster, the `[name]:` protocol and `[PASS]` all still there |
+| `src/main/handlers/agents.test.ts` (S5.14 block) | The creation default per provider type: hidden for `openai-compatible` and for a local preset, shown for `anthropic` / `openai` / `google`, and an explicit choice left alone in both directions. Plus a non-boolean `reasoning` refused |
+| `src/shared/presets.test.ts` (S5.14 block) | `showsThinkingByDefault` over the open-model route, the three first-party adapters, and every preset flagged `local` |
 | `src/main/agents/default-agent.test.ts` | Creating exactly one agent on the first usable provider, reusing it, preferring a user-created agent, and the `validation` refusal |
 
 ## Known limitations and TODOs
@@ -339,3 +365,13 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
   guessing high costs a rejected request.
 - **The user's display name is a constant** (`'User'`). There is no user profile
   yet; the server version gives it one.
+- **Hidden thinking is discarded, not summarised** (S5.14). A `reasoning-delta`
+  the agent does not show is dropped as it arrives: nothing is stored, nothing is
+  emitted, and the transcript cannot say "thought for 400 tokens" afterwards. The
+  provider's own usage figures still count those tokens, which is the only trace
+  left — and the only one the cost line needs.
+- **The closure markers are taught, never enforced.** A model that ignores the
+  briefing writes no marker, and the turn stores exactly what it wrote. Small
+  local models are unreliable here; see
+  [`../orchestration/implement.md`](../orchestration/implement.md) for what that
+  costs.

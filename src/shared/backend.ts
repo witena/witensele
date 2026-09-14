@@ -386,8 +386,19 @@ export interface BackendApi {
   /**
    * Persists the user message and starts a run. Resolves with the stored user
    * message as soon as the run is scheduled; agent output arrives as events.
+   *
+   * `rounds` (S5.14) caps the automatic rounds of **the chain this message
+   * starts**, instead of `chat.settings.maxAutoRounds`, and applies to nothing
+   * else: the next typed message is back on the chat's own setting. It must be
+   * an integer from `MIN_AUTO_ROUNDS` to `MAX_AUTO_ROUNDS`. The Actions card's
+   * "Start a vote" is its one caller and sends `1`.
    */
-  'chat.send': (input: { chatId: string; text: string; mentions?: string[] }) => Promise<Message>
+  'chat.send': (input: {
+    chatId: string
+    text: string
+    mentions?: string[]
+    rounds?: number
+  }) => Promise<Message>
   /** Aborts the whole chain for this chat. Idempotent when nothing is running. */
   'chat.stop': (input: { chatId: string }) => Promise<void>
   /**

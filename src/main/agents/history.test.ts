@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Message, MessagePart, MessageStatus, SenderType } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
-import { PASS_TOKEN } from '@shared/pass'
+import { PASS_TOKEN } from '@shared/markers'
 import {
   DEFAULT_USER_NAME,
   MAX_TOOL_RESULT_CHARS,

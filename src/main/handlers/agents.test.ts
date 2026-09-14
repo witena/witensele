@@ -97,6 +97,7 @@ describe('handlers/agents', () => {
       ['a negative temperature', { params: { temperature: -0.1 } }],
       ['a fractional maxTokens', { params: { maxTokens: 12.5 } }],
       ['a zero maxTokens', { params: { maxTokens: 0 } }],
+      ['a non-boolean reasoning flag', { params: { reasoning: 'yes' as never } }],
       ['an unknown role', { role: 'overlord' as never }]
     ])('rejects %s with validation', async (_label, overrides) => {
       await expect(
@@ -126,6 +127,50 @@ describe('handlers/agents', () => {
       })
 
       expect(created.role).toBe('executor')
+    })
+
+    // S5.14: "show thinking" gets its answer here, from the provider, so a
+    // stored agent always carries a choice of its own.
+    describe('the show-thinking default', () => {
+      /** Creates an agent on a provider of this shape and reports the flag. */
+      const reasoningOn = async (
+        overrides: Parameters<typeof providerInput>[0],
+        params: AgentInput['params'] = {}
+      ): Promise<boolean | undefined> => {
+        const on = ctx.repos.providers.create(providerInput(overrides), ctx.userId)
+        const created = await handlers['agents.create'](ctx, {
+          input: input({ name: `Agent ${on.id}`, providerId: on.id, params })
+        })
+        return created.params.reasoning
+      }
+
+      it('hides thinking on an openai-compatible provider', async () => {
+        await expect(reasoningOn({ type: 'openai-compatible', presetId: 'deepseek' })).resolves.toBe(
+          false
+        )
+      })
+
+      it('hides thinking on a local provider', async () => {
+        await expect(
+          reasoningOn({ type: 'openai-compatible', presetId: 'ollama', name: 'Ollama' })
+        ).resolves.toBe(false)
+      })
+
+      it.each(['anthropic', 'openai', 'google'] as const)(
+        'shows thinking on a %s provider',
+        async (type) => {
+          await expect(reasoningOn({ type, presetId: type, name: type })).resolves.toBe(true)
+        }
+      )
+
+      it('leaves an explicit choice alone', async () => {
+        await expect(
+          reasoningOn({ type: 'anthropic', presetId: 'anthropic' }, { reasoning: false })
+        ).resolves.toBe(false)
+        await expect(
+          reasoningOn({ type: 'openai-compatible', presetId: 'deepseek' }, { reasoning: true })
+        ).resolves.toBe(true)
+      })
     })
   })
 

@@ -108,8 +108,14 @@ of the name, uppercased, when the user did not type one.
   ids, *are* unbound by `mcp.delete` — the two differ because the identifiers do.
 - An agent takes **all** of a bound server's tools or none; there is no per-tool
   selection.
-- The reasoning toggle writes `params.reasoning`; nothing reads it yet —
-  `agent-turn` starts honouring it when a provider that supports it is wired up.
+- **`params.reasoning` is read at last** (S5.14), and it means "show thinking":
+  `agent-turn`'s `showsThinking` decides from it whether a `reasoning-delta` is
+  stored and emitted or discarded as it arrives. `agents.create` fills it in from
+  the agent's provider when the caller leaves it out (`withThinkingDefault` →
+  `showsThinkingByDefault`), so every record written from today carries a boolean;
+  a record written before then has none, and the same provider rule is applied at
+  turn time instead. `agents.update` does **not** re-apply the default — changing
+  an agent's provider keeps whatever it already decided.
 - `params.temperature` and `params.maxTokens` are **stored and honoured but no
   longer editable** (S5.9). `agent-turn` still spreads them into `streamText` and
   `fitHistory` still reserves `maxTokens` when one is set, so an agent configured
@@ -124,6 +130,13 @@ of the name, uppercased, when the user did not type one.
 - There is no `agent.created` / `agent.updated` event. The agents page is the only
   writer and patches its own list; other screens learn through `chat.updated`.
 - Duplicate copies the provider as well as the model, so "the same agent on
-  another model" is two steps.
+  another model" is two steps. It also copies `params.reasoning`, which means a
+  duplicate keeps the original's thinking setting rather than taking the new
+  provider's default — the same rule as `agents.update`.
+- **The Show thinking default is applied in the handler, not in the renderer**
+  (S5.14). Every creation path in the product goes through `agents.create` — the
+  editor's Save, Duplicate, and the first-run card's `createFromTemplate` — so one
+  place fills the gap and the three call sites need no copy of the rule. The
+  editor computes the same answer for display only.
 - The agent list is neither searchable nor groupable. `agents.searchAgents` exists
   as a key for whenever it is.

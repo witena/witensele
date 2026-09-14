@@ -97,6 +97,8 @@ Keys reserved for the features that will emit them:
 | `notices.materialsTruncated` | `agent`, `omitted` | `orchestration` (S5.11), once per chat when a member could not fit the goal's materials. The only notice deduped against the **transcript** rather than against a per-run set, which is what makes "once per chat" survive a relaunch |
 | `notices.handoff` | `agent` | `orchestration` (S5.6), on the **user** message "Hand to executor" stores. The only notice that is a request rather than a report, and the only one carried by a message the user is the sender of |
 | `notices.handoffDeliver` | `agent`, `path` | `orchestration` (S5.12), the same for the "Write the deliverable" action. A key of its own rather than a parameter on `handoff`, because the sentence the user reads is a different sentence; `path` is the goal's **relative** path, never the absolute one |
+| `notices.consensus` | — | `orchestration` (S5.14), when every participant of a round wrote `[AGREED]`. Deliberately **parameterless**: it is stored before the closing speaker is picked, and every member being offline would leave it naming an agent that never wrote anything |
+| `notices.voteClosed` | — | `orchestration` (S5.14), when a chain that carried its own `rounds` cap has run them. A key of its own rather than `maxRoundsReached` with a different `max`: that sentence says "this chat hit its automatic limit, send a message to continue", and this run ended exactly where the user asked it to |
 
 The same principle covers failures: `BackendError.code` is the machine-readable
 class the renderer maps to an `errors.<code>` key, and `BackendError.message` is

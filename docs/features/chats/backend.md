@@ -62,7 +62,7 @@ is the only thing that reads it. See
 | `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | `validation` on an empty id, `not_found` for an unknown chat. A chat with no `document` goal answers `{ deliverable: null, delivered: false }` rather than rejecting — the header asks for every chat it draws |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` newest first | `validation` on an empty chat id or a non-positive limit; `not_found` for an unknown cursor |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` over the whole transcript | `validation` on an empty id, `not_found` for an unknown chat |
-| `chat.send` | `{ chatId, text, mentions? }` | `Message` | `validation` for a non-string or blank text and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
+| `chat.send` | `{ chatId, text, mentions?, rounds? }` | `Message` | `validation` for a non-string or blank text, for a `rounds` that is not an integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` (S5.14), and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
 | `chat.handoff` | `{ chatId }` | `Message` (the stored hand-off row) | `validation` on an empty id; `not_found` for an unknown chat; `validation` plus one of `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details`. The handler checks only the id: the other three are facts about the **run**, and [`orchestration`](../orchestration/backend.md)'s `ChatRunner.handoff` is the only object that holds all of them |
 | `chat.stop` | `{ chatId }` | `void` | `validation` on an empty id; otherwise idempotent |
 
@@ -104,6 +104,17 @@ A chat with no members refuses `chat.send` with `validation('chat has no
 members')`, checked in `ChatRunner.send` before the user's message is persisted.
 The composer stays enabled (the fix is one click away in the member panel) and
 the panel shows `chat.noMembersHint`.
+
+### A message that caps its own chain (S5.14)
+
+`chat.send` accepts an optional `rounds`, bounded by the **same** `MIN_AUTO_ROUNDS`
+/ `MAX_AUTO_ROUNDS` constants `chat.settings.maxAutoRounds` is held to: it is the
+same number arriving by a different route, and a caller must not buy an unbounded
+run by sending the cap per message instead of storing it. It is passed straight
+through to `ctx.runners.send`, is **not** written to the chat, and applies only to
+the chain that message starts — [`orchestration`](../orchestration/backend.md)
+owns what it then does. Its one caller today is the Actions card's "Start a vote",
+which sends `1`.
 
 ### The working directory (S5.2)
 

@@ -30,7 +30,7 @@
  * down by `history.test.ts` rather than by a live run.
  */
 import type { ModelMessage } from 'ai'
-import { stripTrailingPass } from '@shared/pass'
+import { stripTrailingMarkers } from '@shared/markers'
 import type { Agent, Message, MessagePart, SystemNoticePart, ToolResultPart } from '@shared/types'
 
 /** Name used for the human in the `[name]: ` prefix when the caller has none. */
@@ -147,7 +147,7 @@ function renderNotice(part: SystemNoticePart): string | null {
  * Two rules applied while rendering:
  *
  * - A **trailing `[PASS]`** is stripped from text that has real content in front
- *   of it (S4.3, `@shared/pass`). Replaying the marker teaches every later
+ *   of it (S4.3, `@shared/markers`). Replaying the marker teaches every later
  *   speaker that signing off with it is how a normal answer ends.
  * - A **tool result is capped** at `MAX_TOOL_RESULT_CHARS`; see that constant.
  */
@@ -155,7 +155,7 @@ function partsToText(parts: MessagePart[]): string {
   const chunks: string[] = []
   for (const part of parts) {
     if (part.type === 'text') {
-      const text = stripTrailingPass(part.text).trim()
+      const text = stripTrailingMarkers(part.text).trim()
       if (text.length > 0) chunks.push(text)
       continue
     }

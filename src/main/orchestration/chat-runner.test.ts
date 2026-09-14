@@ -23,7 +23,8 @@ import type {
   RunFinishedEvent,
   RunRoundEvent
 } from '@shared/events'
-import { PASS_TOKEN } from '@shared/pass'
+import { AGREED_TOKEN, CONTINUE_TOKEN, PASS_TOKEN } from '@shared/markers'
+import { MAX_AUTO_ROUNDS } from '@shared/types'
 import type { Agent, Chat, HandoffIntent, Message, SystemNoticePart } from '@shared/types'
 import { toModelMessages } from '../agents/history'
 import type { AppContext } from '../app-context'
@@ -33,11 +34,13 @@ import { buildHandlers } from '../handlers'
 import { createTestAppContext } from '../testing'
 import { WRITE_FILE_TOOL } from '../executor/tools'
 import {
+  NOTICE_CONSENSUS,
   NOTICE_CONTEXT_TRUNCATED,
   NOTICE_HANDOFF,
   NOTICE_HANDOFF_DELIVER,
   NOTICE_MATERIALS_TRUNCATED,
   NOTICE_MAX_ROUNDS,
+  NOTICE_VOTE_CLOSED,
   type ChatRunnerOptions
 } from './chat-runner'
 
@@ -610,6 +613,347 @@ describe('ChatRunner (multi-agent)', () => {
     expect(sequence.filter((type) => type === 'run.finished')).toHaveLength(1)
     expect(sequence.indexOf('run.started')).toBeLessThan(sequence.indexOf('run.round'))
     expect(sequence.lastIndexOf('run.round')).toBeLessThan(sequence.indexOf('run.finished'))
+  })
+})
+
+/**
+ * S5.14: the two ways a chain now ends on its own — the group saying it has
+ * agreed, and a message that brought its own round cap.
+ *
+ * Both are read from what the models actually wrote, so every case below is a
+ * mock answering with a marker (or deliberately without one) and an assertion
+ * about the rounds that followed, the notice that was stored and who was asked
+ * to write the conclusion.
+ */
+describe('ChatRunner (discussion closure)', () => {
+  const handlers = buildHandlers()
+
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let ada: Agent
+  let bob: Agent
+  let chat: Chat
+  let models: Map<string, MockLanguageModelV4>
+
+  /** A model whose successive calls answer with successive texts. */
+  const sequence = (...texts: string[]): MockLanguageModelV4 => {
+    let index = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        const text = texts[Math.min(index, texts.length - 1)] ?? ''
+        index += 1
+        return {
+          stream: simulateReadableStream({
+            chunks: textChunks([text]),
+            initialDelayInMs: null,
+            chunkDelayInMs: null
+          })
+        }
+      }
+    })
+  }
+
+  beforeEach(async () => {
+    database = createTestDatabase()
+    models = new Map()
+    const created = createTestAppContext(database, {
+      runner: {
+        createModel: (_ctx, agent) => models.get(agent.name) ?? saying('nothing to add')
+      }
+    })
+    ctx = created.ctx
+    events = created.events
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    ada = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    bob = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = await handlers['chats.create'](ctx, {
+      input: { title: 'Group chat', memberAgentIds: [ada.id, bob.id] }
+    })
+    events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+  })
+
+  const settle = () => ctx.runners.for(chat.id).whenIdle()
+  const finished = (): RunFinishedEvent[] => finishedIn(events)
+  const agentMessages = (): Message[] =>
+    ctx.repos.messages
+      .listForContext(chat.id, ctx.userId)
+      .filter((message) => message.senderType === 'agent')
+
+  const configure = async (settings: Record<string, unknown>): Promise<void> => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { settings } })
+  }
+
+  /** The prompt of one agent's n-th request, as text. */
+  const promptOf = (name: string, index = 0): string =>
+    JSON.stringify(models.get(name)?.doStreamCalls[index]?.prompt ?? null)
+
+  /** The system prompt of one agent's n-th request. */
+  const systemOf = (name: string, index = 0): string => {
+    const system = models.get(name)?.doStreamCalls[index]?.prompt?.find(
+      (message) => message.role === 'system'
+    )
+    return system && 'content' in system && typeof system.content === 'string'
+      ? system.content
+      : ''
+  }
+
+  describe('agreement ends the chain', () => {
+    it('stops, says so and runs one closing turn when everybody agreed', async () => {
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'We settled on starting small.'))
+      models.set('Bob', sequence(`Agreed with Ada. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      // Round 1 is the discussion; round 2 is the conclusion, written by the
+      // first member in speaking order, alone.
+      expect(rounds(events).map((event) => event.speakers)).toEqual([
+        [ada.id, bob.id],
+        [ada.id]
+      ])
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+      expect(finished()[0]).toMatchObject({ reason: 'completed' })
+
+      const texts = agentMessages().map((message) => firstText(message))
+      expect(texts).toHaveLength(3)
+      expect(texts[2]).toBe('We settled on starting small.')
+    })
+
+    it('stores the consensus notice before the conclusion, so the order reads', async () => {
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'The conclusion.'))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      const transcript = ctx.repos.messages.listForContext(chat.id, ctx.userId)
+      const notice = transcript.findIndex((message) => message.senderType === 'system')
+      const conclusion = transcript.findLastIndex((message) => message.senderType === 'agent')
+      expect(notice).toBeGreaterThan(-1)
+      expect(notice).toBeLessThan(conclusion)
+    })
+
+    it('briefs the closing turn to write the conclusion and no marker', async () => {
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'The conclusion.'))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      const discussion = systemOf('Ada', 0)
+      const closing = systemOf('Ada', 1)
+      expect(discussion).toContain(AGREED_TOKEN)
+      expect(discussion).not.toContain('This is the closing turn')
+      expect(closing).toContain('This is the closing turn')
+      // The rule it replaces is gone rather than merely outvoted: a turn told
+      // both "end with a marker" and "write no marker" writes one.
+      expect(closing).not.toContain(AGREED_TOKEN)
+    })
+
+    it('carries on when one member wrote [CONTINUE]', async () => {
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`))
+      models.set('Bob', sequence(`Not yet — what about cost? ${CONTINUE_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(1)
+      expect(noticeKeys(ctx, chat)).toEqual([])
+      expect(agentMessages()).toHaveLength(2)
+    })
+
+    it('carries on when nobody wrote a marker at all', async () => {
+      models.set('Ada', sequence('Start small.'))
+      models.set('Bob', sequence('Sounds right.'))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(1)
+      expect(noticeKeys(ctx, chat)).toEqual([])
+    })
+
+    it('does not close while an @mention is still waiting for an answer', async () => {
+      models.set('Ada', sequence(`@Bob does that work? ${AGREED_TOKEN}`, `Fine. ${AGREED_TOKEN}`))
+      models.set('Bob', sequence(`It does. ${AGREED_TOKEN}`, `Still fine. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      // Round 1 schedules Bob through the mention, so the round that could have
+      // closed did not; round 2 is Bob alone, and *that* one closes.
+      const speakers = rounds(events).map((event) => event.speakers)
+      expect(speakers[0]).toEqual([ada.id, bob.id])
+      expect(speakers[1]).toEqual([bob.id])
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+    })
+
+    it('ignores the executor, which writes files rather than positions', async () => {
+      const hands = ctx.repos.agents.create(
+        agentInput({
+          name: 'Hands',
+          providerId: ada.providerId,
+          modelId: 'deepseek-chat',
+          role: 'executor'
+        }),
+        ctx.userId
+      )
+      await handlers['chats.members.set'](ctx, {
+        chatId: chat.id,
+        agentIds: [ada.id, bob.id, hands.id]
+      })
+      events.length = 0
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'The conclusion.'))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`))
+      // No marker, and the round still closes: the executor does not vote.
+      models.set('Hands', sequence('I will make the change when asked.'))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+      expect(rounds(events).map((event) => event.speakers)).toEqual([
+        [ada.id, bob.id, hands.id],
+        [ada.id]
+      ])
+    })
+
+    it('never closes a round in which nothing but abstentions were said', async () => {
+      models.set('Ada', sequence(PASS_TOKEN))
+      models.set('Bob', sequence(PASS_TOKEN))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Anything to add?' })
+      await settle()
+
+      expect(noticeKeys(ctx, chat)).toEqual([])
+      expect(rounds(events)).toHaveLength(1)
+    })
+
+    it('mention-only: the markers are stripped but ignored', async () => {
+      await configure({ mode: 'mention-only' })
+      events.length = 0
+      models.set('Bob', sequence(`On it. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@Bob take this one' })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(1)
+      expect(noticeKeys(ctx, chat)).toEqual([])
+      // The marker is still in the stored parts — nothing is rewritten — and
+      // still out of the prompt the next turn reads.
+      expect(firstText(agentMessages()[0] as Message)).toContain(AGREED_TOKEN)
+    })
+
+    it('keeps the marker out of what the next speaker reads', async () => {
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'The conclusion.'))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      // Bob is handed Ada's answer with the marker removed (`history.ts` reads
+      // it through `stripTrailingMarkers`), so nobody learns the habit from the
+      // transcript rather than from the briefing. The briefing itself names the
+      // marker, of course, so the assertion is on the history and not the whole
+      // prompt.
+      const history = promptOf('Bob').slice(systemOf('Bob').length)
+      expect(history).toContain('Start small.')
+      expect(history).not.toContain(AGREED_TOKEN)
+    })
+  })
+
+  describe('a message that caps its own chain', () => {
+    it('runs exactly one round for rounds: 1 and closes the vote', async () => {
+      // Both keep handing the floor to the other; only the cap stops them.
+      models.set('Ada', sequence(`@Bob I vote for A. ${CONTINUE_TOKEN}`))
+      models.set('Bob', sequence(`@Ada I vote for B. ${CONTINUE_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all vote please', rounds: 1 })
+      await settle()
+
+      expect(rounds(events).map((event) => event.round)).toEqual([1])
+      expect(agentMessages()).toHaveLength(2)
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_VOTE_CLOSED])
+      expect(finished()[0]).toMatchObject({ reason: 'max-rounds' })
+    })
+
+    it('closes the vote even when the answers mention nobody', async () => {
+      models.set('Ada', sequence('I vote for A.'))
+      models.set('Bob', sequence('I vote for B.'))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all vote please', rounds: 1 })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(1)
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_VOTE_CLOSED])
+    })
+
+    it('wins over the consensus rule, because the user named the number', async () => {
+      models.set('Ada', sequence(`I vote for A. ${AGREED_TOKEN}`))
+      models.set('Bob', sequence(`A works. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all vote please', rounds: 1 })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(1)
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_VOTE_CLOSED])
+    })
+
+    it('caps above one round too, and still says the vote closed', async () => {
+      models.set('Ada', sequence(`@Bob your turn. ${CONTINUE_TOKEN}`))
+      models.set('Bob', sequence(`@Ada your turn. ${CONTINUE_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Discuss', rounds: 2 })
+      await settle()
+
+      expect(rounds(events).map((event) => event.round)).toEqual([1, 2])
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_VOTE_CLOSED])
+    })
+
+    it('does not leak into the next message, which runs under the chat setting', async () => {
+      await configure({ maxAutoRounds: 3 })
+      models.set('Ada', sequence(`@Bob your turn. ${CONTINUE_TOKEN}`))
+      models.set('Bob', sequence(`@Ada your turn. ${CONTINUE_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Vote', rounds: 1 })
+      await settle()
+      events.length = 0
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Now discuss it properly' })
+      await settle()
+
+      // A second run counts its own rounds from 1 again, and this one gets the
+      // chat's three rather than the vote's one.
+      expect(rounds(events).map((event) => event.round)).toEqual([1, 2, 3])
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_VOTE_CLOSED, NOTICE_MAX_ROUNDS])
+    })
+
+    it.each([
+      ['zero rounds', 0],
+      ['more rounds than the cap', MAX_AUTO_ROUNDS + 1],
+      ['a fractional count', 1.5],
+      ['a string', '1' as never]
+    ])('rejects %s with validation and stores nothing', async (_label, rounds) => {
+      await expect(
+        handlers['chat.send'](ctx, { chatId: chat.id, text: 'Vote', rounds })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])
+    })
   })
 })
 

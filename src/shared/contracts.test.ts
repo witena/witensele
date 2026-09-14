@@ -191,6 +191,11 @@ describe('type contracts', () => {
   it('takes a single object argument on every write method', () => {
     expectTypeOf<Parameters<BackendApi['chat.send']>[0]>().toHaveProperty('chatId')
     expectTypeOf<Parameters<BackendApi['chat.send']>[0]['text']>().toBeString()
+    // S5.14: the per-chain round cap "Start a vote" sends, optional so every
+    // ordinary send is unchanged.
+    expectTypeOf<Parameters<BackendApi['chat.send']>[0]['rounds']>().toEqualTypeOf<
+      number | undefined
+    >()
     expectTypeOf<Parameters<BackendApi['chats.members.set']>[0]>().toEqualTypeOf<{
       chatId: string
       agentIds: string[]

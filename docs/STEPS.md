@@ -1905,6 +1905,128 @@ code, which is exactly what a single shared status would have got wrong. Docs:
 `docs/features/providers/` (all four) plus `backend-client` and `i18n`, which the
 changed signatures and the three new codes made out of date.
 
+### S5.14 Discussion closure `[x] (2026-09-13)`
+What: three small product rules the first real use surfaced. Thinking is not shown
+for open models unless asked; a discussion that has reached agreement stops and
+hands the user the conclusion; a vote is one round.
+- **Thinking hidden by default on open models.** `Agent.params.reasoning` changes
+  meaning from "ask for reasoning output" to **"show thinking"**: when it is not
+  `true`, `agent-turn.ts` discards `reasoning-delta` parts instead of storing
+  `ReasoningPart`s (the model still thinks; provider options are unchanged), so
+  the transcript shows the answer only. The default is decided when an agent is
+  created (`agents.create` and `createFromTemplate`): `false` for a provider that
+  is local or `openai-compatible` (the open-model route: Ollama, DeepSeek,
+  Moonshot, vLLM …), `true` for `anthropic`, `openai` and `google`. Existing
+  agents keep whatever they have; an agent with the field absent follows the same
+  provider rule at turn time. The toggle's label and hint in both locales say
+  "Show thinking".
+- **Agreement ends the chain.** The group briefing gains a rule beside `[PASS]`:
+  in an automatic round a participant ends its reply with `[AGREED]` when it has
+  nothing to add and accepts the position on the table, otherwise with
+  `[CONTINUE]`. Both markers are stripped from the stored text the way `[PASS]`
+  is (`@shared/pass` grows into `@shared/markers`, with tests; keep the old export
+  name working or update every import). `ChatRunner`: after a round in which
+  **every** participant who spoke (executors excluded; the round after a hand-off
+  keeps its S5.6 behaviour) ended with `[AGREED]` and no mention is pending, the
+  runner stops scheduling rounds, stores a `notices.consensus` system line, and
+  runs one **closing turn** by the first member in speaking order with a closing
+  briefing: state the group's conclusion for the user in a few lines, no new
+  arguments, no marker. The user's next message starts a new chain as usual. A
+  round with any `[CONTINUE]`, or with no marker at all, continues under
+  `maxAutoRounds` exactly as today. Applies in `roundrobin` mode; in
+  `mention-only` mode the chain is `@`-driven and the markers are stripped but
+  ignored.
+- **A vote is one round.** `ChatSendInput.rounds?: number` (1 … `MAX_AUTO_ROUNDS`)
+  overrides `chat.settings.maxAutoRounds` for the chain that message starts; the
+  actions card's "Start a vote" passes `rounds: 1`, so every member answers once
+  and the run ends with a `notices.voteClosed` line rather than the max-rounds
+  notice. Validation in the handler; the contract test updated.
+- Unit tests: reasoning deltas dropped when the flag is off and stored when on;
+  the creation default per provider type; marker parsing and stripping for both
+  markers and their absence; the runner stopping on unanimous `[AGREED]`,
+  continuing on one `[CONTINUE]`, ignoring executors, the closing turn's briefing
+  and the notice; `rounds: 1` ending after one round with the vote notice;
+  `mention-only` ignoring the markers.
+- e2e (Ollama-gated as the other specs are; `qwen2.5:3b` and `qwen2.5:1.5b` are
+  present on this machine): a two-agent chat whose prompts tell both to agree
+  immediately ends after one round with the consensus line and a closing message;
+  "Start a vote" produces exactly one round. Run after `npm run build` and report
+  honestly.
+Acceptance: the tests above; a discussion that agrees stops by itself with a
+conclusion; a vote never runs a second round. Docs:
+`docs/features/orchestration/`, `docs/features/agent-turn/`,
+`docs/features/agents/` and `docs/features/chats/` (all four each).
+Done: the three rules turned out to share one property — **each is a place where
+the product was storing or scheduling more than the user asked for** — and none of
+them needed a new mechanism.
+
+*Show thinking.* `params.reasoning` had never been read: no provider option was
+ever derived from it, so "ask for reasoning output" described nothing. Giving it
+the meaning its position already implied cost one `case` in `agent-turn.ts`'s
+`fullStream` switch — a hidden `reasoning-delta` is dropped before `appendDelta`,
+so it is neither stored nor emitted, while the `ctx.supervisor.activity` call
+above the switch still counts it, because the model really is working. The
+decision itself is `showsThinking(ctx, agent)`, read once per turn: the agent's
+own boolean when it has one, and otherwise `showsThinkingByDefault(provider)` from
+`@shared/presets` — false for a local or `openai-compatible` provider, true for
+the three first-party adapters. That same function is what `agents.create` writes
+into a new agent's `params` (`withThinkingDefault`), which is why the default
+lives in the handler rather than in the three renderer call sites: the editor's
+Save, Duplicate and the first-run card's `createFromTemplate` all go through
+`agents.create`. `undefined` therefore keeps meaning "nobody has chosen" rather
+than `false`, and the editor's toggle renders the *effective* answer
+(`draft.params.reasoning ?? showsThinkingByDefault(provider)`) so the switch never
+moves under the user at Save. `agents.update` deliberately does not re-apply the
+default: moving a Claude agent to Ollama is not the user changing their mind.
+
+*Agreement.* `src/shared/pass.ts` became `src/shared/markers.ts` and every import
+was updated rather than aliased — four call sites, and a name that lied would have
+been worse than the churn. `closureMarker(text)` reads `[AGREED]` / `[CONTINUE]`
+off the very end of a reply and answers `null` for anything else **including
+`[PASS]`**, which is what keeps an abstention out of the consensus test;
+`stripTrailingMarkers` removes all three the way S4.3 removed one, at the two
+places the text is read and never from the stored parts. The runner's half is
+`#agreed`, six conditions that are all the same conservatism — `roundrobin` only,
+not a hand-off's rounds, nothing mentioned, nothing pending, at least one
+non-executor speaker finished, every such speaker ending with `[AGREED]` — because
+the failure that matters is a discussion cut short, not one that runs a round too
+long. A missing marker means "carry on". `#runClosing` is then an **ordinary round
+with one speaker**: it bumps `#round`, emits `run.round`, and passes
+`closing: true`, so Stop, the barrier, presence and the usage accounting all work
+on it with no case of their own. `scheduling.ts` was not touched at all.
+
+The briefing's new rule is **one line, not two**, and that is the one thing here
+that was measured rather than reasoned. Two lines of marker protocol pulled a 3B
+participant's attention off the workspace briefing far enough that
+`e2e/executor.spec.ts`'s "answers from the materials" started failing — the model
+reached for `read_file` instead of the context it had already been given. Collapsing
+the rule to one line put it back. A briefing is a budget.
+
+*The vote.* `ChatSendInput.rounds` is held in `#pendingRounds` and taken into a
+loop-local at the same boundary that resets `roundsSinceUser`, so the cap and the
+counter it caps always move together; it dies with its chain. It is checked
+**twice** — at the top of the next iteration beside `maxAutoRounds`, and again at
+the end of the round that just ran — because a vote whose answers mention nobody
+schedules nothing and would otherwise leave through the empty-plan branch in
+silence. The cap is tested before agreement: the user named the number. The
+renderer threads an optional `rounds` through `ActionsCard.onSend` →
+`composer.submitText` → `runStore.send` → `chat.send` rather than giving the vote
+a backend path of its own, which keeps the Actions card's own rule intact — the
+transcript still records exactly the sentence that was asked.
+
+Tests: `markers.test.ts` (24 cases), a 19-case
+`ChatRunner (discussion closure)` block, four reasoning cases in
+`agent-turn.test.ts`, the creation default per provider type in
+`handlers/agents.test.ts`, `showsThinkingByDefault` in `presets.test.ts`, the
+closing block in `briefing.test.ts`, `rounds` in `run.test.ts` and
+`contracts.test.ts`. `e2e/closure.spec.ts` drives both rules against real
+`qwen2.5:3b`; its consensus test asks in a fresh chat up to three times, because
+what is unreliable is a 3B model writing the marker (about three runs in four,
+with a system prompt written for the purpose) rather than the runner reacting to
+it — the file's header records the three ways it failed first. Docs: all four
+documents of `orchestration`, `agent-turn`, `agents` and `chats`, plus
+`i18n/backend.md` for the two new notice keys.
+
 ## Phase 6: Backlog (decided, not yet scheduled)
 
 Everything below is agreed work that is deliberately **not** in Phase 5. Each
@@ -2085,6 +2207,47 @@ adds a line here in the same commit.
   told which branch the working tree is on and asked not to switch; nothing stops
   `run_command` from doing so, and nothing re-checks the branch afterwards. The
   permission prompt is the only boundary, which is the same gap the shell has.
+
+### Discussion closure (S5.14)
+
+- **Agreement depends on a model following the briefing.** A model that never
+  writes `[AGREED]` never closes a discussion, and the chain ends the way it did
+  before S5.14. Small local models are unreliable here: `e2e/closure.spec.ts`
+  measures roughly three runs in four for `qwen2.5:3b` **with a system prompt
+  written for the purpose**, and `qwen2.5:1.5b` does not manage it at all. The
+  spec therefore asks up to three times in fresh chats; a product answer would be
+  a structured verdict the runner asks for rather than a token it hopes for — the
+  same shape S5.12's review round wants, and the two should be designed together.
+- **`[AGREED]` is stripped from the history.** Like `[PASS]`, so a later speaker
+  cannot see who has already agreed, and cannot learn the protocol from the
+  transcript either. Whether the closure markers should survive the history
+  transform while `[PASS]` does not is an open question in
+  `docs/features/orchestration/context.md`.
+- **`mention-only` has no closure rule.** The markers are stripped there and
+  ignored, because "everybody agreed" is not something one named member can say.
+  A chat in that mode still ends only on `maxAutoRounds` or on nothing being
+  mentioned.
+- **The closing turn is always the first member in speaking order.** Not the
+  member the group deferred to, not the one with the largest context window.
+  Choosing better would need either a second model call or a signal the
+  transcript does not carry.
+- **The conclusion is not marked as one.** It is an ordinary agent message with
+  an ordinary round number; nothing in the schema says "this is the answer", so
+  it cannot be linked to, exported, or shown at the top of the chat. A
+  `MessageKind` or a column would be the smallest change, and is worth deciding
+  before anything else wants to find it.
+- **A `rounds` cap has no UI of its own.** It is reachable only through "Start a
+  vote", which hard-codes `1`. There is no way to say "answer twice and stop" from
+  the composer, and no indication in the transcript that a chain was capped until
+  the `voteClosed` line appears at the end of it.
+- **Hidden thinking is discarded, not counted.** A `reasoning-delta` the agent
+  does not show leaves no trace beyond the provider's own usage figures, so the
+  transcript cannot offer "thought for 400 tokens" or a way to fetch it back. A
+  count on the message would be cheap; storing the text behind a lazy expander
+  would not.
+- **Changing an agent's provider does not re-apply the Show thinking default.**
+  Once the record holds a boolean it holds it, so a Claude agent moved to Ollama
+  keeps streaming its thinking into the transcript until the user turns it off.
 
 ### Workspace briefing and materials (S5.11)
 

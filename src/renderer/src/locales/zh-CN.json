@@ -194,8 +194,8 @@
     "noProviders": "请先在设置中添加一个服务商。",
     "modelPlaceholder": "模型 id",
     "modelManualHint": "该服务商还没有模型列表，请手动输入 id。",
-    "reasoning": "思考模式",
-    "reasoningHint": "仅支持的模型生效",
+    "reasoning": "显示思考过程",
+    "reasoningHint": "把这个智能体的思考过程保留在对话记录里。开放模型思考篇幅长,默认关闭。",
     "skills": "技能",
     "skillsEmptyTitle": "还没有 skill",
     "skillsEmptyDescription": "在设置里导入一个 skill 文件夹,它就会出现在这里。",
@@ -490,6 +490,8 @@
     "contextTruncated": "{{agent}} 的上下文窗口装不下整段对话，最早的 {{dropped}} 条消息已从它的视野中省略",
     "materialsTruncated": "{{agent}} 的上下文窗口装不下全部材料，其中 {{omitted}} 项只列出了路径，它仍可用 read_file 读取",
     "handoff": "已交给 {{agent}}：实现大家讨论出的结论，并汇报改了什么",
-    "handoffDeliver": "已让 {{agent}} 现在按大家讨论出的结论写出 {{path}}"
+    "handoffDeliver": "已让 {{agent}} 现在按大家讨论出的结论写出 {{path}}",
+    "consensus": "大家已达成一致,讨论到此结束,下面是结论。",
+    "voteClosed": "投票结束:每位成员都已作答一次。发送消息可继续讨论。"
   }
 }

@@ -273,3 +273,35 @@ export function providerRequiresApiKey(provider: {
   if (preset) return preset.requiresApiKey
   return provider.type !== 'openai-compatible'
 }
+
+/**
+ * Whether an agent on this provider shows its **thinking** in the transcript by
+ * default (S5.14).
+ *
+ * `Agent.params.reasoning` means "show thinking", and this is the answer applied
+ * when the agent has no explicit choice — at creation, so the agent editor's
+ * toggle starts where it should, and again at turn time, so an agent written
+ * before the field existed behaves the same way.
+ *
+ * The split is between the two **routes**, not between good and bad models. The
+ * first-party adapters (`anthropic`, `openai`, `google`) emit reasoning only
+ * when the model was asked for an extended thinking mode, and a user who picked
+ * such a model picked it to watch it think. The open-model route — every local
+ * server and every `openai-compatible` endpoint, which is Ollama, DeepSeek,
+ * Moonshot, vLLM and the rest — streams a long chain of thought from an `r1`-
+ * style model whether or not anybody wanted one, and in a group chat of four
+ * members that buries the discussion under thinking nobody reads. So it starts
+ * hidden there and the toggle turns it back on.
+ *
+ * `local` is tested as well as the type even though every local preset is
+ * `openai-compatible` today: the rule the product means is "an open model the
+ * user is running themselves", and a future local preset with a type of its own
+ * must not silently change sides.
+ */
+export function showsThinkingByDefault(provider: {
+  type: ProviderType
+  presetId?: string | undefined
+}): boolean {
+  if (isLocalPreset(provider.presetId)) return false
+  return provider.type !== 'openai-compatible'
+}

@@ -50,8 +50,11 @@
  * were friction with nothing on the other side. `Agent.params` still holds both
  * fields and `agent-turn.ts` still spreads them into the call, so an agent saved
  * with a temperature keeps using it; there is simply no control that writes one.
- * The reasoning toggle stays, because it changes what the model *produces*
- * rather than how it samples.
+ * The one toggle that stays is "Show thinking" (S5.14): it decides what the
+ * **transcript keeps**, not how the model samples, and it is the control the
+ * first real use asked for — four open models each streaming a chain of thought
+ * is a chat nobody can read. Its default comes from the provider, so the switch
+ * shows the effective answer rather than `false` for an agent that never chose.
  *
  * ## Why the model control is a select *and* a text field
  *
@@ -66,6 +69,7 @@ import type { TFunction } from 'i18next'
 import { Sparkles, Server } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { showsThinkingByDefault } from '@shared/presets'
 import type { Agent, AgentRole, Provider } from '@shared/types'
 import {
   Avatar,
@@ -190,6 +194,12 @@ export function AgentEditor({
   const store = (): ReturnType<typeof useAgentsStore.getState> => useAgentsStore.getState()
   const provider = providers.find((candidate) => candidate.id === draft.providerId)
   const models = provider?.models ?? []
+  // S5.14: what "Show thinking" is *effectively* set to. `undefined` is not
+  // `false` — it means the agent has no choice stored, and the provider decides
+  // exactly as the backend would. A draft with no provider yet falls back to
+  // hidden, which is what the picker's first open shows for a second or two.
+  const showThinking =
+    draft.params.reasoning ?? (provider ? showsThinkingByDefault(provider) : false)
   const saveDisabled = saving || !dirty || Object.keys(errors).length > 0
   // The monogram follows the name until the record is saved, exactly as
   // `saveDraft` will store it, so the header tile is never a step behind.
@@ -402,13 +412,17 @@ export function AgentEditor({
               </Field>
             </div>
 
+            {/* "Show thinking" (S5.14). The toggle reads the **effective**
+                answer, not the stored one: a draft with no choice yet — a new
+                agent, or one written before the field existed — shows what its
+                provider would do, which is the same rule `agents.create`
+                applies, so the switch never moves under the user at Save.
+                Toggling writes an explicit boolean and the guesswork stops. */}
             <Field label={t('agents.reasoning')} hint={t('agents.reasoningHint')} layout="column">
               <Toggle
                 label={t('agents.reasoning')}
-                checked={draft.params.reasoning === true}
-                onChange={(checked) =>
-                  store().patchParams({ reasoning: checked ? true : undefined })
-                }
+                checked={showThinking}
+                onChange={(checked) => store().patchParams({ reasoning: checked })}
               />
             </Field>
           </section>

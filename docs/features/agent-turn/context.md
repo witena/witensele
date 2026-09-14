@@ -53,6 +53,13 @@ does not throw, it just makes every answer slightly worse.
   than a decoration.
 - Telling the reviewers of a hand-off that is what they are (`reviewing`, S5.12):
   one more section of the group briefing, for one round, set by the runner.
+- **Deciding whether this agent's thinking is kept at all** (`showsThinking`,
+  S5.14): when it is not, a `reasoning-delta` is discarded as the stream arrives
+  rather than stored as a `ReasoningPart`. The request is unchanged — the model
+  still thinks — and the delta still counts as activity for the supervisor.
+- **The closure markers in the briefing** (S5.14): one rule beside `[PASS]` in
+  both languages, teaching `[AGREED]` and `[CONTINUE]`, and the `closing` block
+  that replaces it for the one turn that writes the group's conclusion.
 
 ## Out of scope
 
@@ -70,6 +77,7 @@ does not throw, it just makes every answer slightly worse.
 | Which paths are marked as materials, and validating them | [`chats`](../chats/context.md), S5.10. This feature only reads the list |
 | Heartbeat, stall / hard timeouts, deciding *when* to abort, the presence state machine | [`presence`](../presence/context.md). The turn owns the controller that gets aborted, and the `skipped` status that results |
 | Announcing that a context was truncated **or that the materials did not fit**, and naming the chat | [`orchestration`](../orchestration/context.md). The turn *measures* (`fitHistory` → `droppedMessages`, `buildMaterialsSection` → `materialsOmitted`) and the runner *tells*, because both are facts about a run |
+| **Reading** the closure markers and deciding the chain is over | [`orchestration`](../orchestration/context.md). The turn teaches the markers and stores whatever the model wrote; `#agreed` is what reads them |
 | Displaying or pricing the stored `Usage` | [`chats`](../chats/context.md) and `src/shared/pricing.ts`. The turn records what the provider reported and nothing else |
 
 ## Dependencies
@@ -96,6 +104,10 @@ per speaker and reads the returned status to decide how the run ends.
 | The turn creates an `AbortController` **of its own**, chained to the run's signal | Hand the run's signal to the supervisor | The run's signal is how Stop reaches every speaker at once; the supervisor has to reach exactly one. Chaining costs one listener and keeps both meanings intact |
 | `runAgentTurn` never throws | Let the caller catch | Every failure has to end with a persisted terminal status and a `message.updated`, or the UI shows a cursor forever. Making that the function's own responsibility means no caller can forget |
 | Reasoning is **not** fed back into later prompts | Include it like text | It is the model's scratch pad, it is not what the group heard, and replaying it inflates every later prompt |
+| **"Show thinking" decides whether reasoning is stored at all** (S5.14), not whether it is requested | Ask the provider not to produce reasoning; render it collapsed and leave the data alone | No provider option was ever set from `params.reasoning`, and the ones that exist differ per vendor and per model — asking for less thinking would change the *answer*, which is not what the user wanted. What the first real use actually complained about is four open models each streaming a chain of thought into one transcript, and that is a rendering-and-storage problem: dropping the delta as it arrives leaves the answer identical and the transcript readable. Collapsing it in the UI was the other candidate and is what S2.5 already does; it was not enough, because the block is still there, still stored, and still four of them |
+| The default is **per provider route**, written into `params` at creation (S5.14) | A global setting; always off; always on | An `anthropic`, `openai` or `google` model emits reasoning only when the user picked a thinking mode, and then they want to see it; the open-model route emits it whether or not anybody asked. Writing the answer at `agents.create` means a stored agent carries a choice of its own rather than a gap, and the same rule applied again at turn time is what keeps every agent written before S5.14 behaving |
+| **`[AGREED]` / `[CONTINUE]` are taught here and read in `orchestration`** (S5.14) | Have the turn decide the round is over | Identical to `@mentions`: the finished text is here, the meaning of a round is there. The turn stores what the model wrote and nothing about a run |
+| The closing block **replaces** the marker rule rather than adding to it (S5.14) | Append it and let the model work it out | A turn told both "end with a marker" and "write no marker" writes one |
 | **Mentions are parsed here, scheduled elsewhere** | Let `ChatRunner` re-read the finished message and parse it | The finished text is already in hand at the terminal update, so parsing it there keeps **one** `message.updated` per turn instead of two, and a reply reaches the renderer with its mentions already on it. The rules that drop a self-mention, a non-member and a `[PASS]` are scheduling rules and live in `orchestration/scheduling.ts` |
 | **The history is an optional parameter, not a mode flag** | A `parallel: boolean`; a second function | The turn does not need to know what a round is: either it is given a transcript or it reads one. That is the whole difference between the two speaking modes, expressed once |
 | `passed` and `skipped` messages are dropped from history | Keep them with a marker | Replaying abstentions teaches the next speaker that abstaining is normal. The round bookkeeping that needs them lives in `ChatRunner` |
@@ -125,3 +137,10 @@ per speaker and reads the returned status to decide how the run ends.
   database; the UI dims it either way.
 - Whether the flush interval should adapt to the model's token rate rather than
   being two fixed constants.
+- Whether a hidden `reasoning-delta` should still be *counted*, so the transcript
+  could say "thought for 400 tokens" without storing the text. Today it is
+  discarded entirely and only the provider's usage figures remain.
+- Whether "show thinking" belongs on the agent at all rather than on the chat, or
+  as a per-message expander that fetches the thinking on demand. It is on the
+  agent because that is where the model is chosen, which is what decides how much
+  thinking there will be.

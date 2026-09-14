@@ -69,8 +69,14 @@ const LINE_HEIGHT_PX = 22
 
 /** What the parent may ask the composer to do. Used by the Actions card. */
 export interface ComposerHandle {
-  /** Sends `text` as if it had been typed, resolving mentions the same way. */
-  submitText: (text: string) => Promise<boolean>
+  /**
+   * Sends `text` as if it had been typed, resolving mentions the same way.
+   *
+   * `rounds` (S5.14) caps the chain that message starts; it travels with the
+   * send rather than being a second path into the backend, so "Start a vote" is
+   * still an ordinary message the transcript records in full.
+   */
+  submitText: (text: string, rounds?: number) => Promise<boolean>
 }
 
 export interface ComposerProps {
@@ -80,8 +86,13 @@ export interface ComposerProps {
   members?: readonly Agent[]
   /** True while a run is active; the button becomes Stop. */
   running: boolean
-  /** Resolves true when the message was accepted, which clears the box. */
-  onSend: (text: string, mentions: string[]) => Promise<boolean>
+  /**
+   * Resolves true when the message was accepted, which clears the box.
+   *
+   * `rounds` is set only by `submitText` (S5.14); a typed message never carries
+   * one and runs under the chat's own `maxAutoRounds`.
+   */
+  onSend: (text: string, mentions: string[], rounds?: number) => Promise<boolean>
   onStop: () => void
   /** Already-translated reason the last send was refused. */
   error?: string | undefined
@@ -134,12 +145,12 @@ export function Composer({
     setActive(0)
   }, [chatId])
 
-  const send = async (value: string): Promise<boolean> => {
+  const send = async (value: string, rounds?: number): Promise<boolean> => {
     const trimmed = value.trim()
     if (disabled || trimmed.length === 0) return false
     setBusy(true)
     try {
-      return await onSend(trimmed, parseMentions(trimmed, mentionMembers))
+      return await onSend(trimmed, parseMentions(trimmed, mentionMembers), rounds)
     } finally {
       setBusy(false)
     }

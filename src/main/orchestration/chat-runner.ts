@@ -25,6 +25,9 @@
  *        aborted                           → finish `stopped`
  *        every speaker errored             → finish `error`
  *        plan = mentions of the round that just ended
+ *        this message's own `rounds` spent  → finish `max-rounds` (+ voteClosed)
+ *        everybody wrote `[AGREED]`         → consensus notice, one closing
+ *                                             turn, finish `completed`
  *      title the chat, if it is still called `New chat`
  *      emit run.finished { reason }
  * ```
@@ -76,6 +79,22 @@
  *   review round tells its speakers that is what they are doing, so they judge
  *   the diff against the chat's goal instead of guessing why they were woken.
  *
+ * - **A discussion that has agreed stops itself** (S5.14). The briefing asks
+ *   every participant to end an automatic reply with `[AGREED]` or
+ *   `[CONTINUE]`; a `roundrobin` round in which everybody who spoke wrote
+ *   `[AGREED]`, with nothing mentioned and nothing pending, ends the chain: the
+ *   `consensus` notice, then **one closing turn** by the first member, briefed
+ *   to write the group's conclusion for the user rather than another argument.
+ *   Executors do not vote, a hand-off's two rounds are exempt, and a single
+ *   `[CONTINUE]` — or no marker at all — carries on under `maxAutoRounds`
+ *   exactly as before. See `#agreed`.
+ * - **A message may cap its own chain** (S5.14). `ChatSendInput.rounds`
+ *   overrides `maxAutoRounds` for the chain that message starts and nothing
+ *   else; the Actions card's "Start a vote" sends `1`, so every member answers
+ *   once and the run closes with `voteClosed`. The cap is checked at the *end*
+ *   of a round as well as at the top of one, because a vote whose answers
+ *   mention nobody would otherwise end in silence.
+ *
  * - **Three things are announced by the runner rather than by the turn** (S4.2,
  *   S4.3, S5.11), because each is a fact about a *run* and `AgentTurn` does not
  *   know one is happening: the `contextTruncated` notice, stored once per run per
@@ -89,6 +108,7 @@
  * reaches the outside world only through `ctx.repos` and `ctx.events`.
  */
 import type { BackendEvent, RunFinishReason } from '@shared/events'
+import { closureMarker } from '@shared/markers'
 import { parseMentions } from '@shared/mentions'
 import { HANDOFF_INTENTS, type Agent, type Chat, type HandoffIntent, type Message } from '@shared/types'
 import type { AppContext } from '../app-context'
@@ -148,6 +168,23 @@ export const NOTICE_HANDOFF = 'handoff'
  * user's home directory printed into every later prompt.
  */
 export const NOTICE_HANDOFF_DELIVER = 'handoffDeliver'
+/**
+ * The group agreed and the chain stopped by itself (S5.14).
+ *
+ * Stored **before** the closing turn rather than after it, so the transcript
+ * reads in the order the events happened: the group finished, and then somebody
+ * wrote down what it concluded.
+ */
+export const NOTICE_CONSENSUS = 'consensus'
+/**
+ * A chain whose message carried an explicit `rounds` cap has run them (S5.14).
+ *
+ * Its only producer today is the Actions card's "Start a vote", which sends
+ * `rounds: 1` — hence the name. `maxRoundsReached` is the wrong sentence for it:
+ * that one says "the chat hit its automatic limit, send a message to continue",
+ * while this run ended exactly where the user asked it to.
+ */
+export const NOTICE_VOTE_CLOSED = 'voteClosed'
 
 /**
  * Which round of a hand-off `#runRound` is running, if it is one (S5.6, S5.12).
@@ -163,6 +200,15 @@ interface HandoffStage {
   intent: HandoffIntent
   /** True in the round after that one, for everybody speaking in it. */
   reviewing: boolean
+  /** True for the single closing turn of an agreed discussion (S5.14). */
+  closing?: boolean
+}
+
+/** The stage of an ordinary round: not a hand-off, not a closing turn. */
+const ORDINARY_STAGE: HandoffStage = {
+  implementing: null,
+  intent: 'implement',
+  reviewing: false
 }
 
 /** One turn that is in flight right now. Read by the tests and by S2.4. */
@@ -192,6 +238,20 @@ export interface ChatSendInput {
   text: string
   /** Agent ids the composer resolved; unioned with the ones parsed from the text. */
   mentions?: string[]
+  /**
+   * How many automatic rounds **the chain this message starts** may run, instead
+   * of the chat's `maxAutoRounds` (S5.14).
+   *
+   * `1 … MAX_AUTO_ROUNDS`, validated in the handler. The Actions card's "Start a
+   * vote" sends `1`: a vote is one question and one answer per member, and a
+   * chat set to three automatic rounds would otherwise answer it twice more.
+   *
+   * It is a property of the message rather than of the chat on purpose — it is
+   * not a setting the user changed, it is what this one request needs — so it
+   * lives on the send and dies with the chain: the next typed message goes back
+   * to `chat.settings.maxAutoRounds`.
+   */
+  rounds?: number
 }
 
 export interface ChatRunnerOptions {
@@ -263,6 +323,17 @@ export class ChatRunner {
    * `#start`'s `finally` cannot replay it.
    */
   #handoff: { agentId: string; intent: HandoffIntent } | null = null
+  /**
+   * The `rounds` cap the next batch of pending messages carries, or `null` for
+   * the chat's own `maxAutoRounds` (S5.14).
+   *
+   * Beside `#pending` rather than on the stored `Message`, because it is not
+   * part of the transcript: the row is what the user said, and how many rounds
+   * the app was told to run it for is scheduling. Last send wins — two messages
+   * that land in the same gap are answered in one round either way, so there is
+   * one chain and it can only have one cap.
+   */
+  #pendingRounds: number | null = null
 
   constructor(ctx: AppContext, chatId: string, options: ChatRunnerOptions = {}) {
     this.#ctx = ctx
@@ -331,6 +402,10 @@ export class ChatRunner {
     this.#emit({ type: 'message.created', message })
 
     this.#pending.push(message)
+    // S5.14: the cap this chain runs under, replaced rather than merged — see
+    // `#pendingRounds`. `undefined` clears an earlier one, so a typed message
+    // that joins a vote mid-run puts the chat's own limit back.
+    this.#pendingRounds = input.rounds ?? null
     if (this.#running === null) this.#start()
     return message
   }
@@ -446,6 +521,7 @@ export class ChatRunner {
   /** Aborts the active run and drops anything pending. Idempotent. */
   stop(): void {
     this.#pending = []
+    this.#pendingRounds = null
     this.#controller?.abort()
   }
 
@@ -509,6 +585,15 @@ export class ChatRunner {
     /** What the round that just ended scheduled. */
     let carried: RoundPlan = EMPTY_PLAN
     let chat: Chat | null = null
+    /**
+     * The `rounds` cap the last batch of user messages carried, or `null` for
+     * the chat's own `maxAutoRounds` (S5.14).
+     *
+     * A loop local rather than a field, because it belongs to the chain and not
+     * to the runner: it is taken from `#pendingRounds` at the same boundary that
+     * resets `roundsSinceUser`, and a run that ends forgets it.
+     */
+    let roundsCap: number | null = null
 
     try {
       for (;;) {
@@ -537,6 +622,8 @@ export class ChatRunner {
           // A user message resets the automatic counter and joins whatever the
           // previous round mentioned, rather than replacing it.
           roundsSinceUser = 0
+          // …and brings its own cap with it, or puts the chat's back (S5.14).
+          roundsCap = this.#takePendingRounds()
           plan = mergePlans(
             memberIds,
             planFromUserMessages(chat.settings.mode, memberIds, pending),
@@ -587,8 +674,13 @@ export class ChatRunner {
         }
         plan = { ...plan, speakers: speaking }
 
-        if (reachedRoundLimit(roundsSinceUser, chat.settings.maxAutoRounds)) {
-          this.#notice(chat, NOTICE_MAX_ROUNDS, { max: chat.settings.maxAutoRounds })
+        // The chain's cap: what this message asked for, or the chat's setting.
+        const limit = roundsCap ?? chat.settings.maxAutoRounds
+        if (reachedRoundLimit(roundsSinceUser, limit)) {
+          // An explicit cap ends with its own sentence: "the vote is closed" is
+          // not "this chat hit its automatic limit" (S5.14).
+          if (roundsCap !== null) this.#notice(chat, NOTICE_VOTE_CLOSED)
+          else this.#notice(chat, NOTICE_MAX_ROUNDS, { max: limit })
           reason = 'max-rounds'
           break
         }
@@ -606,11 +698,19 @@ export class ChatRunner {
         const speakers = plan.speakers
           .map((id) => members.find((member) => member.id === id))
           .filter((member): member is Agent => member !== undefined)
-        const outcomes = await this.#runRound(chat, members, speakers, plan, controller.signal, {
+        const stage: HandoffStage = {
           implementing,
           intent: handoff?.intent ?? 'implement',
           reviewing
-        })
+        }
+        const outcomes = await this.#runRound(
+          chat,
+          members,
+          speakers,
+          plan,
+          controller.signal,
+          stage
+        )
         this.#noticeTruncation(chat, members, outcomes)
         this.#noticeMaterials(chat, members, outcomes)
 
@@ -633,6 +733,26 @@ export class ChatRunner {
             passed: outcome.result.status === 'passed'
           }))
         )
+
+        // A capped chain ends **here**, not at the top of the next iteration
+        // (S5.14). The check up there only fires when something is still
+        // scheduled, and a vote whose answers mention nobody schedules nothing —
+        // which would end the run in silence, with no line saying the vote was
+        // the point. Checked before consensus because the user named the number:
+        // one round means one round, agreement or not.
+        if (roundsCap !== null && reachedRoundLimit(roundsSinceUser, roundsCap)) {
+          this.#notice(chat, NOTICE_VOTE_CLOSED)
+          reason = 'max-rounds'
+          break
+        }
+
+        // …and an *uncapped* discussion ends when the group says it has (S5.14).
+        if (this.#agreed(chat, members, outcomes, carried, stage)) {
+          this.#notice(chat, NOTICE_CONSENSUS)
+          await this.#runClosing(chat, members, controller.signal)
+          reason = controller.signal.aborted ? 'stopped' : 'completed'
+          break
+        }
       }
     } catch (error) {
       // Nothing above is expected to throw — `runAgentTurn` never does — but a
@@ -671,8 +791,8 @@ export class ChatRunner {
     speakers: Agent[],
     plan: RoundPlan,
     signal: AbortSignal,
-    /** Which round of a hand-off this is, if it is one (S5.6, S5.12). */
-    stage: HandoffStage = { implementing: null, intent: 'implement', reviewing: false }
+    /** Which round of a hand-off this is, if it is one (S5.6, S5.12, S5.14). */
+    stage: HandoffStage = ORDINARY_STAGE
   ): Promise<TurnOutcome[]> {
     const round = this.#round
     const parallel = chat.settings.speaking === 'parallel'
@@ -700,6 +820,9 @@ export class ChatRunner {
           // …and the round after that one, where everybody who speaks is reading
           // what it changed and is told to judge it against the chat's goal.
           ...(stage.reviewing ? { reviewing: true } : {}),
+          // S5.14: the single turn that writes the conclusion of an agreed
+          // discussion, which is told the discussion is over.
+          ...(stage.closing ? { closing: true } : {}),
           ...(snapshot ? { history: snapshot } : {}),
           ...(this.#options.createModel ? { createModel: this.#options.createModel } : {}),
           // The turn's own events pass straight through; the wrapper only picks
@@ -756,6 +879,85 @@ export class ChatRunner {
       }
     }
     return outcomes
+  }
+
+  /**
+   * Whether the round that just ended was the group agreeing that it is done
+   * (S5.14).
+   *
+   * The briefing asks every participant to end an automatic reply with
+   * `[AGREED]` or `[CONTINUE]`, and this is the one place that reads them. Every
+   * condition below is a way of being conservative — the failure that matters is
+   * a discussion cut short, not one that runs a round too long:
+   *
+   * - **`roundrobin` only.** In `mention-only` the chain is `@`-driven: the
+   *   markers are still stripped from what the user and the models read, but a
+   *   round there is whoever was named, and "everybody agreed" is not a
+   *   statement one named member can make.
+   * - **Not a hand-off's rounds.** The executor's round and the review round
+   *   after it keep their S5.6 behaviour exactly; a reviewer that has nothing to
+   *   add is not a discussion reaching a conclusion.
+   * - **Executors do not vote.** They write files rather than positions, and a
+   *   chat with one would otherwise need its executor to agree before the
+   *   participants could finish.
+   * - **Somebody has to have spoken.** A round of nothing but abstentions,
+   *   errors and skips is not consensus; `[PASS]` deliberately answers `null`
+   *   here (see `@shared/markers`).
+   * - **Nothing may be pending.** An `@mention` in the round's replies, or a
+   *   user message that landed while it ran, is a question that has not been
+   *   answered yet, and closing on top of one would drop it.
+   */
+  #agreed(
+    chat: Chat,
+    members: Agent[],
+    outcomes: TurnOutcome[],
+    carried: RoundPlan,
+    stage: HandoffStage
+  ): boolean {
+    if (chat.settings.mode !== 'roundrobin') return false
+    if (stage.implementing !== null || stage.reviewing) return false
+    if (carried.speakers.length > 0) return false
+    if (this.#pending.length > 0) return false
+
+    const executors = new Set(
+      members.filter((member) => member.role === 'executor').map((member) => member.id)
+    )
+    const voters = outcomes.filter(
+      (outcome) => !executors.has(outcome.agentId) && outcome.result.status === 'done'
+    )
+    if (voters.length === 0) return false
+    return voters.every((outcome) => closureMarker(textOf(outcome.result.message)) === 'agreed')
+  }
+
+  /**
+   * The one turn that hands the user the group's conclusion (S5.14).
+   *
+   * **The first member in speaking order** writes it, skipping anyone the
+   * supervisor has taken offline. Not the last speaker, not a vote among them: a
+   * conclusion is one voice, and the chat's member order is the one ordering the
+   * user set by hand, so the same chat closes with the same voice every time.
+   *
+   * It is an ordinary round of exactly one speaker, so Stop, the barrier, the
+   * presence machinery and the usage accounting need no special case; the only
+   * thing that differs is `closing`, which swaps the discussion rules in the
+   * briefing for "state the conclusion, add nothing, write no marker". Whatever
+   * it mentions is ignored, because the caller breaks out of the loop
+   * immediately afterwards — that is the point of closing.
+   */
+  async #runClosing(chat: Chat, members: Agent[], signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return
+    const speaker = members.find((member) => !this.#ctx.supervisor.isOffline(member.id))
+    // Every member offline is already the `allOffline` case's territory; there
+    // is nobody left to write a conclusion and the notice above stands alone.
+    if (!speaker) return
+
+    this.#round += 1
+    this.#speakers = [speaker.id]
+    this.#emit({ type: 'run.round', chatId: chat.id, round: this.#round, speakers: [speaker.id] })
+    await this.#runRound(chat, members, [speaker], EMPTY_PLAN, signal, {
+      ...ORDINARY_STAGE,
+      closing: true
+    })
   }
 
   /**
@@ -899,6 +1101,13 @@ export class ChatRunner {
     const pending = this.#pending
     this.#pending = []
     return pending
+  }
+
+  /** Takes the `rounds` cap those pending messages carried, if any (S5.14). */
+  #takePendingRounds(): number | null {
+    const rounds = this.#pendingRounds
+    this.#pendingRounds = null
+    return rounds
   }
 
   /**

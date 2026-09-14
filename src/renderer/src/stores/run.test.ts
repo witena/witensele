@@ -126,6 +126,19 @@ describe('run store', () => {
     ])
   })
 
+  // S5.14: "Start a vote" is the only caller that sets it.
+  it('passes a round cap through, and omits it when there is none', async () => {
+    const calls = fakeBackend()
+
+    await useRunStore.getState().send(CHAT, '@all vote please', [], 1)
+    await useRunStore.getState().send(CHAT, 'and now discuss')
+
+    expect(calls).toEqual([
+      { method: 'chat.send', input: { chatId: CHAT, text: '@all vote please', rounds: 1 } },
+      { method: 'chat.send', input: { chatId: CHAT, text: 'and now discuss' } }
+    ])
+  })
+
   it('refuses an empty message without calling the backend', async () => {
     const calls = fakeBackend()
 

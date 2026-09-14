@@ -9,6 +9,8 @@
 > speakers, and a turn the hard timeout skips releases the barrier like any other
 > terminal status. **S5.6** added the second way a run can start: "Hand to
 > executor", which schedules the executor alone and then one review round.
+> **S5.14** added the two ways a chain now ends on its own: the group writing
+> `[AGREED]`, and a message that carried its own round cap.
 
 ## Problem
 
@@ -50,6 +52,9 @@ that owns the `AbortController` the Stop button reaches.
   changing.
 - **The automatic chat title** (S4.3): after the first run that produced a
   finished reply, and only while the title is still the default.
+- **Discussion closure** (S5.14): reading `[AGREED]` / `[CONTINUE]` off the round
+  that just ended, the `consensus` notice, the single **closing turn**, and
+  `ChatSendInput.rounds` with its `voteClosed` notice.
 
 ## What S2.4 added
 
@@ -82,6 +87,24 @@ that owns the `AbortController` the Stop button reaches.
 The scheduling is **untouched**: the same two staged plans, the same merge, the
 same cap. An intent changes one paragraph of one prompt and one stored key; a
 review round changes one section of the prompts of the round after it.
+
+## What S5.14 added
+
+Two ways a chain ends that are not "nobody was mentioned" and not
+"`maxAutoRounds`".
+
+| Change | Where |
+|---|---|
+| **`#agreed`**: after an ordinary `roundrobin` round, every non-executor speaker that finished wrote `[AGREED]`, nothing is mentioned and nothing is pending | `chat-runner.ts`, `@shared/markers` |
+| **The `consensus` notice**, stored before the closing turn so the transcript reads in the order things happened | `NOTICE_CONSENSUS` |
+| **`#runClosing`**: one extra round of exactly one speaker — the first member in speaking order that is not offline — with `AgentTurnOptions.closing`, after which the loop breaks | `chat-runner.ts`, [`agent-turn`](../agent-turn/context.md) |
+| **`ChatSendInput.rounds`**, held in `#pendingRounds` and taken at the same boundary that resets `roundsSinceUser`; it caps **that chain only** | `chat-runner.ts`, `handlers/chats.ts` |
+| **The `voteClosed` notice**, and the cap checked at the *end* of a round as well as at the top of one | `NOTICE_VOTE_CLOSED` |
+| **`[AGREED]` / `[CONTINUE]` in the group briefing**, one rule beside `[PASS]`, in both languages | [`agent-turn`](../agent-turn/context.md) |
+
+The scheduling is again **untouched**: `scheduling.ts` has no new function, no
+plan is built differently, and the closing turn is an ordinary round with one
+speaker. What changed is the set of reasons the loop may `break`.
 
 ## Out of scope (permanently, for this feature)
 
@@ -125,6 +148,14 @@ review round changes one section of the prompts of the round after it.
 | **A hand-off cannot join a running chain**; it is refused while a run is active | Queue it like a user message | A hand-off's rounds are scheduled, not merged: joining a round somebody else's mentions already filled would make "the executor speaks alone" untrue, and the click would silently mean something else than it said |
 | **`maxAutoRounds` counts the hand-off's rounds like any others** | Exempt the implement + review pair | The setting is the user's promise that the chat will not run away, and a hand-off is the *most* expensive thing in the product to let run away. The cost is that `maxAutoRounds: 1` implements without a review, which the `maxRoundsReached` notice explains — recorded in "Known limitations" rather than hidden |
 | **Offline members are filtered out of `plan.speakers`, not out of `members`** | Drop them before the plan is computed | A reply that says `@Ghost` still resolves to a real member, so the round ends with the `allOffline` notice rather than with `noMentions` — the difference between "that agent is down" and "you mentioned nobody" |
+| **Agreement is read from a marker the model writes, not inferred** (S5.14) | Ask a model "has the group agreed?" after each round; compare replies for similarity | An extra model call per round costs a round-trip and can be wrong in both directions, and similarity is not agreement — two members can restate the same position while one of them still objects. A marker is the group's own answer, it costs nothing, and the briefing already teaches one token of exactly this shape (`[PASS]`) |
+| **No marker at all means "carry on"**, and so does a single `[CONTINUE]` | Treat a missing marker as agreement; require every member to have spoken | The failure that matters is a discussion cut short, not one that runs a round too long. A model that ignored the protocol has said nothing about whether the group is finished, and reading silence as consent would end chats the moment a member forgot the rule |
+| **Executors do not vote**, and a hand-off's two rounds are exempt entirely | Count every speaker | An executor writes files rather than positions; a chat with one would otherwise need it to agree before the participants could finish. A reviewer with nothing to add is not a discussion reaching a conclusion either, so S5.6's rounds keep their own behaviour |
+| **One closing turn by the first member in speaking order** | The last speaker; every member; no closing turn, only the notice | A conclusion is one voice, and the member order is the ordering the user set by hand, so the same chat closes with the same voice every time. Without the turn the user is left to read four replies and work out what was decided, which is the thing the product exists to do for them |
+| **The closing briefing replaces the marker rule rather than adding to it** | Append "this is the closing turn" to the existing rules | A turn told both "end with a marker" and "write no marker" writes one. The block is last, and the rule it contradicts is simply absent |
+| **`rounds` travels on the message, not on the chat** | A `maxAutoRounds` write before the send and another after it | Two writes with a run between them is a setting the user never chose, visible in the member panel, and wrong for ever if the app is closed in between. The cap belongs to one request and dies with its chain |
+| **A capped chain is checked again at the end of a round** | Only at the top of the next round, like `maxAutoRounds` | A vote whose answers mention nobody schedules nothing, so the loop would exit through the empty-plan branch in silence and the user would never be told the vote was the point |
+| **The cap wins over consensus when both apply** | Close with the conclusion instead | The user named the number. One round means one round, and `voteClosed` says exactly what happened |
 
 ## Open questions
 
@@ -140,3 +171,12 @@ review round changes one section of the prompts of the round after it.
   from. Today it simply speaks in the next one.
 - Whether `parallel` should also snapshot the *member list* per round, so a
   removal during a round cannot change the roster the briefing prints mid-round.
+- Whether `mention-only` should have a closure rule of its own. Today the markers
+  are stripped there and ignored, because "everybody agreed" is not a statement
+  one named member can make.
+- Whether the closing turn should be given to the member the group deferred to
+  rather than to the first in speaking order, and how that would be decided
+  without a second model call.
+- Whether `[AGREED]` should survive into the history transform, so a later
+  speaker can see who has already agreed. Today it is stripped like `[PASS]`,
+  which also means a small model cannot learn the protocol from the transcript.

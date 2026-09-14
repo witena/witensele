@@ -4,14 +4,14 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends; from S5.11 `workspaceWorkdir` (the read-only rule), `buildTurnPrompt` (the prompt plus `materialsOmitted`) and the read-only branch of `collectAgentTools`; and from S5.12 `TurnStage` (the `handoff` intent and `reviewing`) and `deliveredRef`, which appends the deliverable's `FileRefPart` after the diffs |
-| `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]`. From S4.2 it also caps each replayed `tool-result` at `MAX_TOOL_RESULT_CHARS` (4 KB) and strips a trailing `[PASS]` from a reply that had real content |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends; from S5.11 `workspaceWorkdir` (the read-only rule), `buildTurnPrompt` (the prompt plus `materialsOmitted`) and the read-only branch of `collectAgentTools`; and from S5.12 `TurnStage` (the `handoff` intent and `reviewing`) and `deliveredRef`, which appends the deliverable's `FileRefPart` after the diffs; from S5.14 `showsThinking`, which decides whether a `reasoning-delta` is kept at all, and `closing` on `TurnStage` |
+| `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]`. From S4.2 it also caps each replayed `tool-result` at `MAX_TOOL_RESULT_CHARS` (4 KB) and strips a trailing marker from a reply that had real content — `[PASS]` since S4.3, `[AGREED]` and `[CONTINUE]` since S5.14, all through the same `stripTrailingMarkers` |
 | `src/main/agents/context-budget.ts` | `estimateTokens` and `fitHistory`: the character-count estimate and the drop-oldest-first budget (S4.2). Pure; no database, no `AppContext` |
 | `src/main/agents/materials.ts` | `buildMaterialsSection`: the goal's materials as a prompt section, inside a quarter of the model's window, with the rest named by path (S5.11). Reads the files it is pointed at through `executor/paths.ts`; no database, no `AppContext` |
 | `src/main/agents/title.ts` | `sanitizeTitle`, `fallbackTitle` and `generateChatTitle` — the automatic chat title (S4.3). `ChatRunner` is what calls it; see [`orchestration`](../orchestration/backend.md) |
-| `src/shared/pass.ts` | `PASS_TOKEN`, `isPassOnly` and `stripTrailingPass`: shared, because the status decision here and the rendering in the transcript have to read the identical rule |
+| `src/shared/markers.ts` | `PASS_TOKEN`, `AGREED_TOKEN`, `CONTINUE_TOKEN`, `isPassOnly`, `closureMarker` and `stripTrailingMarkers`: shared, because the status decision here, the scheduling decision in `orchestration` and the rendering in the transcript have to read the identical rule. It was `src/shared/pass.ts` until S5.14, when the second pair of markers made the name wrong; every import was updated rather than aliased |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
-| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3) and the `Goal of this chat` section (S5.10) |
+| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3), the `Goal of this chat` section (S5.10), the `[AGREED]` / `[CONTINUE]` rule and the `This is the closing turn` block (S5.14) |
 | `src/main/agents/briefing.zh-CN.ts` | The Chinese wording, same rules in the same order. **The only `.ts` file in the repository that may contain Chinese** — see below |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, documented under [`chats`](../chats/backend.md) |
 
@@ -69,7 +69,7 @@ No migration. It writes one `messages` row per turn:
 
 | Column | Written | When |
 |---|---|---|
-| `parts` | `[]`, then the accumulated parts — text, reasoning, and from S3.1 `tool-call` / `tool-result` | On create, on every flush, once per tool part, and once at the end |
+| `parts` | `[]`, then the accumulated parts — text, reasoning **when this agent shows its thinking** (S5.14), and from S3.1 `tool-call` / `tool-result` | On create, on every flush, once per tool part, and once at the end |
 | `status` | `streaming`, then `done` \| `passed` \| `error` | Create, then the terminal update |
 | `round` | The round the runner passed | On create |
 | `in_reply_to` | The `inReplyTo` the runner passed, when it is not empty | On create |
@@ -90,7 +90,7 @@ None. This feature is called by `ChatRunner`, never by the transport.
 | Event | Payload | Emitted when |
 |---|---|---|
 | `message.created` | `{ message }` | The empty `streaming` row is inserted, before the request goes out |
-| `message.delta` | `{ chatId, messageId, delta: { kind, text } }` | Once per `text-delta` / `reasoning-delta` |
+| `message.delta` | `{ chatId, messageId, delta: { kind, text } }` | Once per `text-delta`, and once per `reasoning-delta` **only when `showsThinking(ctx, agent)` is true** (S5.14). A hidden reasoning delta is neither emitted nor stored; it still reaches `ctx.supervisor.activity`, because the model really is working |
 | `message.updated` | `{ message }` | The terminal status is persisted — on every path |
 | `presence.changed` | `{ presence }` | Emitted by `AgentSupervisor`, which the turn drives: `beginTurn` → `working`, `endTurn` → `available` (or `offline`). Every stream part is reported as `activity`, which emits only when it clears `away` |
 | `message.delta` | `{ delta: { kind: 'part', part } }` | A `tool-call` or `tool-result` part was appended (S3.1) |
@@ -158,6 +158,34 @@ Pitfalls, each one hit while writing this step:
   case is that **neither** option reaches the call and the provider's own
   defaults decide the sampling; an agent saved before S5.9 still carries its
   values and they still reach `streamText` unchanged.
+
+### Whether a turn keeps its thinking (S5.14)
+
+```ts
+export function showsThinking(ctx: AppContext, agent: Agent): boolean {
+  if (agent.params.reasoning !== undefined) return agent.params.reasoning
+  try {
+    return showsThinkingByDefault(ctx.repos.providers.get(agent.providerId, ctx.userId))
+  } catch {
+    return false
+  }
+}
+```
+
+Read once per turn, before the stream. Three things about it are decisions:
+
+- **`undefined` is not `false`.** It means the agent has no choice stored — every
+  record written before S5.14, and any future API caller that omits the field —
+  and the provider answers instead, by exactly the rule `agents.create` writes
+  into a new agent's `params` (`showsThinkingByDefault` in `@shared/presets`:
+  false for a local or `openai-compatible` provider, true for `anthropic`,
+  `openai` and `google`). One rule in one place, applied at two moments.
+- **A missing provider answers `false`.** The turn is about to fail on it anyway,
+  and hiding is the half of the choice that cannot fill a transcript with
+  something nobody asked for.
+- **Nothing about the request changes.** No provider option was ever derived from
+  this field and none is now; the model thinks exactly as much as it would have.
+  What changes is one `case` in the `fullStream` switch.
 
 ### The group briefing, and why Chinese lives in a `.ts` file
 

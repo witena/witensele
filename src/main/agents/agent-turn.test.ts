@@ -186,25 +186,66 @@ describe('runAgentTurn', () => {
     expect(result.message.usage).toEqual({ inputTokens: 11, outputTokens: 4, totalTokens: 15 })
   })
 
-  it('records reasoning as its own part and its own delta kind', async () => {
-    const chunks: StreamPart[] = [
-      { type: 'stream-start', warnings: [] },
-      { type: 'reasoning-start', id: 'r' },
-      { type: 'reasoning-delta', id: 'r', delta: 'Let me think.' },
-      { type: 'reasoning-end', id: 'r' },
-      { type: 'text-start', id: '0' },
-      { type: 'text-delta', id: '0', delta: 'Answer.' },
-      { type: 'text-end', id: '0' },
-      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE }
-    ]
+  /** A stream that thinks out loud before it answers. */
+  const thinkingChunks = (): StreamPart[] => [
+    { type: 'stream-start', warnings: [] },
+    { type: 'reasoning-start', id: 'r' },
+    { type: 'reasoning-delta', id: 'r', delta: 'Let me think.' },
+    { type: 'reasoning-end', id: 'r' },
+    { type: 'text-start', id: '0' },
+    { type: 'text-delta', id: '0', delta: 'Answer.' },
+    { type: 'text-end', id: '0' },
+    { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE }
+  ]
 
-    const result = await turn(mockModel(chunks))
+  it('records reasoning as its own part and its own delta kind when thinking is shown', async () => {
+    ctx.repos.agents.update(agent.id, { params: { reasoning: true } }, ctx.userId)
+    agent = ctx.repos.agents.get(agent.id, ctx.userId)
+
+    const result = await turn(mockModel(thinkingChunks()))
 
     expect(result.message.parts).toEqual([
       { type: 'reasoning', text: 'Let me think.' },
       { type: 'text', text: 'Answer.' }
     ])
     expect(deltas().map((event) => event.delta.kind)).toEqual(['reasoning', 'text'])
+  })
+
+  // S5.14. The fixture's provider is `openai-compatible`, so an agent that never
+  // chose is on the open-model route and hides its thinking by default.
+  it('drops the reasoning deltas of an agent whose thinking is hidden', async () => {
+    const result = await turn(mockModel(thinkingChunks()))
+
+    expect(result.message.parts).toEqual([{ type: 'text', text: 'Answer.' }])
+    expect(deltas().map((event) => event.delta.kind)).toEqual(['text'])
+    // …and the answer is untouched: the model still thought, the turn still
+    // finished normally, only the thought was not kept.
+    expect(result.status).toBe('done')
+  })
+
+  it('hides thinking when the agent chose to, whatever its provider', async () => {
+    ctx.repos.agents.update(agent.id, { params: { reasoning: false } }, ctx.userId)
+    agent = ctx.repos.agents.get(agent.id, ctx.userId)
+
+    const result = await turn(mockModel(thinkingChunks()))
+
+    expect(result.message.parts).toEqual([{ type: 'text', text: 'Answer.' }])
+  })
+
+  it('keeps the thinking of an agent with no choice on a first-party provider', async () => {
+    const anthropic = ctx.repos.providers.create(
+      providerInput({ type: 'anthropic', name: 'Anthropic', presetId: 'anthropic' }),
+      ctx.userId
+    )
+    ctx.repos.agents.update(agent.id, { providerId: anthropic.id }, ctx.userId)
+    agent = ctx.repos.agents.get(agent.id, ctx.userId)
+
+    const result = await turn(mockModel(thinkingChunks()))
+
+    expect(result.message.parts).toEqual([
+      { type: 'reasoning', text: 'Let me think.' },
+      { type: 'text', text: 'Answer.' }
+    ])
   })
 
   it('marks a reply of exactly [PASS] as passed', async () => {
