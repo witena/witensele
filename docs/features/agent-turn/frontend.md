@@ -17,7 +17,7 @@ every one of these is a contract the message list has to honour:
 | `status: 'error'`, any other detail | Show "The reply failed". `Message.error` is operator-facing detail and is **not** rendered |
 | `presence.changed` | Update the dot on that agent's avatars, everywhere. The dot shows the agent's *current* state, not its state when the message was sent |
 | `usage` | Stored per message. Since S4.1 it is the source of the chat header's `12.4k tokens · $0.04`, each member row's share, and the tooltip on that message's model badge — see [`chats`](../chats/frontend.md) |
-| `status: 'done'` on text that **ends** with `[PASS]` | Strip the trailing marker when rendering (`messageText`), keep the status. A model that answered and then signed off with the token has not abstained (S4.3) |
+| `status: 'done'` on text that **ends** with `[PASS]`, `[AGREED]` or `[CONTINUE]` | Strip the trailing marker when rendering (`messageText` → `stripTrailingMarkers`), keep the status. A model that answered and then signed off with a protocol token has not abstained (S4.3) and has not said anything the reader needs to see (S5.14). A reply that is *nothing but* a marker is left alone, so a bare `[AGREED]` shows as itself rather than as an empty row |
 | `message.delta { kind: 'part' }` carrying a `tool-call` with no `serverId` | Draw the tool card with the bare tool name and no server prefix. That is what a built-in tool looks like: `read_skill`, `read_skill_file`, `memory_save`, `memory_search` (S3.2, S3.3) and the seven executor tools (S5.4) |
 | A turn that has gone quiet because a `permission.requested` is open (S5.4) | Keep the agent `working` — it is, and its hard timeout is still counting. The card that unblocks it is [`executor`](../executor/frontend.md)'s (S5.5) |
 | `message.delta { kind: 'part' }` carrying a `diff` (S5.5) | Draw one collapsed block per file, headed by the path, through the shared code block in the `diff` language. They arrive **after** the tool results and the text, once the stream has ended, and the final `message.updated` carries them too |
@@ -49,6 +49,17 @@ by [`editor`](../editor/frontend.md)'s detector.
 
 Reasoning parts are rendered collapsed behind a "Reasoning" toggle
 (`chat.reasoning`) because they are long, low-signal and not what the group said.
+Since S5.14 most transcripts have none at all: an agent on the open-model route
+does not show its thinking unless the user turns "Show thinking" on in the agent
+editor, and the turn then **never emits the delta**, so the renderer needs no
+rule for it — a message with no `reasoning` part simply has no toggle. Nothing
+about the collapsed block changed; there is just far less of it. The toggle
+itself is [`agents`](../agents/frontend.md)'s.
+
+S5.14's other renderer-visible change is two notice keys, `notices.consensus` and
+`notices.voteClosed`, both stored by the runner and drawn like every other
+notice, and the closing turn itself — which is an ordinary agent message with an
+ordinary round number. The message list needs no case for it.
 
 The group briefing and the system prompt never reach the renderer at all: they
 are model-facing text, which is exactly why `briefing.zh-CN.ts` is a `.ts` file

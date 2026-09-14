@@ -16,7 +16,7 @@
  */
 import type { ChatGoal } from '@shared/types'
 import type { BriefingBuilder } from './briefing'
-import { PASS_TOKEN } from './briefing'
+import { AGREED_TOKEN, CONTINUE_TOKEN, PASS_TOKEN } from './briefing'
 
 /** One roster line, or just the name when the member has no description. */
 function line(name: string, description: string): string {
@@ -61,12 +61,24 @@ function reviewSection(goal: ChatGoal | null): string[] {
   ]
 }
 
+/** The closing block (S5.14); says the same things in the same order as `briefing.en.ts`. */
+function closingSection(): string[] {
+  return [
+    '',
+    '这是收尾发言:',
+    '- 大家已经达成一致,讨论到此结束。你现在写的是交给用户看的答案,不是又一轮辩论。',
+    '- 用几行话说清楚大家得出的结论:定下来的是什么,站得住的理由是什么;如果还有没定的地方,说明是哪一点。',
+    '- 不要提出新的论点,不要用 @ 点名其他成员,也不要在结尾写任何标记。'
+  ]
+}
+
 export const buildChineseBriefing: BriefingBuilder = ({
   self,
   members,
   memoryEnabled,
   goal,
-  reviewing
+  reviewing,
+  closing
 }) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat; see `briefing.en.ts`.
@@ -90,6 +102,12 @@ export const buildChineseBriefing: BriefingBuilder = ({
     `- 想点名某位成员时,用 @ 加上他的名字,例如 @${other.name}。`,
     `- 如果这一轮你没有新的补充,就只回复 ${PASS_TOKEN},不要写别的内容。`,
     '- 回答要具体、聚焦。群体之所以能得出更好的答案,靠的是精确地提出分歧,而不是长篇附和。',
+    // S5.14: the rule that lets a discussion end by itself; see `briefing.en.ts`.
+    ...(closing
+      ? []
+      : [
+          `- 每条回复的最后都要单独一行写一个标记,后面不要再写任何东西:如果你没有别的要补充了,并且认可大家目前达成的结论,就写 ${AGREED_TOKEN};如果讨论还没结束,就写 ${CONTINUE_TOKEN}。一旦所有人都写了 ${AGREED_TOKEN},讨论就会停止,并把大家的结论交给用户。`
+        ]),
     // S3.3: only when the memory tools are actually attached this turn, so the
     // briefing never asks for a tool the model has not been given.
     ...(memoryEnabled
@@ -100,6 +118,8 @@ export const buildChineseBriefing: BriefingBuilder = ({
     // S5.10: last, for the same reason as in `briefing.en.ts`.
     ...(goal ? goalSection(goal) : []),
     // S5.12: after the goal, for the same reason as in `briefing.en.ts`.
-    ...(reviewing ? reviewSection(goal) : [])
+    ...(reviewing ? reviewSection(goal) : []),
+    // S5.14: last of all, for the same reason as in `briefing.en.ts`.
+    ...(closing ? closingSection() : [])
   ].join('\n')
 }

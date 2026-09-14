@@ -16,6 +16,11 @@
  *   `providerId` points at a deleted row fails at the first turn with a provider
  *   error the user cannot act on; rejecting it here fails at the moment the
  *   mistake is made instead.
+ * - **"Show thinking" is decided at creation, not at render time** (S5.14).
+ *   `agents.create` writes `params.reasoning` from the agent's provider when the
+ *   caller left it out, so a new agent on an open model starts with its thinking
+ *   hidden and one on Claude, GPT or Gemini starts with it shown. See
+ *   `withThinkingDefault`.
  * - **Deleting an agent is not only a row delete.** `chat_members.agent_id`
  *   cascades, so the agent silently leaves every chat. Any of those chats may be
  *   mid-run with that very agent streaming, so the run is stopped first, and
@@ -26,6 +31,7 @@
  * caller, but only `participant` and `executor` are legal values and the UI
  * offers only the first (see "Future extension" in `docs/PLAN.md`).
  */
+import { showsThinkingByDefault } from '@shared/presets'
 import type { AgentInput, AgentParams, AgentRole } from '@shared/types'
 import { validation } from '../errors'
 import type { AppContext } from '../app-context'
@@ -80,7 +86,10 @@ function assertParams(params: unknown): asserts params is AgentParams {
   if (typeof params !== 'object' || params === null || Array.isArray(params)) {
     throw validation('agent params must be an object')
   }
-  const { temperature, maxTokens } = params as AgentParams
+  const { temperature, maxTokens, reasoning } = params as AgentParams
+  if (reasoning !== undefined && typeof reasoning !== 'boolean') {
+    throw validation('reasoning must be a boolean')
+  }
   if (temperature !== undefined) {
     if (
       typeof temperature !== 'number' ||
@@ -152,6 +161,19 @@ function assertAgentPatch(
   }
 }
 
+/**
+ * The agent's `params` with `reasoning` — "show thinking" (S5.14) — filled in
+ * from its provider when the caller did not choose.
+ *
+ * Read `agents.create`'s comment for why this happens here. The provider has
+ * already been proved to exist by `assertProvider`, so the read cannot throw.
+ */
+function withThinkingDefault(ctx: AppContext, input: AgentInput): AgentParams {
+  if (input.params.reasoning !== undefined) return input.params
+  const provider = ctx.repos.providers.get(input.providerId, ctx.userId)
+  return { ...input.params, reasoning: showsThinkingByDefault(provider) }
+}
+
 export const agentHandlers: HandlerModule = {
   'agents.list': async (ctx) => ctx.repos.agents.list(ctx.userId),
 
@@ -163,7 +185,21 @@ export const agentHandlers: HandlerModule = {
   'agents.create': async (ctx, input) => {
     const candidate = (input as { input?: unknown })?.input
     assertAgentInput(ctx, candidate)
-    return ctx.repos.agents.create({ ...candidate, name: candidate.name.trim() }, ctx.userId)
+    return ctx.repos.agents.create(
+      {
+        ...candidate,
+        name: candidate.name.trim(),
+        // S5.14: "show thinking" gets its answer the moment the agent is made,
+        // from the provider it was pointed at, so the stored record carries a
+        // choice rather than a gap. A caller that *did* choose is left alone —
+        // including the agent editor, whose toggle always sends a boolean. Every
+        // creation path in the product comes through here (the editor, Duplicate
+        // and the first-run templates' `createFromTemplate`), which is why the
+        // default lives in the handler and not in three renderer call sites.
+        params: withThinkingDefault(ctx, candidate)
+      },
+      ctx.userId
+    )
   },
 
   'agents.update': async (ctx, input) => {

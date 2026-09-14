@@ -64,8 +64,10 @@ if (plan.speakers.length === 0) {                 // nothing to schedule
   if (pending.length > 0) notice('noMentions')    // mention-only, nobody named
   break                                           // → completed
 }
-if (roundsSinceUser >= chat.settings.maxAutoRounds) {
-  notice('maxRoundsReached', { max })
+// S5.14: this chain's own cap when the message carried one, the chat's otherwise.
+limit = roundsCap ?? chat.settings.maxAutoRounds
+if (roundsSinceUser >= limit) {
+  notice(roundsCap !== null ? 'voteClosed' : 'maxRoundsReached', { max: limit })
   reason = 'max-rounds'; break
 }
 
@@ -76,6 +78,18 @@ outcomes = await runRound(...)                    // the barrier; see below
 if (aborted)                        { reason = 'stopped'; break }
 if (outcomes.every(o => error))     { reason = 'error';   break }
 carried = planFromReplies(memberIds, outcomes)    // self / non-members / passed dropped
+
+// S5.14, in this order. The cap is re-checked here because a vote whose answers
+// mention nobody schedules nothing and would leave through the branch above in
+// silence; and agreement is only asked once nothing is left outstanding.
+if (roundsCap !== null && roundsSinceUser >= roundsCap) {
+  notice('voteClosed'); reason = 'max-rounds'; break
+}
+if (agreed(chat, members, outcomes, carried, stage)) {
+  notice('consensus')
+  await runClosing(chat, members, signal)         // one speaker, closing briefing
+  reason = 'completed'; break
+}
 ```
 
 and then, once, outside the loop: `emit run.finished { reason }`.
@@ -185,6 +199,36 @@ chat can satisfy in the runner, which is the same split the other three follow:
 the handler knows what a well-formed request looks like, the runner is the only
 object that holds the chat, its members and whether a run is going.
 
+### Closing a discussion (S5.14)
+
+```
+round ends
+  │
+  ├─ roundsCap spent?      → notice('voteClosed')  → max-rounds
+  │
+  └─ agreed()?             → notice('consensus')
+         │                    runClosing():
+         │                      round += 1
+         │                      emit run.round { round, speakers: [first member] }
+         │                      runAgentTurn({ …, closing: true })
+         │                    → completed
+         └─ otherwise       → next iteration
+```
+
+`agreed()` is six conditions, every one of them a way of being conservative —
+`roundrobin` only, not a hand-off's rounds, nothing mentioned, nothing pending,
+at least one non-executor speaker finished, and every such speaker's text ending
+with `[AGREED]`. They are listed with their reasons in
+[`backend.md`](./backend.md#the-agreed-chain); the short version is that the
+failure that matters is a discussion cut short, so "no marker" and "one
+`[CONTINUE]`" both mean carry on.
+
+The closing turn is an **ordinary round with one speaker**. Nothing about Stop,
+the barrier, presence or usage needs a case for it; the only difference is
+`AgentTurnOptions.closing`, which swaps the marker rule in the briefing for
+"state the conclusion, add nothing, write no marker". Whatever it mentions is
+ignored, because the loop breaks straight after.
+
 ### Stop
 
 ```
@@ -201,7 +245,8 @@ chat.stop → registry.stop(chatId) → runner.stop()
 | Reason | When |
 |---|---|
 | `completed` | No round scheduled another one — including `mention-only` with nothing mentioned, which also writes the `noMentions` notice |
-| `max-rounds` | `roundsSinceUser` reached `chat.settings.maxAutoRounds` while a round was still scheduled; writes `maxRoundsReached` |
+| `max-rounds` | `roundsSinceUser` reached the chain's limit. The limit is `ChatSendInput.rounds` when the message carried one and `chat.settings.maxAutoRounds` otherwise; the notice is `voteClosed` in the first case and `maxRoundsReached` in the second (S5.14) |
+| `completed`, via agreement | Every non-executor speaker of an ordinary `roundrobin` round wrote `[AGREED]`, nothing was mentioned and nothing was pending: writes `consensus`, runs one closing turn, ends (S5.14) |
 | `stopped` | The signal was aborted — Stop, `chats.delete`, or `AppContext.close()` |
 | `error` | Every speaker of a round errored, or the loop itself threw (which also writes `runFailed`) |
 
@@ -222,7 +267,7 @@ interface RunState {
 class ChatRunner {
   get state(): RunState | null
   get isRunning(): boolean
-  send(input: { chatId, text, mentions? }): Promise<Message>
+  send(input: { chatId, text, mentions?, rounds? }): Promise<Message>
   stop(): void
   whenIdle(): Promise<void>          // the test seam for "wait for the reply"
 }
@@ -262,7 +307,8 @@ wrapper that only reads the `message.created` of each turn to learn its
 | `src/main/orchestration/scheduling.test.ts` | Both modes' round 1, mentions → speakers, self-mention, non-member, `[PASS]`, merged sources, position order, the plan union and the round-limit predicate including the reset |
 | `src/main/orchestration/chat-runner.test.ts` | The S1.7 single-agent sequence, plus: every member in round 1; sequential sees the previous reply and parallel does not; a mention scheduling round 2 with only that member and the `inReplyTo` it stores; a self-mention scheduling nothing; `[PASS]`; the `maxAutoRounds` cap and its notice; `mention-only` with and without a mention; explicit composer mentions; a mid-run message joining the next round and resetting the counter; Stop aborting both turns of a parallel round; one failing speaker not blocking the other; every speaker failing → `error`; one `run.started` and one `run.finished` per multi-round run |
 | `src/main/agents/agent-turn.test.ts` | The stored `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored and absent, and the prebuilt `history` snapshot being used instead of the live transcript |
-| `src/renderer/src/stores/run.test.ts` | The composer's resolved mentions reaching `chat.send`, and an empty list being omitted |
+| `src/renderer/src/stores/run.test.ts` | The composer's resolved mentions reaching `chat.send`, an empty list being omitted, and (S5.14) a `rounds` cap travelling with the send while an ordinary send carries none |
+| `src/shared/markers.test.ts` | `isPassOnly` versus `closureMarker` versus `stripTrailingMarkers`: a bare token is an abstention and survives, a token after real content is a sign-off and goes, a token quoted mid-sentence is neither, two of them are both removed, and `closureMarker` is case-sensitive and answers `null` for `[PASS]` |
 | `src/main/orchestration/chat-runner.test.ts` (`describe('ChatRunner (usage, truncation and titles)')`) | S4.1–S4.3 through the handlers: `messages.usageSummary` summing per agent and pricing a known model, an empty summary and `not_found`; the `contextTruncated` notice appearing once per run with the agent and the count, and not appearing when the history fits; a title generated from a mock model's `doGenerate`, sanitised, falling back when the generator returns `null` or throws, never replacing a title the user set or set later, and never written when every turn failed; a trailing `[PASS]` leaving the status `done` while disappearing from the next speaker's prompt; and `chats.search` finding a chat by a word in one of its messages |
 | `src/main/orchestration/chat-runner.test.ts` (S5.11 cases) | The `materialsTruncated` notice: a chat whose goal marks a 400 KB file gets one notice naming the agent and the count, a second run adds no second notice, and a chat whose materials fit gets none |
 | `e2e/polish.spec.ts` | Against a real local model: the header and member-row token counts, the automatic title replacing `New chat`, and the search box filtering the left column |
@@ -271,7 +317,9 @@ wrapper that only reads the `message.created` of each turn to learn its
 | `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker`: the enabled case, the three refusals, a blank `workdir`, and the order the rules are applied in |
 | `src/renderer/src/stores/run.test.ts` (S5.6 block) | `handoff` calling `chat.handoff` with nothing but the id, and a refusal keeping its `details` so the composer can name the reason |
 | `e2e/orchestration.spec.ts` | Two real models: round-robin in round 1, parallel streaming both rows at once, `mention-only` answering with one member, and the `noMentions` notice |
+| `e2e/closure.spec.ts` | S5.14 against a real local model: two agents prompted to agree immediately end with the `consensus` line and a closing message by the first member in round 2, with no `maxRoundsReached`; and "Start a vote" produces exactly one round and the `voteClosed` line. The first test asks up to three times in fresh chats — a 3B model writes the marker about three runs in four, which is a fact about the model, not the runner |
 | `e2e/executor.spec.ts` | Offline: the hand-off button's `data-blocked` naming the rule that disabled it, and the backend refusing on the same rule. Behind the `qwen2.5:3b` guard: two participants plus an executor discuss, "Hand to executor" is clicked, the permission prompt is allowed, a file appears in the folder and a participant speaks again |
+| `src/main/orchestration/chat-runner.test.ts` (`describe('ChatRunner (discussion closure)')`) | S5.14, nineteen cases. **Agreement**: unanimous `[AGREED]` producing the notice, one closing round with the first member alone and the conclusion it wrote; the notice stored before the conclusion; the closing prompt carrying the closing block and *not* the marker rule while the discussion prompt carries the reverse; one `[CONTINUE]` and no marker at all both carrying on; a pending `@mention` postponing the close to the round that answers it; an executor's marker-free reply not blocking it; a round of nothing but `[PASS]` never closing; `mention-only` stripping the markers and ignoring them; and the marker being absent from the next speaker's prompt. **The cap**: `rounds: 1` running exactly one round and closing with `voteClosed`; the same when the answers mention nobody; the cap winning over agreement; a cap of 2 running two; the cap not leaking into the next message; and four refusals |
 | `src/main/orchestration/chat-runner.test.ts` (S5.12 cases) | `intent: 'deliver'` storing the `handoffDeliver` key with the agent and the relative path while scheduling the same two rounds; the executor's prompt carrying the deliver paragraph and the path and *not* the implement one; the notice reaching the reviewers as prose; the review round's prompts carrying the review block while the executor's does not, and the round after it carrying neither; the refusal with no goal and with a `codebase` goal; the folder and the executor still checked first; and an unknown intent refused |
 
 ## Known limitations and TODOs
@@ -305,6 +353,21 @@ wrapper that only reads the `message.created` of each turn to learn its
   the review round whether or not the deliverable appeared; it is the turn's own
   `FileRefPart` and the header chip that say so, and a reviewer reading a chat
   where nothing was written has to notice that for itself.
-- **A run does not summarise itself.** With `maxAutoRounds` reached, the user
-  gets a notice and has to read the rounds; PLAN's "ask an agent to summarise" is
-  a later action.
+- **A run does not summarise itself** *unless the group agreed*. S5.14's closing
+  turn is exactly that summary, but only on the consensus path: a chain that ends
+  at `maxAutoRounds`, or because nobody was mentioned, still leaves the user to
+  read the rounds, and the Actions card's "Summarise" is the manual version.
+- **Agreement is only as good as the marker.** A model that ignores the briefing
+  never writes `[AGREED]`, and the discussion then ends the way it did before
+  S5.14. Small local models are unreliable here: `e2e/closure.spec.ts` measures
+  roughly three runs in four for `qwen2.5:3b` even with a system prompt written
+  for the purpose.
+- **`[AGREED]` is stripped from the history**, like `[PASS]`, so a later speaker
+  cannot see who has already agreed — and cannot learn the protocol from the
+  transcript either. Recorded as an open question in `context.md`.
+- **The closing turn is always the first member.** Not the member the group
+  deferred to, and not a member chosen for having the largest context; the
+  speaking order the user set is the tie-break.
+- **A `rounds` cap has no UI of its own.** It is reachable only through "Start a
+  vote", which hard-codes `1`; there is no way to say "answer twice" from the
+  composer.

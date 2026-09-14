@@ -540,11 +540,27 @@ export const chatHandlers: HandlerModule = {
     if (typeof chatId !== 'string' || chatId.length === 0) throw validation('A chat id is required')
     if (typeof input.text !== 'string') throw validation('A message text is required')
     if (input.mentions !== undefined) assertAgentIds(input.mentions)
+    // S5.14: the cap this one chain runs under. Bounded by the same constants
+    // `chat.settings.maxAutoRounds` is, because it is the same number arriving
+    // by a different route — a caller must not buy an unbounded run by sending
+    // it per message instead of storing it.
+    const rounds = (input as { rounds?: unknown }).rounds
+    if (rounds !== undefined) {
+      if (
+        typeof rounds !== 'number' ||
+        !Number.isInteger(rounds) ||
+        rounds < MIN_AUTO_ROUNDS ||
+        rounds > MAX_AUTO_ROUNDS
+      ) {
+        throw validation(`rounds must be an integer between ${MIN_AUTO_ROUNDS} and ${MAX_AUTO_ROUNDS}`)
+      }
+    }
 
     return ctx.runners.send({
       chatId,
       text: input.text,
-      ...(input.mentions ? { mentions: input.mentions } : {})
+      ...(input.mentions ? { mentions: input.mentions } : {}),
+      ...(rounds !== undefined ? { rounds } : {})
     })
   },
 

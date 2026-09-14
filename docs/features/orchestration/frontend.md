@@ -15,10 +15,10 @@ actions are deliberately ordinary messages.
 
 | File | Responsibility |
 |---|---|
-| `src/renderer/src/stores/run.ts` | `activeByChat`, reduced from `run.started` / `run.round` / `run.finished`; `send(chatId, text, mentions?)`, `handoff(chatId, intent?)` (S5.6, S5.12) and `stop`; `errorDetails` beside `errorCode`, so a refusal's `ValidationReason` survives to the sentence |
+| `src/renderer/src/stores/run.ts` | `activeByChat`, reduced from `run.started` / `run.round` / `run.finished`; `send(chatId, text, mentions?, rounds?)` (S5.14), `handoff(chatId, intent?)` (S5.6, S5.12) and `stop`; `errorDetails` beside `errorCode`, so a refusal's `ValidationReason` survives to the sentence |
 | `src/renderer/src/components/chat/handoff-button.tsx` | The button above the composer: always drawn for a selected chat, disabled with the reason in its `title` and in `data-blocked` |
 | `src/renderer/src/components/chat/handoff.ts` | `handoffBlocker({ workdir, members, running, intent?, goal? })` → the `ValidationReason` that disables it, or `null`. Pure, and the same four rules the backend applies in the same order. One function for both controls: "Write the deliverable" is the same rules plus `handoff_no_deliverable` (S5.12) |
-| `src/renderer/src/components/chat/actions-card.tsx` | The Actions card's third row, "Write the deliverable" (`chat-write-deliverable`, S5.12): the **one** action in that card that is not an ordinary message — it calls `handoff(chatId, 'deliver')` — disabled with its reason in `data-blocked`, exactly like the button above the composer |
+| `src/renderer/src/components/chat/actions-card.tsx` | The Actions card's third row, "Write the deliverable" (`chat-write-deliverable`, S5.12): the **one** action in that card that is not an ordinary message — it calls `handoff(chatId, 'deliver')` — disabled with its reason in `data-blocked`, exactly like the button above the composer. Its "Start a vote" row is still an ordinary message, now sent with `VOTE_ROUNDS` (`1`, S5.14) |
 | `src/renderer/src/lib/event-bridge.ts` | Routes the three `run.*` events into the store |
 | `src/renderer/src/pages/chats-page.tsx` | The header's run status, and the members it passes to the composer and the message list |
 | `src/renderer/src/components/chat/composer.tsx` | Renders Stop instead of Send while a run is active, and resolves `@Name` before sending |
@@ -49,7 +49,8 @@ takes a moment to unwind, and the button must not lie about it.
 | `run.round` | The header's right-hand status: "Round 2 · Architect, Reviewer speaking" (`chat.runStatus`), with the ids resolved to names through the agents store |
 | `presence.changed` | The dot on the member row and on the message avatar follows that agent through the four states. Presence is per (chat, agent), so the parallel speakers of one round do not flip each other back. The state machine behind it is [`presence`](../presence/frontend.md)'s |
 | `run.finished` | The status disappears and the button returns to Send, whatever the reason |
-| `message.created` with a `system-notice` | A dimmed line in the transcript, translated by `translateNotice` — `notices.noMentions`, `notices.maxRoundsReached`, `notices.runFailed` |
+| `message.created` with a `system-notice` | A dimmed line in the transcript, translated by `translateNotice` — `notices.noMentions`, `notices.maxRoundsReached`, `notices.runFailed`, and from S5.14 `notices.consensus` and `notices.voteClosed` |
+| `run.round` with one speaker, right after `notices.consensus` | The closing turn (S5.14). Nothing on the screen marks it as special: it is one more agent message, carrying its own round number, and the dimmed line above it is what says the discussion ended |
 
 ## Message header and body
 
@@ -93,6 +94,8 @@ them language-independent.
 | delivery available | "Write the deliverable" is enabled: all of the above, and the chat's goal is a `document` naming a file |
 | hand-off unavailable | The same button, **disabled**, with the missing rule in its `title` — no folder, no executor, or a run in flight. Disabled rather than hidden: a control that vanishes teaches nothing |
 | handed over | The transcript gains a user row reading "Handed to X…", the executor answers alone, and every other member reviews in the next round. Nothing else about the screen is special |
+| agreed | The dimmed consensus line, then one more agent message with the group's conclusion, then the composer back to Send (S5.14). The user's next message starts a new chain as usual |
+| voted | "Start a vote" sends `@all` plus its prompt with `rounds: 1`: every member answers once and the dimmed `voteClosed` line ends it, whatever the chat's Max automatic rounds says (S5.14) |
 
 Sending while a run is active is **not** blocked: the message appears
 immediately and is answered from the next round. See the decision table in
@@ -112,6 +115,8 @@ immediately and is answered from the next round. See the decision table in
 | `notices.allOffline` | Written by the runner when every speaker of a round is offline |
 | `notices.contextTruncated` | Written once per run per agent when `fitHistory` had to drop messages, with `{{agent}}` and `{{dropped}}` (S4.2) |
 | `notices.materialsTruncated` | Written once per **chat** when a member could not fit the goal's materials, with `{{agent}}` and `{{omitted}}` (S5.11) |
+| `notices.consensus` | The group agreed and the chain stopped; the conclusion is the message under it (S5.14). No parameters |
+| `notices.voteClosed` | A chain that carried its own `rounds` cap has run them — "Start a vote" is its one caller (S5.14). No parameters |
 | `chat.handoff` | The button's label |
 | `chat.handoffTitle` | Its tooltip while it is enabled |
 | `chat.writeDeliverable`, `chat.writeDeliverableTitle` | The Actions card's third row and its tooltip while enabled (S5.12) |

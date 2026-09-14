@@ -62,8 +62,12 @@ export interface RunState {
    * backend parses the text again with the same function (`@shared/mentions`),
    * so they are a hint rather than the source of truth — but they are what lets
    * a future autocomplete name a member the plain text does not spell out.
+   *
+   * `rounds` (S5.14) caps the automatic rounds of the chain this message starts,
+   * instead of the chat's `maxAutoRounds`. Only "Start a vote" passes it, with
+   * `1`; every other send leaves it out and the chat's own setting applies.
    */
-  send: (chatId: string, text: string, mentions?: string[]) => Promise<boolean>
+  send: (chatId: string, text: string, mentions?: string[], rounds?: number) => Promise<boolean>
   /**
    * Hands the chat to its executor (S5.6). Never rejects; a refusal lands in
    * `error` / `errorCode` / `errorDetails`, which is what the composer prints.
@@ -106,7 +110,7 @@ export const useRunStore = create<RunState>()((set) => ({
     set({ error: undefined, errorCode: undefined, errorDetails: undefined })
   },
 
-  async send(chatId, text, mentions) {
+  async send(chatId, text, mentions, rounds) {
     const trimmed = text.trim()
     if (trimmed.length === 0) return false
 
@@ -122,7 +126,8 @@ export const useRunStore = create<RunState>()((set) => ({
       await getBackend().invoke('chat.send', {
         chatId,
         text: trimmed,
-        ...(mentions && mentions.length > 0 ? { mentions } : {})
+        ...(mentions && mentions.length > 0 ? { mentions } : {}),
+        ...(rounds !== undefined ? { rounds } : {})
       })
       return true
     } catch (cause) {

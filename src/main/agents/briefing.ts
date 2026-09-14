@@ -9,7 +9,11 @@
  * `[PASS]` to abstain. Since S5.10 a fifth, when the chat has one: the **goal**
  * — what the group is working towards, in the user's own words. Since S5.12 a
  * sixth, for one round only: that this round is a **review** of what the
- * executor just changed, judged against that goal.
+ * executor just changed, judged against that goal. Since S5.14 a seventh, in the
+ * rules themselves: how a reply says whether the discussion is **finished** —
+ * `[AGREED]` or `[CONTINUE]` — and, for the single turn that ends such a
+ * discussion, a **closing** block that replaces the rules with "write the
+ * group's conclusion for the user".
  *
  * It exists in **both languages** and follows the UI language (PLAN, "Bilingual
  * UI"): a Chinese-first model reads a Chinese briefing far more reliably than a
@@ -80,6 +84,21 @@ export interface GroupBriefingInput {
    * sets this for the review round's speakers only, which is everybody else.
    */
   reviewing?: boolean
+  /**
+   * True for the single **closing** turn that ends a discussion the group agreed
+   * on (S5.14).
+   *
+   * It replaces the closure-marker rule with the opposite instruction: this turn
+   * is not part of the discussion, it is the answer handed back to the user, so
+   * it states the conclusion in a few lines, adds no new argument and writes no
+   * marker at all. The runner gives it to one member — the first in speaking
+   * order — immediately after the `consensus` notice, and nothing is scheduled
+   * after it.
+   *
+   * Never set together with `reviewing`: a review round is a hand-off's, and a
+   * hand-off's rounds are not what the consensus rule looks at.
+   */
+  closing?: boolean
 }
 
 /** What a language module is given: the briefing input minus the language. */
@@ -89,23 +108,24 @@ export interface BriefingInput {
   memoryEnabled: boolean
   goal: ChatGoal | null
   reviewing: boolean
+  closing: boolean
 }
 
 /** The shape both language modules implement. */
 export type BriefingBuilder = (input: BriefingInput) => string
 
 /**
- * Token an agent replies with to abstain from a round. Identical in both
- * languages, and re-exported here so the two briefing modules keep importing it
- * from the file that teaches it.
+ * The three protocol markers, identical in both languages and re-exported here
+ * so the two briefing modules keep importing them from the file that teaches
+ * them.
  *
- * It is **defined** in `@shared/pass` because the renderer needs the same
- * literal: S4.3 strips a trailing `[PASS]` from a reply that has real content in
- * front of it, and that rule has to read identically on both sides of the IPC
- * boundary. See that module's header for why the marker is stripped at display
- * time rather than at persist time.
+ * They are **defined** in `@shared/markers` because the renderer needs the same
+ * literals: a trailing marker is stripped from a reply that has real content in
+ * front of it (S4.3 for `[PASS]`, S5.14 for the other two), and that rule has to
+ * read identically on both sides of the IPC boundary. See that module's header
+ * for why a marker is stripped at display time rather than at persist time.
  */
-export { PASS_TOKEN } from '@shared/pass'
+export { AGREED_TOKEN, CONTINUE_TOKEN, PASS_TOKEN } from '@shared/markers'
 
 /** Reduces an `Agent` record to what the briefing needs. */
 export function toBriefingMember(agent: Agent): BriefingMember {
@@ -128,7 +148,8 @@ export function buildGroupBriefing(input: GroupBriefingInput): string {
     members: roster,
     memoryEnabled: input.memoryEnabled === true,
     goal: input.goal ?? null,
-    reviewing: input.reviewing === true
+    reviewing: input.reviewing === true,
+    closing: input.closing === true
   })
 }
 

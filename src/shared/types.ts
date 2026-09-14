@@ -216,7 +216,24 @@ export type AgentAvatar = InitialAvatar
 export interface AgentParams {
   temperature?: number
   maxTokens?: number
-  /** Ask for reasoning output on models that support it. */
+  /**
+   * **Show thinking**: whether this agent's reasoning is kept in the transcript
+   * (S5.14).
+   *
+   * It used to mean "ask for reasoning output", which it never did — no provider
+   * option was ever set from it — and the transcripts of the first real use were
+   * the argument for the meaning it has now: the model thinks either way, and
+   * this decides whether the thought is **stored and rendered** or discarded as
+   * the stream arrives. A group of four open models each streaming a chain of
+   * thought is a transcript nobody can read.
+   *
+   * Absent is not `false`: it means "nobody has chosen", and the answer is then
+   * `showsThinkingByDefault` in `@shared/presets` — off for a local or
+   * `openai-compatible` provider, on for `anthropic`, `openai` and `google`. The
+   * default is written into `params` at `agents.create`, so an agent made today
+   * carries its own answer; the fallback at turn time is what keeps every agent
+   * written before S5.14 behaving.
+   */
   reasoning?: boolean
 }
 

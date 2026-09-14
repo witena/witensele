@@ -9,7 +9,7 @@
  */
 import type { ChatGoal } from '@shared/types'
 import type { BriefingBuilder } from './briefing'
-import { PASS_TOKEN } from './briefing'
+import { AGREED_TOKEN, CONTINUE_TOKEN, PASS_TOKEN } from './briefing'
 
 /** `- Name — description` for one member, or just the name when it has none. */
 function line(name: string, description: string): string {
@@ -73,12 +73,34 @@ function reviewSection(goal: ChatGoal | null): string[] {
   ]
 }
 
+/**
+ * The `This is the closing turn` block (S5.14), or nothing.
+ *
+ * It is the one block that **replaces** the discussion rules rather than adding
+ * to them, so it is written last and says so in its first line: the group has
+ * already agreed, this turn is the answer handed back to the human, and the
+ * habits the rules above teach — disagree precisely, mention the next speaker,
+ * end with a marker — are all wrong for it. Saying "no marker" explicitly is not
+ * redundant: a model that has just written `[AGREED]` twice will write it a
+ * third time unless it is told not to.
+ */
+function closingSection(): string[] {
+  return [
+    '',
+    'This is the closing turn:',
+    '- The group has agreed and the discussion is over. You are writing the answer the human reads, not another turn of the debate.',
+    '- State the conclusion the group reached, in a few lines. Say what was decided and the reasons that survived; if something was left open, say what it is.',
+    '- Do not introduce a new argument, do not mention another member with @, and do not end with a marker of any kind.'
+  ]
+}
+
 export const buildEnglishBriefing: BriefingBuilder = ({
   self,
   members,
   memoryEnabled,
   goal,
-  reviewing
+  reviewing,
+  closing
 }) => {
   const roster = members.map((member) => line(member.name, member.description)).join('\n')
   // The two protocol examples name a member of *this* chat rather than a made-up
@@ -104,6 +126,14 @@ export const buildEnglishBriefing: BriefingBuilder = ({
     `- To call on another member by name, mention them with @ followed by their name, for example @${other.name}.`,
     `- If you have nothing to add this round, reply with exactly ${PASS_TOKEN} and nothing else.`,
     '- Keep answers focused and concrete; the group reaches a better answer by disagreeing precisely, not by agreeing at length.',
+    // S5.14: the rule that lets a discussion end by itself. It is stated as the
+    // last thing a reply does, in both languages, because that is where the
+    // runner reads it from — a marker in the middle of a paragraph is prose.
+    ...(closing
+      ? []
+      : [
+          `- End every reply with one marker on its own last line and write nothing after it: ${AGREED_TOKEN} if you have nothing more to add and accept the position the group has reached, or ${CONTINUE_TOKEN} if the discussion is not finished. Once everyone writes ${AGREED_TOKEN} the discussion stops and the group's conclusion goes to the user.`
+        ]),
     // S3.3: only when the memory tools are actually attached this turn, so the
     // briefing never asks for a tool the model has not been given.
     ...(memoryEnabled
@@ -118,6 +148,9 @@ export const buildEnglishBriefing: BriefingBuilder = ({
     // S5.12, and after the goal for the reason `reviewSection` gives: it is the
     // only block here that is about *this round* rather than about the chat, so
     // it is the last thing the model reads before the transcript.
-    ...(reviewing ? reviewSection(goal) : [])
+    ...(reviewing ? reviewSection(goal) : []),
+    // S5.14, last of all: it is the only block that contradicts the rules above,
+    // and the instruction a model follows is the one it read most recently.
+    ...(closing ? closingSection() : [])
   ].join('\n')
 }

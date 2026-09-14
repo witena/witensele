@@ -30,7 +30,7 @@
  * `chat-runner.test.ts` can assert the whole path without a provider.
  */
 import { generateText, type LanguageModel } from 'ai'
-import { stripTrailingPass } from '@shared/pass'
+import { stripTrailingMarkers } from '@shared/markers'
 
 /** Hard cap on a stored title; the left column truncates long ones anyway. */
 export const MAX_TITLE_CHARS = 60
@@ -124,7 +124,7 @@ export type GenerateTitle = (input: GenerateTitleInput) => Promise<string | null
 
 /** Trims one side of the exchange to `PROMPT_EXCERPT_CHARS`. */
 function excerpt(text: string): string {
-  const clean = stripTrailingPass(text ?? '').trim()
+  const clean = stripTrailingMarkers(text ?? '').trim()
   return clean.length > PROMPT_EXCERPT_CHARS ? clean.slice(0, PROMPT_EXCERPT_CHARS) : clean
 }
 

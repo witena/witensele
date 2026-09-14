@@ -35,9 +35,33 @@ what makes `agents.delete` remove memberships. That requires
 |---|---|
 | `agents.list` | Every agent of the user, oldest first |
 | `agents.get` | One agent; `not_found` for an unknown id |
-| `agents.create` | Validates the whole input, trims the name, inserts. **S7.5 added no path around it**: an agent made from a template is this method with an input the renderer assembled, so the name rules, the provider check and the model check apply to a template exactly as to the form |
+| `agents.create` | Validates the whole input, trims the name, **fills in the Show thinking default** (S5.14, see below), inserts. **S7.5 added no path around it**: an agent made from a template is this method with an input the renderer assembled, so the name rules, the provider check and the model check apply to a template exactly as to the form — and so does the default |
 | `agents.update` | `not_found` first, then validates only the fields the patch carries; emits `chat.updated` for every chat the agent is in |
 | `agents.delete` | Stops the run of every chat the agent is in, deletes the row, then emits `chat.updated` for those chats |
+
+### The Show thinking default (S5.14)
+
+`agents.create` writes `params.reasoning` when the caller did not:
+
+```ts
+function withThinkingDefault(ctx: AppContext, input: AgentInput): AgentParams {
+  if (input.params.reasoning !== undefined) return input.params
+  const provider = ctx.repos.providers.get(input.providerId, ctx.userId)
+  return { ...input.params, reasoning: showsThinkingByDefault(provider) }
+}
+```
+
+`showsThinkingByDefault` lives in `@shared/presets` beside `isLocalPreset`, and
+answers **false** for a provider that is local or `openai-compatible` — the open
+model route: Ollama, LM Studio, DeepSeek, Moonshot, vLLM — and **true** for
+`anthropic`, `openai` and `google`. `local` is tested as well as the type even
+though every local preset is `openai-compatible` today, because the rule the
+product means is "an open model the user is running themselves".
+
+The provider read cannot throw: `assertProvider` has already proved the row
+exists. `agents.update` deliberately does **not** re-apply the default — once a
+record holds a boolean it holds it, and changing an agent's provider is not the
+user changing their mind about what they want to see.
 
 ### Validation
 
@@ -55,6 +79,10 @@ agent may keep its name):
   dropped both controls. The checks stay because the handler is the authority for
   any caller, and the fields stay on the record so an agent saved earlier keeps
   the values it was given.
+- `params.reasoning`: a boolean when present (S5.14). Absent means "nobody has
+  chosen", which is not the same as `false`: `agents.create` replaces it with the
+  provider's answer, and a record written before S5.14 that still has none is
+  resolved the same way at turn time.
 - `role`: `participant` or `executor`. **Both are written by the UI from S5.2**;
   the role decides whether `collectAgentTools` attaches a `sideEffects` MCP
   server (S3.1), and whether S5.4 attaches the executor's own tools.

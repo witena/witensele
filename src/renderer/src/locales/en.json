@@ -194,8 +194,8 @@
     "noProviders": "Add a provider under Settings first.",
     "modelPlaceholder": "model id",
     "modelManualHint": "This provider lists no models; type an id.",
-    "reasoning": "Reasoning",
-    "reasoningHint": "on supported models",
+    "reasoning": "Show thinking",
+    "reasoningHint": "Keep this agent's reasoning in the transcript. Off by default for open models, which think at length.",
     "skills": "Skills",
     "skillsEmptyTitle": "No skills yet",
     "skillsEmptyDescription": "Import a skill folder under Settings and it will appear here.",
@@ -492,6 +492,8 @@
     "contextTruncated": "{{agent}} could not fit the whole conversation in its context window, so the {{dropped}} oldest messages were left out of its view",
     "materialsTruncated": "{{agent}} could not fit every material in its context window, so {{omitted}} of them are listed by path instead; it can still read them with read_file",
     "handoff": "Handed to {{agent}}: implement what the group decided, then report what changed",
-    "handoffDeliver": "Asked {{agent}} to write {{path}} now, from what the group decided"
+    "handoffDeliver": "Asked {{agent}} to write {{path}} now, from what the group decided",
+    "consensus": "Everyone agreed, so the discussion ends here and the conclusion follows.",
+    "voteClosed": "The vote is closed: every member answered once. Send a message to carry on."
   }
 }

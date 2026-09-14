@@ -38,12 +38,23 @@ through.
 
 `patchParams` accepts `undefined` for a field, which **removes** it — under
 `exactOptionalPropertyTypes` an absent key and a key holding `undefined` are
-different types, and "turn the reasoning toggle back off" has to mean an absent
-key rather than a stored `undefined`, which is not JSON. Since S5.9 the toggle is
-the only control that calls it: the Temperature and Max tokens boxes are gone,
-and `AgentDraftErrors` has no `temperature` / `maxTokens` member any more. A
-value stored on an older record is carried through the draft untouched and saved
-back unchanged.
+different types. Since S5.9 the Show thinking toggle is the only control that
+calls it: the Temperature and Max tokens boxes are gone, and `AgentDraftErrors`
+has no `temperature` / `maxTokens` member any more. A value stored on an older
+record is carried through the draft untouched and saved back unchanged.
+
+Since **S5.14** that toggle writes an explicit `true` or `false` rather than
+`true` or `undefined`, because absent now means "nobody has chosen" and the
+provider decides. What the switch *shows* is the effective answer:
+
+```ts
+const showThinking =
+  draft.params.reasoning ?? (provider ? showsThinkingByDefault(provider) : false)
+```
+
+— the same `@shared/presets` function `agents.create` applies on the backend, so
+a new agent's switch is already in the position it will be saved in, and an agent
+written before S5.14 shows what it actually does rather than a flat `off`.
 
 ## Backend calls
 
@@ -99,8 +110,10 @@ back unchanged.
   transport, its tool count and its side-effects tag, bound to `mcpServerIds`. A
   `sideEffects` server is greyed out with a hint on a `participant` agent, since
   only an `executor` is ever given those tools.
-- "Reasoning" is a `Toggle` rather than the artboard's select, because the stored
-  value is a boolean.
+- "Show thinking" is a `Toggle` rather than the artboard's select, because the
+  stored value is a boolean. It was labelled "Reasoning" until S5.14, which gave
+  the field its real meaning — whether this agent's thinking is *kept in the
+  transcript* — and rewrote the label and the hint in both locales to say so.
 - The role control is not on the artboard at all: it was drawn before the
   executor existed. It sits at the end of the "Basic info" block, above the
   model, because it says *what this agent is* rather than *how it runs*.

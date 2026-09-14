@@ -3,7 +3,9 @@
  *
  * The first two actions are **ordinary messages**. "Summarise" opens a small
  * picker and sends `@Name` plus a localized request; "Start a vote" sends `@all`
- * plus its own. Neither bypasses `chat.send`: the orchestrator schedules the
+ * plus its own, with `rounds: 1` so the vote is one round (S5.14) rather than
+ * the chat's whole automatic budget. Neither bypasses `chat.send`: the
+ * orchestrator schedules the
  * reply, the transcript records what was asked, and the user can see — and edit,
  * next time — exactly the sentence that produced the summary. A dedicated
  * backend path would have been a second way to start a run, and a summary nobody
@@ -37,13 +39,27 @@ import { validationReasonMessage } from '../../i18n/errors'
 import { Avatar, SectionTitle } from '../ui'
 import { handoffBlocker } from './handoff'
 
+/**
+ * How many automatic rounds "Start a vote" runs (S5.14).
+ *
+ * A named constant rather than a literal `1` at the call site because it is the
+ * whole product rule: a vote asks every member once, and the answer is the round
+ * of answers.
+ */
+export const VOTE_ROUNDS = 1
+
 export interface ActionsCardProps {
   /** `null` disables every action: there is no chat to send into. */
   chatId: string | null
   /** The chat's members; the picker lists them and the vote mentions all of them. */
   members: readonly Agent[]
-  /** Sends one composed message through the composer's own send path. */
-  onSend: (text: string) => void
+  /**
+   * Sends one composed message through the composer's own send path.
+   *
+   * `rounds` caps the chain that message starts (S5.14); "Start a vote" passes
+   * `1` and "Summarise" passes nothing.
+   */
+  onSend: (text: string, rounds?: number) => void
   /** The chat's working directory, for the hand-off rules (S5.12). */
   workdir?: string | null | undefined
   /** The chat's goal; "Write the deliverable" needs a `document` one. */
@@ -95,9 +111,12 @@ export function ActionsCard({
     onSend(`@${agent.name} ${t('chat.actions.summarizePrompt')}`)
   }
 
+  // A vote is **one round** (S5.14): every member answers the question once and
+  // the run closes. Without the cap the chat's `maxAutoRounds` applies, and the
+  // members spend the remaining rounds voting on each other's votes.
   const vote = (): void => {
     const [everyone] = MENTION_ALL_KEYWORDS
-    onSend(`@${everyone as string} ${t('chat.actions.votePrompt')}`)
+    onSend(`@${everyone as string} ${t('chat.actions.votePrompt')}`, VOTE_ROUNDS)
   }
 
   return (

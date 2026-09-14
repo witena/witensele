@@ -2,7 +2,7 @@
  * The few pure helpers the message list needs, kept out of the components so
  * they can be unit tested and so the same rule is not written twice.
  */
-import { stripTrailingPass } from '@shared/pass'
+import { stripTrailingMarkers } from '@shared/markers'
 import type { Message } from '@shared/types'
 
 /**
@@ -30,10 +30,10 @@ export function wasStopped(message: Message): boolean {
  * transcript. A message that is *only* the token is untouched — that one is a
  * real abstention, its status is `passed`, and the row renders the label instead
  * of the body anyway. The stored parts keep what the model actually wrote; see
- * `@shared/pass`.
+ * `@shared/markers`.
  */
 export function messageText(message: Message): string {
-  return stripTrailingPass(
+  return stripTrailingMarkers(
     message.parts
       .filter((part) => part.type === 'text')
       .map((part) => part.text)

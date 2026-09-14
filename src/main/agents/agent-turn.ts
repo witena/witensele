@@ -17,7 +17,9 @@
  *    `working` and starts watching it for the stall and hard timeouts.
  * 3. Call `streamText` and iterate `fullStream`, reporting every part to the
  *    supervisor as activity, appending `text-delta` and `reasoning-delta` to
- *    in-memory parts and emitting one `message.delta` each.
+ *    in-memory parts and emitting one `message.delta` each. A `reasoning-delta`
+ *    is **dropped** when this agent does not show its thinking (S5.14); it is
+ *    still a heartbeat, because the model really is working.
  * 4. Persist the accumulated parts every `FLUSH_INTERVAL_MS` or `FLUSH_EVERY_DELTAS`,
  *    whichever comes first, so a crash keeps most of the answer.
  * 5. Persist the final parts, usage and status, emit `message.updated`, and tell
@@ -118,7 +120,8 @@ import { existsSync } from 'node:fs'
 import { stepCountIs, streamText, type LanguageModel, type LanguageModelUsage, type ToolSet } from 'ai'
 import type { BackendEvent } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
-import { isPassOnly } from '@shared/pass'
+import { isPassOnly } from '@shared/markers'
+import { showsThinkingByDefault } from '@shared/presets'
 import { contextWindowFor } from '@shared/pricing'
 import type {
   Agent,
@@ -260,6 +263,15 @@ export interface AgentTurnOptions {
    * out of the round in the first place.
    */
   reviewing?: boolean
+  /**
+   * True for the one **closing** turn that ends an agreed discussion (S5.14).
+   *
+   * It adds the closing block to the group briefing — state the conclusion for
+   * the user, no new arguments, no marker — and nothing else. The runner sets it
+   * for a single speaker, after the `consensus` notice, and schedules nothing
+   * afterwards.
+   */
+  closing?: boolean
   /** Aborting it stops the turn; the message ends as `error` / `'aborted'`. */
   signal: AbortSignal
   /** A model client built by the caller. Omitted, `createModel` builds one. */
@@ -445,6 +457,28 @@ export function deliveredRef(
  * `MessageDelta` in `src/shared/events.ts` documents for the renderer, applied
  * here so the in-memory copy and the renderer's copy can never diverge.
  */
+/**
+ * Whether this turn keeps the model's thinking in the transcript (S5.14).
+ *
+ * `Agent.params.reasoning` is the user's own answer when they gave one. When
+ * they did not — every agent written before S5.14, and every future caller that
+ * omits the field — the provider decides, by the same rule `agents.create`
+ * writes into a new agent's params (`showsThinkingByDefault`), so the two paths
+ * can never disagree about what an agent with no choice does.
+ *
+ * A provider that is gone answers `false`. The turn is about to fail on the
+ * missing provider anyway; hiding is the half of the choice that cannot fill a
+ * transcript with something nobody asked for.
+ */
+export function showsThinking(ctx: AppContext, agent: Agent): boolean {
+  if (agent.params.reasoning !== undefined) return agent.params.reasoning
+  try {
+    return showsThinkingByDefault(ctx.repos.providers.get(agent.providerId, ctx.userId))
+  } catch {
+    return false
+  }
+}
+
 function appendDelta(parts: MessagePart[], kind: 'text' | 'reasoning', text: string): void {
   const last = parts[parts.length - 1]
   if (last && last.type === kind) {
@@ -529,6 +563,8 @@ export interface TurnStage {
   handoff?: HandoffIntent | null
   /** True for the members of a hand-off's review round (S5.12). */
   reviewing?: boolean
+  /** True for the single closing turn of an agreed discussion (S5.14). */
+  closing?: boolean
   /** Injectable for the tests; defaults to the real `git`. */
   readGit?: (workdir: string) => GitInfo | null
 }
@@ -551,7 +587,10 @@ export function buildTurnPrompt(
     // what the group is for is not a fact about one role.
     goal: chat.goal,
     // S5.12: and the reviewers of a hand-off are told that is what they are.
-    reviewing: stage.reviewing === true
+    reviewing: stage.reviewing === true,
+    // S5.14: …and the one member that writes the conclusion of an agreed
+    // discussion is told that the discussion is over.
+    closing: stage.closing === true
   })
 
   const sections = [agent.systemPrompt.trim(), briefing]
@@ -883,6 +922,8 @@ function noticedToolsUnsupported(ctx: AppContext, chatId: string, agentName: str
 export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurnResult> {
   const { ctx, chat, agent, members, round, signal } = options
   const emit = options.onEvent ?? ((event: BackendEvent) => ctx.events.emit(event))
+  /** Whether this turn's `reasoning-delta` parts are kept at all (S5.14). */
+  const thinking = showsThinking(ctx, agent)
 
   // A controller of this turn's own, chained to the run's signal.
   //
@@ -1002,7 +1043,8 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
 
     prompt ??= buildTurnPrompt(ctx, chat, agent, members, {
       handoff: options.handoff ?? null,
-      reviewing: options.reviewing === true
+      reviewing: options.reviewing === true,
+      closing: options.closing === true
     })
     const system = prompt.text
     materialsOmitted = prompt.materialsOmitted
@@ -1058,7 +1100,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
           onDelta('text', part.text)
           break
         case 'reasoning-delta':
-          onDelta('reasoning', part.text)
+          // S5.14: thrown away when this agent does not show its thinking. The
+          // model still produced it — nothing about the request changed, and the
+          // `activity` call above still counts it as work — but it is neither
+          // stored nor emitted, so the transcript holds the answer only.
+          if (thinking) onDelta('reasoning', part.text)
           break
         case 'tool-call': {
           // `part.toolName` is the prefixed key the model was shown; the
@@ -1175,7 +1221,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
       : // Only a reply that is *nothing but* the token abstains. A model that
         // answered and then signed the answer off with `[PASS]` stays `done`;
         // the trailing marker is stripped where the text is read, never from
-        // the stored parts (see `@shared/pass`).
+        // the stored parts (see `@shared/markers`).
         isPassOnly(text)
         ? 'passed'
         : 'done'

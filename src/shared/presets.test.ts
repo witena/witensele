@@ -15,6 +15,7 @@ import {
   isOAuthProviderType,
   providerAuth,
   providerRequiresApiKey,
+  showsThinkingByDefault,
   supportsOAuth,
   type ProviderPreset
 } from './presets'
@@ -181,5 +182,31 @@ describe('providerAuth / supportsOAuth / providerRequiresApiKey', () => {
   it('ships both install commands as data, not as copy', () => {
     expect(ANT_INSTALL_COMMAND).toBe('brew install anthropics/tap/ant')
     expect(GCLOUD_INSTALL_COMMAND).toBe('brew install --cask google-cloud-sdk')
+  })
+})
+
+/** S5.14: which route an agent's thinking is hidden on unless it says otherwise. */
+describe('showsThinkingByDefault', () => {
+  it('hides thinking on the open-model route', () => {
+    expect(showsThinkingByDefault({ type: 'openai-compatible', presetId: 'ollama' })).toBe(false)
+    expect(showsThinkingByDefault({ type: 'openai-compatible', presetId: 'lmstudio' })).toBe(false)
+    expect(showsThinkingByDefault({ type: 'openai-compatible', presetId: 'deepseek' })).toBe(false)
+    expect(showsThinkingByDefault({ type: 'openai-compatible', presetId: 'moonshot' })).toBe(false)
+    // A bare endpoint with no preset is the same route.
+    expect(showsThinkingByDefault({ type: 'openai-compatible' })).toBe(false)
+  })
+
+  it('shows thinking on the three first-party adapters', () => {
+    expect(showsThinkingByDefault({ type: 'anthropic', presetId: 'anthropic' })).toBe(true)
+    expect(showsThinkingByDefault({ type: 'openai', presetId: 'openai' })).toBe(true)
+    expect(showsThinkingByDefault({ type: 'google', presetId: 'google' })).toBe(true)
+    expect(showsThinkingByDefault({ type: 'anthropic' })).toBe(true)
+  })
+
+  it('hides it for every preset that runs on this machine', () => {
+    for (const preset of PROVIDER_PRESETS) {
+      if (!preset.local) continue
+      expect(showsThinkingByDefault({ type: preset.type, presetId: preset.id })).toBe(false)
+    }
   })
 })

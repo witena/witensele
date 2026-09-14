@@ -9,6 +9,7 @@
 | File | Responsibility |
 |---|---|
 | `src/shared/mentions.ts` | `parseMentions` / `findMentions` / `splitMentions`: the `@Name` rule, shared with the renderer so the composer and the scheduler can never disagree |
+| `src/shared/markers.ts` | `PASS_TOKEN` / `AGREED_TOKEN` / `CONTINUE_TOKEN`, `isPassOnly`, `closureMarker` and `stripTrailingMarkers`: the protocol markers, shared for the same reason. Was `src/shared/pass.ts` until S5.14 |
 | `src/main/orchestration/scheduling.ts` | `planFromUserMessages`, `planFromReplies`, `planFromHandoff`, `planFromReview`, `mergePlans`, `reachedRoundLimit` — the pure "who speaks next" |
 | `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`, and from S4.2 / S4.3 / S5.11 the `contextTruncated` and `materialsTruncated` notices and the automatic title) and `ChatRunnerRegistry` (the map on `AppContext`) |
 | `src/main/agents/title.ts` | `generateChatTitle` and its two pure halves, injected into the runner as `ChatRunnerOptions.generateTitle` so a test can replace it |
@@ -49,7 +50,7 @@ One row per user message:
 | Column | Value |
 |---|---|
 | `sender_type` / `sender_id` | `system` / `system` |
-| `parts` | one `system-notice` part: `noMentions`, `maxRoundsReached { max }` or `runFailed { message }` |
+| `parts` | one `system-notice` part: `noMentions`, `maxRoundsReached { max }`, `runFailed { message }`, `consensus` or `voteClosed` (both S5.14, both without parameters) |
 | `status` / `round` | `done` / the round the run was in when it stopped |
 
 It reads `chat_members` (ordered by `position`) and `agents` to resolve the
@@ -63,7 +64,7 @@ None of its own; it is called by two of [`chats`](../chats/backend.md)'s:
 
 | Channel | Reaches |
 |---|---|
-| `chat.send` | `ctx.runners.send({ chatId, text, mentions })` |
+| `chat.send` | `ctx.runners.send({ chatId, text, mentions, rounds })`. `rounds` (S5.14) is validated here — an integer from `MIN_AUTO_ROUNDS` to `MAX_AUTO_ROUNDS`, the same bounds `chat.settings.maxAutoRounds` is held to, because it is the same number arriving by a different route |
 | `chat.handoff` | `ctx.runners.handoff({ chatId })` — the handler only checks that a `chatId` is a string; the folder, the executor and "is a run going" are facts about the run, and the runner is the only object that holds all three. It rejects with `validation` plus one of `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details` |
 | `chat.stop` | `ctx.runners.stop(chatId)` |
 | `chats.delete` | `ctx.runners.remove(chatId)` **before** the rows are deleted |
@@ -175,6 +176,57 @@ that will still be true in a minute. `components/chat/handoff.ts` computes the
 same four from the same facts in the same order, so the disabled button and the
 rejection cannot name different rules.
 
+## Closing a discussion (S5.14)
+
+Two independent reasons a chain now ends, both evaluated at the **end** of a
+round, after `carried` has been computed and after the abort and error checks.
+
+### The capped chain
+
+`send({ rounds })` writes `#pendingRounds`; `#loop` takes it into a local
+`roundsCap` at the same boundary that resets `roundsSinceUser`, so the cap and
+the counter it caps always change together. The limit each round is checked
+against is `roundsCap ?? chat.settings.maxAutoRounds`.
+
+It is tested **twice**, and both are necessary:
+
+| Where | Why |
+|---|---|
+| Top of the next iteration, beside the `maxAutoRounds` check | The ordinary path, and the only one that can fire when something is still scheduled |
+| End of the round that just ran | A vote whose answers mention nobody schedules nothing, so the loop would exit through the empty-plan branch in silence — and `noMentions` is only written when a user message was pending, so there would be no line at all |
+
+Either way the notice is `voteClosed` rather than `maxRoundsReached` and the
+reason is `max-rounds`. An override dies with its chain: the next typed message
+takes `#takePendingRounds()`'s `null` and the chat's own setting applies again.
+
+### The agreed chain
+
+`#agreed(chat, members, outcomes, carried, stage)` answers true only when **all**
+of these hold:
+
+| Condition | Why |
+|---|---|
+| `chat.settings.mode === 'roundrobin'` | In `mention-only` the round is whoever was named, and "everybody agreed" is not something one named member can say. The markers are still stripped there; they are simply not read |
+| `stage.implementing === null && !stage.reviewing` | A hand-off's two rounds keep their S5.6 behaviour exactly |
+| `carried.speakers.length === 0` | A mention is a question nobody has answered yet |
+| `this.#pending.length === 0` | So is a user message that landed mid-round |
+| At least one non-executor speaker finished `done` | A round of nothing but abstentions, errors and skips is not a conclusion. `[PASS]` answers `closureMarker` with `null` deliberately |
+| Every such speaker's text ends with `[AGREED]` | One `[CONTINUE]`, or no marker at all, means carry on |
+
+Then, in order: the `consensus` notice, `#runClosing`, `break`.
+
+`#runClosing` is an ordinary `#runRound` with one speaker — the first member in
+`position` order the supervisor has not taken offline — and `stage.closing`,
+which is the only thing that sets `AgentTurnOptions.closing`. It increments
+`#round` and emits `run.round` like any round, so the closing message carries a
+round number the UI prints and the presence machinery, the usage accounting and
+Stop all work on it unchanged. Whatever it mentions is ignored, because the loop
+breaks immediately afterwards — that is what closing means. Every member offline
+leaves the notice standing alone rather than failing.
+
+The cap is checked **before** the agreement, so a vote that also agreed still
+ends as a vote: the user named the number.
+
 ## Three things the runner announces, and why it is the runner (S4.2, S4.3, S5.11)
 
 Both are facts about a **run**, and `AgentTurn` does not know one is happening.
@@ -235,4 +287,4 @@ through `ChatRepository.update` and broadcast as `chat.updated`.
 |---|---|---|
 | `ai` (v7) | Only indirectly, through `runAgentTurn` | The runner never touches `streamText`; it passes a signal and reads `{ status, aborted, message.mentions }`. That is what keeps "who speaks" and "how a model streams" separable |
 | `ai/test` `MockLanguageModelV4` | The integration tests, injected as `createModel` | A mock that resolves instantly makes ordering assertions meaningless — the cancellation tests pace their streams with `simulateReadableStream({ chunkDelayInMs })` so the abort lands mid-answer. The multi-agent tests give **each agent its own mock**, because `doStreamCalls` is how "the second speaker saw the first one's reply" is asserted |
-| Real Ollama models | `e2e/orchestration.spec.ts` | A real reply may legitimately contain `@Reviewer` and schedule another round, so the spec never asserts "exactly N messages for the rest of the run": it counts deltas, waits for the run to end, and caps `maxAutoRounds` where an exact count matters |
+| Real Ollama models | `e2e/orchestration.spec.ts`, `e2e/closure.spec.ts` | A real reply may legitimately contain `@Reviewer` and schedule another round, so the spec never asserts "exactly N messages for the rest of the run": it counts deltas, waits for the run to end, and caps `maxAutoRounds` where an exact count matters. `closure.spec.ts` has the sharper version of the same problem — a 3B model writes `[AGREED]` about three runs in four — and answers it by asking in a fresh chat up to three times; see its header |

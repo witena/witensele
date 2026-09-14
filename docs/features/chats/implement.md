@@ -302,6 +302,21 @@ The chip row is the same path through `appendMention`, and the Actions card is
 the same path again through the composer's `submitText` handle — one send, one
 parser, one store.
 
+Since S5.14 that handle carries one more argument, `rounds`, all the way down:
+
+```
+ActionsCard.onSend(text, rounds?)
+  → composer.submitText(text, rounds?)
+  → ComposerProps.onSend(text, parseMentions(text, members), rounds?)
+  → useRunStore.send(chatId, text, mentions, rounds?)
+  → invoke('chat.send', { chatId, text, mentions?, rounds? })
+```
+
+"Start a vote" passes `VOTE_ROUNDS` (`1`); everything else passes nothing and
+runs under the chat's own `maxAutoRounds`. It is threaded through the composer
+rather than given its own store call precisely so the card keeps its rule —
+nothing there bypasses `chat.send`, and the transcript records the sentence.
+
 ### A streaming reply (the path that matters)
 
 ```
@@ -389,7 +404,7 @@ two input types next to them —
 | `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | S5.10. Where the `document` goal's deliverable is and whether it exists. A chat with no such goal answers `{ deliverable: null, delivered: false }` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is a message id |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` | Tokens and estimated cost, total and per agent, over the whole transcript |
-| `chat.send` | `{ chatId, text, mentions? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written |
+| `chat.send` | `{ chatId, text, mentions?, rounds? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written. `rounds` (S5.14) caps the automatic rounds of this chain only, bounded like `maxAutoRounds` |
 | `chat.handoff` | `{ chatId }` | `Message` | S5.6. The stored hand-off row; the executor's round and the review round after it arrive as events. Refused with `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent |
 

@@ -21,7 +21,8 @@ the name is an **identifier the models will type**, not a label.
   the header, "+" opens a draft) and the configuration editor beside it.
 - The editor: basic info (name, avatar monogram and an eight-colour palette,
   description, and since S5.2 the **role**), model (provider select, model select
-  or free-text id, reasoning toggle), system prompt, the skills checklist, the
+  or free-text id, the **Show thinking** toggle — S5.14's renaming of the
+  reasoning one), system prompt, the skills checklist, the
   MCP checklist, and the memory toggle with its panel. Since S5.9 it asks for no
   sampling parameters.
 - The `executor` role itself (S5.2): the segmented control, PLAN.md's
@@ -89,6 +90,9 @@ resolves `@name` against the names created here.
 | The badge is drawn from `isExecutor` in `agent-display.ts` rather than from `role === 'executor'` in each component | A literal comparison in each of the four places | Four copies is four places to miss when the role set grows, and `hasExecutor` — the picker's rule — belongs next to it |
 | The form asks for **no** sampling parameters (S5.9) | Keep Temperature and Max tokens; hide them behind an "advanced" disclosure | Real users do not tune sampling: they pick a model and write a prompt, and current models' provider defaults are what everyone should run with. Two numeric fields with range messages under them were friction with nothing on the other side, and an "advanced" drawer is the same two fields plus a place to hide a bug. `Agent.params` keeps both fields, so an agent saved with a temperature still uses it and no migration is needed |
 | The reasoning toggle stays while the other two go | Remove all three | It changes what the model *produces* — a visible reasoning block in the transcript — rather than how it samples, so it is a product choice and not a knob |
+| **That toggle now means "show thinking"** (S5.14) | Leave it meaning "ask for reasoning output"; add a second control | It never meant the first thing: nothing read `params.reasoning`, and no provider option was ever set from it. What the first real use complained about was four open models each streaming a chain of thought into one transcript — a question about what is *kept*, not about what is requested — so the field was given the meaning the control's position already implied, and the label says it |
+| **Its default comes from the provider, and is written into `params` at creation** (S5.14) | A global setting; off for everyone; on for everyone; compute it at render time only | An `anthropic`, `openai` or `google` model produces reasoning only when the user picked a thinking mode, and then they want to see it; an Ollama or DeepSeek model produces it whether or not anybody asked. Writing the answer at `agents.create` means a stored agent carries a choice rather than a gap, so the toggle never moves under the user afterwards; the editor shows the same computed answer for a draft that has not chosen yet, so the switch at Save is the switch that was on screen |
+| The toggle stores an **explicit boolean**, including `false` | Keep storing `undefined` for off, as before S5.14 | With a provider-dependent default, "absent" has to keep meaning "nobody chose". A user who turns thinking off on an Anthropic agent has chosen, and an absent key would silently turn it back on |
 | `ensureDefaultAgent` stays | Delete it now that the user can create agents | It is the only thing that makes the *first* chat of a fresh install answerable, and `e2e/chat.spec.ts` depends on that path. It now fires only while the agents table is empty |
 
 ## Open questions
@@ -96,8 +100,13 @@ resolves `@name` against the names created here.
 - Whether an agent should be copyable *between* providers in one action ("the
   same reviewer, on the other model"), which is what Duplicate is usually reached
   for. Today it copies the provider too and the user changes it afterwards.
-- Whether the reasoning toggle should be hidden for models that do not support
-  it. That needs per-model capability data, which no provider exposes uniformly.
+- Whether the Show thinking toggle should be hidden for models that do not
+  produce reasoning at all. That needs per-model capability data, which no
+  provider exposes uniformly — and the toggle is harmless on such a model, since
+  there is nothing to hide or show.
+- Whether changing an agent's provider should re-apply the Show thinking default.
+  Today it does not: once the record holds a boolean, it holds it, and moving a
+  Claude agent to Ollama keeps its thinking visible until the user says otherwise.
 - Whether `params.temperature` / `params.maxTokens` should eventually leave the
   schema too. S5.9 left them stored and honoured, so agents configured before it
   keep behaving exactly as they did; dropping them means a migration and a
