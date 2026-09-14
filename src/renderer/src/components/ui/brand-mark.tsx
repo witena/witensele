@@ -47,14 +47,18 @@ export interface BrandMarkBlade {
   y2: number
 }
 
-/** The six chords that make the iris. Each starts at a hexagon corner. */
+/**
+ * The six chords that make the iris. Each starts 16 px inside its hexagon
+ * corner, along its own direction: the corners are eased with a 52 px radius, so
+ * a blade that began at the true vertex would poke a few pixels past the frame.
+ */
 export const BRAND_MARK_BLADES: readonly BrandMarkBlade[] = [
-  { x1: 512, y1: 212, x2: 338.8, y2: 512 },
-  { x1: 252.2, y1: 362, x2: 425.4, y2: 662 },
-  { x1: 252.2, y1: 662, x2: 598.6, y2: 662 },
-  { x1: 512, y1: 812, x2: 685.2, y2: 512 },
-  { x1: 771.8, y1: 662, x2: 598.6, y2: 362 },
-  { x1: 771.8, y1: 362, x2: 425.4, y2: 362 }
+  { x1: 504, y1: 225.9, x2: 338.8, y2: 512 },
+  { x1: 260.2, y1: 375.9, x2: 425.4, y2: 662 },
+  { x1: 268.2, y1: 662, x2: 598.6, y2: 662 },
+  { x1: 520, y1: 798.1, x2: 685.2, y2: 512 },
+  { x1: 763.8, y1: 648.1, x2: 598.6, y2: 362 },
+  { x1: 755.8, y1: 362, x2: 425.4, y2: 362 }
 ]
 
 /** The terracotta point the blades close on, at the centre of the canvas. */

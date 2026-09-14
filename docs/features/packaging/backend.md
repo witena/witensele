@@ -172,6 +172,14 @@ found out why:
   a `sed` over the committed SVG rather than a second committed file, so there is
   still exactly one drawing.
 
+Each blade starts 16 px inside its hexagon corner, along its own direction,
+rather than at the true vertex. The frame's corners are eased with a 52 px
+radius, which pulls the frame's centreline about 8 px inside the vertex; a blade
+that began at the vertex poked a few pixels past the rounded outline as a small
+nub on every corner (seen in the first S7.1 render). 16 px puts the whole butt
+end of the blade inside the frame's 30 px stroke band — no nub outside, no notch
+inside — and `brand-mark.tsx` carries the same coordinates.
+
 The 64 px inset in the SVG is the padding macOS expects around an app icon — an
 icon drawn edge to edge looks oversized next to every other one in the Dock. The
 tile carries **no border**: a hairline around a white tile is invisible on a light
