@@ -5,9 +5,9 @@
 | File | What it is |
 |---|---|
 | `src/renderer/src/pages/agents-page.tsx` | The two columns: the 264px list and the editor. Owns the three loads it needs and the "Delete is armed" view state |
-| `src/renderer/src/components/agents/agent-list.tsx` | The mockup's `.agent-item` rows: avatar, name, `modelId · provider` in mono |
-| `src/renderer/src/components/agents/agent-editor.tsx` | The header (avatar, name, "in N chats", Duplicate / Delete / Save) and the two-column body |
-| `src/renderer/src/components/agents/agent-display.ts` | Pure helpers: the avatar palette, `avatarInitial`, `agentModelLabel`. Shared with the chat's member panel |
+| `src/renderer/src/components/agents/agent-list.tsx` | The mockup's `.agent-item` rows: avatar, name, the `executor` chip, `modelId · provider` in mono. Takes `executorLabel` as an already-translated prop, so the row stays free of i18next |
+| `src/renderer/src/components/agents/agent-editor.tsx` | The header (avatar, name, "in N chats", Duplicate / Delete / Save) and the two-column body, including the S5.2 role control and the explanation under it |
+| `src/renderer/src/components/agents/agent-display.ts` | Pure helpers: the avatar palette, `avatarInitial`, `agentModelLabel`, and `isExecutor` / `hasExecutor`. Shared with the chat's member panel, its picker and the message header |
 | `src/renderer/src/stores/agents.ts` | The list, the editor draft, validation |
 
 ## Store fields (`useAgentsStore`)
@@ -24,11 +24,26 @@
 
 Actions: `load`, `create`, `update`, `remove`, `duplicate`, `startCreate`,
 `startEdit`, `closeEditor`, `patchDraft`, `patchParams`, `pickAvatarColor`,
-`saveDraft`, `draftErrors`.
+`saveDraft`, `draftErrors`, and since S7.5 `createFromTemplate`.
+
+`createFromTemplate(template, providerId, models)` is the only action that
+creates an agent **without opening the editor**: its caller is the first-run
+card on the chat page, and leaving a draft behind on a page the user has not
+visited would be a surprise the next time they went there. It picks the model
+with `suggestedModel` (the template's hints, then the provider's first model),
+uniquifies the name with the same `<name> copy` rule as Duplicate — `agents.create`
+refuses a clash, and a refusal on a first-run card explains nothing — and
+answers `null` rather than writing an agent that would have no model to speak
+through.
 
 `patchParams` accepts `undefined` for a field, which **removes** it — under
 `exactOptionalPropertyTypes` an absent key and a key holding `undefined` are
-different types, and "clear the temperature box" has to be spellable.
+different types, and "turn the reasoning toggle back off" has to mean an absent
+key rather than a stored `undefined`, which is not JSON. Since S5.9 the toggle is
+the only control that calls it: the Temperature and Max tokens boxes are gone,
+and `AgentDraftErrors` has no `temperature` / `maxTokens` member any more. A
+value stored on an older record is carried through the draft untouched and saved
+back unchanged.
 
 ## Backend calls
 
@@ -52,6 +67,7 @@ different types, and "clear the temperature box" has to be spellable.
 | Delete armed | The Delete button's label becomes "click again to confirm" until the next click or a selection change |
 | No providers | The provider select shows its placeholder and `agents.noProviders` points at Settings |
 | Provider with no model list | The model control is a text field plus `agents.modelManualHint` |
+| Role | A two-segment control (`Participant` / `Executor`) with `agents.roleHint` under it. Picking `Executor` immediately un-greys the `sideEffects` rows in the MCP checklist below, which is the whole point of the two controls sharing a screen |
 | Load or save failure | `agents-error` under the list, translated by `i18n/errors.ts` |
 
 ## Test ids
@@ -59,9 +75,10 @@ different types, and "clear the temperature box" has to be spellable.
 `page-agents`, `agents-new`, `agent-item` (`data-agent-id`, `data-selected`),
 `agent-item-name`, `agent-item-model`, `agent-editor-name`, `agent-duplicate`,
 `agent-delete`, `agent-save`, `agent-name`, `agent-name-error`,
-`agent-avatar-swatch`, `agent-description`, `agent-provider`, `agent-model`,
-`agent-model-input`, `agent-temperature`, `agent-max-tokens`,
-`agent-system-prompt`, `agents-error`, `agent-skill-item` (with `data-skill` and
+`agent-avatar-swatch`, `agent-description`, `agent-role-participant`,
+`agent-role-executor`, `agent-role-hint`, `agent-item-executor`,
+`agent-provider`, `agent-model`,
+`agent-model-input`, `agent-system-prompt`, `agents-error`, `agent-skill-item` (with `data-skill` and
 `data-missing`), `agent-skill-checkbox`, `agent-memory-toggle`, `memory-index`,
 `memory-entry`, `memory-content`, `memory-save`, `memory-delete`.
 
@@ -84,3 +101,6 @@ different types, and "clear the temperature box" has to be spellable.
   only an `executor` is ever given those tools.
 - "Reasoning" is a `Toggle` rather than the artboard's select, because the stored
   value is a boolean.
+- The role control is not on the artboard at all: it was drawn before the
+  executor existed. It sits at the end of the "Basic info" block, above the
+  model, because it says *what this agent is* rather than *how it runs*.

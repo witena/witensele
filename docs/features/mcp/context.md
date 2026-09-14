@@ -20,19 +20,24 @@ turn call them and show what came back.
 - Tool execution inside one agent turn, with a per-call timeout, the tool loop
   capped at `MAX_TOOL_STEPS`, and `tool-call` / `tool-result` message parts.
 - The **side-effects rule**: a server flagged `sideEffects` is attached to
-  `executor` agents only.
+  `executor` agents only — and, since S5.4, **every** call to one of its tools is
+  confirmed through the permission prompt before it runs.
 - Settings → MCP servers: CRUD, transport-specific form, test connection with the
   tool list, enable switch, stderr log.
 - The agent form's MCP checklist, bound to `agents.mcpServerIds`.
+- **The connector gallery** (S5.1): a static table of common servers
+  (`src/shared/mcp-presets.ts`) and the tile grid that prefills a new draft from
+  one, so registering the GitHub server is a click plus a token.
 
 ## Out of scope
 
 | Not here | Who owns it |
 |---|---|
-| Permission prompts before a tool runs | Post-MVP; `permission.requested` is reserved in `shared/events.ts` (PLAN, "Future extension") |
-| The executor agent itself | Post-MVP. This feature only **enforces** the rule that reserves side-effecting tools for it |
+| The permission prompt itself — the gate, the two `permission.*` events, `permission.reply` | [`executor`](../executor/context.md), S5.4 `[x]`. This feature supplies the `sideEffects` flag that decides *which* MCP calls are confirmed; the asking is the executor's |
+| The executor agent itself and its built-in file / shell / git tools | [`executor`](../executor/context.md), S5.4 `[x]`. This feature only **enforces** the rule that reserves side-effecting tools for it |
 | MCP **resources** and **prompts** | Not in the MVP. Only `tools/list` and `tools/call` are used |
-| A connector gallery (preset servers, one-click add) | Post-MVP (PLAN, "Future extension", point 1) |
+| Installing a server (running `npm i`, `uv tool install`, pulling an image) | Nobody. The gallery writes a command line; putting `npx` / `uvx` on `PATH` stays the user's job, and the tile says which runner it needs |
+| Keeping a registered server in step with its preset | Nobody. A preset is prefill, not a link: `McpServer` stores no `presetId`, so a package that moves is edited by hand (see "Open questions") |
 | `read_skill` / `read_skill_file` | [`skills`](../skills/context.md), S3.2 `[x]` — different tools, same `ToolSet`, and **not** subject to the side-effects rule: they are read-only and confined to `userData/skills/` |
 | `memory_save` / `memory_search` | [`memory`](../memory/context.md), S3.3 `[x]` — likewise outside the rule: the only thing they can write is the agent's own notes folder |
 | OAuth against an HTTP MCP server | Not in the MVP; the SDK's `authProvider` hook is where it would go |
@@ -69,9 +74,17 @@ their own tools to the same `ToolSet` through the same `collectAgentTools`.
 | stdio children inherit `process.env` | Inherit the SDK's `DEFAULT_INHERITED_ENV_VARS`; inherit nothing | `npx`, `uvx` and `docker` need `PATH`, `HOME`, `NODE_*` and proxy variables. A registered server already runs an arbitrary command by design, so there is nothing left to protect by stripping variables (see `backend.md`, "Security posture") |
 | stderr is kept in a **ring buffer** | Log to the app's stderr; drop it | "Could not connect" is not a diagnostic. The real reason (missing package, wrong path) is on the child's stderr and nowhere else |
 | The side-effects rule is enforced in `collectAgentTools` | Enforce in the handler; enforce in the UI | The UI explains it and the handler never sees a turn. The one place every tool must pass through is where the turn assembles them |
+| S5.4's **confirmation** is attached in the same place — the `call` closure `collectAgentTools` builds — rather than inside `mcp/tools.ts` | Ask inside `toAiTools`; ask inside `McpManager.callTool` | `tools.ts` is pure and knows nothing about a chat, and the manager is a connection pool. Attaching it at the same seam means the flag that decides *whether an agent may have a tool* and the flag that decides *whether a call is confirmed* are read in one place from one record |
+| **Every** tool of a flagged server asks, not just the ones whose names sound dangerous | Ask per tool name; let the server annotate its own tools | The flag is the server's own declaration that its tools change the world. This layer cannot tell `create_issue` from `list_issues`, and guessing wrong in that direction is silent |
 | A model that cannot use tools gets **one retry without them** | Fail the turn; never attach tools to small models | Answering without tools beats answering nothing, and which local models support tool calling cannot be known ahead of time |
 | Tool counts are fetched **on demand**, never on page load | Load every server's tools when settings opens | `mcp.tools` connects; a settings page that spawns six `npx` processes on open is a page that is wrong to open |
 | The arguments / environment boxes own their **raw text**; the draft stores the normalised list | Render the draft back into the box on every keystroke; normalise only on blur | The normalisers drop empty lines and `=`-less lines, so a round-trip erased the Enter that starts a second argument. Blur-only would leave the draft stale while Test and Save read it |
+| The gallery is **static data in `src/shared/`** | A `mcp.presets` backend method; a registry fetched from the MCP servers repository | A frozen array compiled into the bundle needs no loading state and works offline. Fetching a live registry is a different feature (trust, signatures, versions) and would make "Add server" fail when the network does |
+| A preset's `env` values are **empty strings** | Omit `env` and explain the variables in the description; ship placeholder values | An empty value is what makes the environment box open with `GITHUB_PERSONAL_ACCESS_TOKEN=` already on a line: the user fills in the half that is secret. A placeholder value would be indistinguishable from a real one after Save |
+| A preset writes the **id** into an untouched name | Write the display name (`Brave Search`) | The name is also the tool prefix an agent sees (`everything__echo`), and `${slug}__${tool}` sanitizes anything else into something the user never typed |
+| The gallery is shown for a **new draft only** | Show it when editing too, as the provider editor does | A tile replaces the command, the arguments, the environment and the side-effects flag — that is a new registration, not an edit. The provider editor can afford it because a provider preset only changes an endpoint and a model list |
+| Which tile was picked is **view state in the editor** | An `mcp_servers.preset_id` column, like `Provider.presetId` | Nothing downstream needs it: there is no logo to pick again and no "local server" rule to derive. A column would be a migration that buys an outline |
+| A second grid component rather than a generalised `preset-grid.tsx` | Widen the provider grid with optional badge / hint / description slots | A connector tile answers "what does this do and will it change anything"; a provider tile is a monogram and a brand. One component would have meant six optional slots and would have dragged the providers feature into this step. The duplication is a border and a focus ring |
 
 ## Open questions
 
@@ -84,3 +97,14 @@ their own tools to the same `ToolSet` through the same `collectAgentTools`.
   checkboxes are the obvious next step if that becomes a problem in practice.
 - **`MAX_TOOL_STEPS = 8` is a guess.** It has not yet been tuned against a real
   multi-step task.
+- **Preset command lines age.** A package that is renamed or archived makes an
+  entry wrong, and because no server remembers which preset it came from, a
+  registered server never learns about the correction. Everything a preset writes
+  is visible in the form before Save, so the failure mode is a probe that fails
+  with a clear npm error rather than a silent misconfiguration — but a gallery
+  that is checked against reality (a test that actually spawns each one) is the
+  obvious next step, and it is not cheap: it downloads ten packages.
+- **`McpPreset.docsUrl` is data nobody renders yet.** It is the same state
+  `ProviderPreset.docsUrl` has been in since S1.6. The tile is the natural home
+  for a "documentation" link, which needs one more key and an external-link
+  affordance the settings pages do not have yet.

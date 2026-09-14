@@ -8,7 +8,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Provider } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
-import { AGENT_AVATAR_COLORS, agentModelLabel, avatarFor, avatarInitial } from './agent-display'
+import {
+  AGENT_AVATAR_COLORS,
+  agentModelLabel,
+  avatarFor,
+  avatarInitial,
+  hasExecutor,
+  isExecutor
+} from './agent-display'
 
 const ollama: Provider = {
   id: 'p1',
@@ -65,5 +72,18 @@ describe('avatarFor', () => {
   it('offers eight distinct colours', () => {
     expect(AGENT_AVATAR_COLORS).toHaveLength(8)
     expect(new Set(AGENT_AVATAR_COLORS.map((entry) => entry.color)).size).toBe(8)
+  })
+})
+
+describe('the executor predicates', () => {
+  it('recognises the one role that may change things', () => {
+    expect(isExecutor({ role: 'executor' })).toBe(true)
+    expect(isExecutor({ role: 'participant' })).toBe(false)
+  })
+
+  it('answers whether a member list already holds the one writer', () => {
+    expect(hasExecutor([])).toBe(false)
+    expect(hasExecutor([{ role: 'participant' }, { role: 'participant' }])).toBe(false)
+    expect(hasExecutor([{ role: 'participant' }, { role: 'executor' }])).toBe(true)
   })
 })

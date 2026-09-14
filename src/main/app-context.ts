@@ -13,6 +13,7 @@
  * the per-agent memory folders — is derived from that one injected directory.
  */
 import { join } from 'node:path'
+import type { OAuthProviderType } from '@shared/presets'
 import type { AppTimeouts, UserId } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import type { DatabaseHandle } from './db/database'
@@ -21,6 +22,8 @@ import type { Repositories } from './db/repositories'
 import { createRepositories } from './db/repositories'
 import type { EventBus } from './events/bus'
 import { createEventBus } from './events/bus'
+import type { PermissionGate } from './executor/permissions'
+import { createPermissionGate } from './executor/permissions'
 import { McpManager } from './mcp/manager'
 import type { McpManagerOptions } from './mcp/manager'
 import { createMemoryStore, type MemoryStore } from './memory/store'
@@ -28,7 +31,13 @@ import { ChatRunnerRegistry } from './orchestration/chat-runner'
 import type { ChatRunnerOptions } from './orchestration/chat-runner'
 import { AgentSupervisor } from './presence/supervisor'
 import type { AgentSupervisorOptions, PresenceTimeouts } from './presence/supervisor'
+import type { AnthropicCli } from './providers/anthropic-cli'
+import { createAnthropicCli } from './providers/anthropic-cli'
+import type { GoogleCli } from './providers/google-cli'
+import { createGoogleCli } from './providers/google-cli'
 import { fetchModels, type FetchImpl } from './providers/discovery'
+import { createProviderFetch } from './providers/registry'
+import type { ModelOptions, ResolvedProvider } from './providers/registry'
 import { resolveProvider } from './providers/resolve'
 import type { SecretStore } from './secrets'
 
@@ -77,11 +86,46 @@ export async function probeAgentProvider(ctx: AppContext, agentId: string): Prom
   try {
     const agent = ctx.repos.agents.get(agentId, ctx.userId)
     const resolved = resolveProvider(ctx, { id: agent.providerId })
-    await fetchModels(resolved, ctx.fetchImpl ?? globalThis.fetch)
+    // Through the provider's own `fetch`, so a signed-in provider is probed with
+    // its account token rather than with the key it does not have.
+    await fetchModels(resolved, providerFetch(ctx, resolved))
     return true
   } catch {
     return false
   }
+}
+
+/**
+ * The `fetch` a provider's REST calls go through, given this context.
+ *
+ * One line in three places (`probeAgentProvider` here, `providers.fetchModels`
+ * and the connection probe in the handler) rather than three spellings of
+ * "…unless it signs in, in which case wrap it".
+ */
+export function providerFetch(ctx: AppContext, provider: ResolvedProvider): FetchImpl {
+  return createProviderFetch(provider, modelOptions(ctx))
+}
+
+/** The capabilities the model layer takes by injection, read off the context. */
+export function modelOptions(ctx: AppContext): ModelOptions {
+  return {
+    anthropicCli: ctx.anthropicCli,
+    googleCli: ctx.googleCli,
+    ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {})
+  }
+}
+
+/**
+ * The vendor CLI behind one sign-in provider type (S5.13).
+ *
+ * Total over `OAuthProviderType`, so a third vendor cannot be added to
+ * `OAUTH_PROVIDER_TYPES` without the compiler asking which CLI answers for it.
+ * The two interfaces agree on the four methods every caller here uses; only the
+ * Google one has more, and `providers.setQuotaProject` reaches for `ctx.googleCli`
+ * directly rather than widening this return type to a union nobody can narrow.
+ */
+export function authCli(ctx: AppContext, type: OAuthProviderType): AnthropicCli {
+  return type === 'anthropic' ? ctx.anthropicCli : ctx.googleCli
 }
 
 /** Directory name of the skills library inside `userDataDir`. */
@@ -123,6 +167,21 @@ export interface AppContext {
   events: EventBus
   /** Encryption for provider API keys; decryption is used only when calling a model. */
   secrets: SecretStore
+  /**
+   * Ids of providers whose stored key this build cannot decrypt (S7.6).
+   *
+   * Filled by `migrateProviderSecrets` at startup and by `resolveProvider` when
+   * a decrypt fails later; read by the `providers.*` handlers, which turn it
+   * into `Provider.keyState` so the UI can ask for the key again. In memory
+   * rather than a column, because it is a fact about *this installation's*
+   * encryption key and not about the row: restoring the Keychain item or moving
+   * the database to the machine that wrote it makes the same row readable again.
+   *
+   * On the context rather than in a module singleton, for the same reason the
+   * runners and the supervisor are: two contexts (a test's and the app's) must
+   * never share one.
+   */
+  unreadableSecrets: Set<string>
   /** The implicit single user of the desktop build. */
   userId: UserId
   /**
@@ -159,12 +218,37 @@ export interface AppContext {
    */
   memory: MemoryStore
   /**
+   * The executor's permission prompt (S5.4).
+   *
+   * On the context for the same reason as `runners` and `supervisor`: a prompt
+   * outlives the IPC call that raised it — the tool call is suspended inside a
+   * turn while the user reads the card — and `permission.reply` has to reach the
+   * very gate that is holding that promise.
+   */
+  permissions: PermissionGate
+  /**
    * Outbound HTTP for handlers that talk to a provider's REST endpoint
    * (`providers.fetchModels`). Absent means the platform `fetch`; a test injects
    * its own so the suite never opens a socket, and a future server build can put
    * a proxy-aware implementation here without touching a handler.
    */
   fetchImpl?: FetchImpl
+  /**
+   * The Anthropic CLI wrapper behind "Sign in with Anthropic" (S5.3).
+   *
+   * On the context because it owns the in-memory access-token cache and because
+   * a test must be able to replace it with a stub: it is the one capability that
+   * spawns a process the user installed themselves.
+   */
+  anthropicCli: AnthropicCli
+  /**
+   * The Google Cloud SDK wrapper behind "Sign in with Google" (S5.13).
+   *
+   * On the context for exactly the reasons `anthropicCli` is: it owns an
+   * in-memory credential cache, and a test must be able to replace it with a
+   * stub rather than run whatever `gcloud` the developer happens to have.
+   */
+  googleCli: GoogleCli
   /** Releases the database. Safe to call more than once. */
   close(): void
 }
@@ -181,6 +265,10 @@ export interface AppContextOptions {
   events?: EventBus
   /** Injectable outbound HTTP; omitted, handlers use the platform `fetch`. */
   fetchImpl?: FetchImpl
+  /** Injectable Anthropic CLI; omitted, the real `ant`-spawning implementation. */
+  anthropicCli?: AnthropicCli
+  /** Injectable Google CLI; omitted, the real `gcloud`-spawning implementation. */
+  googleCli?: GoogleCli
   /** Passed through to every `ChatRunner`; a test injects its own `createModel`. */
   runner?: ChatRunnerOptions
   /** Clock, intervals and provider probe of the `AgentSupervisor`. */
@@ -230,12 +318,15 @@ export function createAppContext(options: AppContextOptions): AppContext {
 
   let closed = false
 
+  const events = options.events ?? createEventBus()
+
   const ctx: AppContext = {
     db,
     userDataDir,
     repos,
-    events: options.events ?? createEventBus(),
+    events,
     secrets,
+    unreadableSecrets: new Set<string>(),
     userId: options.userId ?? LOCAL_USER_ID,
     // Replaced immediately below: the registry needs the finished context, and
     // the context declares the registry, so one of the two has to be tied off
@@ -244,6 +335,9 @@ export function createAppContext(options: AppContextOptions): AppContext {
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
     memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
+    permissions: createPermissionGate({ emit: (event) => events.emit(event) }),
+    anthropicCli: options.anthropicCli ?? createAnthropicCli(),
+    googleCli: options.googleCli ?? createGoogleCli(),
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
@@ -252,6 +346,9 @@ export function createAppContext(options: AppContextOptions): AppContext {
       closed = true
       ctx.runners.stopAll()
       ctx.supervisor.stop()
+      // After `stopAll`, so a prompt whose turn is being aborted is closed by
+      // its own signal and this only catches whatever that missed.
+      ctx.permissions.abortAll()
       // Fire and forget: `close()` is synchronous because every caller of it is
       // (electron's `will-quit`, a test's `afterEach`), and a child process that
       // takes a moment to exit must not hold either of them up. The transport

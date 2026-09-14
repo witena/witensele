@@ -7,8 +7,16 @@
  * nine in the morning.
  */
 import { describe, expect, it } from 'vitest'
-import type { Message } from '@shared/types'
-import { buildTranscriptRows, dayBucket, startOfDay } from './transcript-rows'
+import type { Message, MessagePart } from '@shared/types'
+import {
+  buildTranscriptRows,
+  collectDiffs,
+  collectFileRefs,
+  countDiffLines,
+  formatFileRef,
+  dayBucket,
+  startOfDay
+} from './transcript-rows'
 
 const NOW = new Date('2026-09-13T10:00:00').getTime()
 const HOUR = 60 * 60 * 1000
@@ -98,5 +106,98 @@ describe('buildTranscriptRows', () => {
     const day = startOfDay(NOW)
     const rows = buildTranscriptRows([message('a', NOW)], NOW)
     expect(rows[0]?.key).toBe(`day-${day}`)
+  })
+})
+
+/**
+ * The two part kinds a message row draws as blocks of its own (S5.5).
+ *
+ * Both are order-sensitive — the transcript claims to show what the executor did
+ * and in which order — and both have to survive being mixed in with text, tool
+ * calls and notices, which is how a real executor message is shaped.
+ */
+describe('collectDiffs', () => {
+  it('is empty for a message with no diff parts', () => {
+    expect(collectDiffs([{ type: 'text', text: 'Done.' }])).toEqual([])
+  })
+
+  it('keeps the diff parts in order and drops everything else', () => {
+    const parts: MessagePart[] = [
+      { type: 'tool-call', toolCallId: 'call-1', toolName: 'write_file', input: {} },
+      { type: 'tool-result', toolCallId: 'call-1', output: { patch: 'ignored' } },
+      { type: 'text', text: 'I added two files.' },
+      { type: 'diff', path: 'a.ts', patch: '--- a.ts\n+++ a.ts\n+one\n' },
+      { type: 'diff', path: 'b.ts', patch: '--- b.ts\n+++ b.ts\n+two\n' }
+    ]
+
+    expect(collectDiffs(parts).map((part) => part.path)).toEqual(['a.ts', 'b.ts'])
+  })
+})
+
+describe('collectFileRefs', () => {
+  it('keeps a line number when there is one and tolerates none', () => {
+    const refs = collectFileRefs([
+      { type: 'file-ref', path: 'src/main.ts', line: 42 },
+      { type: 'text', text: 'and' },
+      { type: 'file-ref', path: 'README.md' }
+    ])
+
+    expect(refs).toEqual([
+      { type: 'file-ref', path: 'src/main.ts', line: 42 },
+      { type: 'file-ref', path: 'README.md' }
+    ])
+  })
+
+  it('de-duplicates the same reference and keeps the first position', () => {
+    const refs = collectFileRefs([
+      { type: 'file-ref', path: 'src/main.ts', line: 42 },
+      { type: 'file-ref', path: 'src/main.ts', line: 7 },
+      { type: 'file-ref', path: 'src/main.ts', line: 42 }
+    ])
+
+    // Same file, different line, is a different reference; the exact repeat is
+    // the one that is dropped.
+    expect(refs.map((part) => part.line)).toEqual([42, 7])
+  })
+})
+
+describe('countDiffLines', () => {
+  it('counts changed lines and ignores the file headers', () => {
+    const patch = [
+      'Index: a.ts',
+      '===================================================================',
+      '--- a.ts',
+      '+++ a.ts',
+      '@@ -1,2 +1,3 @@',
+      ' kept',
+      '-gone',
+      '+new',
+      '+also new'
+    ].join('\n')
+
+    expect(countDiffLines(patch)).toEqual({ added: 2, removed: 1 })
+  })
+
+  it('counts a concatenation of two patches for the same file', () => {
+    const one = '--- a.ts\n+++ a.ts\n+one\n'
+    const two = '--- a.ts\n+++ a.ts\n-one\n+two\n'
+
+    expect(countDiffLines(one + two)).toEqual({ added: 2, removed: 1 })
+  })
+
+  it('is zero for an empty patch', () => {
+    expect(countDiffLines('')).toEqual({ added: 0, removed: 0 })
+  })
+})
+
+describe('formatFileRef', () => {
+  it('appends the line when there is one', () => {
+    expect(formatFileRef({ type: 'file-ref', path: 'src/main.ts', line: 42 })).toBe(
+      'src/main.ts:42'
+    )
+  })
+
+  it('leaves a reference without a line as the bare path', () => {
+    expect(formatFileRef({ type: 'file-ref', path: 'README.md' })).toBe('README.md')
   })
 })

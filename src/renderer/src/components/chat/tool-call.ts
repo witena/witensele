@@ -31,8 +31,57 @@
  * | `undefined` / `null` | `null`, and the card says nothing about results |
  *
  * A wrong count here is cosmetic; the expanded card always shows the real JSON.
+ *
+ * ## The executor's own tools (S5.5)
+ *
+ * `write_file(path: "src/a.ts", content: "…")` is a card nobody can read at a
+ * glance, and the argument that matters is always the same one: the path, the
+ * query, or the command line. `EXECUTOR_PREVIEW_ARG` names it per tool and the
+ * value is printed **bare**, without the `key: ` prefix and without JSON quotes,
+ * so the line reads `write_file(src/a.ts)` and `run_command(npm test)`.
+ *
+ * The preview is still capped at `ARGS_PREVIEW_MAX`, including for
+ * `run_command`: this is a one-line summary of a call that already happened, not
+ * the permission prompt. The prompt is the security boundary and shows the
+ * command verbatim (`permission-input.ts`); the expanded card below shows the
+ * whole input as JSON either way.
+ *
+ * ## The file a card is about (S5.7)
+ *
+ * `read_file`, `write_file` and `edit_file` are each about exactly one file, and
+ * that file is the thing a reader of the transcript most often wants open in
+ * front of them. `filePath` carries it — the path the *model* typed, which may be
+ * relative to the chat's folder — and the card turns it into an "open" icon.
+ * `list_dir`, `search_files`, `run_command` and `git_diff` are deliberately not
+ * in the set: a folder, a query and a command line are not a file to open.
  */
 import type { ToolCallPart, ToolResultPart } from '@shared/types'
+
+/**
+ * The one argument worth printing for each built-in executor tool.
+ *
+ * Keyed by the tool's own name, which is what the transcript stores: these tools
+ * have no MCP server behind them, so there is no prefix to strip. A tool missing
+ * from this table — or a call whose argument is not a string — falls back to the
+ * generic `key: value` preview.
+ */
+export const EXECUTOR_PREVIEW_ARG: Record<string, string> = {
+  read_file: 'path',
+  list_dir: 'path',
+  search_files: 'query',
+  write_file: 'path',
+  edit_file: 'path',
+  run_command: 'command',
+  git_diff: 'path'
+}
+
+/**
+ * The built-in tools whose `path` argument names a file worth opening (S5.7).
+ *
+ * A subset of `EXECUTOR_PREVIEW_ARG`'s keys, and separate from it on purpose:
+ * `list_dir` and `git_diff` also take a `path`, and neither of them is a file.
+ */
+export const EXECUTOR_OPENABLE_TOOLS = ['read_file', 'write_file', 'edit_file'] as const
 
 /** How long `argsPreview` may get before it is cut. Roughly the mockup's width. */
 export const ARGS_PREVIEW_MAX = 48
@@ -57,6 +106,13 @@ export interface ToolCallDescription {
   inputJson: string
   /** Pretty-printed output, or `null` while the call is still running. */
   outputJson: string | null
+  /**
+   * The one file this call is about, as the model wrote it, or `null`.
+   *
+   * Relative or absolute — resolving it against the chat's folder is the card's
+   * job, because only the card knows which chat it is in.
+   */
+  filePath: string | null
 }
 
 /** `JSON.stringify` that never throws: a cycle or a BigInt becomes a marker. */
@@ -87,7 +143,21 @@ function previewValue(value: unknown): string {
  * declaration order, because a tool's first argument is nearly always the one
  * worth reading.
  */
-export function previewToolArgs(input: unknown, max: number = ARGS_PREVIEW_MAX): string {
+export function previewToolArgs(
+  input: unknown,
+  max: number = ARGS_PREVIEW_MAX,
+  toolName?: string
+): string {
+  const primary = toolName === undefined ? undefined : EXECUTOR_PREVIEW_ARG[toolName]
+  const bare =
+    primary !== undefined && input !== null && typeof input === 'object'
+      ? (input as Record<string, unknown>)[primary]
+      : undefined
+  if (typeof bare === 'string') {
+    const single = bare.replace(/\s+/g, ' ').trim()
+    return single.length > max ? `${single.slice(0, max - 1)}…` : single
+  }
+
   const full =
     input === undefined || input === null
       ? ''
@@ -98,6 +168,22 @@ export function previewToolArgs(input: unknown, max: number = ARGS_PREVIEW_MAX):
         : previewValue(input)
 
   return full.length > max ? `${full.slice(0, max - 1)}…` : full
+}
+
+/**
+ * The `path` argument of a built-in file tool, or `null` for anything else.
+ *
+ * `serverName` is the gate, exactly as it is for `argsPreview`: an MCP server
+ * that happens to expose a tool called `write_file` is not this executor tool and
+ * its arguments mean whatever that server says they mean.
+ */
+export function openableFilePath(part: ToolCallPart): string | null {
+  if (part.serverName) return null
+  if (!(EXECUTOR_OPENABLE_TOOLS as readonly string[]).includes(part.toolName)) return null
+  const input = part.input
+  if (input === null || typeof input !== 'object') return null
+  const path = (input as Record<string, unknown>).path
+  return typeof path === 'string' && path.trim().length > 0 ? path.trim() : null
 }
 
 /** The result count, or `null` when the output says nothing countable. */
@@ -131,12 +217,20 @@ export function describeToolCall(
     toolName: part.toolName,
     ...(part.serverName ? { serverName: part.serverName } : {}),
     label: part.serverName ? `${part.serverName} · ${part.toolName}` : part.toolName,
-    argsPreview: previewToolArgs(part.input),
+    // The tool's own name, not the label: an MCP tool called `write_file` comes
+    // from a server and is not this executor tool, so it keeps the generic
+    // preview — `serverName` is what tells them apart, and it is on the part.
+    argsPreview: previewToolArgs(
+      part.input,
+      ARGS_PREVIEW_MAX,
+      part.serverName ? undefined : part.toolName
+    ),
     state,
     // An errored call's output is the error itself, not a list of results.
     resultCount: result && state !== 'error' ? countToolResults(result.output) : null,
     inputJson: safeJson(part.input, 2),
-    outputJson: result ? safeJson(result.output, 2) : null
+    outputJson: result ? safeJson(result.output, 2) : null,
+    filePath: openableFilePath(part)
   }
 }
 

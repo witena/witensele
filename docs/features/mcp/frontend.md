@@ -7,7 +7,8 @@
 | `pages/settings/mcp-section.tsx` | Settings → MCP servers: the 520px card list plus the editor column. Like `ProvidersSection`, it supplies **both** columns and carries `settings-section-title` |
 | `components/settings/mcp-card.tsx` | One server: name, transport badge, side-effects tag, endpoint, tool count, status pill, enabled switch |
 | `components/settings/mcp-display.ts` | Pure: `mcpStatus`, `mcpStatusTone`, `mcpEndpoint`. Unit-tested |
-| `components/settings/mcp-editor.tsx` | The add / edit form, the probe result with its tool list, the stderr log, Test / Save / Delete |
+| `components/settings/mcp-editor.tsx` | The add / edit form, the connector gallery above it while the draft is new, the probe result with its tool list, the stderr log, Test / Save / Delete |
+| `components/settings/mcp-preset-grid.tsx` | S5.1: the gallery. A two-column grid of `MCP_PRESETS` tiles — name, read-only / changes-things badge, one-line description, runner hint |
 | `components/settings/mcp-text.ts` | Pure: `visibleText`, `canonicalArgs`, `canonicalEnv` — what the arguments / environment / headers boxes show. Unit-tested |
 | `components/agents/mcp-checklist.tsx` | The agent form's checklist, bound to `mcpServerIds` |
 | `components/chat/tool-call.ts` | Gained `serverName` and `label` (`serverName · toolName`) |
@@ -33,6 +34,38 @@ its MCP `EmptyState` with the checklist.
 Pure helpers exported for the editor and for tests: `argsToText` / `textToArgs`
 (one argument per line) and `envToText` / `textToEnv` (`KEY=VALUE` per line,
 split on the **first** `=` so a value may contain one).
+
+## The connector gallery (S5.1)
+
+`McpPresetGrid` renders `MCP_PRESETS` from `@shared/mcp-presets` directly — the
+table is frozen data compiled into the bundle, so there is no `mcp.presets`
+method and no loading state. The editor mounts it **only while `mode ===
+'create'`**: a tile replaces the command, the arguments, the environment and the
+side-effects flag, which is a new registration rather than an edit of the server
+on screen.
+
+Picking a tile calls `applyPreset(id)` on the store, which rewrites those fields
+and **keeps a name the user has already typed**; an untouched name is filled with
+the preset **id** (`github`, not `GitHub`), because the name is also the tool
+prefix. Every connection field is written unconditionally, including the ones a
+preset does not set, so `custom` after `github` leaves an empty form instead of
+GitHub's arguments with the brand name removed.
+
+Two details that follow from the rest of the editor:
+
+- **The line-list boxes need no special case.** `visibleText` already shows the
+  draft whenever the typed text can no longer account for it, which is exactly
+  what a preset does to `argsText` / `envText`.
+- **Which tile is selected is component state** (`presetId` in `McpEditor`),
+  reset with the other per-record state when `selectedId` or `mode` changes.
+  `McpServer` has no `presetId` column and needs none — nothing downstream asks
+  which tile a server came from.
+
+Tile copy: brand names are data and are **not** translated; the `custom` label,
+the two badges and the runner hint are keys, and the one-line description is
+looked up with the runtime key `settings.mcp.presets.<id>`. `used-keys.test.ts`
+cannot see a key built at runtime, so `locales.test.ts` asserts that the set of
+description keys in both files is exactly the set of preset ids.
 
 ## The line-list boxes
 
@@ -81,7 +114,9 @@ agent form asks only for the servers that agent actually uses.
 
 | State | What the user sees |
 |---|---|
-| Fresh draft | Test and Save both disabled until there is a name and a command (or URL) |
+| Fresh draft | The connector gallery above the form; Test and Save both disabled until there is a name and a command (or URL) |
+| A tile picked | The tile is outlined, the form below is filled in, and the environment box shows the server's variables as `KEY=` lines to complete. The side-effects switch follows the preset, on for GitHub and off for Fetch |
+| Editing a saved server | No gallery — only the form |
 | Typing a second argument / variable | Enter opens a new line and the caret stays on it; the draft already holds the lines above it |
 | Probing | Spinner on the button, "Connecting…" |
 | Probe succeeded | A green line with the latency and the tool count, then every tool with its description |
@@ -94,6 +129,7 @@ agent form asks only for the servers that agent actually uses.
 
 ## Test ids
 
+`mcp-preset-<preset id>` (one per tile, carrying `data-side-effects`),
 `mcp-add`, `mcp-card` (+ `-select`, `-name`, `-transport`, `-endpoint`, `-tools`,
 `-status`, `-side-effects`, `-enabled`), `mcp-editor`, `mcp-name-input`,
 `mcp-transport-stdio` / `-http`, `mcp-command-input`, `mcp-args-input`,
@@ -111,3 +147,10 @@ New keys under `settings.mcp.*` (43), `agents.mcp*` (7) and
 `notices.toolsUnsupported`, in both `en.json` and `zh-CN.json`. The
 side-effects explanation is the one long string on the page and is a deliberate
 paraphrase of the `PLAN.md` decision, not a translation of it.
+
+S5.1 added five more under `settings.mcp.*` — `preset`, `presetHint`,
+`presetCustom`, `presetReadOnly`, `presetRequires` (`{{runner}}`) — plus the
+`settings.mcp.presets.*` subtree, one description per preset id. The
+changes-things badge reuses the existing `sideEffectsTag`, so a tile and a card
+say the same word about the same flag. Preset **names** are brand names and stay
+out of the locale files.

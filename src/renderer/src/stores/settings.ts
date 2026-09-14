@@ -15,9 +15,10 @@
  *   "not loaded yet" and "load failed" need different UI.
  */
 import { create } from 'zustand'
-import type { AppSettings, AppTimeouts } from '@shared/types'
+import type { AppSettings, AppTimeouts, EditorSettings, ThemeSetting } from '@shared/types'
 import { getNavigatorLanguage, i18n, resolveLanguage } from '../i18n'
 import { getBackend } from '../lib/backend-provider'
+import { activateTheme } from '../lib/theme'
 
 /** The stored setting: a concrete language, or "follow the system". */
 export type LanguageSetting = AppSettings['language']
@@ -36,6 +37,22 @@ export interface SettingsState {
   /** Persists the language setting and applies it to i18next immediately. */
   setLanguage: (language: LanguageSetting) => Promise<void>
   /**
+   * Persists the appearance setting, repaints the window and tells the main
+   * process, which owns the parts of the window the renderer cannot paint: the
+   * traffic lights and the native dialogs (`system.applyTheme`).
+   */
+  setTheme: (theme: ThemeSetting) => Promise<void>
+  /**
+   * Persists the editor choice, one field at a time (S5.7).
+   *
+   * A **partial** for the same reason `setTimeouts` takes one: the kind is a
+   * click and the command is a field that commits on blur, and a whole-object
+   * write from either control would undo whatever the other one did a moment
+   * earlier. Nothing is optimistic here — no pixel on screen depends on the
+   * value, only the next click on a file chip does.
+   */
+  setEditor: (patch: Partial<EditorSettings>) => Promise<void>
+  /**
    * Persists one or more heartbeat budgets.
    *
    * A **partial** of `AppTimeouts`, because the backend merges `timeouts` field
@@ -44,6 +61,15 @@ export interface SettingsState {
    * stale copy of the whole object.
    */
   setTimeouts: (patch: Partial<AppTimeouts>) => Promise<void>
+  /**
+   * Hides the first-run card for this installation (S7.5).
+   *
+   * Optimistic like the language and the theme: Skip is a click on a card that
+   * has to disappear under the cursor, not a round trip later. One-way on
+   * purpose — nothing writes `false` back, because the card is a guide through
+   * an empty installation rather than a feature to switch on and off.
+   */
+  dismissOnboarding: () => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -74,8 +100,43 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     await i18n.changeLanguage(resolveLanguage(settings.language, getNavigatorLanguage()))
   },
 
+  async setTheme(theme) {
+    const previous = get().settings
+    // Optimistic for the same reason as the language, and then some: the click
+    // repaints the entire window, so a round trip of delay would look broken.
+    if (previous) set({ settings: { ...previous, theme } })
+    activateTheme(theme)
+
+    const settings = await getBackend().invoke('settings.update', { patch: { theme } })
+    set({ settings, status: 'ready', error: undefined })
+
+    // The authoritative answer may differ from the optimistic write (another
+    // window, a rejected value), so the attribute is stamped from it as well.
+    activateTheme(settings.theme)
+    // Best effort: the window chrome following the theme is a nicety, and a
+    // transport that cannot do it (a server build) must not fail the setting.
+    await getBackend()
+      .invoke('system.applyTheme', { theme: settings.theme })
+      .catch(() => undefined)
+  },
+
+  async setEditor(patch) {
+    const settings = await getBackend().invoke('settings.update', { patch: { editor: patch } })
+    set({ settings, status: 'ready', error: undefined })
+  },
+
   async setTimeouts(patch) {
     const settings = await getBackend().invoke('settings.update', { patch: { timeouts: patch } })
+    set({ settings, status: 'ready', error: undefined })
+  },
+
+  async dismissOnboarding() {
+    const previous = get().settings
+    if (previous) set({ settings: { ...previous, onboardingDismissed: true } })
+
+    const settings = await getBackend().invoke('settings.update', {
+      patch: { onboardingDismissed: true }
+    })
     set({ settings, status: 'ready', error: undefined })
   }
 }))

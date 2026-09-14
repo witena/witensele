@@ -63,6 +63,24 @@
  * The side-effects rule lives in `collectAgentTools`: a server flagged
  * `sideEffects` is attached only to an `executor` agent. See its doc comment.
  *
+ * ## The executor and its permission prompt (S5.4)
+ *
+ * `collectAgentTools` also attaches the seven built-in executor tools
+ * (`executor/tools.ts`) — but only to **the** executor of a chat that has a
+ * `workdir`. `write_file`, `edit_file`, `run_command` and every tool of a
+ * `sideEffects` MCP server suspend inside `PermissionGate.ask` until the user
+ * answers `permission.reply`; a denial or a stop comes back as a `tool-error`
+ * part the model reads and can talk about. The whole feature is written up in
+ * `docs/features/executor/`.
+ *
+ * When the stream is over, `diffPartsFrom` turns the patches those writes
+ * returned into one `DiffPart` per file and appends them to the same message
+ * (S5.5), so what an executor changed is a block in the transcript rather than a
+ * field inside a tool result nobody expands. `deliveredRef` adds one more part
+ * after them when the turn is the one that brought a `document` goal's
+ * deliverable into existence (S5.12): a `FileRefPart` the user can click to open
+ * the file the chat was for.
+ *
  * ## Skills and memory (S3.2, S3.3)
  *
  * The same function also attaches the built-in tools. `read_skill` and
@@ -96,6 +114,7 @@
  * (carries `finishReason` and `totalUsage`, summed over every step), `abort` and
  * `error`. `stepCountIs` is exported by `ai` as an alias of `isStepCount`.
  */
+import { existsSync } from 'node:fs'
 import { stepCountIs, streamText, type LanguageModel, type LanguageModelUsage, type ToolSet } from 'ai'
 import type { BackendEvent } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
@@ -104,6 +123,9 @@ import { contextWindowFor } from '@shared/pricing'
 import type {
   Agent,
   Chat,
+  DiffPart,
+  FileRefPart,
+  HandoffIntent,
   Message,
   MessagePart,
   MessageStatus,
@@ -116,16 +138,28 @@ import type {
 } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { skillsDir } from '../app-context'
+import {
+  buildExecutorSection,
+  buildExecutorTools,
+  EDIT_FILE_TOOL,
+  PermissionDeniedError,
+  READ_ONLY_EXECUTOR_TOOLS,
+  WRITE_FILE_TOOL
+} from '../executor/tools'
+import { deliverablePath } from '../executor/paths'
+import { buildWorkspaceSection, gitInfo, type GitInfo } from '../executor/workspace'
 import { toAiTools, type AgentTools, type ToolOrigin } from '../mcp/tools'
 import { buildMemorySection, buildMemoryTools } from '../memory/tools'
 import { scanSkills } from '../skills/loader'
 import { buildSkillsSection, buildSkillTools } from '../skills/tools'
 import { isTimeoutAbort, TIMEOUT_ERROR } from '../presence/abort-reasons'
 import type { TurnOutcome } from '../presence/supervisor'
+import { modelOptions } from '../app-context'
 import { createLanguageModel } from '../providers/registry'
 import { resolveProvider } from '../providers/resolve'
 import { buildGroupBriefing, resolveMainLanguage, toBriefingMember } from './briefing'
 import { DEFAULT_OUTPUT_RESERVE, fitHistory } from './context-budget'
+import { buildMaterialsSection } from './materials'
 import { toModelMessages } from './history'
 
 /** Partial text is written to the database at least this often, in milliseconds. */
@@ -165,9 +199,19 @@ function outcomeOf(status: MessageStatus, aborted: boolean): TurnOutcome {
 /** Builds the model client for an agent. Injected by tests; defaults to the registry. */
 export type CreateModel = (ctx: AppContext, agent: Agent) => LanguageModel
 
-/** The default: resolve the provider (decrypting its key) and build the adapter. */
+/**
+ * The default: resolve the provider (decrypting its key) and build the adapter.
+ *
+ * `modelOptions(ctx)` carries the Anthropic CLI, which is what a provider in
+ * sign-in mode needs to mint a token for this turn (S5.3). A provider on an API
+ * key never touches it.
+ */
 export const createModelFromRegistry: CreateModel = (ctx, agent) =>
-  createLanguageModel(resolveProvider(ctx, { id: agent.providerId }), agent.modelId)
+  createLanguageModel(
+    resolveProvider(ctx, { id: agent.providerId }),
+    agent.modelId,
+    modelOptions(ctx)
+  )
 
 export interface AgentTurnOptions {
   ctx: AppContext
@@ -194,6 +238,28 @@ export interface AgentTurnOptions {
    * rather than a race between concurrent turns.
    */
   history?: Message[]
+  /**
+   * Set for the one turn "Hand to executor" schedules (S5.6), and says which of
+   * the two hand-offs it is (S5.12).
+   *
+   * It only extends the executor's briefing — implement the conclusion above,
+   * or write the deliverable; either way do not re-open the debate and report
+   * the paths you touched — and reaches no other part of the turn. The runner
+   * sets it for the agent it handed the work to, in that round only: a reviewer
+   * told to "implement the conclusion" would be the wrong instruction, and an
+   * executor re-@'d later is being asked something specific rather than being
+   * handed the whole discussion again.
+   */
+  handoff?: HandoffIntent
+  /**
+   * True for the members of the review round a hand-off schedules (S5.12).
+   *
+   * It adds the review block to the group briefing — read what the executor
+   * changed and judge it against the goal — and nothing else. Never set for the
+   * executor: it is not reviewing its own work, and `planFromReview` leaves it
+   * out of the round in the first place.
+   */
+  reviewing?: boolean
   /** Aborting it stops the turn; the message ends as `error` / `'aborted'`. */
   signal: AbortSignal
   /** A model client built by the caller. Omitted, `createModel` builds one. */
@@ -219,6 +285,17 @@ export interface AgentTurnResult {
    * run per agent rather than once per round.
    */
   droppedMessages: number
+  /**
+   * How many of the chat's materials were listed by path instead of being
+   * inlined in this turn's prompt (S5.11). `0` when they all fitted, and in
+   * every chat that has none.
+   *
+   * Reported rather than announced here, exactly like `droppedMessages`: the
+   * `materialsTruncated` notice belongs to the run, and `ChatRunner` is what
+   * stores it — once per chat, because the materials do not change between
+   * rounds and a line per round would be noise.
+   */
+  materialsOmitted: number
 }
 
 /** `LanguageModelUsage` (numbers or `undefined`) → the stored `Usage`. */
@@ -251,6 +328,116 @@ function textOf(parts: MessagePart[]): string {
     .filter((part): part is TextPart => part.type === 'text')
     .map((part) => part.text)
     .join('')
+}
+
+/**
+ * One `DiffPart` per file this turn wrote (S5.5).
+ *
+ * The write tools return `{ path, patch }` and the patch reaches the transcript
+ * only as a field buried inside the `tool-result` JSON, which nobody reads. This
+ * turns it into the block the user actually looks at, and it is computed from
+ * the parts rather than collected during the stream so that it has exactly one
+ * source of truth: what was stored.
+ *
+ * Three rules, each of them a case that occurs:
+ *
+ * - **Per file, not per call.** An executor that writes a file and then edits it
+ *   twice produced one changed file, so the patches are concatenated in the
+ *   order they happened. First-write order decides where the file's block sits.
+ * - **Only successful calls.** A denied or refused write has `isError`, no
+ *   patch, and nothing to show.
+ * - **Only the write tools.** `git_diff` also returns a `patch`, and it is a
+ *   *report* about the folder rather than a change this turn made; posting it as
+ *   the turn's diff would claim the executor wrote something it did not.
+ */
+export function diffPartsFrom(parts: readonly MessagePart[]): DiffPart[] {
+  /** The write calls, in the order the model made them. */
+  const writes = parts
+    .filter(
+      (part): part is ToolCallPart =>
+        part.type === 'tool-call' &&
+        (part.toolName === WRITE_FILE_TOOL || part.toolName === EDIT_FILE_TOOL)
+    )
+    .map((part) => part.toolCallId)
+  if (writes.length === 0) return []
+
+  const results = new Map<string, ToolResultPart>()
+  for (const part of parts) {
+    if (part.type === 'tool-result') results.set(part.toolCallId, part)
+  }
+
+  // Walked in **call** order rather than in the order the results came back: two
+  // writes issued in one step finish in whichever order the filesystem answers,
+  // and a transcript whose blocks reshuffle between two identical turns is one
+  // nobody can compare against anything.
+  //
+  // Insertion-ordered, so a file keeps the position of its first write.
+  const byPath = new Map<string, string[]>()
+  for (const toolCallId of writes) {
+    const result = results.get(toolCallId)
+    if (!result || result.isError === true) continue
+
+    const output = result.output as { path?: unknown; patch?: unknown } | null
+    if (!output || typeof output !== 'object') continue
+    const { path, patch } = output
+    if (typeof path !== 'string' || path.length === 0) continue
+    if (typeof patch !== 'string' || patch.trim().length === 0) continue
+
+    const collected = byPath.get(path)
+    if (collected) collected.push(patch)
+    else byPath.set(path, [patch])
+  }
+
+  return [...byPath.entries()].map(([path, patches]) => ({
+    type: 'diff' as const,
+    path,
+    // A patch from `createPatch` ends with a newline, but a hand-made one may
+    // not, and two headers running into each other would break the block.
+    patch: patches.map((patch) => (patch.endsWith('\n') ? patch : `${patch}\n`)).join('')
+  }))
+}
+
+/**
+ * The chip that says "here is the file this chat exists for", or `null` (S5.12).
+ *
+ * The rule is **the turn that delivered it, and only that turn**: the
+ * deliverable was not on disk when the turn started and is on disk now. Two
+ * alternatives were considered and both are worse.
+ *
+ * - *Every executor turn while the file exists* would put a chip on the turn
+ *   that fixed a typo in it and on the one that only read it, which reads as a
+ *   claim each of them produced the document. It is the argument `diffPartsFrom`
+ *   already makes about `git_diff`: a part attached to a turn is a statement
+ *   about what that turn did.
+ * - *The first executor turn in a chat whose deliverable exists* needs a scan of
+ *   the whole transcript for an earlier chip, and still cannot tell a file this
+ *   chat wrote from one that was already lying in the folder when it opened.
+ *
+ * So the state is sampled once at the top of the turn and once at the bottom,
+ * which costs two `existsSync` calls and says exactly what happened. The
+ * consequences are deliberate: a deliverable that already existed before the
+ * chat ever ran gets no chip (the header chip has said "delivered" since the
+ * chat was opened, so nothing is hidden), a rewrite of it gets no second chip
+ * (its `DiffPart` is the record of that), and a file deleted by hand and written
+ * again gets a new one, because that turn really did deliver it again.
+ *
+ * It is not conditional on the turn having *written* the file: the executor may
+ * have produced it with `run_command`, which returns no patch, and the question
+ * the chip answers is whether the deliverable is there, not which tool made it.
+ * A failed or stopped turn keeps its chip for the same reason it keeps its
+ * diffs — the file is on disk either way.
+ */
+export function deliveredRef(
+  /** Absolute path of the deliverable, or `null` when this turn has none. */
+  deliverable: string | null,
+  /** Whether it was already on disk when the turn started. */
+  existedBefore: boolean
+): FileRefPart | null {
+  if (deliverable === null || existedBefore) return null
+  if (!existsSync(deliverable)) return null
+  // No `line`: the chip names a file the turn produced, and line 1 of a document
+  // nobody has read is not a more precise place to open it at.
+  return { type: 'file-ref', path: deliverable }
 }
 
 /**
@@ -292,40 +479,222 @@ export function enabledSkills(ctx: AppContext, agent: Agent): SkillMeta[] {
 
 /**
  * The system prompt, in the order `docs/PLAN.md` ("One agent turn") fixes: the
- * agent's own instructions, the group briefing, the enabled skills' names and
- * descriptions, then the whole memory index.
+ * agent's own instructions, the group briefing, the executor's folder and tools
+ * when it is one, the enabled skills' names and descriptions, then the whole
+ * memory index.
+ *
+ * Since S5.10 the briefing also carries the chat's **goal**, for every member;
+ * the executor section's hand-off suffix additionally names the deliverable or
+ * the change, because that turn is the one being asked to produce it.
  *
  * Skills and memory come **after** the briefing because they are data the agent
  * may reach for, while the briefing is how it must behave; a model that runs out
- * of attention should lose the reference material first, not the protocol.
+ * of attention should lose the reference material first, not the protocol. The
+ * executor section sits between the two for the same reason: it is protocol —
+ * which folder, which tools, what to do when it is finished — and is only
+ * present when the tools it describes are actually attached, because a prompt
+ * that promises a tool the model was not given is how a model starts describing
+ * tool calls in prose.
  */
-export function buildSystemPrompt(ctx: AppContext, agent: Agent, members: Agent[]): string {
+export interface TurnPrompt {
+  /** The assembled system prompt. */
+  text: string
+  /**
+   * How many materials had to be listed by path instead of inlined (S5.11).
+   *
+   * Reported for the same reason `droppedMessages` is: the user-visible notice
+   * belongs to the **run**, and `ChatRunner` is the only object that can say it
+   * once rather than once per round.
+   */
+  materialsOmitted: number
+}
+
+/**
+ * The prompt, plus the one number the turn has to report about it.
+ *
+ * `buildSystemPrompt` is this function's text and is what every caller that only
+ * wants the prompt uses; the two exist separately so the materials count reaches
+ * `AgentTurnResult` without every test that asserts on the prompt having to
+ * unwrap an object.
+ */
+/** Which round this turn is, as far as the prompt is concerned (S5.6, S5.12). */
+export interface TurnStage {
+  /**
+   * The hand-off this turn is, when the runner handed the work to this agent.
+   *
+   * `null` — the default — is every ordinary turn, including an executor that a
+   * reviewer `@`-ed afterwards: that one is being asked something specific, not
+   * handed the whole discussion again.
+   */
+  handoff?: HandoffIntent | null
+  /** True for the members of a hand-off's review round (S5.12). */
+  reviewing?: boolean
+  /** Injectable for the tests; defaults to the real `git`. */
+  readGit?: (workdir: string) => GitInfo | null
+}
+
+export function buildTurnPrompt(
+  ctx: AppContext,
+  chat: Chat,
+  agent: Agent,
+  members: Agent[],
+  stage: TurnStage = {}
+): TurnPrompt {
+  const handoff = stage.handoff ?? null
   const language = resolveMainLanguage(ctx.repos.settings.get(ctx.userId).language)
   const briefing = buildGroupBriefing({
     language,
     self: toBriefingMember(agent),
     members: members.map(toBriefingMember),
-    memoryEnabled: agent.memoryEnabled
+    memoryEnabled: agent.memoryEnabled,
+    // S5.10: every member is briefed with the chat's goal, executor or not —
+    // what the group is for is not a fact about one role.
+    goal: chat.goal,
+    // S5.12: and the reviewers of a hand-off are told that is what they are.
+    reviewing: stage.reviewing === true
   })
 
   const sections = [agent.systemPrompt.trim(), briefing]
+
+  const executing = executorWorkdir(chat, agent, members)
+  const workspace = workspaceWorkdir(chat)
+  // One `git` probe per turn at most, and only for the goal that reads it. The
+  // hand-off line names the branch (S5.12) and the workspace section prints the
+  // status (S5.11); both come from the same `gitInfo`, and two `spawnSync` calls
+  // for one prompt is a real cost on a large repository — and a chance for the
+  // two halves of the same prompt to name two different branches.
+  const readGit = stage.readGit ?? gitInfo
+  const git = workspace !== null && chat.goal?.kind === 'codebase' ? readGit(workspace) : null
+
+  if (executing) {
+    sections.push(
+      buildExecutorSection({
+        workdir: executing,
+        handoff,
+        goal: chat.goal,
+        branch: git?.branch ?? null
+      })
+    )
+  }
+
+  // S5.11: every member of a chat with a folder is shown the folder, executor or
+  // not. The section is built once per turn, here, because `walkTree` touches
+  // the disk and a turn that assembled it twice would be reading the same
+  // hundreds of directory entries for the same prompt.
+  if (workspace) {
+    sections.push(
+      buildWorkspaceSection({
+        workdir: workspace,
+        goal: chat.goal,
+        executor: executing !== null,
+        // The probe above, handed over rather than run again.
+        readGit: () => git
+      })
+    )
+  }
 
   const skills = buildSkillsSection(enabledSkills(ctx, agent))
   if (skills.length > 0) sections.push(skills)
 
   if (agent.memoryEnabled) sections.push(buildMemorySection(ctx.memory.readIndex(agent.id)))
 
-  return sections.filter((section) => section.length > 0).join('\n\n')
+  // The materials go **last**, immediately before the history they ground. They
+  // are the bulkiest thing in the prompt and the one part of it that is pure
+  // reference material, so a model that runs out of attention loses them before
+  // it loses the protocol — the same argument that puts skills and memory after
+  // the briefing.
+  const materials =
+    workspace && chat.goal
+      ? buildMaterialsSection({
+          workdir: workspace,
+          materials: chat.goal.materials,
+          contextWindow: contextWindowFor(agent.modelId)
+        })
+      : null
+  if (materials && materials.text.length > 0) sections.push(materials.text)
+
+  return {
+    text: sections.filter((section) => section.length > 0).join('\n\n'),
+    materialsOmitted: materials?.omitted ?? 0
+  }
+}
+
+/** The prompt on its own. See `buildTurnPrompt` for why both exist. */
+export function buildSystemPrompt(
+  ctx: AppContext,
+  chat: Chat,
+  agent: Agent,
+  members: Agent[],
+  stage: TurnStage = {}
+): string {
+  return buildTurnPrompt(ctx, chat, agent, members, stage).text
+}
+
+/**
+ * The folder **every** member of this chat may read, or `null` (S5.11).
+ *
+ * One condition, not `executorWorkdir`'s three: the chat has a `workdir`. PLAN's
+ * read-only rule is what this expresses — participants get the four read-only
+ * tools and the workspace briefing so they can ground the discussion in the real
+ * code, and they get nothing that writes, whatever the goal says.
+ *
+ * It is a function rather than an inline check for the same reason
+ * `executorWorkdir` is: `collectAgentTools` and `buildTurnPrompt` must answer it
+ * identically, or the prompt describes tools the model was not given.
+ */
+export function workspaceWorkdir(chat: Chat): string | null {
+  if (typeof chat.workdir !== 'string' || chat.workdir.trim().length === 0) return null
+  return chat.workdir
+}
+
+/**
+ * The folder this agent may act on, or `null` — the single rule behind both the
+ * executor tools and the executor section of the prompt.
+ *
+ * Three conditions, all necessary:
+ *
+ * 1. **The agent's role is `executor`.** A participant never gets these tools,
+ *    whatever the chat says (PLAN.md: discussion agents are read-only).
+ * 2. **The chat has a `workdir`.** There is no default folder and no fallback to
+ *    the process's working directory: an executor in a chat nobody bound to a
+ *    folder simply has no file tools, which S5.2 chose over refusing the member.
+ * 3. **It is *the* executor of this chat** — the first `executor` in the member
+ *    list, which the runner passes in `position` order.
+ *
+ * The third condition exists because `chats.members.set` is not the only way to
+ * end up with two executors in one chat: `agents.update` can still *promote* a
+ * participant that is already a member, which S5.2 recorded as a known gap. Two
+ * agents writing into one folder is exactly what PLAN.md's one-writer decision
+ * exists to prevent, so the tie is broken deterministically here rather than
+ * left to whichever turn runs first.
+ */
+export function executorWorkdir(chat: Chat, agent: Agent, members: readonly Agent[]): string | null {
+  if (agent.role !== 'executor') return null
+  if (typeof chat.workdir !== 'string' || chat.workdir.trim().length === 0) return null
+  const first = members.find((member) => member.role === 'executor')
+  // `first` is undefined only when the caller passed a member list this agent is
+  // not in, which the runner never does; trusting the agent's own role then is
+  // the safer of the two answers, because the alternative silently disarms an
+  // executor the user is watching.
+  if (first && first.id !== agent.id) return null
+  return chat.workdir
 }
 
 /* -------------------------------------------------------------------------- */
 /* Tools                                                                       */
 /* -------------------------------------------------------------------------- */
 
-/** What `collectAgentTools` needs from the turn: its signal and its budget. */
+/** What `collectAgentTools` needs from the turn: its signal, its budget, its chat. */
 export interface CollectToolsOptions {
   signal: AbortSignal
   toolTimeoutMs: number
+  /**
+   * Everyone in the chat, in `position` order.
+   *
+   * Needed only to pick the chat's executor deterministically when the member
+   * list somehow holds two; see `executorWorkdir`.
+   */
+  members: readonly Agent[]
 }
 
 /**
@@ -349,12 +718,24 @@ export interface CollectToolsOptions {
  * answer from what it knows.
  *
  * On top of those, the **built-in** tools: `read_skill` / `read_skill_file` when
- * the agent has at least one skill that still exists (S3.2), and `memory_save` /
- * `memory_search` when its memory is on (S3.3). See the end of the function for
- * why the side-effects rule does not reach them.
+ * the agent has at least one skill that still exists (S3.2), `memory_save` /
+ * `memory_search` when its memory is on (S3.3), and the seven **executor** tools
+ * when `executorWorkdir` says this agent is the chat's executor and the chat has
+ * a folder (S5.4). See the end of the function for why the side-effects rule
+ * does not reach the first two families.
+ *
+ * ## Where the permission prompt is attached
+ *
+ * Here, not inside the tools: `mcp/tools.ts` is pure and knows nothing about a
+ * chat, and the executor tools ask through the gate they are handed. So the
+ * `call` closure this function builds for an MCP server checks `sideEffects` and
+ * asks first — which means the flag that decides *whether an agent may have a
+ * tool at all* and the flag that decides *whether a call is confirmed* are read
+ * in one place, from one record.
  */
 export async function collectAgentTools(
   ctx: AppContext,
+  chat: Chat,
   agent: Agent,
   options: CollectToolsOptions
 ): Promise<AgentTools> {
@@ -380,12 +761,25 @@ export async function collectAgentTools(
 
     try {
       const discovered = await ctx.mcp.listTools(serverId)
-      const wrapped = toAiTools(serverId, server.name, discovered, (toolName, args) =>
-        ctx.mcp.callTool(serverId, toolName, args, {
+      const wrapped = toAiTools(serverId, server.name, discovered, async (toolName, args) => {
+        // Every tool of a side-effecting server is confirmed, not only the ones
+        // whose name sounds dangerous: the server declared that its tools change
+        // the outside world and this layer cannot tell which of them do.
+        if (server.sideEffects) {
+          const outcome = await ctx.permissions.ask({
+            chatId: chat.id,
+            agentId: agent.id,
+            toolName,
+            input: args,
+            signal: options.signal
+          })
+          if (!outcome.allowed) throw new PermissionDeniedError(toolName, outcome.reason)
+        }
+        return await ctx.mcp.callTool(serverId, toolName, args, {
           signal: options.signal,
           timeoutMs: options.toolTimeoutMs
         })
-      )
+      })
       for (const [key, definition] of Object.entries(wrapped.tools)) {
         // Two servers whose names sanitize to the same slug would collide; the
         // first one keeps the key, which is at least stable across turns.
@@ -412,6 +806,44 @@ export async function collectAgentTools(
   }
   if (agent.memoryEnabled) {
     Object.assign(tools, buildMemoryTools(ctx.memory, agent.id))
+  }
+
+  // The built-in file, search, shell and git tools (S5.4, S5.11). Unlike the two
+  // families above, these *are* the side-effects rule rather than an exception
+  // to it: three of the seven go through `ctx.permissions` before they run, all
+  // of them are confined to the chat's folder, and which of them an agent gets
+  // is decided by its role.
+  //
+  // | Agent | Tools |
+  // |---|---|
+  // | The chat's executor, chat has a `workdir` | All seven |
+  // | Any other member, chat has a `workdir` | The four that only read |
+  // | Any member, chat has no `workdir` | None |
+  //
+  // The second row is S5.11 and PLAN.md's read-only rule: a participant may
+  // ground its argument in the real code, and may not change a byte of it. The
+  // set it gets is `READ_ONLY_EXECUTOR_TOOLS`, which is the complement of the
+  // gated set rather than a second hand-written list, so a tool that becomes
+  // gated stops reaching participants in the same edit.
+  const executing = executorWorkdir(chat, agent, options.members)
+  const workdir = executing ?? workspaceWorkdir(chat)
+  if (workdir) {
+    const built = buildExecutorTools({
+      workdir,
+      chatId: chat.id,
+      agentId: agent.id,
+      signal: options.signal,
+      timeoutMs: options.toolTimeoutMs,
+      permissions: ctx.permissions
+    })
+    if (executing) {
+      Object.assign(tools, built)
+    } else {
+      for (const name of READ_ONLY_EXECUTOR_TOOLS) {
+        const definition = built[name]
+        if (definition) tools[name] = definition
+      }
+    }
   }
 
   return { tools, origins }
@@ -491,6 +923,19 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     controller
   })
 
+  /**
+   * The deliverable of a `document` goal, for an **executor** turn (S5.12).
+   *
+   * Two facts are wanted and only one of them survives the turn, so both are
+   * taken here: where the file would be, and whether it was already there before
+   * this turn started. See `deliveredRef` at the bottom of the turn for the rule
+   * they feed.
+   */
+  const deliverable = executorWorkdir(chat, agent, members)
+    ? deliverablePath(chat.goal, chat.workdir)
+    : null
+  const deliveredBefore = deliverable !== null && existsSync(deliverable)
+
   const parts: MessagePart[] = []
   let usage: Usage | undefined
   let failure: string | undefined
@@ -499,6 +944,19 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   let toolsUnsupported = false
   /** How many history messages the context budget removed; reported to the runner. */
   let droppedMessages = 0
+  /**
+   * The system prompt, built at most **once** per turn (S5.11).
+   *
+   * `consume` can run twice — a model whose provider rejects tools gets a second,
+   * tool-free attempt — and the prompt now reads the folder: a tree walk and the
+   * materials, which must not happen twice for one turn. Memoised here rather
+   * than hoisted out of `consume` so a failure while assembling it is still the
+   * turn's own error path rather than a throw out of `runAgentTurn`, which
+   * promises never to throw.
+   */
+  let prompt: TurnPrompt | null = null
+  /** How many materials that prompt had to list rather than inline (S5.11). */
+  let materialsOmitted = 0
 
   let lastFlushAt = Date.now()
   let deltasSinceFlush = 0
@@ -542,7 +1000,12 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const agentsById = Object.fromEntries(members.map((member) => [member.id, member]))
     const origins = attached?.origins ?? {}
 
-    const system = buildSystemPrompt(ctx, agent, members)
+    prompt ??= buildTurnPrompt(ctx, chat, agent, members, {
+      handoff: options.handoff ?? null,
+      reviewing: options.reviewing === true
+    })
+    const system = prompt.text
+    materialsOmitted = prompt.materialsOmitted
     // Both history paths go through the budget: the sequential turn's fresh read
     // and the snapshot the runner took once for a parallel round. A long chat
     // overflows every speaker at the same moment, so exempting either one would
@@ -658,9 +1121,10 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     if (turnSignal.aborted) throw new TurnAborted()
 
     const toolTimeoutMs = ctx.repos.settings.get(ctx.userId).timeouts.toolTimeoutMs
-    const attached = await collectAgentTools(ctx, agent, {
+    const attached = await collectAgentTools(ctx, chat, agent, {
       signal: turnSignal,
-      toolTimeoutMs
+      toolTimeoutMs,
+      members
     })
     const hasTools = Object.keys(attached.tools).length > 0
 
@@ -685,6 +1149,19 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   }
 
   if (turnSignal.aborted) aborted = true
+
+  // What the turn changed on disk, as one block per file (S5.5). Appended after
+  // the stream rather than as each write returns, so a file written three times
+  // is one block instead of three — and appended even when the turn was stopped
+  // or failed afterwards, because the writes really happened and hiding them is
+  // the one thing the transcript must never do.
+  for (const diff of diffPartsFrom(parts)) onPart(diff)
+
+  // …and, when this is the turn that produced the file the chat exists for, a
+  // chip pointing at it (S5.12). After the diffs, because it is the conclusion
+  // they add up to.
+  const delivered = deliveredRef(deliverable, deliveredBefore)
+  if (delivered) onPart(delivered)
 
   // The supervisor's hard timeout and the user's Stop both arrive as an abort;
   // only the reason tells them apart, and they end in different statuses.
@@ -776,7 +1253,13 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     // A timeout is *not* reported as an abort: the round barrier reads this flag
     // to decide whether the user stopped the run, and one skipped agent must
     // leave the others' answers and the next round alone.
-    return { message, status, aborted: aborted && !timedOut, droppedMessages }
+    return {
+      message,
+      status,
+      aborted: aborted && !timedOut,
+      droppedMessages,
+      materialsOmitted
+    }
   } finally {
     ctx.supervisor.endTurn({
       chatId: chat.id,

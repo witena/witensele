@@ -36,13 +36,28 @@ machine whose language changes should keep following it.
 | Channel | Input | Output | Errors |
 |---|---|---|---|
 | `settings.get` | — | `AppSettings` | None; an absent row is the defaults |
-| `settings.update` | `{ patch: { language } }` | `AppSettings` | `validation` when `patch` is not an object or carries a key other than `language` / `theme` / `timeouts` |
+| `settings.update` | `{ patch: { language } }` | `AppSettings` | `validation` when `patch` is not an object or carries a key other than `language` / `theme` / `editor` / `timeouts` / `onboardingDismissed` |
 
 The handler does **not** validate the language value itself. The renderer only
 ever sends one of the three, the type system enforces it on both sides, and an
 unknown value would be corrected on read by `resolveLanguage`'s fallback rather
 than corrupt anything. Add a runtime check here if a non-TypeScript client ever
 appears.
+
+S7.5 added the fifth key, `onboardingDismissed` — the first-run card's Skip flag
+([`../chats/backend.md`](../chats/backend.md)). It is validated like `theme` and
+`editor` rather than trusted like the language: it is read back as a boolean by
+code with no other branch, and a stored `'no'` is truthy, which would hide the
+first-run card on a machine where nothing is set up. No migration was needed —
+reads merge the stored object over `DEFAULT_APP_SETTINGS`, so a row written
+before it existed answers `false`.
+
+S5.8 made `theme` the exception: `assertPatch` checks it against
+`THEME_SETTINGS` and refuses anything else with `validation`. The asymmetry is
+deliberate and is about the *consequence*, not the source — an unknown language
+falls back to English, which is visible and recoverable, while an unknown theme
+resolves to light and leaves the user looking at an appearance no control in
+the app accounts for.
 
 ## Events emitted
 
@@ -79,10 +94,42 @@ Keys reserved for the features that will emit them:
 | `notices.runStopped` | — | `orchestration` (S2.3), when the Stop button cancels a chain |
 | `notices.maxRoundsReached` | `max` | `orchestration` (S2.3), when the automatic round cap is hit |
 | `notices.providerError` | `message` | `agent-turn` (S1.7) / `providers` (S1.6) |
+| `notices.materialsTruncated` | `agent`, `omitted` | `orchestration` (S5.11), once per chat when a member could not fit the goal's materials. The only notice deduped against the **transcript** rather than against a per-run set, which is what makes "once per chat" survive a relaunch |
+| `notices.handoff` | `agent` | `orchestration` (S5.6), on the **user** message "Hand to executor" stores. The only notice that is a request rather than a report, and the only one carried by a message the user is the sender of |
+| `notices.handoffDeliver` | `agent`, `path` | `orchestration` (S5.12), the same for the "Write the deliverable" action. A key of its own rather than a parameter on `handoff`, because the sentence the user reads is a different sentence; `path` is the goal's **relative** path, never the absolute one |
 
 The same principle covers failures: `BackendError.code` is the machine-readable
 class the renderer maps to an `errors.<code>` key, and `BackendError.message` is
 developer detail for logs that is never rendered.
+
+S5.2 added a narrower identifier for the same reason. The codes are a
+failure *taxonomy*, and "the request was rejected as invalid" is the right
+sentence almost everywhere because the control that sent the request is on
+screen saying what it wanted — but not when the user picked a folder that is not
+a folder, or added a member the chat cannot hold. Those refusals carry a
+`ValidationReason` (`src/shared/types.ts`) in `BackendError.details`, which the
+renderer maps to an `errors.<reason>` key exactly as it maps a code. It is still
+an identifier, never a sentence: the backend does not know the UI language.
+
+S5.3 used the *other* half of the same choice, and the line between them is worth
+keeping: a `ValidationReason` narrows the refusal of one request and is only read
+when the code is `validation`, so the two `oauth_*` refusals of the provider form
+are reasons — while "the Anthropic CLI is not installed" is also raised while
+building a model for a chat turn, which is nobody's form, so `ant_missing` and
+`ant_not_logged_in` are codes — and so are S5.13's `gcloud_missing`,
+`gcloud_not_logged_in` and `gcloud_no_project`, the last of them most clearly of
+all: it is raised by the OAuth `fetch` wrapper in the middle of a request, where
+there is no request-shaped refusal to narrow. S7.6's `key_unreadable` is on the
+same side: a stored key encrypted by a previous installation is a fact about this
+machine's data, and it is raised while resolving a provider for a chat turn as
+much as while probing one from a form. The same rule applies to the next one: if only the
+sender of this request can be wrong, it is a reason; if the *machine* is in that
+state, it is a code.
+
+One more thing the backend deliberately does not send: a **formatted date**. The
+sign-in panel's "valid until" line is built in the renderer from the epoch
+milliseconds in `ProviderAuthStatus`, for the same reason as everything above —
+the main process does not know the active language.
 
 ## Prompts are not UI copy — and are still bilingual (S1.7)
 
@@ -105,6 +152,13 @@ The plan for S1.7, recorded here so it is not rediscovered:
   Chinese-speaking user wants replies in Chinese. The briefing language is the
   cheapest lever on both.
 - The agent's own `systemPrompt` is user data and is never translated.
+- Since **S5.10** the same line runs through the chat's **goal**: the briefing's
+  sentences about it are written in both `briefing.en.ts` and `briefing.zh-CN.ts`
+  and follow the same setting, while the user's own `description` and the
+  deliverable's path are **data** and are placed verbatim in whichever language
+  the briefing is being written in. The `Goal` block's *labels* are ordinary
+  locale keys under `chat.*`, and its nine refusals are `errors.<reason>` keys
+  like every other `ValidationReason`.
 
 ## External dependencies
 

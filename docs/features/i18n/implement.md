@@ -101,11 +101,11 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 |---|---|
 | `common` | App name, OK / Cancel / Save / Delete / Add / Search, loading, generic error |
 | `nav` | The three navigation rail entries |
-| `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped` |
-| `agents` | Agent list and configuration form labels |
-| `settings` | Section names, the language switcher's own copy, the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` |
+| `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, and since S5.5 the executor's permission card, the diff block and the file-reference chip |
+| `agents` | Agent list and configuration form labels, plus the `templates.*` subtree (S7.5): one description per entry of `@shared/agent-templates`, looked up by a **runtime** key, so `locales.test.ts` checks the subtree against the table in both directions the way it already does for the MCP presets |
+| `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` and S5.7 extended with the Editor block's seven `editor*` keys |
 | `presence` | The four presence states |
-| `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` |
+| `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`). `errors.test.ts` asserts the namespace holds **exactly** the codes plus the reasons, in both directions, so a code added to the shared union without copy fails there rather than on screen (S5.3 added two of each; S5.13 three more codes, one per way the Google Cloud SDK can be unready; S5.6 three more reasons, for the hand-off's three refusals; S5.7 two more, for the two ways a path can be refused by `system.openInEditor`; S5.10 nine more, one per field of a chat goal that can be wrong — two of which the **renderer** raises itself, because a native dialog cannot be confined to a folder and the conversion is where that is noticed; S7.6 one more code, `key_unreadable`, for an API key encrypted by a previous installation) |
 | `notices` | Backend-authored notices — the keys `SystemNoticePart.key` may take |
 
 S1.5 was the first step to render most of `nav`, `chat`, `agents` and `settings`,
@@ -131,11 +131,52 @@ translated at authoring time, not at display time. That makes `briefing.zh-CN.ts
 the one `.ts` file allowed to contain Chinese; see
 [`../agent-turn/backend.md`](../agent-turn/backend.md).
 
+S5.7's keys are seven under `settings.developer.editor*` and three under
+`chat.*` (`fileRefTitle`, reworded from "Copy this path" when the chip stopped
+copying, `fileRefFailed` and `openInEditor`). Two of the seven — `editorVscode`
+and `editorCursor` — are **brand marks** and are byte-identical in both files,
+which is precisely the shape `locales.test.ts` allows: a `zh-CN` value with no
+CJK in it must *equal* its English counterpart, so a brand name passes and an
+untranslated sentence does not. And
+`editorCommandHint` writes its placeholders as single-brace `{path}` / `{line}`
+rather than i18next's `{{…}}`: they are literal text the user types into a
+command template, not interpolation, and the double-brace spelling would have
+been substituted away to nothing.
+
+S5.12 added four: `chat.writeDeliverable` and `chat.writeDeliverableTitle` for
+the Actions card's third row, `errors.handoff_no_deliverable` for the rule that
+disables it, and `notices.handoffDeliver` for the message the click stores. The
+notice is a **second key** rather than a parameter on `notices.handoff`, which is
+the rule this feature keeps coming back to: a parameter is for a value inside a
+sentence, and these are two different sentences — one says "implement what the
+group decided", the other names a file. The error key follows the S5.2 shape
+exactly, so the disabled tooltip and the backend's rejection are one string.
+
+S7.5 added three groups and one rule worth repeating. `chat.onboarding.*` is the
+first-run card; `agents.templates.*` is described above; `settings.about.*` plus
+`settings.sections.about` is the About screen, whose only interpolation is
+`licensesHint`'s `{{packages}}`. The rule: **the things About prints are not
+copy**. `Witena 0.1.0`, `react@19.3.0`, `MIT` and the repository URL are
+identifiers — the same in both languages — so they are rendered as data with
+translated labels around them, exactly as the `ant` install command and a
+working-directory path are. The same goes for a template's **name**: it is
+stored in `agents.name`, `@mentions` resolve against it and every model sees it,
+so it lives in `@shared/agent-templates` as an English literal and only its
+description is a key.
+
+S5.8 added five `settings.theme*` keys next to the language ones, and nothing
+else: the theme is an attribute on `<html>`, so the only translated text it
+owns is the three segment labels and one hint. `themeSystem` is worded
+identically to `languageSystem` in both files on purpose — it is the same
+promise about the same machine — which is also why `locales.test.ts`'s rule
+that a `zh-CN` value must differ from its English one has an exception list it
+did not need here (both Chinese values are real translations).
+
 ## Tests
 
 | File | Covers |
 |---|---|
-| `src/renderer/src/i18n/locales.test.ts` | Identical key trees; the expected top-level namespaces; no empty values; no CJK in `en.json`; every `zh-CN` value either contains CJK or is deliberately identical to English; identical `{{placeholders}}` on both sides |
+| `src/renderer/src/i18n/locales.test.ts` | Identical key trees; the expected top-level namespaces; no empty values; no CJK in `en.json`; every `zh-CN` value either contains CJK or is deliberately identical to English; identical `{{placeholders}}` on both sides; and, since S5.1, that the `settings.mcp.presets.*` keys are exactly the ids in `@shared/mcp-presets` — a runtime key `used-keys.test.ts` cannot resolve |
 | `src/renderer/src/i18n/used-keys.test.ts` | Every literal `t('…')` / `i18nKey="…"` resolves in `en.json`; no JSX text node is a hard-coded string |
 | `src/renderer/src/i18n/notices.test.ts` | `translateNotice` prefixes, interpolates, follows the active language, and falls back to the raw key |
 | `src/renderer/src/stores/settings.test.ts` | `load` populates and records failure instead of throwing; `setLanguage` sends the right patch, stores the answer, switches i18next, resolves `'system'` through the navigator, and updates optimistically |
@@ -153,9 +194,10 @@ trap described in [frontend.md](./frontend.md).
 
 - **The guard only reads `.tsx` for literals.** A string assembled in a `.ts`
   helper and rendered elsewhere is invisible to it.
-- **Runtime keys are unchecked.** `t(option.labelKey)` and
-  `t('notices.' + part.key)` cannot be resolved statically; `notices.test.ts`
-  covers the second by exercising real keys.
+- **Runtime keys are unchecked.** `t(option.labelKey)`,
+  `t('notices.' + part.key)` and the gallery's `settings.mcp.presets.<id>` cannot
+  be resolved statically; `notices.test.ts` covers the second by exercising real
+  keys, and `locales.test.ts` covers the third against the preset table.
 - **No plural or gender rules** beyond i18next's defaults, because nothing needs
   them yet. Adding them is a locale-file change, not a code change.
 - **`zh-TW` is folded into `zh-CN`.** Adding it means a third resource and one

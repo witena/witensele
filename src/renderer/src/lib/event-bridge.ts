@@ -19,6 +19,7 @@
 import type { BackendEvent } from '@shared/events'
 import { useChatsStore } from '../stores/chats'
 import { useMessagesStore } from '../stores/messages'
+import { usePermissionsStore } from '../stores/permissions'
 import { usePresenceStore } from '../stores/presence'
 import { useRunStore } from '../stores/run'
 import { useUsageStore } from '../stores/usage'
@@ -48,6 +49,7 @@ export function applyBackendEvent(event: BackendEvent): void {
       useChatsStore.getState().applyDeleted(event.chatId)
       useMessagesStore.getState().clear(event.chatId)
       usePresenceStore.getState().clear(event.chatId)
+      usePermissionsStore.getState().clear(event.chatId)
       useRunStore.getState().applyFinished(event.chatId)
       useUsageStore.getState().clear(event.chatId)
       break
@@ -63,8 +65,16 @@ export function applyBackendEvent(event: BackendEvent): void {
     case 'run.finished':
       useRunStore.getState().applyFinished(event.chatId)
       break
-    // `permission.requested` is reserved for the executor agent and `system.test`
-    // belongs to the Developer section, which subscribes to it itself.
+    // The executor's permission prompt (S5.4), drawn as a card above the
+    // composer (S5.5). `resolved` arrives exactly once per `requested`, on every
+    // path, which is what lets the card be dismissed without knowing why.
+    case 'permission.requested':
+      usePermissionsStore.getState().applyRequested(event)
+      break
+    case 'permission.resolved':
+      usePermissionsStore.getState().applyResolved(event.requestId)
+      break
+    // `system.test` belongs to the Developer section, which subscribes itself.
     default:
       break
   }

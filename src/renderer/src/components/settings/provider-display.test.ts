@@ -9,10 +9,26 @@
 import { describe, expect, it } from 'vitest'
 import type { Provider } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
-import { providerHost, providerStatus, providerStatusTone } from './provider-display'
+import {
+  authControl,
+  formatExpiry,
+  keyUnreadable,
+  providerHost,
+  providerStatus,
+  providerStatusTone,
+  signedInName
+} from './provider-display'
 
-function provider(overrides: Partial<Provider> = {}): Provider {
-  return {
+/**
+ * Overrides that may explicitly clear a field, as `registry.test.ts` does:
+ * `Partial<T>` cannot express `baseUrl: undefined` under
+ * `exactOptionalPropertyTypes`, and "this provider has no custom endpoint" is
+ * one of the cases worth testing.
+ */
+type ProviderOverrides = { [K in keyof Provider]?: Provider[K] | undefined }
+
+function provider(overrides: ProviderOverrides = {}): Provider {
+  const base: Provider = {
     id: 'p1',
     userId: LOCAL_USER_ID,
     createdAt: 0,
@@ -22,9 +38,9 @@ function provider(overrides: Partial<Provider> = {}): Provider {
     baseUrl: 'https://api.deepseek.com/v1',
     presetId: 'deepseek',
     models: ['deepseek-chat'],
-    hasApiKey: true,
-    ...overrides
+    hasApiKey: true
   }
+  return { ...base, ...overrides } as Provider
 }
 
 describe('providerHost', () => {
@@ -68,6 +84,26 @@ describe('providerStatus', () => {
     expect(providerStatus(provider(), undefined)).toBe('untested')
   })
 
+  it('says "signed in" for a provider that authenticates with an account', () => {
+    // Not "no key": having no key is the point of that mode, and the card would
+    // otherwise show a warning for a provider that is perfectly well configured.
+    const signedIn = provider({
+      type: 'anthropic',
+      presetId: 'anthropic',
+      auth: 'oauth',
+      hasApiKey: false,
+      baseUrl: undefined
+    })
+
+    expect(providerStatus(signedIn, undefined)).toBe('signed-in')
+  })
+
+  it('lets a probe outrank the sign-in badge', () => {
+    const signedIn = provider({ type: 'anthropic', auth: 'oauth', hasApiKey: false })
+
+    expect(providerStatus(signedIn, { ok: true, latencyMs: 12 })).toBe('connected')
+  })
+
   it('reflects the probe outcome', () => {
     expect(providerStatus(provider(), { ok: true, latencyMs: 30 })).toBe('connected')
     expect(
@@ -85,5 +121,83 @@ describe('providerStatusTone', () => {
     expect(providerStatusTone('failed')).toBe('warn')
     expect(providerStatusTone('no-key')).toBe('idle')
     expect(providerStatusTone('untested')).toBe('idle')
+    // Neutral, not green: the record says this provider signs in, which is not a
+    // claim that the login still works.
+    expect(providerStatusTone('signed-in')).toBe('idle')
+  })
+})
+
+/**
+ * The editor's Authentication control, as a rule rather than as JSX (S5.3).
+ *
+ * The suite has no DOM, so the decision the component makes is a pure function
+ * it calls — which is also the only way "disabled with a hint" and "absent" stay
+ * distinguishable in a test.
+ */
+describe('authControl', () => {
+  it('offers a live control for the providers that can be signed into', () => {
+    expect(authControl('anthropic')).toEqual({ shown: true, available: true })
+    // S5.13 turned Google's on; OpenAI's is still the "not yet" case below.
+    expect(authControl('google')).toEqual({ shown: true, available: true })
+  })
+
+  it('shows a disabled one for the provider whose sign-in is not built yet', () => {
+    expect(authControl('openai')).toEqual({ shown: true, available: false })
+  })
+
+  it('shows none at all for an endpoint that has no account behind it', () => {
+    expect(authControl('openai-compatible')).toEqual({ shown: false, available: false })
+  })
+})
+
+describe('signedInName', () => {
+  it('prefers the account the user recognises', () => {
+    expect(
+      signedInName({
+        state: 'signed-in',
+        account: 'person@example.com',
+        workspaceName: 'Default',
+        organizationName: 'Org'
+      })
+    ).toBe('person@example.com')
+  })
+
+  it('falls back rather than rendering "signed in as nobody"', () => {
+    expect(signedInName({ state: 'signed-in', workspaceName: 'Default' })).toBe('Default')
+    expect(signedInName({ state: 'signed-in', organizationName: 'Org' })).toBe('Org')
+    // A `gcloud` ADC carries no account of its own; the project is the only
+    // label it has, and it beats an empty line.
+    expect(signedInName({ state: 'signed-in', project: 'witena-dev' })).toBe('witena-dev')
+    expect(signedInName({ state: 'signed-in' })).toBe('')
+  })
+})
+
+describe('formatExpiry', () => {
+  it('renders a timestamp in the viewer locale', () => {
+    expect(formatExpiry(Date.UTC(2026, 8, 13, 12, 0, 0), 'en-US')).not.toBe('')
+  })
+
+  it('says nothing when the CLI did not say', () => {
+    expect(formatExpiry(undefined, 'en-US')).toBe('')
+  })
+})
+
+/**
+ * S7.6. The notice under the card and above the key field is one predicate, and
+ * this is it — absent `keyState` must never render it, because a provider that
+ * did not come from a `providers.*` answer (an editor draft, an older backend)
+ * simply has not been asked.
+ */
+describe('keyUnreadable', () => {
+  it('is true only for a key this build could not decrypt', () => {
+    expect(keyUnreadable({ keyState: 'unreadable' })).toBe(true)
+    expect(keyUnreadable({ keyState: 'ok' })).toBe(false)
+    expect(keyUnreadable({ keyState: 'none' })).toBe(false)
+  })
+
+  it('says nothing when nobody has determined it', () => {
+    expect(keyUnreadable({})).toBe(false)
+    expect(keyUnreadable(undefined)).toBe(false)
+    expect(keyUnreadable(null)).toBe(false)
   })
 })

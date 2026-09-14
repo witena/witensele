@@ -48,6 +48,35 @@ export interface EntityBase {
 export type ProviderType = 'anthropic' | 'openai' | 'google' | 'openai-compatible'
 
 /**
+ * How a provider proves who it is (S5.3).
+ *
+ * `apiKey` is the original and the default: a secret the user pastes, encrypted
+ * by the `SecretStore`. `oauth` means "use the account the user is already
+ * signed in to", which Witena delegates entirely to the vendor's own CLI — it
+ * stores **no token of its own**, so signing out of the CLI signs Witena out too.
+ *
+ * `anthropic` (S5.3) and `google` (S5.13) implement `oauth`; OpenAI does not
+ * yet — "Sign in with ChatGPT" is a gated program (see "Phase 6: Backlog" in
+ * `docs/STEPS.md`). The field is shared rather than derived from the type
+ * because a provider of either kind may legitimately stay on a key.
+ */
+export type ProviderAuth = 'apiKey' | 'oauth'
+
+/** Every authentication mode, for validation and for the editor's control. */
+export const PROVIDER_AUTH_MODES = ['apiKey', 'oauth'] as const
+
+/**
+ * Whether this provider's stored key can still be decrypted (S7.6).
+ *
+ * `none` is a provider that stores no key — a local endpoint, or one that signs
+ * in — and is therefore not a problem. `unreadable` is a key written by an
+ * earlier installation whose encryption key is gone; the row is left exactly as
+ * it is (never overwritten with something unreadable) and the UI asks for the
+ * key again.
+ */
+export type ProviderKeyState = 'ok' | 'unreadable' | 'none'
+
+/**
  * A configured model provider. Deliberately has no key field: the encrypted key
  * lives in the backend's `SecretStore` and only its presence is reported here.
  */
@@ -62,6 +91,23 @@ export interface Provider extends EntityBase {
   models: string[]
   /** True when a key is stored for this provider. The key itself never leaves main. */
   hasApiKey: boolean
+  /**
+   * Whether the stored key can still be read (S7.6).
+   *
+   * **Runtime only, not a column**: the `providers.*` handlers fill it from the
+   * set of ids the startup migration could not decrypt, so it is absent from a
+   * provider built anywhere else (a repository row, an editor draft) and a
+   * reader must treat absent as "not determined". `unreadable` is the state the
+   * UI explains — a key encrypted by a previous installation, which has to be
+   * pasted again.
+   */
+  keyState?: ProviderKeyState
+  /**
+   * Absent means `apiKey`, which is what every row written before S5.3 holds.
+   * Read it through `providerAuth()` in `shared/presets.ts` rather than
+   * comparing it by hand, so the default lives in one place.
+   */
+  auth?: ProviderAuth
 }
 
 /**
@@ -78,6 +124,54 @@ export interface ProviderInput {
   presetId?: string
   models: string[]
   apiKey?: string
+  /** Absent means `apiKey`. `oauth` is accepted for `anthropic` and `google`. */
+  auth?: ProviderAuth
+}
+
+/**
+ * What the renderer is told about a vendor CLI's login state.
+ *
+ * `not-installed` is a first-class answer rather than an error, because "the
+ * binary is not on this machine" is the ordinary state of a machine that has
+ * never used it, and the sign-in panel's job is to say so and print the install
+ * command.
+ */
+export type ProviderAuthState = 'signed-in' | 'signed-out' | 'not-installed'
+
+/**
+ * The login state of the CLI behind one `auth: 'oauth'` provider type.
+ *
+ * Deliberately **no token**: an access token and a refresh token never leave the
+ * main process, so nothing that crosses IPC — or lands in a renderer heap
+ * snapshot — can carry a credential. What is left is what the panel has to
+ * print: who the user is signed in as, the one label that gives that identity
+ * context, and when the current credential expires.
+ *
+ * One interface for both vendors (S5.13) rather than one per vendor, because
+ * every consumer — the store, the panel, the card badge — treats it as "the
+ * machine's login state plus a few labels". *Which* labels are filled is a fact
+ * about the vendor rather than about the shape: `ant` reports an organisation
+ * and a workspace, `gcloud` reports a quota project, and a field the answering
+ * CLI has no notion of is simply absent — the same case every consumer already
+ * handles for a profile that carried none.
+ */
+export interface ProviderAuthStatus {
+  state: ProviderAuthState
+  /** The signed-in identity. An account email for both CLIs today. */
+  account?: string
+  /** Anthropic: the organisation the profile belongs to. */
+  organizationName?: string
+  /** Anthropic: the workspace the profile is scoped to. */
+  workspaceName?: string
+  /**
+   * Google: the quota project `x-goog-user-project` names, which is the project
+   * billed for the request. Absent means the user signed in but never chose one,
+   * which the panel offers to fix — the Gemini API refuses an end-user
+   * credential that names no project.
+   */
+  project?: string
+  /** Epoch **milliseconds** when the current credential expires. */
+  expiresAt?: number
 }
 
 /* -------------------------------------------------------------------------- */
@@ -85,8 +179,17 @@ export interface ProviderInput {
 /* -------------------------------------------------------------------------- */
 
 /**
- * `participant` agents discuss. `executor` is reserved for the post-MVP executor
- * agent bound to `Chat.workdir`; nothing implements it yet.
+ * `participant` agents discuss and never write. `executor` is the single agent
+ * per chat that is allowed to act on the outside world, bound to `Chat.workdir`.
+ *
+ * PLAN.md's decision, in one line: *discussion agents are read-only; all writes
+ * go through one executor*. Several models writing into the same directory
+ * overwrite each other and nothing is reviewable, so exactly one writer plus a
+ * diff-review loop is the shape. Two consequences are already enforced:
+ * `collectAgentTools` attaches a `sideEffects` MCP server only to an `executor`
+ * (S3.1), and a chat refuses a second `executor` member (S5.2). Since S5.4 the
+ * executor also gets its own file, search, shell and git tools, confined to
+ * `Chat.workdir` and gated by the permission prompt (`docs/features/executor/`).
  */
 export type AgentRole = 'participant' | 'executor'
 
@@ -157,7 +260,11 @@ export interface McpServer extends EntityBase {
   enabled: boolean
   /**
    * Marks a server whose tools change the outside world (write files, send mail,
-   * push commits). Reserved for the permission prompt; the MVP only displays it.
+   * push commits).
+   *
+   * Two rules read it: `collectAgentTools` attaches such a server only to an
+   * `executor` agent (S3.1), and since S5.4 **every** call to one of its tools
+   * goes through the permission prompt before it runs.
    */
   sideEffects: boolean
 }
@@ -194,13 +301,104 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   maxAutoRounds: 3
 }
 
+/** The three shapes a chat's goal can take (`docs/PLAN.md`, "Chat goal and workspace"). */
+export const GOAL_KINDS = ['discussion', 'document', 'codebase'] as const
+
+export type GoalKind = (typeof GOAL_KINDS)[number]
+
+/** Longest description `chats.update` accepts; a goal is a paragraph, not a document. */
+export const MAX_GOAL_DESCRIPTION_CHARS = 2_000
+
+/**
+ * What the group in this chat is working towards (S5.10).
+ *
+ * The kind decides what "done" means and who touches the folder:
+ * `discussion` reaches a conclusion in the transcript, `document` produces one
+ * file, `codebase` changes the code in the chat's `workdir`. The last two
+ * therefore require a `workdir` — there is nothing to write into otherwise —
+ * and `document` additionally requires a `deliverable`.
+ *
+ * Every path in here is **relative to `Chat.workdir`**, never absolute: the
+ * folder can be moved or restored from a backup, and a goal that named
+ * `/Users/ada/…` would then point at nothing. The renderer converts what the
+ * native dialogs return before it sends them (`lib/workdir.ts`).
+ */
+export interface ChatGoal {
+  kind: GoalKind
+  /** Prose the user wrote; placed verbatim in every member's briefing. */
+  description: string
+  /**
+   * The one file a `document` goal produces, relative to `workdir`.
+   *
+   * Required for `document` and meaningless for the other two. Its parent folder
+   * need not exist yet — the point of the goal is that the file does not exist
+   * at the start.
+   */
+  deliverable?: string
+  /**
+   * Files and folders under `workdir` the group starts from, relative paths.
+   *
+   * Each one must exist when it is saved. S5.11 places their contents in every
+   * member's system prompt, in list order and inside a quarter of that model's
+   * context window; what does not fit is named by path for `read_file`.
+   */
+  materials: string[]
+}
+
+/**
+ * Whether a `document` goal's deliverable is on disk yet.
+ *
+ * A fact about the **filesystem**, not about the chat row, which is why it is a
+ * query of its own (`chats.goalStatus`) rather than a field on `Chat`: a derived
+ * column on the domain type would be stale the moment anything wrote the file,
+ * and the same reasoning already keeps the member count off `Chat`.
+ */
+export interface ChatGoalStatus {
+  /** Absolute path of the deliverable, or `null` when the goal has none. */
+  deliverable: string | null
+  /** True when that file exists right now. Always false without a deliverable. */
+  delivered: boolean
+}
+
+/**
+ * What the user is handing the executor (S5.12).
+ *
+ * One `chat.handoff` with an argument rather than two methods, because the two
+ * differ in **one sentence of the briefing and one notice key** and in nothing
+ * else: the same executor is chosen by the same rule, the same message shape is
+ * stored, and the same two staged rounds run. A second method would have been
+ * `handoff()` copied for its last paragraph.
+ *
+ * - `implement` — S5.6's hand-off: build the conclusion the group reached.
+ * - `deliver` — the "Write the deliverable" action: write the `document` goal's
+ *   file now. Refused (`handoff_no_deliverable`) on a chat whose goal is not a
+ *   `document` with a deliverable, because there would be no file to name.
+ */
+export const HANDOFF_INTENTS = ['implement', 'deliver'] as const
+
+export type HandoffIntent = (typeof HANDOFF_INTENTS)[number]
+
 export interface Chat extends EntityBase {
   title: string
   /**
-   * Local working directory for the future executor agent. Reserved: the MVP
-   * always stores `null`.
+   * Absolute path of the local folder this chat's executor works in, or `null`
+   * when the chat is not bound to one.
+   *
+   * Validated by `chats.update` against the real filesystem (absolute, exists,
+   * is a directory), because every path the executor resolves in S5.3 is
+   * confined to it — a folder that is not there is not a boundary. A chat may
+   * have an `executor` member and no `workdir`; that agent simply gets no
+   * executor tools.
    */
   workdir: string | null
+  /**
+   * What this chat is for (S5.10), or `null` while nobody has said.
+   *
+   * Stored as one nullable JSON column, so a chat written before S5.10 reads as
+   * `null` and behaves exactly as it did — a chat with no goal is a discussion
+   * nobody bothered to name.
+   */
+  goal: ChatGoal | null
   settings: ChatSettings
 }
 
@@ -404,30 +602,101 @@ export interface AppTimeouts {
   toolTimeoutMs: number
 }
 
+/**
+ * The stored appearance setting.
+ *
+ * `'system'` is not a theme, it is a *rule*: the resolved theme follows
+ * `prefers-color-scheme` and changes while the app is running. Everything that
+ * paints turns it into `'light' | 'dark'` at use time — `resolveTheme` in the
+ * renderer, `nativeTheme` in the main process — exactly as `'system'` works for
+ * the language, and for the same reason: storing the resolved value would freeze
+ * a user who asked to follow the machine.
+ */
+export type ThemeSetting = 'system' | 'light' | 'dark'
+
+/** Every value `AppSettings.theme` accepts, in the order the control shows them. */
+export const THEME_SETTINGS = ['system', 'light', 'dark'] as const satisfies readonly ThemeSetting[]
+
+/**
+ * Which editor `system.openInEditor` hands a file to (S5.7).
+ *
+ * The two named editors are URL schemes — `vscode://file/<path>:<line>` and its
+ * Cursor twin — because a URL needs nothing installed on the `PATH` and works
+ * whether or not the user ever ran "Install 'code' command in PATH". `'custom'`
+ * is the escape hatch for everything else, and it is a command line rather than
+ * a second scheme because that is the only interface every editor has.
+ */
+export type EditorKind = 'vscode' | 'cursor' | 'custom'
+
+/** Every value `EditorSettings.kind` accepts, in the order the control shows them. */
+export const EDITOR_KINDS = ['vscode', 'cursor', 'custom'] as const satisfies readonly EditorKind[]
+
+/**
+ * The command template `kind: 'custom'` starts from.
+ *
+ * `{path}` and `{line}` are the only placeholders; the backend substitutes them
+ * with the *quoted* absolute path and the line number, so a template may put them
+ * anywhere without thinking about spaces in a directory name.
+ */
+export const DEFAULT_EDITOR_COMMAND = 'code -g {path}:{line}'
+
+export interface EditorSettings {
+  kind: EditorKind
+  /** Only used when `kind` is `'custom'`, but kept across a switch away and back. */
+  command: string
+}
+
 export interface AppSettings {
   /** `'system'` follows the OS language, which is the first-launch default. */
   language: Language | 'system'
-  /** Only a dark theme exists; the field is here so light can be added later. */
-  theme: 'dark'
+  /** `'system'` follows the OS appearance, which is the first-launch default. */
+  theme: ThemeSetting
+  /** Where a `path:line` chip, a diff header or a file tool card opens (S5.7). */
+  editor: EditorSettings
   timeouts: AppTimeouts
+  /**
+   * True once the user pressed Skip on the first-run card (S7.5).
+   *
+   * A setting rather than browser storage: it is a fact about this
+   * installation, it has to survive a cleared web storage and a different
+   * window, and the server version of the app (Phase 8) will want it per
+   * account. It is never set back to `false` by the UI — the card is not a
+   * feature to switch on and off, and a user who wants it again has an empty
+   * installation anyway.
+   */
+  onboardingDismissed: boolean
 }
 
 /** Settings a fresh installation starts with. */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   language: 'system',
-  theme: 'dark',
+  theme: 'system',
+  editor: {
+    kind: 'vscode',
+    command: DEFAULT_EDITOR_COMMAND
+  },
   timeouts: {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,
     toolTimeoutMs: 60_000
-  }
+  },
+  onboardingDismissed: false
 }
 
-/** A shallow patch of `AppSettings`; `timeouts` may be updated one field at a time. */
+/**
+ * A shallow patch of `AppSettings`.
+ *
+ * `timeouts` and `editor` may each be updated one field at a time, because both
+ * are written by a form whose controls commit separately: the kind is a click and
+ * the command template is a field that commits on blur, and a whole-object write
+ * from either would overwrite whatever the other one did a moment earlier.
+ */
 export interface AppSettingsPatch {
   language?: AppSettings['language']
   theme?: AppSettings['theme']
+  editor?: Partial<EditorSettings>
   timeouts?: Partial<AppTimeouts>
+  onboardingDismissed?: boolean
 }
 
 /* -------------------------------------------------------------------------- */
@@ -495,6 +764,31 @@ export interface MemorySearchHit {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Executor permissions (S5.4)                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The three answers to a permission prompt.
+ *
+ * `allowAlways` is PLAN.md's "always allow in this chat": it runs the call and
+ * remembers the **chat + tool** pair, so every later call of that tool in that
+ * chat runs without asking again. It is deliberately not remembered per input —
+ * a user who has decided that this executor may run `write_file` in this chat
+ * has decided about the tool, not about one path — and deliberately not
+ * persisted: the memory lives for the life of the process, so closing the app is
+ * always a way back to being asked.
+ */
+export const PERMISSION_DECISIONS = ['allow', 'deny', 'allowAlways'] as const
+
+/** One of `allow`, `deny`, `allowAlways`. */
+export type PermissionDecision = (typeof PERMISSION_DECISIONS)[number]
+
+/** Narrows an unknown value to a decision, for the handler's validation. */
+export function isPermissionDecision(value: unknown): value is PermissionDecision {
+  return typeof value === 'string' && (PERMISSION_DECISIONS as readonly string[]).includes(value)
+}
+
+/* -------------------------------------------------------------------------- */
 /* Errors                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -502,6 +796,11 @@ export interface MemorySearchHit {
  * Machine-readable failure classes. The renderer switches on `code` to pick an
  * i18n key; `message` is for logs and developer-facing detail, not UI copy.
  * `unauthorized` is reserved for the server version and unused locally.
+ *
+ * The `ant_*` and `gcloud_*` codes are classes rather than `ValidationReason`s
+ * on purpose: they describe the state of a **tool on the user's machine**, not a
+ * malformed request, and they are raised by the provider layer (a model being
+ * built for a chat turn) as well as by a handler validating a form.
  */
 export type BackendErrorCode =
   | 'not_found'
@@ -511,12 +810,102 @@ export type BackendErrorCode =
   | 'aborted'
   | 'unauthorized'
   | 'internal'
+  /** The Anthropic CLI (`ant`) is not installed, or not where it was expected. */
+  | 'ant_missing'
+  /** `ant` is installed but no profile is logged in (`ant auth login`). */
+  | 'ant_not_logged_in'
+  /** The Google Cloud SDK (`gcloud`) is not installed, or not where it was expected. */
+  | 'gcloud_missing'
+  /** `gcloud` is installed but has no application-default credentials (S5.13). */
+  | 'gcloud_not_logged_in'
+  /**
+   * `gcloud` is signed in but names no quota project, so a request would have no
+   * `x-goog-user-project` header — which the Gemini API refuses for an end-user
+   * credential. The sign-in panel offers a field that sets one.
+   */
+  | 'gcloud_no_project'
+  /**
+   * A stored API key cannot be decrypted by this build (S7.6).
+   *
+   * The key was encrypted by an earlier installation whose encryption key is
+   * gone — an unsigned rebuild loses the `safeStorage` Keychain item, because
+   * macOS grants it per application identity. Nothing is broken and nothing was
+   * lost except the key itself: pasting it again fixes the provider for good,
+   * since every key written since S7.6 is held by `userData/secrets.key`, which
+   * updates do not touch.
+   */
+  | 'key_unreadable'
 
 /** Serializable error shape: an `Error` cannot survive the transport intact. */
 export interface BackendError {
   code: BackendErrorCode
   message: string
   details?: unknown
+}
+
+/**
+ * The `validation` refusals the renderer has a sentence of its own for.
+ *
+ * `BackendErrorCode` is deliberately coarse — seven classes for the whole
+ * product — and "the request was rejected as invalid" is the right answer for
+ * almost every one of them, because the control that sent the request is right
+ * there saying what it wanted. These are the exceptions: the user picked a
+ * folder and it turned out not to be one, added a member the chat cannot hold,
+ * or asked for a sign-in mode this provider cannot have, and the generic
+ * sentence would leave them guessing.
+ *
+ * A reason travels in `BackendError.details` as `{ reason }`, so it is an
+ * **identifier the renderer translates**, never a sentence the backend wrote
+ * (CLAUDE.md rule #4). Adding one means adding an `errors.<reason>` key to both
+ * locale files; `i18n/errors.ts` switches over the union and the compiler proves
+ * the mapping is total.
+ */
+export const VALIDATION_REASONS = [
+  'workdir_not_absolute',
+  'workdir_missing',
+  'workdir_not_directory',
+  'second_executor',
+  /** `auth: 'oauth'` on a provider type that has no sign-in flow yet. */
+  'oauth_unsupported_provider',
+  /** `auth: 'oauth'` together with a custom base URL, which cannot be signed into. */
+  'oauth_custom_base_url',
+  /** `chat.handoff` on a chat that is not bound to a folder (S5.6). */
+  'handoff_no_workdir',
+  /** `chat.handoff` on a chat whose members include no executor (S5.6). */
+  'handoff_no_executor',
+  /** `chat.handoff` while a run of that chat is still going (S5.6). */
+  'handoff_run_active',
+  /** `chat.handoff` with `intent: 'deliver'` on a chat with no deliverable (S5.12). */
+  'handoff_no_deliverable',
+  /** `system.openInEditor` was given a path that is not absolute (S5.7). */
+  'editor_path_not_absolute',
+  /** `system.openInEditor` was given a path outside the chat's folder (S5.7). */
+  'editor_path_outside_workdir',
+  /** A goal was saved with a blank description (S5.10). */
+  'goal_description_empty',
+  /** A goal description longer than `MAX_GOAL_DESCRIPTION_CHARS` (S5.10). */
+  'goal_description_too_long',
+  /** A `document` goal with no `deliverable` (S5.10). */
+  'goal_deliverable_required',
+  /** A deliverable that is absolute, blank, or climbs out with `..` (S5.10). */
+  'goal_deliverable_not_relative',
+  /** A deliverable that resolves outside the chat's folder (S5.10). */
+  'goal_deliverable_outside_workdir',
+  /** A material that is absolute, blank, or climbs out with `..` (S5.10). */
+  'goal_material_not_relative',
+  /** A material that resolves outside the chat's folder (S5.10). */
+  'goal_material_outside_workdir',
+  /** A material that is not on disk (S5.10). */
+  'goal_material_missing',
+  /** A `document` or `codebase` goal on a chat bound to no folder (S5.10). */
+  'goal_needs_workdir'
+] as const
+
+export type ValidationReason = (typeof VALIDATION_REASONS)[number]
+
+/** The shape `BackendError.details` takes when a reason is carried. */
+export interface ValidationDetails {
+  reason: ValidationReason
 }
 
 /* -------------------------------------------------------------------------- */

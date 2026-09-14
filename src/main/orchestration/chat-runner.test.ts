@@ -12,6 +12,9 @@
  * `[PASS]`, the round cap, and what happens when one speaker fails and the
  * others do not.
  */
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type {
@@ -21,14 +24,22 @@ import type {
   RunRoundEvent
 } from '@shared/events'
 import { PASS_TOKEN } from '@shared/pass'
-import type { Agent, Chat, Message, SystemNoticePart } from '@shared/types'
+import type { Agent, Chat, HandoffIntent, Message, SystemNoticePart } from '@shared/types'
 import { toModelMessages } from '../agents/history'
 import type { AppContext } from '../app-context'
 import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
 import { DEFAULT_CHAT_TITLE } from '../db/repositories'
 import { buildHandlers } from '../handlers'
 import { createTestAppContext } from '../testing'
-import { NOTICE_CONTEXT_TRUNCATED, type ChatRunnerOptions } from './chat-runner'
+import { WRITE_FILE_TOOL } from '../executor/tools'
+import {
+  NOTICE_CONTEXT_TRUNCATED,
+  NOTICE_HANDOFF,
+  NOTICE_HANDOFF_DELIVER,
+  NOTICE_MATERIALS_TRUNCATED,
+  NOTICE_MAX_ROUNDS,
+  type ChatRunnerOptions
+} from './chat-runner'
 
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
 type StreamPart = StreamResult extends { stream: ReadableStream<infer Part> } ? Part : never
@@ -1110,6 +1121,72 @@ describe('ChatRunner (usage, truncation and titles)', () => {
     expect(noticeKeys(ctx, chat)).not.toContain(NOTICE_CONTEXT_TRUNCATED)
   })
 
+  /* -- S5.11 -------------------------------------------------------------- */
+
+  /**
+   * The materials notice, which is the one notice in the product stored **once
+   * per chat** rather than once per run: the goal's materials are the same in
+   * every round of every run until the user edits them, so a second sentence
+   * would say exactly what the first one said.
+   */
+  it('says once per chat that the materials did not all fit', async () => {
+    await start({ generateTitle: async () => null })
+    const workdir = mkdtempSync(join(tmpdir(), 'witena-runner-materials-'))
+    try {
+      writeFileSync(join(workdir, 'HUGE.md'), 'w'.repeat(400_000), 'utf8')
+      writeFileSync(join(workdir, 'SMALL.md'), 'a line\n', 'utf8')
+      await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: {
+          workdir,
+          goal: {
+            kind: 'discussion',
+            description: 'Decide what to do about the brief',
+            materials: ['HUGE.md', 'SMALL.md']
+          }
+        }
+      })
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What does it say?' })
+      await settle()
+
+      const params = noticeParams(ctx, chat, NOTICE_MATERIALS_TRUNCATED)
+      expect(params?.['agent']).toBe('Ada')
+      expect(Number(params?.['omitted'])).toBeGreaterThan(0)
+
+      // A second run adds no second sentence.
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'And now?' })
+      await settle()
+      expect(
+        noticeKeys(ctx, chat).filter((key) => key === NOTICE_MATERIALS_TRUNCATED)
+      ).toHaveLength(1)
+    } finally {
+      rmSync(workdir, { recursive: true, force: true })
+    }
+  })
+
+  it('stores no materials notice when they all fit', async () => {
+    await start({ generateTitle: async () => null })
+    const workdir = mkdtempSync(join(tmpdir(), 'witena-runner-materials-'))
+    try {
+      writeFileSync(join(workdir, 'SMALL.md'), 'a line\n', 'utf8')
+      await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: {
+          workdir,
+          goal: { kind: 'discussion', description: 'Read the line', materials: ['SMALL.md'] }
+        }
+      })
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What does it say?' })
+      await settle()
+
+      expect(noticeKeys(ctx, chat)).not.toContain(NOTICE_MATERIALS_TRUNCATED)
+    } finally {
+      rmSync(workdir, { recursive: true, force: true })
+    }
+  })
+
   /* -- S4.3 --------------------------------------------------------------- */
 
   it('names a chat after the first exchange, using the model', async () => {
@@ -1237,5 +1314,408 @@ describe('ChatRunner (usage, truncation and titles)', () => {
     await expect(
       handlers['chats.search'](ctx, {} as { query: string })
     ).rejects.toMatchObject({ code: 'validation' })
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.6: hand to executor, and the review round                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * PLAN.md's workflow, driven through the handler the button calls: discuss →
+ * hand to executor → it implements → the others review → iterate.
+ *
+ * The chat is deliberately `roundrobin` (the default) with the executor **in the
+ * middle** of the member list: the two facts these cases exist to pin down are
+ * that the executor speaks alone in a mode where everybody normally speaks, and
+ * that the review round is everybody else in `position` order rather than
+ * "whoever is not last".
+ */
+describe('ChatRunner (hand to executor)', () => {
+  const handlers = buildHandlers()
+
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let ada: Agent
+  let hands: Agent
+  let bob: Agent
+  let chat: Chat
+  let workdir: string
+  let models: Map<string, MockLanguageModelV4>
+
+  beforeEach(async () => {
+    database = createTestDatabase()
+    models = new Map()
+    const created = createTestAppContext(database, {
+      runner: {
+        createModel: (_ctx, agent) => models.get(agent.name) ?? saying('nothing to add')
+      }
+    })
+    ctx = created.ctx
+    events = created.events
+    workdir = mkdtempSync(join(tmpdir(), 'witena-handoff-'))
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    ada = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    hands = ctx.repos.agents.create(
+      agentInput({
+        name: 'Hands',
+        providerId: provider.id,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      }),
+      ctx.userId
+    )
+    bob = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = await handlers['chats.create'](ctx, {
+      input: { title: 'Implementation', workdir, memberAgentIds: [ada.id, hands.id, bob.id] }
+    })
+    events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const settle = () => ctx.runners.for(chat.id).whenIdle()
+  const finished = (): RunFinishedEvent[] => finishedIn(events)
+  const agentMessages = (): Message[] =>
+    ctx.repos.messages
+      .listForContext(chat.id, ctx.userId)
+      .filter((message) => message.senderType === 'agent')
+  const promptOf = (name: string, index = 0): string =>
+    JSON.stringify(models.get(name)?.doStreamCalls[index]?.prompt ?? null)
+
+  /** A model that answers a different sentence per turn, then repeats the last. */
+  const answering = (texts: string[]): MockLanguageModelV4 => {
+    let turn = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        const text = texts[turn] ?? texts[texts.length - 1] ?? ''
+        turn += 1
+        return { stream: simulateReadableStream({ chunks: textChunks([text]) }) }
+      }
+    })
+  }
+
+  it('stores a hand-off message that mentions the executor and nobody else', async () => {
+    const message = await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    expect(message).toMatchObject({
+      senderType: 'user',
+      status: 'done',
+      round: 0,
+      mentions: [hands.id],
+      // A key plus the executor's name, never a sentence: the row outlives any
+      // language choice (CLAUDE.md rule #4).
+      parts: [{ type: 'system-notice', key: NOTICE_HANDOFF, params: { agent: 'Hands' } }]
+    })
+    expect(events[0]).toMatchObject({ type: 'message.created', message: { id: message.id } })
+  })
+
+  it('gives the executor the floor alone, then everybody else one review round', async () => {
+    models.set('Hands', saying('I added NOTES.md and wired it into the index.'))
+    models.set('Ada', saying('Reads fine.'))
+    models.set('Bob', saying('Same here.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    // Round 1 is the executor on its own, in a `roundrobin` chat where a typed
+    // message would have given all three the floor; round 2 is the other two, in
+    // member order, and there is no round 3.
+    expect(rounds(events)).toEqual([
+      { type: 'run.round', chatId: chat.id, round: 1, speakers: [hands.id] },
+      { type: 'run.round', chatId: chat.id, round: 2, speakers: [ada.id, bob.id] }
+    ])
+    expect(agentMessages().map((message) => message.senderId)).toEqual([hands.id, ada.id, bob.id])
+    // The reviewers were pulled in by the executor, which is what the UI prints.
+    expect(agentMessages()[1]?.inReplyTo).toEqual([hands.id])
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+  })
+
+  it('briefs the executor to implement the conclusion, and feeds the reviewers its answer', async () => {
+    models.set('Hands', saying('I added NOTES.md and wired it into the index.'))
+    models.set('Ada', saying('Reads fine.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    // The extra briefing (S5.6) on top of the standing executor section (S5.4).
+    expect(promptOf('Hands')).toContain('Implement the conclusion the group reached')
+    expect(promptOf('Hands')).toContain(workdir)
+    // The request itself reached the prompt as prose rather than as a bare key.
+    expect(promptOf('Hands')).toContain('handed the discussion to Hands')
+    // And the review round is reading what the executor actually said.
+    expect(promptOf('Ada')).toContain('I added NOTES.md')
+  })
+
+  it('schedules no review round when the executor is the only member', async () => {
+    await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [hands.id] })
+    models.set('Hands', saying('Done; nothing to review against.'))
+    events.length = 0
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    expect(rounds(events)).toEqual([
+      { type: 'run.round', chatId: chat.id, round: 1, speakers: [hands.id] }
+    ])
+    // `completed`, and silent: nobody was mentioned and nothing failed, so there
+    // is nothing for a notice to explain.
+    expect(finished()[0]).toMatchObject({ reason: 'completed' })
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_HANDOFF])
+  })
+
+  it('hands the floor back to the executor when a reviewer @s it, under the round cap', async () => {
+    // The executor answers twice: the hand-off, then the reviewer's complaint,
+    // which it closes by asking Ada to look again — a fourth round the cap
+    // refuses, because `maxAutoRounds` counts every round since the hand-off.
+    models.set('Hands', answering(['Added NOTES.md.', '@Ada fixed, look again.']))
+    models.set('Ada', saying('@Hands the title is wrong.'))
+    models.set('Bob', saying('Nothing from me.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    expect(rounds(events).map((event) => event.speakers)).toEqual([
+      [hands.id],
+      [ada.id, bob.id],
+      [hands.id]
+    ])
+    // The second executor turn is an ordinary reply to a mention: it keeps the
+    // folder and the tools, and loses the "the discussion is over" briefing.
+    expect(promptOf('Hands', 1)).toContain(workdir)
+    expect(promptOf('Hands', 1)).not.toContain('Implement the conclusion the group reached')
+    // The fourth round is refused: three is `maxAutoRounds`, and a hand-off's
+    // own two rounds count towards it like any other.
+    expect(finished()[0]).toMatchObject({ reason: 'max-rounds' })
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_HANDOFF, NOTICE_MAX_ROUNDS])
+  })
+
+  it('stops inside the executor’s turn, leaving no pending permission and no review', async () => {
+    // A model that reaches for a gated tool and never gets an answer: the turn
+    // is suspended inside `streamText`'s tool loop when Stop arrives.
+    models.set(
+      'Hands',
+      new MockLanguageModelV4({
+        provider: 'mock',
+        modelId: 'mock-model',
+        doStream: async () => ({
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: 'call-1',
+                toolName: WRITE_FILE_TOOL,
+                input: JSON.stringify({ path: 'NOTES.md', content: '# Notes\n' })
+              },
+              {
+                type: 'finish',
+                finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                usage: USAGE
+              }
+            ]
+          })
+        })
+      })
+    )
+    const stopOnPrompt = ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') ctx.runners.stop(chat.id)
+    })
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+    stopOnPrompt()
+
+    expect(finished()[0]).toMatchObject({ reason: 'stopped' })
+    // Exactly one `permission.resolved` per `permission.requested`, on every
+    // path: a stop must not leave a card on screen with nothing behind it.
+    expect(events.filter((event) => event.type === 'permission.resolved')).toMatchObject([
+      { decision: 'aborted' }
+    ])
+    expect(ctx.permissions.pending()).toEqual([])
+    // Neither the write nor the review round happened.
+    expect(existsSync(join(workdir, 'NOTES.md'))).toBe(false)
+    expect(rounds(events)).toHaveLength(1)
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* S5.12: the second intent, and the review round that knows it is one       */
+  /* ------------------------------------------------------------------------ */
+
+  /** Puts a `document` goal on the chat and returns the deliverable's path. */
+  const setDocumentGoal = async (deliverable = 'docs/REPORT.md'): Promise<string> => {
+    await handlers['chats.update'](ctx, {
+      id: chat.id,
+      patch: {
+        goal: {
+          kind: 'document',
+          description: 'Write the quarterly report',
+          deliverable,
+          materials: []
+        }
+      }
+    })
+    return deliverable
+  }
+
+  it('stores its own notice for a deliver hand-off, naming the file', async () => {
+    const deliverable = await setDocumentGoal()
+
+    const message = await handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    await settle()
+
+    expect(message).toMatchObject({
+      senderType: 'user',
+      mentions: [hands.id],
+      // A different key rather than the same one with a parameter: the sentence
+      // the user reads is a different sentence. The path is the **relative** one
+      // the goal stores, which is what the header chip shows too.
+      parts: [
+        {
+          type: 'system-notice',
+          key: NOTICE_HANDOFF_DELIVER,
+          params: { agent: 'Hands', path: deliverable }
+        }
+      ]
+    })
+    // …and the same two staged rounds as an ordinary hand-off: the intent
+    // changes the briefing, not the scheduling.
+    expect(rounds(events).map((event) => event.speakers)).toEqual([
+      [hands.id],
+      [ada.id, bob.id]
+    ])
+  })
+
+  it('briefs the executor to write the file, and reaches the reviewers as prose', async () => {
+    await setDocumentGoal()
+    models.set('Hands', saying('Written.'))
+    models.set('Ada', saying('Reads fine.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    await settle()
+
+    expect(promptOf('Hands')).toContain('write the deliverable of this chat now')
+    expect(promptOf('Hands')).toContain('docs/REPORT.md')
+    expect(promptOf('Hands')).not.toContain('Implement the conclusion the group reached')
+    // The notice is rendered into the transcript the reviewers read, like the
+    // other one: a key with no rendering would be an empty request.
+    expect(promptOf('Ada')).toContain('write the deliverable of this chat')
+  })
+
+  it('tells the review round it is reviewing, and the executor round nothing of the kind', async () => {
+    await setDocumentGoal()
+    models.set('Hands', saying('Written.'))
+    models.set('Ada', saying('Reads fine.'))
+    models.set('Bob', saying('Same here.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    expect(promptOf('Ada')).toContain('This round is a review')
+    expect(promptOf('Bob')).toContain('This round is a review')
+    // The executor wrote the thing; it is not reviewing it.
+    expect(promptOf('Hands')).not.toContain('This round is a review')
+  })
+
+  it('does not carry the review briefing into the rounds after it', async () => {
+    await setDocumentGoal()
+    models.set('Hands', answering(['Written.', 'Fixed.']))
+    models.set('Ada', saying('@Hands the title is wrong.'))
+    models.set('Bob', saying('Nothing from me.'))
+
+    await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+
+    // Round 3 is ordinary `@` scheduling; nothing in it is a review round, so
+    // the executor's second prompt carries neither block.
+    expect(promptOf('Hands', 1)).not.toContain('This round is a review')
+  })
+
+  it('refuses a deliver hand-off on a chat whose goal names no file', async () => {
+    // No goal at all…
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    ).rejects.toMatchObject({
+      code: 'validation',
+      details: { reason: 'handoff_no_deliverable' }
+    })
+
+    // …and a goal of the wrong kind. Both are the same mistake to the user: this
+    // chat has nothing to deliver.
+    await handlers['chats.update'](ctx, {
+      id: chat.id,
+      patch: { goal: { kind: 'codebase', description: 'Split the runner', materials: [] } }
+    })
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    ).rejects.toMatchObject({ details: { reason: 'handoff_no_deliverable' } })
+
+    // Nothing was stored on either path, and the ordinary hand-off still works.
+    expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])
+  })
+
+  it('checks the folder and the executor before the deliverable', async () => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: null } })
+
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    ).rejects.toMatchObject({ details: { reason: 'handoff_no_workdir' } })
+  })
+
+  it('refuses an intent it does not know', async () => {
+    // Cast because the *type* already forbids it: the check exists for a caller
+    // the compiler never saw — a stale renderer, or a future HTTP client.
+    await expect(
+      handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'ship-it' as HandoffIntent })
+    ).rejects.toMatchObject({ code: 'validation' })
+    expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])
+  })
+
+  it('refuses a chat with no working directory', async () => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: null } })
+
+    await expect(handlers['chat.handoff'](ctx, { chatId: chat.id })).rejects.toMatchObject({
+      code: 'validation',
+      details: { reason: 'handoff_no_workdir' }
+    })
+    expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])
+  })
+
+  it('refuses a chat with no executor member', async () => {
+    await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, bob.id] })
+
+    await expect(handlers['chat.handoff'](ctx, { chatId: chat.id })).rejects.toMatchObject({
+      code: 'validation',
+      details: { reason: 'handoff_no_executor' }
+    })
+  })
+
+  it('refuses to join a run that is already going', async () => {
+    models.set('Ada', saying('thinking', 20))
+    models.set('Hands', saying('thinking', 20))
+    models.set('Bob', saying('thinking', 20))
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'What should we do?' })
+
+    await expect(handlers['chat.handoff'](ctx, { chatId: chat.id })).rejects.toMatchObject({
+      code: 'validation',
+      details: { reason: 'handoff_run_active' }
+    })
+
+    ctx.runners.stop(chat.id)
+    await settle()
   })
 })

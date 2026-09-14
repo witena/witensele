@@ -15,7 +15,7 @@ This feature is almost entirely frontend: the backend only stores a string (see
 | `src/renderer/src/lib/backend-provider.ts` | `getBackend()` / `setBackend()` — the injection point that keeps stores testable in plain Node |
 | `src/renderer/src/main.tsx` | Bootstrap: load settings → resolve → `initI18n` → set `<html lang>` → render inside `I18nextProvider` |
 | `src/renderer/src/pages/settings-page.tsx` | S1.5: the language quick toggle at the bottom of the settings nav (`lang-system` / `lang-zh-CN` / `lang-en`) |
-| `src/renderer/src/pages/settings/appearance-section.tsx` | S1.5: the same setting again as a `Select`, under Settings -> Appearance & language |
+| `src/renderer/src/pages/settings/appearance-section.tsx` | S1.5: the same setting again as a `Select`, under Settings -> Appearance & language. S5.8 put the appearance `SegmentedControl` above it, built the same way: a handler module, a stored `'system'`, no local state |
 | `src/renderer/src/pages/settings/language.ts` | S1.5: `applyLanguageSetting` — the single handler both controls call; it puts a failed write into the store's `error` field |
 | `src/renderer/src/App.tsx` | S1.5: a composition root only. The smoke screen it used to hold is now Settings -> Developer |
 | `src/renderer/index.html` | `lang="en"` as the pre-bootstrap default; the bootstrap overwrites it |
@@ -36,6 +36,10 @@ Actions:
 - `setLanguage(language)` — optimistic local write, then `settings.update`, then
   replace with the authoritative answer, then `i18n.changeLanguage(resolve(…))`.
   It *does* reject if the write fails, so the caller can surface it.
+- `dismissOnboarding()` (S7.5) — the same shape as `setTheme`: an optimistic
+  local write so the card disappears under the cursor, then `settings.update`
+  with `{ onboardingDismissed: true }`, then the authoritative row. One-way by
+  design; nothing writes `false` back.
 - `useLanguage()` — the stored **setting** (`'system'` included), which is what
   the switcher highlights. The *active* language is `i18n.language` from
   `useTranslation()`; the two are different things.
@@ -67,7 +71,7 @@ rule #6).
 
 | State | What the user sees |
 |---|---|
-| idle | The UI in the active language; in the settings nav the current choice is highlighted with `aria-pressed`, and the Appearance select shows the same value |
+| idle | The UI in the active language; in the settings nav the current choice is highlighted with `aria-pressed`, and the Appearance select shows the same value. The appearance control above it highlights the stored *setting* (S5.8) — `System` stays pressed while the machine decides what is painted, exactly as the language toggle does |
 | loading | Nothing — the dark page background. The bootstrap resolves the language before creating the React root, so there is no frame of raw keys and no language flicker |
 | streaming | n/a |
 | empty | n/a |
@@ -99,11 +103,40 @@ actually wanted.
 4. Text the main process produces is not a string: emit a `SystemNoticePart` with
    a key under `notices.*` and render it with `translateNotice`. A rejected
    `invoke` is rendered from `errors.<BackendError.code>`; `BackendError.message`
-   is log detail and is never shown.
+   is log detail and is never shown. When the rejection carries a
+   `ValidationReason` in `details`, `translateFailure` prefers `errors.<reason>`
+   over the generic `errors.validation` — the narrower half of the same contract.
+   A code may also have a *second*, longer piece of copy in the feature that owns
+   the screen: S7.6's `errors.key_unreadable` is the one-line failure class, and
+   `settings.providers.keyUnreadable` is the sentence the provider card and the
+   editor show, which says what to do about it.
+   Since S5.10 a store may fill those same three fields **itself**, with a reason
+   and no rejection behind it: a path picked outside the chat's folder is refused
+   by the renderer, because no native dialog can be confined to a directory, and
+   it is reported through exactly this path so the user cannot tell — and does
+   not need to — which side noticed
+   (S5.2).
 
 Things the guards will refuse: an English sentence in `zh-CN.json`, any CJK in
 `en.json`, an empty value, a key that exists in one file only, a key that no
 locale file defines, and a literal in JSX.
+
+One thing they are *not* meant to refuse: a value that is genuinely the same in
+both languages. A shell command (S5.3's `brew install anthropics/tap/ant`,
+S5.13's `brew install --cask google-cloud-sdk`) is
+data, so it is a constant in `@shared/presets` rendered inside `{…}` — braces are
+invisible to the JSX scan — rather than a key that would have to be duplicated
+identically in both files and then drift. The same rule already covers a working
+directory path and a model id, and S7.5 added three more: the version string and
+the repository URL in Settings → About, every `name@version · licence` row of
+its generated licence list, and an agent template's **name**, which is stored in
+`agents.name` and resolved against by `@mentions`.
+
+Two runtime keys now exist, and both are checked in `locales.test.ts` rather
+than by the usage guard, which cannot see a key that is assembled:
+`settings.mcp.presets.<id>` (S5.1) and `agents.templates.<id>` (S7.5). Each is
+asserted **in both directions** — no entry without copy, no copy left behind by
+an entry that was renamed.
 
 ## Accessibility and keyboard
 

@@ -23,6 +23,7 @@
  */
 import { create } from 'zustand'
 import type { McpServerRef } from '@shared/backend'
+import { getMcpPreset } from '@shared/mcp-presets'
 import type {
   BackendErrorCode,
   McpConnectionTestResult,
@@ -166,6 +167,8 @@ export interface McpState {
   startEdit: (id: string) => void
   closeEditor: () => void
   patchDraft: (patch: Partial<McpServerInput>) => void
+  /** Rewrites the draft's connection fields from a gallery preset. */
+  applyPreset: (presetId: string) => void
   /** Creates or updates from the draft. Never rejects; sets `error` on failure. */
   saveDraft: () => Promise<McpServer | null>
 }
@@ -318,6 +321,39 @@ export const useMcpStore = create<McpState>()((set, get) => ({
     const draft = get().draft
     if (!draft) return
     set({ draft: { ...draft, ...patch } })
+  },
+
+  /**
+   * Prefills the draft from a connector-gallery tile.
+   *
+   * Every connection field is **replaced**, including the ones the preset does
+   * not set: picking `custom` after `github` has to leave an empty form rather
+   * than a form still carrying GitHub's arguments and token variable. That is
+   * why `command`, `args`, `env` and `url` are written unconditionally instead of
+   * being merged — a half-applied preset is a configuration nobody chose.
+   *
+   * The name is the exception, for the same reason as in `stores/providers.ts`:
+   * a name the user has already typed is theirs. An untouched name is filled
+   * with the preset **id** rather than its display name, because the name is
+   * also the tool prefix every agent sees (`everything__echo`), and `Brave
+   * Search` would be sanitized into something the user never wrote.
+   */
+  applyPreset(presetId) {
+    const preset = getMcpPreset(presetId)
+    const draft = get().draft
+    if (!preset || !draft) return
+    set({
+      draft: {
+        ...draft,
+        name: draft.name.trim().length === 0 ? preset.id : draft.name,
+        transport: preset.transport,
+        command: preset.command ?? '',
+        args: [...(preset.args ?? [])],
+        env: { ...(preset.env ?? {}) },
+        url: preset.url ?? '',
+        sideEffects: preset.sideEffects
+      }
+    })
   },
 
   async saveDraft() {

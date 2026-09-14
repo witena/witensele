@@ -21,7 +21,7 @@ import { ProviderCard } from '../../components/settings/provider-card'
 import { providerStatus, type ProviderStatus } from '../../components/settings/provider-display'
 import { ProviderEditor } from '../../components/settings/provider-editor'
 import { Button, EmptyState } from '../../components/ui'
-import { translateError } from '../../i18n/errors'
+import { translateFailure } from '../../i18n/errors'
 import { useProvidersStore } from '../../stores/providers'
 
 /** Literal `t()` calls, so `used-keys.test.ts` can verify every status label. */
@@ -33,6 +33,8 @@ function statusLabel(t: TFunction, status: ProviderStatus): string {
       return t('settings.providers.statusFailed')
     case 'no-key':
       return t('settings.providers.statusNoKey')
+    case 'signed-in':
+      return t('settings.providers.statusSignedIn')
     case 'untested':
       return t('settings.providers.statusUntested')
   }
@@ -57,6 +59,7 @@ export function ProvidersSection(): React.JSX.Element {
   const status = useProvidersStore((state) => state.status)
   const error = useProvidersStore((state) => state.error)
   const errorCode = useProvidersStore((state) => state.errorCode)
+  const errorDetails = useProvidersStore((state) => state.errorDetails)
   const selectedId = useProvidersStore((state) => state.selectedId)
   const mode = useProvidersStore((state) => state.mode)
   const testResults = useProvidersStore((state) => state.testResults)
@@ -105,6 +108,7 @@ export function ProvidersSection(): React.JSX.Element {
                 overflowLabel={
                   hidden > 0 ? t('settings.providers.moreModels', { extra: hidden }) : undefined
                 }
+                keyUnreadableLabel={t('settings.providers.keyUnreadable')}
                 onSelect={() => useProvidersStore.getState().startEdit(provider.id)}
               />
             )
@@ -121,7 +125,7 @@ export function ProvidersSection(): React.JSX.Element {
 
           {status === 'error' && error ? (
             <p data-testid="providers-list-error" className="px-1 text-xs text-danger">
-              {translateError(t, { code: errorCode ?? 'internal', message: error })}
+              {translateFailure(t, errorCode, errorDetails)}
             </p>
           ) : null}
         </div>

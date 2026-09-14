@@ -2,13 +2,15 @@
 
 ## Approach
 
-Four modules, each a pure function except the last:
+Five modules, each a pure function except the last (`materials.ts` reads the
+files it is pointed at and nothing else):
 
 | Module | Shape |
 |---|---|
-| `briefing.ts` | `(language, self, members) → string`, delegating to `briefing.en.ts` / `briefing.zh-CN.ts`. Also `resolveMainLanguage(setting)` |
+| `briefing.ts` | `(language, self, members, memoryEnabled?, goal?) → string`, delegating to `briefing.en.ts` / `briefing.zh-CN.ts`. Also `resolveMainLanguage(setting)` |
 | `history.ts` | `(self, agentsById, userName, messages) → ModelMessage[]` |
 | `context-budget.ts` | `estimateTokens(text) → number` and `fitHistory({ system, messages, contextWindow, reserveForOutput }) → { messages, droppedCount, estimatedTokens }` |
+| `materials.ts` (S5.11) | `buildMaterialsSection({ workdir, materials, contextWindow, share? }) → { text, inlined, listed, omitted, estimatedTokens }`, plus `hasBinaryExtension` and `readMaterialText` |
 | `title.ts` | `sanitizeTitle` / `fallbackTitle`, and `generateChatTitle({ model, question, reply, signal }) → string \| null` |
 | `default-agent.ts` | `ensureDefaultAgent(ctx)`, documented under [`chats`](../chats/backend.md) |
 | `agent-turn.ts` | `runAgentTurn(options) → AgentTurnResult`; the only one with side effects |
@@ -25,10 +27,14 @@ ChatRunner picks a speaker
   ├─ messages.create({ parts: [], status: 'streaming', round })   → message.created
   ├─ supervisor.beginTurn → presence.changed { working }
   │
-  ├─ system  = agent.systemPrompt
+  ├─ system  = agent.systemPrompt                              ── buildTurnPrompt, once per turn
   │            + buildGroupBriefing(...)                      (+ the memory rule, S3.3)
+  │            + buildExecutorSection({ workdir, handoff,      (S5.4, the chat's executor only)
+  │                                    goal, branch })          (handoff: the intent, S5.6/S5.12)
+  │            + buildWorkspaceSection({ workdir, goal, … })   (S5.11, every member, when bound)
   │            + buildSkillsSection(enabledSkills(ctx, agent)) (S3.2, when any)
   │            + buildMemorySection(ctx.memory.readIndex(id))  (S3.3, when enabled)
+  │            + buildMaterialsSection({ workdir, materials }) (S5.11, last, when the goal has any)
   ├─ messages = toModelMessages({ self, agentsById,
   │               messages: options.history ?? listForContext(chat) })
   ├─ streamText({ model, system, messages, abortSignal, maxOutputTokens?, temperature? })
@@ -97,15 +103,134 @@ set: save durable facts about the user or the project with `memory_save`. It is
 conditional because a prompt that asks for a tool the model was not given is how
 a model starts describing tool calls in prose.
 
+### The goal section (S5.10)
+
+Since **S5.10** they also take the chat's `ChatGoal`, and append a final
+`Goal of this chat` section when there is one — for **every** member, because
+what the group is for is not a fact about one role:
+
+| Line | Present for |
+|---|---|
+| One sentence naming what the kind means | Always |
+| `What the user asked for: <description>` — **verbatim** | Always |
+| The deliverable's relative path, and that answers are judged by whether they improve it | `document` |
+| That the member changes no file itself: the executor makes the change after the discussion, from the conclusion | `codebase` |
+
+Verbatim is the load-bearing word: the description is the one part of the whole
+prompt the user wrote, and paraphrasing it would be the app rewriting the brief.
+The section is **last** for the reason skills and memory come after the
+briefing, inverted — it is protocol of the strongest kind, and the end of a long
+prompt is the part a model is still following.
+
+A chat with **no** goal gets no section at all, not a paragraph saying so: a
+chat with no goal is a discussion nobody bothered to name, and explaining that
+would be prompt spent on nothing. A test asserts the two briefings are byte for
+byte identical in that case.
+
+### The executor section (S5.4)
+
+`buildSystemPrompt` gained the chat, and inserts `buildExecutorSection(workdir)`
+between the briefing and the skills — protocol, not reference material — under
+exactly the condition that attaches the tools. It names the folder, lists the
+seven tools and what each is for, says which three pause for the user, and ends
+with the instruction that makes PLAN.md's review loop work: finish with a summary
+of every file changed and ask the others to review it.
+
+**S5.6** adds one optional flag on top: `AgentTurnOptions.handoff`, passed
+straight into `buildExecutorSection`, which appends `HANDOFF_BRIEFING` —
+implement the conclusion above, do not re-open the debate, report the paths —
+plus, since **S5.10**, `goalHandoffLine(goal)`: the file to write (with its
+parent folders) for a `document`, or the change to make for a `codebase`, and
+nothing at all for a discussion, where `HANDOFF_BRIEFING` already says everything
+there is to say. It points at the goal rather than restating it, because the goal
+is already in the group briefing of the same prompt. `ChatRunner` sets it for
+exactly one turn, the executor's in the round "Hand to executor" scheduled
+([`orchestration`](../orchestration/implement.md)), and it reaches nothing else
+in the turn: not the history, not the tools, not the result. A reviewer, and an
+executor re-`@`-ed later, are being asked something specific and must not be told
+the discussion is over.
+
+**S5.12** turns that flag into a `HandoffIntent`. `deliver` swaps
+`HANDOFF_BRIEFING` for `DELIVER_BRIEFING` — write the file itself, create its
+parent folders, finish with a summary of exactly two lines — and a `codebase`
+goal's `goalHandoffLine` gains the branch `gitInfo` reports plus the request for
+a summary listing every changed path. The two paragraphs are alternatives, never
+both.
+
+### The review block (S5.12)
+
+`AgentTurnOptions.reviewing` reaches `buildGroupBriefing`, which appends one more
+block **after** the goal, in both languages: the executor has just changed files,
+read the diffs in its message above, and judge them against the goal rather than
+against what you would have written. It goes in the group briefing rather than in
+a section of its own for the reason the goal does — it is a rule of the room —
+and it goes *after* the goal because "the goal above" has to be one line up. A
+chat with no goal gets the same block pointing at the conclusion in the
+transcript instead, since a hand-off in a chat that never set a goal is legal.
+
+### The delivered chip (S5.12)
+
+Two `existsSync` calls bracket the turn: one before the stream, on
+`deliverablePath(chat.goal, chat.workdir)` for an **executor** of a `document`
+chat, and one after it, in `deliveredRef`. A file that was not there and is there
+now produces one `FileRefPart` carrying the **absolute** path, appended
+immediately after the diff blocks. Every other case produces nothing — including
+a later turn that rewrites the deliverable, which is claiming credit it did not
+earn, and a participant's turn, which cannot write. The rules and the rejected
+alternatives are tabulated in
+[`executor/backend.md`](../executor/backend.md#the-delivered-chip-s512).
+
+### The workspace briefing and the materials (S5.11)
+
+Two more sections, decided by one new rule: `workspaceWorkdir(chat)`, which asks
+only whether the chat has a folder. `executorWorkdir` answers who may *write*;
+this one answers who may *read*, which since S5.11 is everybody in the room.
+
+| Section | Position | Present when |
+|---|---|---|
+| `Workspace` | After the executor section, before the skills | The chat has a `workdir`. It is protocol — which folder, what is in it, what you may do to it — so it goes with the executor section rather than with the reference material |
+| `Materials` | **Last**, after the memory index | The chat has a `workdir` **and** a goal with a non-empty `materials` list |
+
+`Materials` is last because it is the bulkiest and purest reference material in
+the prompt, and the same argument that puts skills after the briefing puts the
+materials after skills: a model that runs out of attention should lose the
+document before it loses the protocol. Last is also immediately before the
+history it exists to ground.
+
+The budget is `contextWindow * 0.25`, measured with `fitHistory`'s own
+`estimateTokens` so the two numbers mean the same thing. Items are taken in the
+order the user listed them until one does not fit; from there on every remaining
+item is named by path under a line saying `read_file` will fetch it. A **folder**
+expands into its listing plus its text files, so the cut falls between files
+rather than inside one, and a binary file is never inlined at any budget.
+
+`buildTurnPrompt` returns `{ text, materialsOmitted }` and `buildSystemPrompt` is
+its `text`; the count travels out through `AgentTurnResult.materialsOmitted`, and
+`ChatRunner` turns it into the `materialsTruncated` notice — **once per chat**,
+because the materials do not change between rounds
+([`orchestration`](../orchestration/implement.md)). The prompt is built at most
+once per turn, memoised inside `runAgentTurn`, because it walks the folder and
+reads files and `consume` can run twice when a provider turns out to reject
+tools.
+
 ### Tools attached to one turn
 
 `collectAgentTools` is the single place every tool passes through:
 
 | Source | When | Rule |
 |---|---|---|
-| The agent's MCP servers | The record exists and is enabled | A `sideEffects` server goes to an `executor` only (S3.1) |
+| The agent's MCP servers | The record exists and is enabled | A `sideEffects` server goes to an `executor` only (S3.1), and since S5.4 **every** call to one of its tools is confirmed through `ctx.permissions` first |
 | `read_skill`, `read_skill_file` | The agent has at least one skill that still exists on disk (S3.2) | Attached regardless of the side-effects rule: read-only, and confined to `userData/skills/` |
 | `memory_save`, `memory_search` | `agent.memoryEnabled` (S3.3) | Likewise: the only thing they can write is this agent's own notes folder |
+| The seven executor tools (S5.4) | `executorWorkdir(chat, agent, members)` is non-null | The opposite of an exception to the rule: `write_file`, `edit_file` and `run_command` are confirmed, and all seven are confined to the chat's folder ([`executor`](../executor/context.md)) |
+| The four read-only ones (S5.11) | `executorWorkdir` said no and `workspaceWorkdir(chat)` is non-null | PLAN.md's read-only rule: every member of a chat with a folder may read it, none but the executor may change it. `READ_ONLY_EXECUTOR_TOOLS` is the complement of `GATED_EXECUTOR_TOOLS`, so the two rules cannot drift apart, and they are the *same* tool objects — same confinement, same caps — picked out of the same built set |
+
+`executorWorkdir` is the attachment rule in one function, and it needs all three
+of its arguments: the agent's `role` must be `executor`, the chat must have a
+`workdir`, and the agent must be **the first `executor` in the member list** —
+`agents.update` can still promote a participant that is already a member (S5.2's
+recorded gap), and two writers in one folder is what PLAN.md's one-writer
+decision exists to prevent.
 
 The built-in tools have no `origins` entry, so their `tool-call` parts carry no
 `serverId` and the transcript draws the card with the bare tool name.
@@ -120,7 +245,13 @@ runAgentTurn({
   model?,        // already built; otherwise createModel builds one
   createModel?,  // default: resolveProvider + createLanguageModel
   onEvent?       // default: ctx.events.emit
-}): Promise<{ message: Message; status: MessageStatus; aborted: boolean }>
+}): Promise<{
+  message: Message
+  status: MessageStatus
+  aborted: boolean
+  droppedMessages: number    // S4.2: history messages the budget removed
+  materialsOmitted: number   // S5.11: materials listed rather than inlined
+}>
 ```
 
 `history` is what makes the two speaking modes differ: **sequential** omits it,
@@ -151,9 +282,16 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | File | Covers |
 |---|---|
 | `src/main/agents/history.test.ts` | Every rule in the table above, one case each: prefixes, roles, the unknown-agent fallback, merging in both directions, dropping `passed` / `skipped` / empty / streaming, reasoning excluded, notices rendered and unknown keys skipped, and the same transcript producing a different view per agent |
-| `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage` |
-| `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call, `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
+| `src/main/agents/briefing.test.ts` | Both languages: every member listed with its description, the agent told which one it is, the `[name]` and `@name` protocols, the `[PASS]` rule, the two languages differing, the one-member fallback, and `resolveMainLanguage`. S5.10 adds the goal section in both languages — nothing at all without a goal, the description verbatim for all three kinds, the deliverable named for a `document`, the executor rule present for a `codebase` and absent otherwise |
+| `src/main/executor/tools.test.ts` (`goalHandoffLine`) | S5.10: the deliverable and its parent folders for a `document`, the change for a `codebase`, nothing for a discussion or a chat with no goal, and the line reaching `buildExecutorSection` **only** on the hand-off turn |
+| `src/main/agents/agent-turn.test.ts` | The real `streamText` against `MockLanguageModelV4.doStream`: the event order, one delta per token, the empty `streaming` row, the presence pair, V4 usage mapping, reasoning as its own part and kind, `[PASS]` (and `[PASS]` *inside* a sentence not counting), provider failure, an already-aborted signal, a mid-stream abort keeping what arrived, the flush writing more than once, the prompt carrying the agent's own instructions plus the briefing plus the prefixed history, `temperature` / `maxOutputTokens` reaching the call and **neither** being set for an agent with empty `params` (the S5.9 shape), `createModel` being used when no model is passed, and — from S2.3 — the parsed `mentions`, no mentions on a `[PASS]`, `inReplyTo` stored (and absent when nobody asked), and a prebuilt `history` being used instead of the live transcript |
 | `src/main/agents/agent-turn.test.ts` (S3.2 / S3.3 blocks) | The built-in tools end to end against a real skills folder and a real memory directory: the prompt carrying a skill's description but not its body, `read_skill` and `read_skill_file` answering, a traversal refused as an errored tool result, a missing skill skipped, `memory_save` writing the note **and** the index line, the index reaching the next prompt, the briefing's memory sentence appearing only when memory is on, and one agent unable to search another's notes |
+| `src/main/agents/agent-turn.test.ts` (S5.12 block, `runAgentTurn and a document goal`) | Seven whole turns: the `FileRefPart` appended when the deliverable appears and not when it was already there, not for another file, not without a `document` goal and not for a participant; the review block in a reviewer's prompt and not in an ordinary one; and `DELIVER_BRIEFING` plus the path in a `deliver` hand-off's prompt, with the implement paragraph absent |
+| `src/main/agents/briefing.test.ts` (S5.12 block) | The review block in both languages: absent byte for byte in an ordinary round, appended **after** the goal when the round is a review, and pointing at the conclusion instead when the chat has no goal |
+| `src/main/agents/agent-turn.test.ts` (S5.5 block) | `diffPartsFrom` as a pure function — one block per file, several writes to one file concatenated at its first position, a missing trailing newline separated, and a denial / an unchanged edit / a `git_diff` / a malformed output each producing nothing — plus three whole turns through `streamText`: two files giving two blocks and two `part` deltas, a write then an edit of the same file giving one, and a denied write giving none |
+| `src/main/agents/agent-turn.test.ts` (S5.11 block) | A whole **participant** turn in a chat with a folder: the four read-only tools offered and `write_file` / `edit_file` / `run_command` each asserted absent, the folder and its listing in the prompt, a marked material in the prompt while an unmarked file's contents are not, a real `read_file` call on that unmarked file returning its contents, `materialsOmitted` reported for a material too large to inline, and a chat with no folder getting neither tools nor a `Workspace` section |
+| `src/main/agents/agent-turn.test.ts` (S5.4 block) | A `MockLanguageModelV4` calling `write_file` in a chat bound to a real temporary folder: the seven tools offered and the folder in the prompt, a `permission.requested` carrying the path and the content, `allow` writing the file and storing a `tool-result` with the patch, `deny` writing nothing and storing a `tool-error`, `allowAlways` not asking a second time, a participant and a folderless chat getting no tools at all, the two-executor tie broken by position, and a read-only tool and a path that leaves the folder never asking |
+| `src/main/agents/materials.test.ts` (S5.11) | `buildMaterialsSection` against a real temporary folder: nothing for an empty list, one file inlined under its path, several in list order, a folder expanded into its tree and then its files, a budget too small for anything, a budget that takes a prefix and lists "the rest" (including a small file behind a large one that is *not* rescued), the share respected across twenty files, a binary file listed and not spending the budget, a missing material dropped, a material that resolves outside the folder dropped, and one enormous file cut at the per-file cap; plus `hasBinaryExtension` and the null-byte fallback in `readMaterialText` |
 | `src/main/agents/context-budget.test.ts` | `estimateTokens` against ASCII, CJK and a real sentence (with a tolerance, because it is an approximation), and every `fitHistory` rule: nothing dropped when it fits, oldest first, the last user message protected, the note prepended once, the reserve and the system prompt both counted, and a window smaller than its own system prompt not looping |
 | `src/main/agents/title.test.ts` | `sanitizeTitle` (whitespace, quotes in both scripts, trailing punctuation, a `Title:` preamble, the 60-character cap, and the empty result that triggers the fallback) and `fallbackTitle` |
 | `src/shared/pass.test.ts` | `isPassOnly` versus `stripTrailingPass`: a bare token is an abstention and survives, a token after real content is a sign-off and goes |
@@ -161,6 +299,16 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 
 ## Known limitations and TODOs
 
+- **The workspace tree is walked once per turn, not once per round** (S5.11). It
+  is memoised inside a turn, so a tool-rejection retry does not walk twice, but
+  four members in one round walk the same folder four times. A per-run cache
+  keyed on the folder needs an invalidation rule that an executor's own writes
+  would trip.
+- **The materials are re-read every turn as well**, and the budget is computed
+  per agent, so two members with different context windows can inline different
+  amounts of the same list. That is correct — the budget is a fraction of *their*
+  window — but it means the notice names one agent rather than describing the
+  chat.
 - **A turn with no tools at all is still the common case.** An agent with no MCP
   server, no skill and no memory gets no `tools` and no `stopWhen`, so a model
   that wants to call one simply answers in prose. Where the tools come from when
@@ -177,7 +325,9 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
   tokenizer would mean a WASM blob per encoding and would be exact for OpenAI and
   wrong for everyone else. The budget is
   `contextWindow - reserveForOutput - estimate(system)`, with
-  `reserveForOutput = agent.params.maxTokens ?? DEFAULT_OUTPUT_RESERVE (4096)`;
+  `reserveForOutput = agent.params.maxTokens ?? DEFAULT_OUTPUT_RESERVE (4096)`
+  — and since S5.9 no agent form writes `maxTokens`, so the fallback is the
+  normal path rather than the exception;
   the oldest messages go first, the **last user message never does**, and when
   anything went a one-line note is prepended to the first survivor. The number
   dropped is returned as `droppedMessages` so `ChatRunner` can tell the user once

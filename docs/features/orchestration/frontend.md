@@ -6,11 +6,19 @@ button, the run status in the header, the round and "replying to" labels on a
 message, and the highlighted `@Name` tokens in a reply. S2.5 polishes all of it;
 S2.3 made it real.
 
+S5.6 adds the one **control** that is this feature's own: "Hand to executor",
+directly above the composer. It is the second way to start a run, so it lives in
+the run store beside `send` and `stop` rather than in the Actions card, whose two
+actions are deliberately ordinary messages.
+
 ## The renderer's half
 
 | File | Responsibility |
 |---|---|
-| `src/renderer/src/stores/run.ts` | `activeByChat`, reduced from `run.started` / `run.round` / `run.finished`; `send(chatId, text, mentions?)` and `stop` |
+| `src/renderer/src/stores/run.ts` | `activeByChat`, reduced from `run.started` / `run.round` / `run.finished`; `send(chatId, text, mentions?)`, `handoff(chatId, intent?)` (S5.6, S5.12) and `stop`; `errorDetails` beside `errorCode`, so a refusal's `ValidationReason` survives to the sentence |
+| `src/renderer/src/components/chat/handoff-button.tsx` | The button above the composer: always drawn for a selected chat, disabled with the reason in its `title` and in `data-blocked` |
+| `src/renderer/src/components/chat/handoff.ts` | `handoffBlocker({ workdir, members, running, intent?, goal? })` → the `ValidationReason` that disables it, or `null`. Pure, and the same four rules the backend applies in the same order. One function for both controls: "Write the deliverable" is the same rules plus `handoff_no_deliverable` (S5.12) |
+| `src/renderer/src/components/chat/actions-card.tsx` | The Actions card's third row, "Write the deliverable" (`chat-write-deliverable`, S5.12): the **one** action in that card that is not an ordinary message — it calls `handoff(chatId, 'deliver')` — disabled with its reason in `data-blocked`, exactly like the button above the composer |
 | `src/renderer/src/lib/event-bridge.ts` | Routes the three `run.*` events into the store |
 | `src/renderer/src/pages/chats-page.tsx` | The header's run status, and the members it passes to the composer and the message list |
 | `src/renderer/src/components/chat/composer.tsx` | Renders Stop instead of Send while a run is active, and resolves `@Name` before sending |
@@ -21,7 +29,8 @@ S2.3 made it real.
 | Store | Field | Type | Meaning |
 |---|---|---|---|
 | `run` | `activeByChat` | `Record<string, { round, speakers }>` | Backend-owned. Present = a run is in flight |
-| `run` | `sendingByChat` | `Record<string, boolean>` | Local; covers the `chat.send` round trip before `run.started` arrives |
+| `run` | `sendingByChat` | `Record<string, boolean>` | Local; covers the `chat.send` **or `chat.handoff`** round trip before `run.started` arrives |
+| `run` | `errorDetails` | `unknown` | The `details` of the last refusal; `translateFailure` narrows it to a `ValidationReason` |
 
 The rule the store is written around: **the run state comes from the events, not
 from the local `send()` call.** A message sent during an active run joins that
@@ -65,6 +74,7 @@ them language-independent.
 | Call / subscription | Called from | Purpose |
 |---|---|---|
 | `invoke('chat.send', { chatId, text, mentions? })` | The composer, on Enter or Send | Stores the message and starts or joins a run. `mentions` is what the composer resolved with `parseMentions`; the backend parses the text again, so it is a hint rather than the authority |
+| `invoke('chat.handoff', { chatId, intent? })` | The "Hand to executor" button, and the Actions card's "Write the deliverable" (`intent: 'deliver'`, S5.12) | Stores the hand-off message and runs implement + review. Refused with `handoff_no_workdir` / `handoff_no_executor` / `handoff_no_deliverable` / `handoff_run_active`, which are the four states the controls are already disabled in — the call is what a stale window or a second client meets. `intent` is **omitted** for a plain hand-off rather than sent as `'implement'`: the backend's default is the one that decides |
 | `invoke('chat.stop', { chatId })` | The Stop button | Aborts every active turn and drops what is pending |
 | `subscribeTo('run.*')` (via the bridge) | Bootstrap | Drives the Send / Stop swap and the header status |
 
@@ -79,6 +89,10 @@ them language-independent.
 | max rounds | The button returns to Send and a notice line explains why nobody is speaking any more |
 | nobody mentioned | In `mention-only`: no agent row at all, one notice line |
 | error | The button returns to Send; the failure is on the message row. A run that failed entirely also leaves a `runFailed` notice |
+| hand-off available | "Hand to executor" is enabled: the chat has a folder, has an executor, and is idle |
+| delivery available | "Write the deliverable" is enabled: all of the above, and the chat's goal is a `document` naming a file |
+| hand-off unavailable | The same button, **disabled**, with the missing rule in its `title` — no folder, no executor, or a run in flight. Disabled rather than hidden: a control that vanishes teaches nothing |
+| handed over | The transcript gains a user row reading "Handed to X…", the executor answers alone, and every other member reviews in the next round. Nothing else about the screen is special |
 
 Sending while a run is active is **not** blocked: the message appears
 immediately and is answered from the next round. See the decision table in
@@ -97,6 +111,13 @@ immediately and is answered from the next round. See the decision table in
 | `notices.agentSkipped` | Written by `agent-turn` when the hard timeout skipped a member; see [`presence`](../presence/frontend.md) |
 | `notices.allOffline` | Written by the runner when every speaker of a round is offline |
 | `notices.contextTruncated` | Written once per run per agent when `fitHistory` had to drop messages, with `{{agent}}` and `{{dropped}}` (S4.2) |
+| `notices.materialsTruncated` | Written once per **chat** when a member could not fit the goal's materials, with `{{agent}}` and `{{omitted}}` (S5.11) |
+| `chat.handoff` | The button's label |
+| `chat.handoffTitle` | Its tooltip while it is enabled |
+| `chat.writeDeliverable`, `chat.writeDeliverableTitle` | The Actions card's third row and its tooltip while enabled (S5.12) |
+| `errors.handoff_no_workdir`, `errors.handoff_no_executor`, `errors.handoff_no_deliverable`, `errors.handoff_run_active` | The tooltip while either control is **disabled**, and the sentence under the composer if the call is refused anyway. One set of words for one rule |
+| `notices.handoff` | The hand-off message itself, with `{{agent}}` — rendered by `translateNotice` on a `user` row (S5.6) |
+| `notices.handoffDeliver` | The same for a `deliver` hand-off, with `{{agent}}` and `{{path}}` (S5.12) |
 | `notices.runStopped` | Reserved; Stop writes no notice, because the interrupted row already says so |
 
 ## Accessibility and keyboard

@@ -1,8 +1,10 @@
-# electron-builder configuration (S4.4).
+# electron-builder configuration (S4.4, extended by S7.2).
 #
-# Only macOS arm64 is produced today: Witena is a single-user macOS desktop app
-# (PLAN.md, "Context"), and a build for a platform nobody has tested the layout
-# on would be a promise the project cannot keep.
+# macOS only: Witena is a single-user macOS desktop app (PLAN.md, "Context"),
+# and a build for a platform nobody has tested the layout on would be a promise
+# the project cannot keep. Both macOS architectures are produced — two dmgs,
+# not one universal binary, because a universal build doubles every download
+# for the many who need one half of it.
 #
 # The build is **unsigned and not notarized** — `identity: null` and
 # `hardenedRuntime: false`. There is no Apple Developer account behind this
@@ -48,10 +50,25 @@ mac:
     - target: dmg
       arch:
         - arm64
+        - x64
   category: public.app-category.developer-tools
   icon: build/icon.icns
   hardenedRuntime: false
   identity: null
 
 dmg:
+  # ${arch} is what keeps the two builds apart — Witena-0.1.0-arm64.dmg and
+  # Witena-0.1.0-x64.dmg land in the same Release and must not collide.
   artifactName: ${productName}-${version}-${arch}.${ext}
+
+# Where `.github/workflows/release.yml` uploads a tagged build, and the feed
+# S7.4's electron-updater will read. `owner` and `repo` are deliberately not
+# spelled out: electron-builder derives them from the git remote
+# (witena/witensele here), so a tag pushed on a fork produces a draft Release
+# on that fork rather than trying to write to this one.
+#
+# `draft` is the point of the whole arrangement: CI packages, a human reads the
+# artifacts and presses Publish.
+publish:
+  provider: github
+  releaseType: draft

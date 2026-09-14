@@ -19,6 +19,7 @@ import { mcpHandlers } from './mcp'
 import { skillHandlers } from './skills'
 import { memoryHandlers } from './memory'
 import { chatHandlers } from './chats'
+import { permissionHandlers } from './permissions'
 import { presenceHandlers } from './presence'
 import type { HandlerMap, HandlerModule } from './types'
 
@@ -32,6 +33,7 @@ const MODULES: HandlerModule[] = [
   skillHandlers,
   memoryHandlers,
   chatHandlers,
+  permissionHandlers,
   presenceHandlers
 ]
 

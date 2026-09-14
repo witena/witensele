@@ -7,15 +7,18 @@
  * show a frame of raw keys (or of English on a Chinese machine), which is exactly
  * what a bundled-resource setup makes unnecessary — `initI18n` is synchronous.
  *
- * Until the root is created the window shows the dark page background from
- * `index.css`, not an empty white flash.
+ * Until the root is created the window shows the page background from
+ * `index.css`, not an empty white flash — in the theme the stored setting asks
+ * for, since S5.8 stamps `data-theme` on the same pass.
  */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
+import { DEFAULT_APP_SETTINGS } from '@shared/types'
 import App from './App'
 import { getNavigatorLanguage, initI18n, resolveLanguage } from './i18n'
 import { startEventBridge } from './lib/event-bridge'
+import { activateTheme } from './lib/theme'
 import { useSettingsStore } from './stores/settings'
 import './index.css'
 
@@ -31,6 +34,15 @@ async function bootstrap(): Promise<void> {
   // `load` never rejects: a backend failure leaves `settings` null and we fall
   // back to the system language rather than refusing to start.
   await useSettingsStore.getState().load()
+
+  // Before the first render, like the language and for the same reason: the
+  // window is already painted in `backgroundColor` (`src/main/index.ts` reads the
+  // same stored setting), and stamping `data-theme` here means the first frame of
+  // the UI is in the right palette rather than one frame of dark on a light theme.
+  // `activateTheme` also starts following the machine when the setting is
+  // `'system'`, and is deliberately never stopped: the subscription lives as long
+  // as the window, and `stores/settings.ts` replaces it when the user chooses.
+  activateTheme(useSettingsStore.getState().settings?.theme ?? DEFAULT_APP_SETTINGS.theme)
 
   const setting = useSettingsStore.getState().settings?.language ?? 'system'
   const language = resolveLanguage(setting, getNavigatorLanguage())

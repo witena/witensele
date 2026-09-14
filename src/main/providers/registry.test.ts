@@ -10,7 +10,20 @@
 import { describe, expect, it } from 'vitest'
 import type { Provider } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
-import { createLanguageModel, LOCAL_PLACEHOLDER_API_KEY, type ResolvedProvider } from './registry'
+import { BackendFailure } from '../errors'
+import type { AnthropicCli } from './anthropic-cli'
+import type { GoogleCli } from './google-cli'
+import {
+  anthropicOAuthHeaders,
+  ANTHROPIC_OAUTH_BETA,
+  createLanguageModel,
+  createProviderFetch,
+  googleOAuthHeaders,
+  LOCAL_PLACEHOLDER_API_KEY,
+  mergeBeta,
+  oauthFetch,
+  type ResolvedProvider
+} from './registry'
 
 /**
  * Overrides that may explicitly clear a field. `Partial<T>` cannot express
@@ -140,5 +153,242 @@ describe('createLanguageModel', () => {
     expect(() =>
       createLanguageModel(provider({ apiKey: '   ', hasApiKey: false }), 'claude-sonnet-4-5')
     ).not.toThrow()
+  })
+})
+
+/**
+ * The OAuth half (S5.3).
+ *
+ * The wrapper is where a mistake would be invisible until a real request came
+ * back 401, so it is tested directly: what it deletes, what it sets, and what it
+ * leaves alone. `fetch` is a fake that records the headers it was handed, and the
+ * "CLI" is a counter — no process is spawned here.
+ */
+function recordingFetch(): {
+  fetchImpl: typeof globalThis.fetch
+  calls: { url: string; headers: Record<string, string> }[]
+} {
+  const calls: { url: string; headers: Record<string, string> }[] = []
+  // `Parameters<typeof fetch>` rather than `RequestInfo`: the main project is
+  // type-checked without the DOM library, and these globals come from undici.
+  const fetchImpl = (async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1]
+  ) => {
+    const headers: Record<string, string> = {}
+    new Headers(init?.headers).forEach((value, key) => {
+      headers[key] = value
+    })
+    calls.push({ url: String(input), headers })
+    return new Response('{}', { status: 200 })
+  }) as typeof globalThis.fetch
+  return { fetchImpl, calls }
+}
+
+/** A stub CLI: the registry only ever asks it for a token. */
+function stubCli(token = 'oat-token'): AnthropicCli {
+  return {
+    status: () => Promise.resolve({ state: 'signed-in' as const }),
+    login: () => Promise.resolve({ state: 'signed-in' as const }),
+    logout: () => Promise.resolve({ state: 'signed-out' as const }),
+    accessToken: () => Promise.resolve(token)
+  }
+}
+
+/** The Google half: a token and the quota project every request must name. */
+function stubGoogleCli(token = 'ya29-token', project: string | null = 'my-project'): GoogleCli {
+  const status = () => Promise.resolve({ state: 'signed-in' as const })
+  return {
+    status,
+    login: status,
+    logout: () => Promise.resolve({ state: 'signed-out' as const }),
+    accessToken: () => Promise.resolve(token),
+    project: () =>
+      project === null
+        ? Promise.reject(new BackendFailure('gcloud_no_project', 'no project'))
+        : Promise.resolve(project),
+    setQuotaProject: status
+  }
+}
+
+describe('mergeBeta', () => {
+  it('adds the flag to an empty header', () => {
+    expect(mergeBeta(null, ANTHROPIC_OAUTH_BETA)).toBe(ANTHROPIC_OAUTH_BETA)
+  })
+
+  it('keeps the flags the SDK already asked for', () => {
+    expect(mergeBeta('fine-grained-tool-streaming-2025-05-14', ANTHROPIC_OAUTH_BETA)).toBe(
+      `fine-grained-tool-streaming-2025-05-14,${ANTHROPIC_OAUTH_BETA}`
+    )
+  })
+
+  it('does not repeat itself', () => {
+    expect(mergeBeta(`${ANTHROPIC_OAUTH_BETA}, other`, ANTHROPIC_OAUTH_BETA)).toBe(
+      `${ANTHROPIC_OAUTH_BETA},other`
+    )
+  })
+})
+
+describe('oauthFetch', () => {
+  it('replaces the key header with a bearer token and the beta flag', async () => {
+    const { fetchImpl, calls } = recordingFetch()
+    const wrapped = oauthFetch(anthropicOAuthHeaders(stubCli()), fetchImpl)
+
+    await wrapped('https://api.anthropic.com/v1/messages', {
+      headers: { 'x-api-key': 'sk-ant-key', 'anthropic-version': '2023-06-01' }
+    })
+
+    const [call] = calls
+    expect(call?.headers['x-api-key']).toBeUndefined()
+    expect(call?.headers['authorization']).toBe('Bearer oat-token')
+    expect(call?.headers['anthropic-beta']).toBe(ANTHROPIC_OAUTH_BETA)
+    // Everything the caller set that is none of the wrapper's business survives.
+    expect(call?.headers['anthropic-version']).toBe('2023-06-01')
+  })
+
+  it('merges into an existing anthropic-beta rather than overwriting it', async () => {
+    const { fetchImpl, calls } = recordingFetch()
+    const wrapped = oauthFetch(anthropicOAuthHeaders(stubCli()), fetchImpl)
+
+    await wrapped('https://api.anthropic.com/v1/messages', {
+      headers: { 'anthropic-beta': 'context-1m-2025-08-07' }
+    })
+
+    expect(calls[0]?.headers['anthropic-beta']).toBe(
+      `context-1m-2025-08-07,${ANTHROPIC_OAUTH_BETA}`
+    )
+  })
+
+  it('asks for a token per request, so a refresh is picked up', async () => {
+    const { fetchImpl, calls } = recordingFetch()
+    let issued = 0
+    const wrapped = oauthFetch(
+      () => Promise.resolve({ token: `token-${++issued}` }),
+      fetchImpl
+    )
+
+    await wrapped('https://api.anthropic.com/v1/models', {})
+    await wrapped('https://api.anthropic.com/v1/models', {})
+
+    expect(calls.map((call) => call.headers['authorization'])).toEqual([
+      'Bearer token-1',
+      'Bearer token-2'
+    ])
+  })
+
+  /* -- the Google header set (S5.13) ------------------------------------- */
+
+  it('replaces the Google key header with a bearer token and the quota project', async () => {
+    const { fetchImpl, calls } = recordingFetch()
+    const wrapped = oauthFetch(googleOAuthHeaders(stubGoogleCli()), fetchImpl)
+
+    await wrapped('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: { 'x-goog-api-key': 'AIza-key', 'content-type': 'application/json' }
+    })
+
+    const [call] = calls
+    expect(call?.headers['x-goog-api-key']).toBeUndefined()
+    expect(call?.headers['authorization']).toBe('Bearer ya29-token')
+    expect(call?.headers['x-goog-user-project']).toBe('my-project')
+    // The wrapper touches authentication and nothing else.
+    expect(call?.headers['content-type']).toBe('application/json')
+    // Anthropic's flag has no business on a Google request.
+    expect(call?.headers['anthropic-beta']).toBeUndefined()
+  })
+
+  it('refuses to send a Google request that names no quota project', async () => {
+    const { fetchImpl, calls } = recordingFetch()
+    const wrapped = oauthFetch(googleOAuthHeaders(stubGoogleCli('ya29-token', null)), fetchImpl)
+
+    // The API refuses an end-user credential with no `x-goog-user-project`, so
+    // the request is never made: the panel's project field is the fix.
+    await expect(
+      wrapped('https://generativelanguage.googleapis.com/v1beta/models', {})
+    ).rejects.toMatchObject({ code: 'gcloud_no_project' })
+    expect(calls).toHaveLength(0)
+  })
+})
+
+describe('createLanguageModel with auth: oauth', () => {
+  it('builds an Anthropic model that authenticates through the CLI', async () => {
+    const { fetchImpl, calls } = recordingFetch()
+    const model = createLanguageModel(
+      provider({ auth: 'oauth', hasApiKey: false, apiKey: undefined }),
+      'claude-sonnet-4-5',
+      { anthropicCli: stubCli(), fetchImpl }
+    )
+
+    expect(identity(model).provider).toContain('anthropic')
+
+    // The adapter is lazy, so nothing is proven until a request is made.
+    if (typeof model === 'string') throw new Error('expected a model object')
+    try {
+      // The fake answers `{}`, which the adapter then refuses to parse. What is
+      // being asserted is the request it made on the way there.
+      await model.doGenerate({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]
+      })
+    } catch {
+      /* expected: the response is not a real Anthropic payload */
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.headers['x-api-key']).toBeUndefined()
+    expect(calls[0]?.headers['authorization']).toBe('Bearer oat-token')
+    expect(calls[0]?.headers['anthropic-beta']).toContain(ANTHROPIC_OAUTH_BETA)
+  })
+
+  it('refuses to build one with no CLI to ask, rather than sending an empty key', () => {
+    expect(() =>
+      createLanguageModel(provider({ auth: 'oauth' }), 'claude-sonnet-4-5')
+    ).toThrowError(expect.objectContaining({ code: 'validation' }))
+  })
+
+  it('leaves every other provider on the plain fetch', () => {
+    const { fetchImpl } = recordingFetch()
+    const keyed = provider({ auth: 'apiKey' })
+
+    expect(createProviderFetch(keyed, { fetchImpl })).toBe(fetchImpl)
+    // OpenAI has no sign-in flow, so an unvalidated draft claiming one gets the
+    // plain `fetch` rather than a wrapper with nothing to ask.
+    const openai = provider({ type: 'openai', name: 'OpenAI', auth: 'oauth' })
+    expect(createProviderFetch(openai, { fetchImpl })).toBe(fetchImpl)
+  })
+
+  it('builds a Google model that authenticates through gcloud', async () => {
+    const { fetchImpl, calls } = recordingFetch()
+    const model = createLanguageModel(
+      provider({
+        type: 'google',
+        name: 'Gemini',
+        auth: 'oauth',
+        hasApiKey: false,
+        apiKey: undefined
+      }),
+      'gemini-2.5-pro',
+      { googleCli: stubGoogleCli(), fetchImpl }
+    )
+
+    expect(identity(model).provider).toContain('google')
+
+    if (typeof model === 'string') throw new Error('expected a model object')
+    try {
+      await model.doGenerate({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]
+      })
+    } catch {
+      /* expected: the response is not a real Gemini payload */
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.headers['x-goog-api-key']).toBeUndefined()
+    expect(calls[0]?.headers['authorization']).toBe('Bearer ya29-token')
+    expect(calls[0]?.headers['x-goog-user-project']).toBe('my-project')
+  })
+
+  it('refuses to build a Google one with no CLI to ask', () => {
+    expect(() =>
+      createLanguageModel(provider({ type: 'google', name: 'Gemini', auth: 'oauth' }), 'gemini-2.5-pro')
+    ).toThrowError(expect.objectContaining({ code: 'validation' }))
   })
 })

@@ -47,6 +47,19 @@ export function notFound(entity: string, id: string): BackendFailure {
   return new BackendFailure('not_found', `${entity} not found: ${id}`)
 }
 
+/**
+ * A stored secret this build cannot decrypt (S7.6).
+ *
+ * Raised by `FileKeySecretStore.decrypt` and by `providers/resolve.ts` when the
+ * ciphertext in the row was written with a key that is gone — the case that
+ * motivated S7.6, where an unsigned rebuild lost the Keychain item behind every
+ * `safeStorage` value. It is its own code rather than `internal` because the
+ * user can fix it in one step, and the UI's job is to say which step.
+ */
+export function keyUnreadable(message: string): BackendFailure {
+  return new BackendFailure('key_unreadable', message)
+}
+
 /** Input the backend refuses before it reaches storage. */
 export function validation(message: string, details?: unknown): BackendFailure {
   return new BackendFailure('validation', message, details)

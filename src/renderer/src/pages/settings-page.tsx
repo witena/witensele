@@ -16,6 +16,7 @@ import type { TFunction } from 'i18next'
 import {
   Database,
   Globe,
+  Info,
   KeyRound,
   Palette,
   Server,
@@ -31,6 +32,7 @@ import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from '../components/layout/
 import { EmptyState, SectionTitle, SegmentedControl } from '../components/ui'
 import { useSettingsStore, type LanguageSetting } from '../stores/settings'
 import { SETTINGS_SECTIONS, useUiStore, type SettingsSection } from '../stores/ui'
+import { AboutSection } from './settings/about-section'
 import { AppearanceSection } from './settings/appearance-section'
 import { DeveloperSection } from './settings/developer-section'
 import { McpSection } from './settings/mcp-section'
@@ -46,6 +48,7 @@ const SECTION_ICONS: Record<SettingsSection, LucideIcon> = {
   timeouts: Timer,
   appearance: Palette,
   data: Database,
+  about: Info,
   developer: Terminal
 }
 
@@ -64,6 +67,8 @@ function sectionLabel(t: TFunction, section: SettingsSection): string {
       return t('settings.sections.appearanceLanguage')
     case 'data':
       return t('settings.sections.dataBackup')
+    case 'about':
+      return t('settings.sections.about')
     case 'developer':
       return t('settings.sections.developer')
   }
@@ -75,6 +80,7 @@ function SectionBody({ section }: { section: SettingsSection }): React.JSX.Eleme
   if (section === 'appearance') return <AppearanceSection />
   if (section === 'developer') return <DeveloperSection />
   if (section === 'timeouts') return <TimeoutsSection />
+  if (section === 'about') return <AboutSection />
 
   return (
     <EmptyState

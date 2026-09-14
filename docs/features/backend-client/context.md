@@ -29,6 +29,14 @@ only in the type system.
 - `src/shared/index.ts` — one import point for all of the above.
 - `src/shared/contracts.test.ts` — runtime and type-level tests over the contract.
 
+  The surface has grown three times since S1.1 declared it, and each addition
+  follows the same three steps: the method on `BackendApi`, its name in
+  `BACKEND_METHODS`, and a case in `contracts.test.ts` (S5.3
+  `providers.authStatus` / `login` / `logout` and S5.13's
+  `providers.setQuotaProject`, S5.4 `permission.reply`, S5.6
+  `chat.handoff`). The compile-time `Assert` below makes the first two
+  inseparable.
+
 **The transport (S1.3)**
 
 - `src/main/events/bus.ts` — the Electron-free `EventBus` every service emits on.
@@ -42,9 +50,11 @@ only in the type system.
 - `src/main/ipc-protocol.ts` — the channel names, the response envelope and
   `toBackendError`, shared by main and preload and free of electron.
 - `src/main/ipc/` — the only Electron-aware backend code: `register.ts`
-  (`ipcMain.handle` plus event forwarding), `secret-store.ts` (`safeStorage`) and,
-  from S3.2, `dialogs.ts` (`system.pickFolder`, the one method that needs a
-  window — see [`backend.md`](./backend.md)).
+  (`ipcMain.handle` plus event forwarding), `secret-store.ts` (`safeStorage`),
+  `dialogs.ts` (`system.pickFolder`, S3.2, plus `system.pickSavePath` and
+  `system.pickPaths`, S5.10), `theme.ts` (`system.applyTheme`,
+  S5.8) and `editor.ts` (`system.openInEditor`, S5.7) — the methods that need a
+  window, see [`backend.md`](./backend.md).
 - `src/preload/index.ts` / `index.d.ts` — the `window.witena` bridge.
 - `src/renderer/src/lib/backend.ts` — `createElectronBackendClient` and the
   `backend` singleton, the only renderer file that knows a transport exists.
@@ -54,7 +64,7 @@ only in the type system.
 
 | Not here | Owned by |
 |---|---|
-| Implementing any method beyond `system.*` and `settings.*` | The step that owns each domain (S1.6 providers, S1.7 chats, S2.1 agents, …). As of S3.3 they have all landed; `system.pickFolder` is the one whose implementation lives in `src/main/ipc/` rather than in a handler module |
+| Implementing any method beyond `system.*` and `settings.*` | The step that owns each domain (S1.6 providers, S1.7 chats, S2.1 agents, …). As of S3.3 they have all landed; the three `pick*` dialogs (S3.2, S5.10), `system.applyTheme` (S5.8) and `system.openInEditor` (S5.7) are the ones whose implementations live in `src/main/ipc/` rather than in a handler module — the last of them only half, see [`editor`](../editor/backend.md) |
 | A React context that injects a fake client into pages | Deferred to S1.5 / S1.7, when the first store and page exist; until then the `backend` singleton is imported directly and tests use `createElectronBackendClient(fakeBridge)` |
 | Database schema and persistence | `../database/`, S1.2 |
 | Provider presets (`shared/presets.ts`) and real key encryption on a live provider | `../providers/`, S1.6 |
@@ -104,6 +114,17 @@ through `BackendClient`.
 - `providers.fetchModels` / `providers.testConnection` accept either a saved id
   or an unsaved draft (`ProviderRef`). If the settings form ends up always
   saving first, the `draft` half can be dropped.
+- The three `providers.auth*` methods take `{ type }` since S5.13, and took no
+  argument in S5.3 because `ant` was the only CLI. Adding Google could have meant
+  three more methods; it means one more argument instead, because the question is
+  the same question asked of a different machine fact. `providers.setQuotaProject`
+  is deliberately *not* `{ type }`-shaped: a quota project is a Google concept
+  with no Anthropic counterpart, and a method that is meaningless for half of its
+  own argument's values is worse than one named after what it does. Within one
+  vendor, the original limitation stands: each CLI has one active profile and
+  Witena stores no credential of its own. A build that supported several logins
+  *of the same vendor* would have to name which one, and the status would stop
+  being a fact about the machine.
 - `InvokeResponse` is written twice: once in `src/main/ipc-protocol.ts` for main
   and preload, once in `src/preload/index.d.ts` for the renderer, because the
   renderer's TypeScript project may not pull files out of `src/main/`. If a third

@@ -10,9 +10,13 @@ import type { BackendEvent, BackendEventType, EventOf, MessageDelta } from '@sha
 import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
+  DEFAULT_EDITOR_COMMAND,
+  EDITOR_KINDS,
   LOCAL_USER_ID,
+  type HandoffIntent,
   type Message,
   type MessagePart,
+  type PermissionDecision,
   type Provider
 } from '@shared/types'
 
@@ -25,6 +29,10 @@ const EXPECTED_METHODS = [
   'system.ping',
   'system.emitTestEvent',
   'system.pickFolder',
+  'system.pickSavePath',
+  'system.pickPaths',
+  'system.applyTheme',
+  'system.openInEditor',
   'settings.get',
   'settings.update',
   'providers.list',
@@ -34,6 +42,10 @@ const EXPECTED_METHODS = [
   'providers.delete',
   'providers.fetchModels',
   'providers.testConnection',
+  'providers.authStatus',
+  'providers.login',
+  'providers.logout',
+  'providers.setQuotaProject',
   'agents.list',
   'agents.get',
   'agents.create',
@@ -61,14 +73,17 @@ const EXPECTED_METHODS = [
   'chats.update',
   'chats.delete',
   'chats.search',
+  'chats.goalStatus',
   'chats.members.list',
   'chats.members.set',
   'presence.list',
   'presence.retry',
   'messages.list',
   'messages.usageSummary',
+  'permission.reply',
   'chat.send',
-  'chat.stop'
+  'chat.stop',
+  'chat.handoff'
 ]
 
 describe('BACKEND_METHODS', () => {
@@ -95,6 +110,7 @@ describe('BACKEND_METHODS', () => {
       'mcp',
       'memory',
       'messages',
+      'permission',
       'presence',
       'providers',
       'settings',
@@ -130,16 +146,32 @@ describe('defaults', () => {
     expect(DEFAULT_CHAT_SETTINGS.hardTimeoutMs).toBeUndefined()
   })
 
-  it('follows the system language on a fresh installation', () => {
+  it('follows the system language and appearance on a fresh installation', () => {
     expect(DEFAULT_APP_SETTINGS).toEqual({
       language: 'system',
-      theme: 'dark',
+      // S5.8: `theme` used to be the single value `dark`. A stored `'dark'` still
+      // means dark; only a *fresh* installation now follows the machine.
+      theme: 'system',
+      // S5.7: VS Code by default, because it is the editor the product tour
+      // shows and the one whose URL scheme needs nothing on the `PATH`. The
+      // command template is only read for `kind: 'custom'`, but it is stored
+      // from the start so switching to custom offers a working line rather than
+      // an empty field.
+      editor: {
+        kind: 'vscode',
+        command: 'code -g {path}:{line}'
+      },
       timeouts: {
         stallTimeoutMs: 30000,
         hardTimeoutMs: 120000,
         toolTimeoutMs: 60000
-      }
+      },
+      // S7.5: the first-run card has not been skipped on an installation that
+      // has never been opened, which is the only way it can ever be shown.
+      onboardingDismissed: false
     })
+    expect(DEFAULT_APP_SETTINGS.editor.command).toBe(DEFAULT_EDITOR_COMMAND)
+    expect(EDITOR_KINDS).toEqual(['vscode', 'cursor', 'custom'])
   })
 
   it('fixes the local user id', () => {
@@ -185,6 +217,36 @@ describe('type contracts', () => {
     type SystemNotice = Extract<MessagePart, { type: 'system-notice' }>
     expectTypeOf<SystemNotice['key']>().toBeString()
     expectTypeOf<SystemNotice>().not.toHaveProperty('text')
+  })
+
+  it('carries the executor permission prompt and its resolution (S5.4)', () => {
+    expectTypeOf<EventOf<'permission.requested'>['requestId']>().toBeString()
+    expectTypeOf<EventOf<'permission.requested'>['toolName']>().toBeString()
+    expectTypeOf<EventOf<'permission.resolved'>['decision']>().toEqualTypeOf<
+      PermissionDecision | 'aborted'
+    >()
+    expectTypeOf<Parameters<BackendApi['permission.reply']>[0]>().toEqualTypeOf<{
+      requestId: string
+      decision: PermissionDecision
+    }>()
+  })
+
+  it('hands a chat to its executor with the chat id and an optional intent (S5.6, S5.12)', () => {
+    // The executor, the folder and the review round are all decided in the
+    // backend from the chat record: a renderer that had to name the executor
+    // could name a different one than `executorWorkdir` attaches the tools to.
+    //
+    // `intent` is the one thing the renderer does say, and it is **optional**:
+    // S5.6's button sends nothing and gets `'implement'`, S5.12's quick action
+    // sends `'deliver'`. A second method would have been `handoff()` copied for
+    // the sake of one paragraph of briefing.
+    expectTypeOf<Parameters<BackendApi['chat.handoff']>[0]>().toEqualTypeOf<{
+      chatId: string
+      intent?: HandoffIntent
+    }>()
+    expectTypeOf<HandoffIntent>().toEqualTypeOf<'implement' | 'deliver'>()
+    // The stored hand-off message comes back, like `chat.send`'s.
+    expectTypeOf<ReturnType<BackendApi['chat.handoff']>>().toEqualTypeOf<Promise<Message>>()
   })
 
   it('returns an unsubscribe function from subscribe', () => {

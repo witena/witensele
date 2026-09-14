@@ -18,7 +18,7 @@ import type { ProviderRef } from '@shared/backend'
 import { providerRequiresApiKey } from '@shared/presets'
 import { LOCAL_USER_ID, type Provider, type ProviderInput } from '@shared/types'
 import type { AppContext } from '../app-context'
-import { validation } from '../errors'
+import { keyUnreadable, validation } from '../errors'
 import type { ResolvedProvider } from './registry'
 
 /**
@@ -46,14 +46,42 @@ function fromDraft(draft: ProviderInput, userId: string): ResolvedProvider {
     ...(draft.presetId ? { presetId: draft.presetId } : {}),
     models: Array.isArray(draft.models) ? draft.models : [],
     hasApiKey: Boolean(draft.apiKey),
+    // Carried through so a draft in sign-in mode is probed the way it will be
+    // used: "Test connection" before Save is the whole point of a draft ref.
+    ...(draft.auth ? { auth: draft.auth } : {}),
     ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
+  }
+}
+
+/**
+ * The stored key, or a `key_unreadable` failure (S7.6).
+ *
+ * Before S7.6 this was a bare `ctx.secrets.decrypt`, and a key encrypted by a
+ * previous installation — every key on the machine, after an unsigned rebuild —
+ * threw whatever the crypto layer said. That reached the user as a failed probe
+ * and a "no key" card, both of which are wrong: the key is stored, it simply
+ * cannot be read here. The code says exactly that instead, and the id is
+ * remembered so the card and the editor explain it even when nothing is probed.
+ */
+function decryptApiKey(ctx: AppContext, id: string, cipher: string): string {
+  try {
+    const plain = ctx.secrets.decrypt(cipher)
+    ctx.unreadableSecrets.delete(id)
+    return plain
+  } catch (cause) {
+    ctx.unreadableSecrets.add(id)
+    throw keyUnreadable(
+      `The stored API key of provider ${id} cannot be decrypted by this installation: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`
+    )
   }
 }
 
 function fromId(ctx: AppContext, id: string): ResolvedProvider {
   const provider: Provider = ctx.repos.providers.get(id, ctx.userId)
   const cipher = ctx.repos.providers.getApiKeyCiphertext(id, ctx.userId)
-  const apiKey = cipher ? ctx.secrets.decrypt(cipher) : undefined
+  const apiKey = cipher ? decryptApiKey(ctx, id, cipher) : undefined
   return { ...provider, ...(apiKey ? { apiKey } : {}) }
 }
 

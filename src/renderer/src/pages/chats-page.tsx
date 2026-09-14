@@ -13,6 +13,11 @@
  * state, so the header badge, the controls and the database can never disagree:
  * the write returns the stored row and the `chat.updated` event re-renders both.
  *
+ * The executor's permission prompts (S5.5) are drawn between the transcript and
+ * the composer, one card per pending request, from `stores/permissions.ts`, and
+ * "Hand to executor" (S5.6) sits just below them, in the same column and for
+ * the same reason: both are answered where the user is already looking.
+ *
  * Data comes from five stores and nothing is fetched here directly: `chats`,
  * `agents` and `providers` mirror the backend, `messages` holds the transcript,
  * `run` says whether the Stop button is showing and `presence` colours the dots —
@@ -38,13 +43,19 @@ import {
 import { ActionsCard } from '../components/chat/actions-card'
 import { ChatList } from '../components/chat/chat-list'
 import { Composer, type ComposerHandle } from '../components/chat/composer'
+import { GoalChip } from '../components/chat/goal-chip'
+import { GoalSettings } from '../components/chat/goal-settings'
+import { HandoffButton } from '../components/chat/handoff-button'
 import { MemberPanel } from '../components/chat/member-panel'
+import { OnboardingCard, useOnboarding } from '../components/onboarding/onboarding-card'
 import { MessageList } from '../components/chat/message-list'
+import { PermissionCard } from '../components/chat/permission-card'
 import { Column } from '../components/layout/column'
 import { PageHeader } from '../components/layout/page-header'
 import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from '../components/layout/window-chrome'
 import {
   Badge,
+  Button,
   EmptyState,
   Field,
   IconButton,
@@ -53,15 +64,17 @@ import {
   SegmentedControl,
   Select
 } from '../components/ui'
-import { translateError } from '../i18n/errors'
+import { translateFailure } from '../i18n/errors'
 import { useAgentsStore } from '../stores/agents'
-import { useChatMemberIds, useChatsStore } from '../stores/chats'
+import { useChatGoalStatus, useChatMemberIds, useChatsStore } from '../stores/chats'
 import { useChatMessages, useMessagesStore } from '../stores/messages'
 import { usePresenceStore } from '../stores/presence'
+import { usePendingPermissions } from '../stores/permissions'
 import { useIsRunning, useRunStore } from '../stores/run'
 import { useProvidersStore } from '../stores/providers'
 import { useChatUsage, useUsageStore } from '../stores/usage'
 import { reorder } from '../lib/reorder'
+import { folderName } from '../lib/workdir'
 
 /** Literal `t()` calls so the `used-keys` guard can verify both branches. */
 function modeLabel(t: TFunction, mode: ChatMode): string {
@@ -116,6 +129,7 @@ export function ChatsPage(): React.JSX.Element {
   const selectedId = useChatsStore((state) => state.selectedId)
   const chatsError = useChatsStore((state) => state.error)
   const chatsErrorCode = useChatsStore((state) => state.errorCode)
+  const chatsErrorDetails = useChatsStore((state) => state.errorDetails)
   const agents = useAgentsStore((state) => state.agents)
   const providers = useProvidersStore((state) => state.providers)
 
@@ -125,10 +139,27 @@ export function ChatsPage(): React.JSX.Element {
   const activeRun = useRunStore((state) => (selectedId ? state.activeByChat[selectedId] : undefined))
   const runError = useRunStore((state) => state.error)
   const runErrorCode = useRunStore((state) => state.errorCode)
+  const runErrorDetails = useRunStore((state) => state.errorDetails)
   const usage = useChatUsage(selectedId)
+  // Whether this chat's deliverable is on disk. A query rather than a column on
+  // `Chat`, so it is loaded beside the transcript and the usage summary.
+  const goalStatus = useChatGoalStatus(selectedId)
+  // The executor's open permission prompts for this chat, oldest first. They sit
+  // above the composer because that is where the answer is given, and because a
+  // suspended tool call must not hide the transcript that explains it.
+  const permissions = usePendingPermissions(selectedId)
   const matchIds = useChatsStore((state) => state.matchIds)
+  // A primitive, so the effect below re-runs when the chat row really changed
+  // rather than on every store write that replaced the array.
+  const selectedUpdatedAt = useChatsStore(
+    (state) => state.chats.find((chat) => chat.id === state.selectedId)?.updatedAt ?? 0
+  )
   // What the box holds right now; the store only ever sees the debounced value.
   const [query, setQuery] = useState('')
+  // Whether a fresh installation is still being walked through its first chat
+  // (S7.5). Asked here because this column draws either the card or the bare
+  // "no chat selected" state, never both.
+  const onboarding = useOnboarding()
 
   // The page owns all three lists: the chat list needs them, every message row
   // needs the author's name, avatar and model, and the member panel prints the
@@ -156,6 +187,25 @@ export function ChatsPage(): React.JSX.Element {
     if (!selectedId) return
     void usePresenceStore.getState().load(selectedId)
   }, [selectedId])
+
+  // The goal's delivery state is a fact about the filesystem, so it is asked for
+  // rather than stored: on every visit, and again whenever this chat changes —
+  // which is what a `chat.updated` from a goal edit, a rename or a membership
+  // change already is.
+  //
+  // S5.12 adds the two moments an **executor turn** can have written the
+  // deliverable: every round boundary, and the end of the run. A round boundary
+  // is what catches a hand-off — the executor writes in its own round and the
+  // review round starts the moment it is finished, so the chip flips while the
+  // reviewers are still reading — and the end of the run catches the rest,
+  // including a hand-off whose chat has nobody to review it. Polling at these
+  // points rather than watching the file is the choice S5.10 recorded; a
+  // filesystem watcher is in the Phase 6 backlog.
+  const activeRound = activeRun?.round ?? 0
+  useEffect(() => {
+    if (!selectedId) return
+    void useChatsStore.getState().loadGoalStatus(selectedId)
+  }, [selectedId, selectedUpdatedAt, running, activeRound])
 
   // Usage is seeded from the backend on every visit too, and for the same kind of
   // reason: the summary covers the **whole** transcript while the messages store
@@ -302,7 +352,7 @@ export function ChatsPage(): React.JSX.Element {
 
           {chatsError ? (
             <p data-testid="chats-error" className="px-3 pb-3 text-xs text-danger">
-              {translateError(t, { code: chatsErrorCode ?? 'internal', message: chatsError })}
+              {translateFailure(t, chatsErrorCode, chatsErrorDetails)}
             </p>
           ) : null}
         </div>
@@ -313,7 +363,28 @@ export function ChatsPage(): React.JSX.Element {
         <PageHeader
           testId="page-chats-conversation"
           title={selected ? selected.title : t('chat.noChatSelected')}
-          badge={<Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>}
+          badge={
+            <>
+              <Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>
+              {/* The folder's own name, with the whole path in the tooltip: the
+                  interesting half of a path is its last segment, and the rest
+                  does not fit beside a title. */}
+              {selected?.workdir ? (
+                <Badge
+                  tone="accent"
+                  data-testid="chat-workdir-chip"
+                  title={selected.workdir}
+                >
+                  {folderName(selected.workdir)}
+                </Badge>
+              ) : null}
+              {/* What the chat is for (S5.10). For a `document` it carries the
+                  deliverable's name and, once the file is there, opens it. */}
+              {selected ? (
+                <GoalChip chatId={selected.id} goal={selected.goal} status={goalStatus} />
+              ) : null}
+            </>
+          }
           actions={
             <>
               {activeRun && speakingNow.length > 0 ? (
@@ -339,22 +410,56 @@ export function ChatsPage(): React.JSX.Element {
           <MessageList chatId={selected.id} messages={messages} members={members} />
         ) : (
           <div className="flex flex-1 items-center justify-center overflow-y-auto px-7 py-5">
-            <EmptyState
-              icon={MessagesSquare}
-              title={t('chat.emptyConversationTitle')}
-              description={t('chat.emptyConversationDescription')}
-            />
+            {/* On a fresh installation the bare empty state is replaced by the
+                first-run card (S7.5): "no chat selected" is true and useless
+                when the reason is that nothing is set up yet. The card renders
+                `null` as soon as a chat has a member, or once Skip was pressed,
+                and the empty state is what is left. */}
+            {onboarding.visible ? (
+              <OnboardingCard />
+            ) : (
+              <EmptyState
+                icon={MessagesSquare}
+                title={t('chat.emptyConversationTitle')}
+                description={t('chat.emptyConversationDescription')}
+              />
+            )}
           </div>
         )}
+
+        {permissions.length > 0 ? (
+          <div
+            data-testid="permission-stack"
+            className="flex shrink-0 flex-col gap-2 px-7 pt-3"
+          >
+            {permissions.map((request, index) => (
+              <PermissionCard
+                key={request.requestId}
+                request={request}
+                autoFocus={index === 0}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        {/* "Hand to executor" (S5.6), directly above the composer: the moment
+            the user decides the discussion is over is the moment they are
+            looking at this corner. It is disabled, never hidden, when the chat
+            has no folder or no executor — the tooltip says which. */}
+        <HandoffButton
+          chatId={selectedId}
+          workdir={selected?.workdir}
+          members={members}
+          running={running}
+          onHandoff={(chatId) => void useRunStore.getState().handoff(chatId)}
+        />
 
         <Composer
           chatId={selectedId}
           handleRef={composer}
           members={members}
           running={running}
-          {...(runError
-            ? { error: translateError(t, { code: runErrorCode ?? 'internal', message: runError }) }
-            : {})}
+          {...(runError ? { error: translateFailure(t, runErrorCode, runErrorDetails) } : {})}
           onSend={(text, mentions) =>
             selectedId
               ? useRunStore.getState().send(selectedId, text, mentions)
@@ -451,6 +556,60 @@ export function ChatsPage(): React.JSX.Element {
             <Field label={t('chat.speakingOrder')}>
               <span className="text-[11px] text-fg-faint">{t('chat.speakingOrderHint')}</span>
             </Field>
+
+            {/*
+              The chat's working directory (S5.2). The path itself is data, not
+              copy, so it is printed rather than translated — the folder's name
+              on the line, the whole path in the tooltip. "Choose…" goes through
+              the native picker, which is the one backend method that needs
+              electron (`src/main/ipc/dialogs.ts`).
+            */}
+            <Field label={t('chat.workdir')} hint={t('chat.workdirHint')} layout="column">
+              <div className="flex items-center gap-1.5">
+                <span
+                  data-testid="chat-workdir"
+                  data-path={selected?.workdir ?? ''}
+                  title={selected?.workdir ?? undefined}
+                  className={
+                    selected?.workdir
+                      ? 'min-w-0 grow truncate font-mono text-[11px] text-fg-dim'
+                      : 'min-w-0 grow truncate text-[11px] text-fg-faint'
+                  }
+                >
+                  {selected?.workdir ? folderName(selected.workdir) : t('chat.workdirNone')}
+                </span>
+                <Button
+                  size="sm"
+                  data-testid="chat-workdir-choose"
+                  disabled={!selectedId}
+                  onClick={() => {
+                    if (selectedId) void useChatsStore.getState().chooseWorkdir(selectedId)
+                  }}
+                >
+                  {t('chat.workdirChoose')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-testid="chat-workdir-clear"
+                  disabled={!selectedId || !selected?.workdir}
+                  onClick={() => {
+                    if (selectedId) void useChatsStore.getState().setWorkdir(selectedId, null)
+                  }}
+                >
+                  {t('chat.workdirClear')}
+                </Button>
+              </div>
+            </Field>
+
+            {/* The Goal block (S5.10), under the folder it is written against:
+                the two kinds that name files are impossible without one, and
+                reading the rows in this order is what makes that obvious. */}
+            <GoalSettings
+              chatId={selectedId}
+              workdir={selected?.workdir ?? null}
+              goal={selected?.goal ?? null}
+            />
           </section>
 
           <div className="flex-1" />
@@ -459,6 +618,12 @@ export function ChatsPage(): React.JSX.Element {
             chatId={selectedId}
             members={members}
             onSend={(text) => void composer.current?.submitText(text)}
+            workdir={selected?.workdir}
+            goal={selected?.goal}
+            running={running}
+            onWriteDeliverable={(chatId) =>
+              void useRunStore.getState().handoff(chatId, 'deliver')
+            }
           />
         </div>
       </Column>

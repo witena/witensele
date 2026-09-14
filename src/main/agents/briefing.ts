@@ -6,7 +6,10 @@
  * who is in the room (name plus description), which of them *you* are, that the
  * other members' turns arrive as `[name]:` prefixed user messages rather than as
  * assistant turns, and the two protocol tokens — `@name` to call on someone and
- * `[PASS]` to abstain.
+ * `[PASS]` to abstain. Since S5.10 a fifth, when the chat has one: the **goal**
+ * — what the group is working towards, in the user's own words. Since S5.12 a
+ * sixth, for one round only: that this round is a **review** of what the
+ * executor just changed, judged against that goal.
  *
  * It exists in **both languages** and follows the UI language (PLAN, "Bilingual
  * UI"): a Chinese-first model reads a Chinese briefing far more reliably than a
@@ -18,7 +21,7 @@
  * it is not an i18n key and `briefing.zh-CN.ts` is the one `.ts` file in the
  * repository allowed to contain Chinese (see `docs/features/agent-turn/`).
  */
-import type { Agent, Language } from '@shared/types'
+import type { Agent, ChatGoal, Language } from '@shared/types'
 import { buildEnglishBriefing } from './briefing.en'
 import { buildChineseBriefing } from './briefing.zh-CN'
 
@@ -46,6 +49,37 @@ export interface GroupBriefingInput {
    * often than one appended after a data dump.
    */
   memoryEnabled?: boolean
+  /**
+   * What this chat is working towards (S5.10), or nothing.
+   *
+   * It goes in the **briefing** rather than in a section of its own because it
+   * is the same class of thing as the roster and the protocol: a rule of the
+   * room, which every member is held to, not reference material one of them may
+   * reach for. A model that runs out of attention has to lose the skills index
+   * before it loses what it is here to do.
+   *
+   * A `codebase` goal also carries a rule the group cannot see from the goal
+   * itself — that the executor makes the change afterwards — because PLAN.md's
+   * one-writer decision is invisible to a participant otherwise, and a model
+   * told to change a codebase will otherwise write the change out in prose as
+   * if it had.
+   */
+  goal?: ChatGoal | null
+  /**
+   * True for the members of a hand-off's **review** round (S5.12).
+   *
+   * The round exists since S5.6 and until now said nothing about itself: every
+   * reviewer was handed the executor's message plus its diffs and left to guess
+   * what it was being asked. What it is being asked is the thing the goal
+   * answers — *does this change do what this chat is for* — so the two travel
+   * together, and the review block is written immediately after the goal in both
+   * languages so "the goal above" is one line up rather than a page away.
+   *
+   * The executor never gets it: it is not reviewing, it wrote the thing, and its
+   * own section already tells it what to do (`buildExecutorSection`). The runner
+   * sets this for the review round's speakers only, which is everybody else.
+   */
+  reviewing?: boolean
 }
 
 /** What a language module is given: the briefing input minus the language. */
@@ -53,6 +87,8 @@ export interface BriefingInput {
   self: BriefingMember
   members: BriefingMember[]
   memoryEnabled: boolean
+  goal: ChatGoal | null
+  reviewing: boolean
 }
 
 /** The shape both language modules implement. */
@@ -87,7 +123,13 @@ export function buildGroupBriefing(input: GroupBriefingInput): string {
   const { language, self, members } = input
   const roster = members.length > 0 ? members : [self]
   const build: BriefingBuilder = language === 'zh-CN' ? buildChineseBriefing : buildEnglishBriefing
-  return build({ self, members: roster, memoryEnabled: input.memoryEnabled === true })
+  return build({
+    self,
+    members: roster,
+    memoryEnabled: input.memoryEnabled === true,
+    goal: input.goal ?? null,
+    reviewing: input.reviewing === true
+  })
 }
 
 /**

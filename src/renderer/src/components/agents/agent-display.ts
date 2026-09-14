@@ -90,3 +90,27 @@ export function agentModelLabel(
   const providerName = providerNameFor(agent, providers)
   return providerName ? `${agent.modelId} · ${providerName}` : agent.modelId
 }
+
+/**
+ * Whether this agent is the one allowed to change things (S5.2).
+ *
+ * A one-line predicate, but it is the rule four surfaces draw a badge from — the
+ * agent list, the member row, the message header and the member picker — and a
+ * literal `=== 'executor'` repeated in four components is four places to miss
+ * when the role set grows.
+ */
+export function isExecutor(agent: Pick<Agent, 'role'>): boolean {
+  return agent.role === 'executor'
+}
+
+/**
+ * Whether a member list already holds the chat's one executor.
+ *
+ * The member picker greys an executor candidate out with this rather than
+ * letting the click be refused by the backend: a disabled row with a reason is a
+ * better answer than an error line in another column. The backend refusal stays
+ * the authority — a second window, or a future HTTP client, is not this picker.
+ */
+export function hasExecutor(agents: readonly Pick<Agent, 'role'>[]): boolean {
+  return agents.some(isExecutor)
+}

@@ -1,17 +1,36 @@
 # packaging — Frontend
 
 **This feature has no renderer code.** S4.4 added no page, no component, no
-store field, no `BackendClient` call and no translation key. A packaged build
-renders exactly what `npm run dev` renders; nothing in the UI branches on
-`app.isPackaged`.
+store field, no `BackendClient` call and no translation key, and S7.2 — the CI
+and release workflows — added none either. A packaged build renders exactly what
+`npm run dev` renders; nothing in the UI branches on `app.isPackaged`, and
+nothing in it branches on how the bundle was built.
+
+The version number is the one thing a release changes that the renderer shows.
+**Settings → About arrived in S7.5** and reads `APP_VERSION` and
+`APP_REPOSITORY_URL` from `src/shared/version.ts`, the former kept in step with
+`package.json` by `scripts/sync-version.mjs`; `src/main/mcp/manager.ts` reads the
+same constant for the MCP client handshake. The screen belongs to
+[`../ui-shell/frontend.md`](../ui-shell/frontend.md). Its labels go through
+`t()`; the version string, the repository URL and the licence rows are printed
+as **data**, because an identifier is the same in both languages — which is the
+same call the `ant` install command and a working-directory path already make.
+
+The other renderer-visible thing a build now produces is that licence list:
+`prebuild` regenerates `src/renderer/src/generated/licenses.json` from the
+production dependency tree, so a packaged app ships the list of what it was
+actually built from.
 
 The three renderer-visible facts it does produce, and where they belong:
 
 | Fact | Where it lives |
 |---|---|
 | The application icon in the Dock, the Finder and the About panel | `build/icon.icns`, referenced by `mac.icon` in `electron-builder.yml`. It is **not** the window icon — macOS takes that from the bundle, and `createWindow` sets none. See [`backend.md`](./backend.md), "Building the icon" |
+| The same mark inside the running app | `components/ui/brand-mark.tsx` on the navigation rail (S7.1). Nothing loads `build/icon.svg` at runtime: the rail inlines the geometry so its blades can be `currentColor` and follow the theme. The two are held together by `brand-mark.test.ts`, not by a shared asset — see [`../ui-shell/frontend.md`](../ui-shell/frontend.md) |
+| The mark in the README | `build/icon.png`, at `width="96"` above the title. The committed 1024 px artifact rather than a copy under `docs/assets/`, so the README cannot show a mark the build no longer ships. Checked against GitHub's light (`#ffffff`), dark (`#0d1117`) and dark-dimmed (`#22272e`) page grounds: on dark the white tile reads as the app icon, on light it disappears into the page and the mark reads tile-less. Both hold with no hairline |
 | The window's size, colour and title bar | Unchanged from S1.5; the contract is written out in [`../ui-shell/backend.md`](../ui-shell/backend.md), "Window options" |
 | The skills a fresh installation opens with | Seeded before the first window exists, and then read through the ordinary `skills.list` handler. The screen is [`../skills/frontend.md`](../skills/frontend.md)'s Settings → Skills |
+| The version, the repository link and the licences of the bundled dependencies | Settings → About (S7.5), from `@shared/version` and the generated `licenses.json` |
 
 ## Screenshots and the demo recording
 

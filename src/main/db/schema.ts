@@ -20,6 +20,7 @@ import type {
   AgentAvatar,
   AgentParams,
   AppSettings,
+  ChatGoal,
   ChatSettings,
   MessagePart,
   Usage
@@ -45,6 +46,11 @@ export const providers = sqliteTable('providers', {
   presetId: text('preset_id'),
   models: text('models', { mode: 'json' }).$type<string[]>().notNull(),
   apiKeyEncrypted: text('api_key_encrypted'),
+  // Nullable rather than `notNull().default('apiKey')`: every row written before
+  // S5.3 has no value, and "absent means apiKey" is already the rule the shared
+  // type states (`providerAuth()` in `shared/presets.ts`). A default would make
+  // the same fact true in two places and disagree the day the default changes.
+  auth: text('auth', { enum: ['apiKey', 'oauth'] }),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull()
 })
@@ -103,8 +109,16 @@ export const chats = sqliteTable('chats', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),
   title: text('title').notNull(),
-  /** Reserved for the executor agent's working directory; always null in the MVP. */
+  /** The executor agent's working directory; real since S5.2. */
   workdir: text('workdir'),
+  /**
+   * What the group is working towards (S5.10), or null while nobody has said.
+   *
+   * Nullable with no default, like every column added after the initial schema:
+   * SQLite adds it in place, and a chat written before S5.10 reads as `null`,
+   * which the shared type documents as "no goal".
+   */
+  goal: text('goal', { mode: 'json' }).$type<ChatGoal>(),
   settings: text('settings', { mode: 'json' }).$type<ChatSettings>().notNull(),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull()

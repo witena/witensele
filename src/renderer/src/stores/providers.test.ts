@@ -9,10 +9,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod, ProviderRef } from '@shared/backend'
-import type { ConnectionTestResult, Provider, ProviderInput } from '@shared/types'
+import type {
+  ProviderAuthStatus,
+  ConnectionTestResult,
+  Provider,
+  ProviderInput
+} from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
+import { BackendClientError } from '../lib/backend'
 import { resetBackend, setBackend } from '../lib/backend-provider'
-import { DRAFT_TEST_KEY, useProvidersStore } from './providers'
+import { DRAFT_TEST_KEY, emptyAuthStatuses, useProvidersStore } from './providers'
 
 interface Call {
   method: BackendMethod
@@ -26,6 +32,7 @@ interface Fake {
   keys: () => Record<string, string>
   setModels: (models: string[]) => void
   setTestResult: (result: ConnectionTestResult) => void
+  setAuthStatus: (status: ProviderAuthStatus) => void
   fail: (error: Error | null) => void
 }
 
@@ -39,6 +46,7 @@ function fakeBackend(initial: Provider[] = []): Fake {
   )
   let models: string[] = []
   let testResult: ConnectionTestResult = { ok: true, latencyMs: 12, model: 'gpt-4o' }
+  let authStatus: ProviderAuthStatus = { state: 'signed-out' }
   let failure: Error | null = null
   let nextId = 1
 
@@ -59,6 +67,9 @@ function fakeBackend(initial: Provider[] = []): Fake {
           name: payload.name,
           models: payload.models,
           hasApiKey: Boolean(payload.apiKey),
+          // Filled by the handler in the real backend (S7.6), so the fake fills
+          // it too: a key this build just wrote is readable by definition.
+          keyState: payload.apiKey ? 'ok' : 'none',
           ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}),
           ...(payload.presetId ? { presetId: payload.presetId } : {})
         }
@@ -80,7 +91,14 @@ function fakeBackend(initial: Provider[] = []): Fake {
           ...(patch.type !== undefined ? { type: patch.type } : {}),
           ...(patch.models !== undefined ? { models: patch.models } : {}),
           ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-          hasApiKey: keys[id] !== undefined
+          hasApiKey: keys[id] !== undefined,
+          // A patch that touched the key replaced whatever could not be read.
+          keyState:
+            patch.apiKey !== undefined
+              ? keys[id] !== undefined
+                ? ('ok' as const)
+                : ('none' as const)
+              : current.keyState ?? ('ok' as const)
         }
         rows = rows.map((row) => (row.id === id ? updated : row))
         return updated
@@ -93,6 +111,20 @@ function fakeBackend(initial: Provider[] = []): Fake {
       }
       if (method === 'providers.fetchModels') return models
       if (method === 'providers.testConnection') return testResult
+      if (method === 'providers.authStatus') return authStatus
+      if (method === 'providers.login') {
+        authStatus = { state: 'signed-in', account: 'person@example.com' }
+        return authStatus
+      }
+      if (method === 'providers.logout') {
+        authStatus = { state: 'signed-out' }
+        return authStatus
+      }
+      if (method === 'providers.setQuotaProject') {
+        const { project } = input as { project: string }
+        authStatus = { state: 'signed-in', account: 'person@example.com', project }
+        return authStatus
+      }
 
       throw new Error(`unexpected method ${method}`)
     }) as BackendClient['invoke'],
@@ -109,6 +141,9 @@ function fakeBackend(initial: Provider[] = []): Fake {
     },
     setTestResult: (next) => {
       testResult = next
+    },
+    setAuthStatus: (next) => {
+      authStatus = next
     },
     fail: (error) => {
       failure = error
@@ -145,7 +180,10 @@ beforeEach(() => {
     testResults: {},
     testing: false,
     fetchingModels: false,
-    saving: false
+    saving: false,
+    authStatus: emptyAuthStatuses(),
+    authBusy: false,
+    authErrorCode: undefined
   })
 })
 
@@ -184,6 +222,27 @@ describe('the editor draft', () => {
     expect(state().mode).toBe('create')
     expect(state().selectedId).toBeNull()
     expect(state().draft).toEqual({ type: 'openai-compatible', name: '', models: [] })
+  })
+
+  it('makes a draft without opening the settings editor (S7.5)', () => {
+    // The first-run card lives on the chat page and edits this same draft. If it
+    // used `startCreate`, Settings → Providers would open on a half-filled Add
+    // form the user never asked for.
+    state().ensureDraft()
+
+    expect(state().draft).toEqual({ type: 'openai-compatible', name: '', models: [] })
+    expect(state().mode).toBe('idle')
+  })
+
+  it('never replaces a draft that is already being edited', () => {
+    state().startEdit('missing')
+    state().startCreate()
+    state().patchDraft({ name: 'Half typed' })
+
+    state().ensureDraft()
+
+    expect(state().draft?.name).toBe('Half typed')
+    expect(state().mode).toBe('create')
   })
 
   it('fills type, name, base URL and models from a preset', () => {
@@ -385,6 +444,33 @@ describe('fetchModels', () => {
   })
 })
 
+/**
+ * S7.6: what the settings screen needs in order to explain an unreadable key,
+ * and what makes the explanation go away.
+ *
+ * The notice itself is one `keyState === 'unreadable'` check
+ * (`components/settings/provider-display.ts`), so what is worth testing here is
+ * that the store carries the field at all and that saving a pasted key replaces
+ * the record with one that no longer carries it.
+ */
+describe('an unreadable key', () => {
+  it('is mirrored from the backend and cleared by saving a new key', async () => {
+    const backend = fakeBackend([stored({ keyState: 'unreadable' })])
+    setBackend(backend.client)
+    await state().load()
+
+    expect(state().providers[0]?.keyState).toBe('unreadable')
+
+    state().startEdit('p1')
+    state().patchDraft({ apiKey: 'sk-pasted-again' })
+    const saved = await state().saveDraft()
+
+    expect(saved?.keyState).toBe('ok')
+    expect(state().providers[0]?.keyState).toBe('ok')
+    expect(backend.keys()['p1']).toBe('sk-pasted-again')
+  })
+})
+
 describe('testConnection', () => {
   it('remembers the result under the provider id', async () => {
     const backend = fakeBackend([stored()])
@@ -433,6 +519,28 @@ describe('testConnection', () => {
     expect(state().testResults['p1']).toMatchObject({ ok: false })
   })
 
+  /**
+   * S7.6. `providers.testConnection` normally answers with a value, but a stored
+   * key this build cannot decrypt is refused by `resolveProvider` *before* the
+   * probe runs — so it arrives as a rejection, and the class has to survive it
+   * or the line under the button reads "something went wrong inside the app".
+   */
+  it('keeps the failure class of a rejected probe', async () => {
+    const backend = fakeBackend([stored({ keyState: 'unreadable' })])
+    setBackend(backend.client)
+    await state().load()
+    backend.fail(
+      new BackendClientError({
+        code: 'key_unreadable',
+        message: 'The stored API key of provider p1 cannot be decrypted'
+      })
+    )
+
+    const result = await state().testConnection({ id: 'p1' })
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'key_unreadable' } })
+  })
+
   it('turns a transport failure into the same shape', async () => {
     const backend = fakeBackend([stored()])
     setBackend(backend.client)
@@ -443,5 +551,128 @@ describe('testConnection', () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
     expect(state().testing).toBe(false)
+  })
+})
+
+/**
+ * The sign-in half (S5.3).
+ *
+ * The three states are values the panel renders, so the store's job is only to
+ * hold the latest answer and never to leave a spinner running. The fake's login
+ * flips its own state, which is what proves the store re-reads rather than
+ * assuming.
+ */
+describe('sign-in', () => {
+  it('reads the CLI status, under the vendor that was asked', async () => {
+    const backend = fakeBackend()
+    backend.setAuthStatus({ state: 'not-installed' })
+    setBackend(backend.client)
+
+    await expect(state().loadAuthStatus('anthropic')).resolves.toEqual({ state: 'not-installed' })
+    expect(state().authStatus.anthropic).toEqual({ state: 'not-installed' })
+    // The other vendor was never asked, and answering for it would be a guess.
+    expect(state().authStatus.google).toBeNull()
+    expect(state().authErrorCode).toBeUndefined()
+  })
+
+  it('keeps the two vendors’ logins apart', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await state().signIn('google')
+
+    expect(state().authStatus.google).toMatchObject({ state: 'signed-in' })
+    expect(state().authStatus.anthropic).toBeNull()
+    expect(backend.calls.map((call) => call.input)).toEqual([{ type: 'google' }])
+  })
+
+  it('signs in and keeps the resulting status', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await state().signIn('anthropic')
+
+    expect(state().authStatus.anthropic).toMatchObject({ state: 'signed-in' })
+    expect(state().authBusy).toBe(false)
+    expect(backend.calls.map((call) => call.method)).toEqual(['providers.login'])
+  })
+
+  it('signs out and keeps the resulting status', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await state().signIn('anthropic')
+
+    await state().signOut('anthropic')
+
+    expect(state().authStatus.anthropic).toEqual({ state: 'signed-out' })
+    expect(state().authBusy).toBe(false)
+  })
+
+  it('records a refused sign-in and asks the CLI what actually happened', async () => {
+    const backend = fakeBackend()
+    backend.setAuthStatus({ state: 'not-installed' })
+    setBackend(backend.client)
+    backend.fail(new Error('ant is missing'))
+
+    await state().signIn('anthropic')
+
+    // Not a rejection: the panel keeps its shape and gains an error line.
+    expect(state().authErrorCode).toBe('internal')
+    expect(state().authBusy).toBe(false)
+  })
+
+  it('never leaves a transport failure looking like an install', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    backend.fail(new Error('bridge is down'))
+
+    await expect(state().loadAuthStatus('google')).resolves.toEqual({ state: 'not-installed' })
+    expect(state().authErrorCode).toBe('internal')
+  })
+
+  it('sets the Google quota project and stores the status that came back', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await state().setQuotaProject('witena-dev')
+
+    expect(state().authStatus.google).toMatchObject({ project: 'witena-dev' })
+    expect(state().authBusy).toBe(false)
+  })
+
+  it('records a refused project rather than rejecting', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    backend.fail(new Error('no permission on that project'))
+
+    await state().setQuotaProject('someone-elses-project')
+
+    expect(state().authErrorCode).toBe('internal')
+    expect(state().authBusy).toBe(false)
+  })
+})
+
+describe('the draft carries the authentication mode', () => {
+  it('round-trips it from a stored provider', async () => {
+    const backend = fakeBackend([
+      stored({ id: 'p9', type: 'anthropic', name: 'Claude', auth: 'oauth', hasApiKey: false })
+    ])
+    setBackend(backend.client)
+    await state().load()
+
+    state().startEdit('p9')
+    expect(state().draft?.auth).toBe('oauth')
+
+    state().patchDraft({ auth: 'apiKey' })
+    expect(state().draft?.auth).toBe('apiKey')
+  })
+
+  it('leaves it absent for a provider that never had one', async () => {
+    const backend = fakeBackend([stored()])
+    setBackend(backend.client)
+    await state().load()
+
+    state().startEdit('p1')
+    expect(state().draft && 'auth' in state().draft!).toBe(false)
   })
 })

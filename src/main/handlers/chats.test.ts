@@ -1,15 +1,27 @@
 /**
- * The parts of `chats.*` that S2.2 made real: who a new chat is created with, the
- * member list, and the orchestration settings.
+ * The parts of `chats.*` that S2.2 made real — who a new chat is created with,
+ * the member list, and the orchestration settings — plus the two rules S5.2
+ * added: at most one `executor` among a chat's members, and a `workdir` that has
+ * to be an absolute path to a directory that actually exists — plus S5.10's
+ * goal, whose validation table is the longest one in the handler layer.
  *
  * The S1.7 behaviour (create, rename, delete, the run methods) is covered by
  * `handlers.test.ts` and `../orchestration/chat-runner.test.ts`; this file is
  * about the three rules that changed, and about the events the member panel
  * depends on. Nothing here talks to a model, so no runner options are injected.
  */
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendEvent, ChatUpdatedEvent } from '@shared/events'
-import { DEFAULT_CHAT_SETTINGS, type Agent, type Provider } from '@shared/types'
+import {
+  DEFAULT_CHAT_SETTINGS,
+  MAX_GOAL_DESCRIPTION_CHARS,
+  type Agent,
+  type ChatGoal,
+  type Provider
+} from '@shared/types'
 import type { AppContext } from '../app-context'
 import { DEFAULT_AGENT_NAME } from '../agents/default-agent'
 import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
@@ -27,6 +39,16 @@ describe('handlers/chats members and settings', () => {
   const createAgent = (name: string): Promise<Agent> =>
     handlers['agents.create'](ctx, {
       input: agentInput({ name, providerId: provider.id, modelId: 'deepseek-chat' })
+    })
+
+  const createExecutor = (name: string): Promise<Agent> =>
+    handlers['agents.create'](ctx, {
+      input: agentInput({
+        name,
+        providerId: provider.id,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      })
     })
 
   beforeEach(() => {
@@ -148,6 +170,356 @@ describe('handlers/chats members and settings', () => {
       await expect(
         handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, ada.id] })
       ).rejects.toMatchObject({ code: 'validation' })
+    })
+  })
+
+  describe('one executor per chat', () => {
+    it('refuses a second executor member, with the reason the renderer translates', async () => {
+      const first = await createExecutor('Hands')
+      const second = await createExecutor('Other hands')
+      const chat = await handlers['chats.create'](ctx, { input: { memberAgentIds: [first.id] } })
+      events.length = 0
+
+      await expect(
+        handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [first.id, second.id] })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'second_executor' } })
+
+      // Refused before the transaction: the membership is exactly as it was.
+      expect(ctx.repos.chats.listMembers(chat.id, ctx.userId).map((m) => m.agentId)).toEqual([
+        first.id
+      ])
+      expect(chatUpdates()).toEqual([])
+    })
+
+    it('allows one executor beside any number of participants', async () => {
+      const hands = await createExecutor('Hands')
+      const ada = await createAgent('Ada')
+      const bob = await createAgent('Bob')
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, hands.id, bob.id] })
+      ).resolves.toHaveLength(3)
+    })
+
+    it('allows swapping one executor for another in a single write', async () => {
+      const first = await createExecutor('Hands')
+      const second = await createExecutor('Other hands')
+      const chat = await handlers['chats.create'](ctx, { input: { memberAgentIds: [first.id] } })
+
+      // The whole list is replaced, so this is one executor, not two.
+      const members = await handlers['chats.members.set'](ctx, {
+        chatId: chat.id,
+        agentIds: [second.id]
+      })
+
+      expect(members.map((member) => member.agentId)).toEqual([second.id])
+    })
+
+    it('refuses a chat created with two executors before the row exists', async () => {
+      const first = await createExecutor('Hands')
+      const second = await createExecutor('Other hands')
+      const before = ctx.repos.chats.list(ctx.userId).length
+
+      await expect(
+        handlers['chats.create'](ctx, { input: { memberAgentIds: [first.id, second.id] } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'second_executor' } })
+
+      expect(ctx.repos.chats.list(ctx.userId)).toHaveLength(before)
+    })
+  })
+
+  describe('chats.update workdir', () => {
+    let folder: string
+
+    beforeEach(() => {
+      folder = mkdtempSync(join(tmpdir(), 'witena-workdir-'))
+    })
+
+    afterEach(() => {
+      rmSync(folder, { recursive: true, force: true })
+    })
+
+    it('stores an absolute path that is a real directory', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      const updated = await handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: folder } })
+
+      expect(updated.workdir).toBe(folder)
+      expect(ctx.repos.chats.get(chat.id, ctx.userId).workdir).toBe(folder)
+    })
+
+    it('clears the binding with null', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: { workdir: folder } })
+
+      const cleared = await handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: null } })
+
+      expect(cleared.workdir).toBeNull()
+    })
+
+    it('refuses a relative path', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: 'code/witena' } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_absolute' } })
+      expect(ctx.repos.chats.get(chat.id, ctx.userId).workdir).toBeNull()
+    })
+
+    it('refuses an empty string, which is not the same as clearing', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: '   ' } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_absolute' } })
+    })
+
+    it('refuses a path that does not exist', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: join(folder, 'gone') } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_missing' } })
+    })
+
+    it('refuses a file', async () => {
+      const file = join(folder, 'notes.md')
+      writeFileSync(file, '# not a folder\n')
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: chat.id, patch: { workdir: file } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_directory' } })
+    })
+
+    it('checks the same rules on chats.create', async () => {
+      await expect(
+        handlers['chats.create'](ctx, { input: { workdir: 'relative/path' } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'workdir_not_absolute' } })
+    })
+  })
+
+  /**
+   * S5.10's validation table, one case per `ValidationReason` plus the shapes
+   * that have to stay legal. The paths are resolved against a **real** temporary
+   * folder, because a goal's paths are held to the executor's own confinement
+   * check and that one reads the filesystem.
+   */
+  describe('chats.update goal', () => {
+    let folder: string
+    let bound: string
+
+    const goal = (patch: Partial<ChatGoal> = {}): ChatGoal => ({
+      kind: 'discussion',
+      description: 'Decide what the API should look like',
+      materials: [],
+      ...patch
+    })
+
+    const refuse = async (value: unknown, reason: string): Promise<void> => {
+      await expect(
+        handlers['chats.update'](ctx, { id: bound, patch: { goal: value as ChatGoal } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason } })
+    }
+
+    beforeEach(async () => {
+      folder = mkdtempSync(join(tmpdir(), 'witena-goal-'))
+      mkdirSync(join(folder, 'src'))
+      writeFileSync(join(folder, 'notes.md'), '# notes\n')
+      bound = (await handlers['chats.create'](ctx, { input: { workdir: folder } })).id
+    })
+
+    afterEach(() => {
+      rmSync(folder, { recursive: true, force: true })
+    })
+
+    it('stores a discussion goal on a chat bound to nothing at all', async () => {
+      const free = await handlers['chats.create'](ctx, { input: {} })
+
+      const updated = await handlers['chats.update'](ctx, {
+        id: free.id,
+        patch: { goal: goal() }
+      })
+
+      expect(updated.goal).toEqual(goal())
+      expect(ctx.repos.chats.get(free.id, ctx.userId).goal).toEqual(goal())
+    })
+
+    it('stores a document goal with a deliverable whose parent does not exist yet', async () => {
+      const wanted = goal({ kind: 'document', deliverable: 'docs/reports/q3.md' })
+
+      const updated = await handlers['chats.update'](ctx, { id: bound, patch: { goal: wanted } })
+
+      // The whole point of a deliverable is that it is not there yet, so nothing
+      // about it is checked against the filesystem except where it resolves.
+      expect(updated.goal).toEqual(wanted)
+    })
+
+    it('stores materials that exist, a folder as readily as a file', async () => {
+      const wanted = goal({ materials: ['notes.md', 'src'] })
+
+      expect((await handlers['chats.update'](ctx, { id: bound, patch: { goal: wanted } })).goal)
+        .toEqual(wanted)
+    })
+
+    it('removes the goal with null', async () => {
+      await handlers['chats.update'](ctx, { id: bound, patch: { goal: goal() } })
+
+      const cleared = await handlers['chats.update'](ctx, { id: bound, patch: { goal: null } })
+
+      expect(cleared.goal).toBeNull()
+    })
+
+    it('accepts a folder and a goal that names files in it in one call', async () => {
+      const free = await handlers['chats.create'](ctx, { input: {} })
+
+      // The patch's own `workdir` is what the goal is validated against, so
+      // binding and goal-setting do not have to be two round trips.
+      const updated = await handlers['chats.update'](ctx, {
+        id: free.id,
+        patch: { workdir: folder, goal: goal({ kind: 'codebase', materials: ['notes.md'] }) }
+      })
+
+      expect(updated.goal?.kind).toBe('codebase')
+    })
+
+    it('refuses a blank description', async () => {
+      await refuse(goal({ description: '   ' }), 'goal_description_empty')
+    })
+
+    it('refuses a description longer than the cap', async () => {
+      await refuse(
+        goal({ description: 'x'.repeat(MAX_GOAL_DESCRIPTION_CHARS + 1) }),
+        'goal_description_too_long'
+      )
+    })
+
+    it('refuses a document goal with no deliverable', async () => {
+      await refuse(goal({ kind: 'document' }), 'goal_deliverable_required')
+    })
+
+    it('refuses an absolute deliverable, and one that climbs out with ..', async () => {
+      // Absolute and `..` share a reason because they share a fix: write the
+      // path relative to the folder.
+      await refuse(
+        goal({ kind: 'document', deliverable: join(folder, 'a.md') }),
+        'goal_deliverable_not_relative'
+      )
+      await refuse(
+        goal({ kind: 'document', deliverable: '../escape.md' }),
+        'goal_deliverable_not_relative'
+      )
+    })
+
+    it('refuses a deliverable that resolves outside the folder through a symlink', async () => {
+      const outside = mkdtempSync(join(tmpdir(), 'witena-outside-'))
+      symlinkSync(outside, join(folder, 'link'))
+      try {
+        await refuse(
+          goal({ kind: 'document', deliverable: 'link/a.md' }),
+          'goal_deliverable_outside_workdir'
+        )
+      } finally {
+        rmSync(outside, { recursive: true, force: true })
+      }
+    })
+
+    it('refuses an absolute material', async () => {
+      await refuse(goal({ materials: [join(folder, 'notes.md')] }), 'goal_material_not_relative')
+    })
+
+    it('refuses a material that resolves outside the folder through a symlink', async () => {
+      const outside = mkdtempSync(join(tmpdir(), 'witena-outside-'))
+      writeFileSync(join(outside, 'secret.md'), 'x')
+      symlinkSync(outside, join(folder, 'out'))
+      try {
+        await refuse(goal({ materials: ['out/secret.md'] }), 'goal_material_outside_workdir')
+      } finally {
+        rmSync(outside, { recursive: true, force: true })
+      }
+    })
+
+    it('refuses a material that is not there', async () => {
+      await refuse(goal({ materials: ['gone.md'] }), 'goal_material_missing')
+    })
+
+    it('refuses a document or codebase goal on a chat with no folder', async () => {
+      const free = await handlers['chats.create'](ctx, { input: {} })
+
+      for (const kind of ['document', 'codebase'] as const) {
+        await expect(
+          handlers['chats.update'](ctx, {
+            id: free.id,
+            patch: { goal: goal({ kind, ...(kind === 'document' ? { deliverable: 'a.md' } : {}) }) }
+          })
+        ).rejects.toMatchObject({ code: 'validation', details: { reason: 'goal_needs_workdir' } })
+      }
+    })
+
+    it('refuses materials on a chat with no folder, which is the same rule', async () => {
+      const free = await handlers['chats.create'](ctx, { input: {} })
+
+      await expect(
+        handlers['chats.update'](ctx, { id: free.id, patch: { goal: goal({ materials: ['a.md'] }) } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'goal_needs_workdir' } })
+    })
+
+    it('refuses a deliverable on a goal that is not a document', async () => {
+      // No reason: the panel drops the field when the kind changes, so only a
+      // hand-written call reaches this, and a reason is a sentence a user acts on.
+      await expect(
+        handlers['chats.update'](ctx, {
+          id: bound,
+          patch: { goal: goal({ kind: 'codebase', deliverable: 'a.md' }) }
+        })
+      ).rejects.toMatchObject({ code: 'validation', details: undefined })
+    })
+
+    it('refuses a malformed goal without pretending to know which field to fix', async () => {
+      for (const bad of [
+        { ...goal(), kind: 'anything' },
+        { ...goal(), materials: 'notes.md' },
+        []
+      ]) {
+        await expect(
+          handlers['chats.update'](ctx, { id: bound, patch: { goal: bad as unknown as ChatGoal } })
+        ).rejects.toMatchObject({ code: 'validation' })
+      }
+    })
+
+    it('checks the same rules on chats.create', async () => {
+      await expect(
+        handlers['chats.create'](ctx, { input: { goal: goal({ description: '' }) } })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'goal_description_empty' } })
+    })
+
+    it('reports whether the deliverable is on disk, and says so again once it is', async () => {
+      await handlers['chats.update'](ctx, {
+        id: bound,
+        patch: { goal: goal({ kind: 'document', deliverable: 'docs/q3.md' }) }
+      })
+
+      expect(await handlers['chats.goalStatus'](ctx, { chatId: bound })).toEqual({
+        deliverable: join(folder, 'docs/q3.md'),
+        delivered: false
+      })
+
+      mkdirSync(join(folder, 'docs'))
+      writeFileSync(join(folder, 'docs/q3.md'), '# q3\n')
+
+      expect(await handlers['chats.goalStatus'](ctx, { chatId: bound })).toEqual({
+        deliverable: join(folder, 'docs/q3.md'),
+        delivered: true
+      })
+    })
+
+    it('answers nothing to deliver for a chat whose goal is not a document', async () => {
+      await handlers['chats.update'](ctx, { id: bound, patch: { goal: goal() } })
+
+      expect(await handlers['chats.goalStatus'](ctx, { chatId: bound })).toEqual({
+        deliverable: null,
+        delivered: false
+      })
     })
   })
 

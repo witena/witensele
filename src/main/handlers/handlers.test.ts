@@ -1,13 +1,26 @@
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BACKEND_METHODS, type BackendMethod } from '@shared/backend'
 import type { BackendEvent } from '@shared/events'
-import { DEFAULT_APP_SETTINGS, LOCAL_USER_ID, type ProviderInput } from '@shared/types'
+import {
+  DEFAULT_APP_SETTINGS,
+  DEFAULT_EDITOR_COMMAND,
+  EDITOR_KINDS,
+  LOCAL_USER_ID,
+  THEME_SETTINGS,
+  type ProviderAuthState,
+  type ProviderAuthStatus,
+  type ProviderInput
+} from '@shared/types'
 import type { AppContext } from '../app-context'
 import { createTestDatabase, type TestDatabase } from '../db/testing'
 import { createInsecureSecretStore } from '../secrets'
 import type { FetchImpl } from '../providers/discovery'
 import { createTestAppContext, type TestAppContext } from '../testing'
 import { buildHandlers, notImplemented } from './index'
+import { OPEN_IN_EDITOR_UNAVAILABLE } from './system'
 
 /**
  * An `AppContext` backed by the S1.2 test fixture: a real temporary database
@@ -84,6 +97,71 @@ describe('handlers/buildHandlers', () => {
     })
   })
 
+  /**
+   * The half of `system.openInEditor` the Electron-free layer really implements
+   * (S5.7). The URL half rejects here and is layered over by
+   * `src/main/ipc/editor.ts`; the path rules themselves are covered in
+   * `src/main/editor/open.test.ts`, so these are the handler's own three answers.
+   */
+  describe('system.openInEditor', () => {
+    let root: string
+    let chatId: string
+
+    beforeEach(() => {
+      // Realpathed for the same reason `editor/open.test.ts` does it: macOS puts
+      // `tmpdir()` behind the `/var` -> `/private/var` symlink.
+      root = realpathSync(mkdtempSync(join(tmpdir(), 'witena-open-')))
+      writeFileSync(join(root, 'a.ts'), 'export const answer = 42\n', 'utf8')
+      chatId = ctx.repos.chats.create({ title: 'Bound', workdir: root }, ctx.userId).id
+    })
+
+    afterEach(() => {
+      rmSync(root, { recursive: true, force: true })
+    })
+
+    it('rejects with a pointer at the overlay while the editor is a URL scheme', async () => {
+      await expect(
+        handlers['system.openInEditor'](ctx, { path: join(root, 'a.ts'), line: 3, chatId })
+      ).rejects.toMatchObject({ code: 'internal', message: OPEN_IN_EDITOR_UNAVAILABLE })
+    })
+
+    it('runs a custom command line, with the path substituted and quoted', async () => {
+      const marker = join(root, 'marker.txt')
+      ctx.repos.settings.update(
+        { editor: { kind: 'custom', command: `cat {path} > '${marker}'` } },
+        ctx.userId
+      )
+
+      await handlers['system.openInEditor'](ctx, { path: join(root, 'a.ts'), chatId })
+
+      // The child is detached and nothing is awaited by contract, so the file it
+      // writes is the only observable and it has to be waited for.
+      await expect
+        .poll(() => (existsSync(marker) ? readFileSync(marker, 'utf8') : null), { timeout: 5_000 })
+        .toBe('export const answer = 42\n')
+    })
+
+    it('refuses a path outside the chat folder before reading the setting', async () => {
+      ctx.repos.settings.update({ editor: { kind: 'custom' } }, ctx.userId)
+
+      await expect(
+        handlers['system.openInEditor'](ctx, { path: '/etc/passwd', chatId })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'editor_path_outside_workdir' }
+      })
+    })
+
+    it('refuses a relative path', async () => {
+      await expect(
+        handlers['system.openInEditor'](ctx, { path: 'a.ts', chatId })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'editor_path_not_absolute' }
+      })
+    })
+  })
+
   describe('settings.get / settings.update', () => {
     it('returns the defaults before anything was stored', async () => {
       await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
@@ -110,9 +188,96 @@ describe('handlers/buildHandlers', () => {
       ).rejects.toMatchObject({ code: 'validation' })
     })
 
+    it('stores each of the three themes', async () => {
+      for (const theme of THEME_SETTINGS) {
+        const updated = await handlers['settings.update'](ctx, { patch: { theme } })
+        expect(updated.theme).toBe(theme)
+      }
+    })
+
+    it('rejects a theme that is not one of them', async () => {
+      // The one setting whose *value* is validated (S5.8): a stored `'sepia'`
+      // would resolve to light and leave the user with a theme no control in the
+      // app explains.
+      await expect(
+        handlers['settings.update'](ctx, { patch: { theme: 'sepia' as never } })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('stores the first-run Skip flag and keeps it (S7.5)', async () => {
+      const updated = await handlers['settings.update'](ctx, {
+        patch: { onboardingDismissed: true }
+      })
+
+      expect(updated.onboardingDismissed).toBe(true)
+      // The flag is what makes Skip belong to the installation rather than to
+      // one window, so it has to survive the next read.
+      await expect(handlers['settings.get'](ctx)).resolves.toMatchObject({
+        onboardingDismissed: true
+      })
+    })
+
+    it('refuses a Skip flag that is not a boolean', async () => {
+      await expect(
+        handlers['settings.update'](ctx, { patch: { onboardingDismissed: 'yes' as never } })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
     it('rejects unknown keys instead of storing them', async () => {
       await expect(
         handlers['settings.update'](ctx, { patch: { nope: true } as never })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('stores each of the three editor kinds', async () => {
+      for (const kind of EDITOR_KINDS) {
+        const updated = await handlers['settings.update'](ctx, { patch: { editor: { kind } } })
+        expect(updated.editor.kind).toBe(kind)
+        // Field by field, like `timeouts`: the kind is a click and the command is
+        // a field that commits on blur, so neither may clear the other (S5.7).
+        expect(updated.editor.command).toBe(DEFAULT_EDITOR_COMMAND)
+      }
+    })
+
+    it('merges the editor command without touching the kind', async () => {
+      await handlers['settings.update'](ctx, { patch: { editor: { kind: 'custom' } } })
+      const updated = await handlers['settings.update'](ctx, {
+        patch: { editor: { command: 'subl {path}:{line}' } }
+      })
+
+      expect(updated.editor).toEqual({ kind: 'custom', command: 'subl {path}:{line}' })
+    })
+
+    it('rejects an editor kind that is not one of them', async () => {
+      await expect(
+        handlers['settings.update'](ctx, { patch: { editor: { kind: 'emacs' as never } } })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('rejects a blank or non-string editor command', async () => {
+      for (const command of ['', '   ', 42 as never]) {
+        await expect(
+          handlers['settings.update'](ctx, { patch: { editor: { command } } })
+        ).rejects.toMatchObject({ code: 'validation' })
+      }
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('rejects an editor patch that is not an object, and unknown keys in it', async () => {
+      await expect(
+        handlers['settings.update'](ctx, { patch: { editor: 'vscode' as never } })
+      ).rejects.toMatchObject({ code: 'validation' })
+      await expect(
+        handlers['settings.update'](ctx, { patch: { editor: { nope: true } as never } })
       ).rejects.toMatchObject({ code: 'validation' })
 
       await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
@@ -150,6 +315,51 @@ describe('handlers/buildHandlers', () => {
 
       await expect(handlers['providers.list'](ctx)).resolves.toEqual([created])
       await expect(handlers['providers.get'](ctx, { id: created.id })).resolves.toEqual(created)
+    })
+
+    /**
+     * S7.6. `keyState` is filled by the handler from `ctx.unreadableSecrets`,
+     * which the startup migration and `resolveProvider` write to — so the three
+     * cases here are "no key at all", "a key this build wrote" and "a key it
+     * cannot read", and the third is the only one the UI explains.
+     */
+    it('reports keyState for every provider it returns', async () => {
+      const keyed = await handlers['providers.create'](ctx, { input: deepseek })
+      const keyless = await handlers['providers.create'](ctx, {
+        input: { type: 'openai-compatible', name: 'Ollama', baseUrl: 'http://x/v1', models: [] }
+      })
+
+      expect(keyed.keyState).toBe('ok')
+      expect(keyless.keyState).toBe('none')
+
+      ctx.unreadableSecrets.add(keyed.id)
+
+      await expect(handlers['providers.get'](ctx, { id: keyed.id })).resolves.toMatchObject({
+        hasApiKey: true,
+        keyState: 'unreadable'
+      })
+      const listed = await handlers['providers.list'](ctx)
+      expect(listed.map((provider) => provider.keyState)).toEqual(['unreadable', 'none'])
+    })
+
+    it('clears the unreadable mark when a new key is saved over it', async () => {
+      const created = await handlers['providers.create'](ctx, { input: deepseek })
+      ctx.unreadableSecrets.add(created.id)
+
+      // A patch that does not touch the key changes nothing about the problem.
+      const renamed = await handlers['providers.update'](ctx, {
+        id: created.id,
+        patch: { name: 'DeepSeek (work)' }
+      })
+      expect(renamed.keyState).toBe('unreadable')
+
+      const pasted = await handlers['providers.update'](ctx, {
+        id: created.id,
+        patch: { apiKey: 'sk-pasted-again' }
+      })
+
+      expect(pasted.keyState).toBe('ok')
+      expect(ctx.unreadableSecrets.has(created.id)).toBe(false)
     })
 
     it('rejects a provider with no name', async () => {
@@ -243,6 +453,297 @@ describe('handlers/buildHandlers', () => {
       })
     })
 
+    /* -- sign-in mode (S5.3) --------------------------------------------- */
+
+    /** An Anthropic provider that authenticates with the user's account. */
+    const signedInProvider: ProviderInput = {
+      type: 'anthropic',
+      name: 'Claude',
+      presetId: 'anthropic',
+      models: ['claude-sonnet-4-5'],
+      auth: 'oauth'
+    }
+
+    /** An Google provider that authenticates with the user's Google account. */
+    const googleSignInProvider: ProviderInput = {
+      type: 'google',
+      name: 'Gemini',
+      presetId: 'google',
+      models: ['gemini-2.5-pro'],
+      auth: 'oauth'
+    }
+
+    /** A context whose CLIs report a logged-in profile, spawning nothing. */
+    function withCli(state: ProviderAuthState, project = 'my-project'): AppContext {
+      const status = (): Promise<ProviderAuthStatus> => Promise.resolve({ state })
+      const googleStatus = (): Promise<ProviderAuthStatus> =>
+        Promise.resolve(state === 'signed-in' ? { state, project } : { state })
+      return {
+        ...ctx,
+        anthropicCli: {
+          status,
+          login: status,
+          logout: status,
+          accessToken: () => Promise.resolve('oat-token')
+        },
+        googleCli: {
+          status: googleStatus,
+          login: googleStatus,
+          logout: googleStatus,
+          accessToken: () => Promise.resolve('ya29-token'),
+          project: () => Promise.resolve(project),
+          setQuotaProject: googleStatus
+        }
+      }
+    }
+
+    it('saves a provider that signs in with no key at all', async () => {
+      const created = await handlers['providers.create'](withCli('signed-in'), {
+        input: signedInProvider
+      })
+
+      expect(created).toMatchObject({ auth: 'oauth', hasApiKey: false })
+      expect(ctx.repos.providers.getApiKeyCiphertext(created.id, ctx.userId)).toBeNull()
+    })
+
+    it('refuses to sign in with a provider type that has no flow yet', async () => {
+      await expect(
+        handlers['providers.create'](withCli('signed-in'), {
+          input: { ...signedInProvider, type: 'openai', name: 'OpenAI', presetId: 'openai' }
+        })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'oauth_unsupported_provider' }
+      })
+    })
+
+    it('refuses to point an account credential at a custom endpoint', async () => {
+      await expect(
+        handlers['providers.create'](withCli('signed-in'), {
+          input: { ...signedInProvider, baseUrl: 'https://proxy.example.com' }
+        })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'oauth_custom_base_url' }
+      })
+    })
+
+    it('rejects an authentication mode that is not one of the two', async () => {
+      await expect(
+        handlers['providers.create'](ctx, {
+          input: { ...signedInProvider, auth: 'magic' as never }
+        })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('refuses to save a sign-in provider when the CLI is missing or signed out', async () => {
+      await expect(
+        handlers['providers.create'](withCli('not-installed'), { input: signedInProvider })
+      ).rejects.toMatchObject({ code: 'ant_missing' })
+
+      await expect(
+        handlers['providers.create'](withCli('signed-out'), { input: signedInProvider })
+      ).rejects.toMatchObject({ code: 'ant_not_logged_in' })
+
+      await expect(handlers['providers.list'](ctx)).resolves.toEqual([])
+    })
+
+    it('checks the merged record on update, not the patch alone', async () => {
+      const keyed = await handlers['providers.create'](ctx, {
+        input: {
+          type: 'openai',
+          name: 'OpenAI',
+          presetId: 'openai',
+          models: ['gpt-4o'],
+          apiKey: 'sk-openai'
+        }
+      })
+
+      // `{ auth: 'oauth' }` says nothing on its own; the stored type refuses it.
+      await expect(
+        handlers['providers.update'](withCli('signed-in'), {
+          id: keyed.id,
+          patch: { auth: 'oauth' }
+        })
+      ).rejects.toMatchObject({ details: { reason: 'oauth_unsupported_provider' } })
+
+      const anthropic = await handlers['providers.create'](ctx, {
+        input: { type: 'anthropic', name: 'Claude', models: [], apiKey: 'sk-ant' }
+      })
+      const switched = await handlers['providers.update'](withCli('signed-in'), {
+        id: anthropic.id,
+        patch: { auth: 'oauth' }
+      })
+
+      expect(switched.auth).toBe('oauth')
+    })
+
+    it('reads the model list with a bearer token and no key header', async () => {
+      const seen: Record<string, string>[] = []
+      const fetchImpl: FetchImpl = (_input, init) => {
+        const headers: Record<string, string> = {}
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value
+        })
+        seen.push(headers)
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: 'claude-sonnet-4-5' }] }), { status: 200 })
+        )
+      }
+
+      await expect(
+        handlers['providers.fetchModels'](
+          { ...withCli('signed-in'), fetchImpl },
+          { provider: { draft: signedInProvider } }
+        )
+      ).resolves.toEqual(['claude-sonnet-4-5'])
+
+      expect(seen[0]?.['authorization']).toBe('Bearer oat-token')
+      expect(seen[0]?.['x-api-key']).toBeUndefined()
+      expect(seen[0]?.['anthropic-beta']).toContain('oauth-2025-04-20')
+      expect(seen[0]?.['anthropic-version']).toBe('2023-06-01')
+    })
+
+    it('answers the three auth methods straight from the CLI', async () => {
+      const signedIn = withCli('signed-in')
+
+      await expect(
+        handlers['providers.authStatus'](signedIn, { type: 'anthropic' })
+      ).resolves.toEqual({ state: 'signed-in' })
+      await expect(handlers['providers.login'](signedIn, { type: 'anthropic' })).resolves.toEqual({
+        state: 'signed-in'
+      })
+      await expect(
+        handlers['providers.logout'](withCli('signed-out'), { type: 'anthropic' })
+      ).resolves.toEqual({ state: 'signed-out' })
+    })
+
+    it('routes the three auth methods to the CLI the type names', async () => {
+      const signedIn = withCli('signed-in')
+
+      // The same three methods, a different machine fact behind them: `gcloud`
+      // answers with the quota project, which `ant` has no notion of.
+      await expect(handlers['providers.authStatus'](signedIn, { type: 'google' })).resolves.toEqual(
+        { state: 'signed-in', project: 'my-project' }
+      )
+      await expect(handlers['providers.login'](signedIn, { type: 'google' })).resolves.toEqual({
+        state: 'signed-in',
+        project: 'my-project'
+      })
+    })
+
+    it('refuses a sign-in type that has no flow, rather than picking one', async () => {
+      // `openai` is a real provider type and not a sign-in one; the refusal names
+      // itself so the panel can say which rule was broken.
+      await expect(
+        handlers['providers.authStatus'](withCli('signed-in'), { type: 'openai' as never })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'oauth_unsupported_provider' }
+      })
+    })
+
+    it('saves a Google provider that signs in, with no key at all', async () => {
+      const created = await handlers['providers.create'](withCli('signed-in'), {
+        input: googleSignInProvider
+      })
+
+      expect(created).toMatchObject({ type: 'google', auth: 'oauth', hasApiKey: false })
+      expect(ctx.repos.providers.getApiKeyCiphertext(created.id, ctx.userId)).toBeNull()
+    })
+
+    it('refuses to save a Google sign-in provider when gcloud is missing or signed out', async () => {
+      await expect(
+        handlers['providers.create'](withCli('not-installed'), { input: googleSignInProvider })
+      ).rejects.toMatchObject({ code: 'gcloud_missing' })
+
+      await expect(
+        handlers['providers.create'](withCli('signed-out'), { input: googleSignInProvider })
+      ).rejects.toMatchObject({ code: 'gcloud_not_logged_in' })
+    })
+
+    it('saves a signed-in Google provider that has no quota project yet', async () => {
+      // A missing project is a gap the panel offers to fill, not a broken login:
+      // refusing the save here would tell the user the wrong thing.
+      const created = await handlers['providers.create'](withCli('signed-in', ''), {
+        input: googleSignInProvider
+      })
+
+      expect(created).toMatchObject({ auth: 'oauth' })
+    })
+
+    it('sets the quota project through gcloud and answers with the new status', async () => {
+      const seen: string[] = []
+      const context: AppContext = {
+        ...ctx,
+        googleCli: {
+          ...withCli('signed-in').googleCli,
+          setQuotaProject: (project: string) => {
+            seen.push(project)
+            return Promise.resolve({ state: 'signed-in' as const, project })
+          }
+        }
+      }
+
+      await expect(
+        handlers['providers.setQuotaProject'](context, { project: 'witena-dev' })
+      ).resolves.toEqual({ state: 'signed-in', project: 'witena-dev' })
+      expect(seen).toEqual(['witena-dev'])
+
+      await expect(
+        handlers['providers.setQuotaProject'](context, { project: '  ' })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('reads the Google model list with a bearer token and no key in the URL', async () => {
+      const seen: { url: string; headers: Record<string, string> }[] = []
+      const fetchImpl: FetchImpl = (input, init) => {
+        const headers: Record<string, string> = {}
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value
+        })
+        seen.push({ url: String(input), headers })
+        return Promise.resolve(
+          new Response(JSON.stringify({ models: [{ name: 'models/gemini-2.5-pro' }] }), {
+            status: 200
+          })
+        )
+      }
+
+      await expect(
+        handlers['providers.fetchModels'](
+          { ...withCli('signed-in'), fetchImpl },
+          { provider: { draft: googleSignInProvider } }
+        )
+      ).resolves.toEqual(['gemini-2.5-pro'])
+
+      expect(seen[0]?.headers['authorization']).toBe('Bearer ya29-token')
+      expect(seen[0]?.headers['x-goog-user-project']).toBe('my-project')
+      expect(seen[0]?.headers['x-goog-api-key']).toBeUndefined()
+      // An empty `?key=` alongside a bearer token is refused by the API.
+      expect(seen[0]?.url).not.toContain('key=')
+    })
+
+    it('answers "not installed" as a status, but refuses to run a sign-in', async () => {
+      // The default test context has no CLI at all, which is the state of a
+      // machine that never installed one. Asking *about* it is fine; asking it
+      // to do something is the failure the panel's error line shows.
+      await expect(handlers['providers.authStatus'](ctx, { type: 'anthropic' })).resolves.toEqual({
+        state: 'not-installed'
+      })
+      await expect(handlers['providers.login'](ctx, { type: 'anthropic' })).rejects.toMatchObject({
+        code: 'ant_missing'
+      })
+
+      // The same for the Google half, with the Google codes.
+      await expect(handlers['providers.authStatus'](ctx, { type: 'google' })).resolves.toEqual({
+        state: 'not-installed'
+      })
+      await expect(handlers['providers.login'](ctx, { type: 'google' })).rejects.toMatchObject({
+        code: 'gcloud_missing'
+      })
+    })
+
     it('scopes every read to the context user', async () => {
       const created = await handlers['providers.create'](ctx, { input: deepseek })
       const other: AppContext = { ...ctx, userId: 'someone-else' }
@@ -314,10 +815,23 @@ describe('handlers/buildHandlers', () => {
 
 describe('handlers/stubs', () => {
   /**
-   * What is left is `system.pickFolder`, which is declared here and implemented
-   * in `src/main/ipc/dialogs.ts` because it is the one method that needs a
-   * window. Outside the Electron transport it must reject rather than resolve
-   * `null`, which would look to the renderer like the user cancelling.
+   * What is left is the methods that need a window: the three native dialogs
+   * (`system.pickFolder`, and S5.10's `system.pickSavePath` / `system.pickPaths`)
+   * implemented in `src/main/ipc/dialogs.ts`, and `system.applyTheme` (S5.8), in
+   * `src/main/ipc/theme.ts`. Outside the Electron transport all of them must
+   * reject rather than resolve — `null` or `[]` would look to the renderer like
+   * the user cancelling, and a silent `undefined` like window chrome that was
+   * tinted.
+   *
+   * `system.openInEditor` (S5.7) is excluded from the sweep rather than listed
+   * as a stub, because it is the one method that is *conditionally* electron:
+   * with `editor.kind: 'custom'` it runs here, and it reaches the database before
+   * it can decide, which this sweep's context-shaped `{ userId }` has no room
+   * for. Both of its branches have their own cases above.
+   *
+   * `chats.goalStatus` (S5.10) is excluded for the ordinary reason: it is a real
+   * handler, implemented in `handlers/chats.ts`, and it is listed with the rest
+   * of the implemented surface below.
    */
   it('every method the Electron-free layer cannot implement rejects rather than resolving undefined', async () => {
     const handlers = buildHandlers()
@@ -374,7 +888,20 @@ describe('handlers/stubs', () => {
       'memory.search',
       // S4.1, S4.3
       'chats.search',
-      'messages.usageSummary'
+      'messages.usageSummary',
+      // S5.3, and S5.13's fourth
+      'providers.authStatus',
+      'providers.login',
+      'providers.logout',
+      'providers.setQuotaProject',
+      // S5.4
+      'permission.reply',
+      // S5.6
+      'chat.handoff',
+      // S5.7 — see the comment above: half of it is implemented here.
+      'system.openInEditor',
+      // S5.10
+      'chats.goalStatus'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

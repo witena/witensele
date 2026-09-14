@@ -45,6 +45,21 @@
  * `tool-call` and `tool-result` parts render as `ToolCard`, paired by
  * `toolCallId` in `collectToolCalls`. No tool exists until S3.1; the renderer
  * handles the parts now so the first real call is visible on the day it happens.
+ *
+ * ## Diffs and file references (S5.5, S5.7)
+ *
+ * A `diff` part is one file the executor changed, drawn as a collapsed
+ * `DiffBlock` under the tool cards and above the agent's own summary — the
+ * summary is what should be read first, the diffs are what it is about. A
+ * `file-ref` part is a `path:line` chip. Both come from `transcript-rows.ts`.
+ *
+ * Since S5.7 all four surfaces of a row open a file in the editor — the chip, the
+ * diff header, a file tool card's "open" icon, and a path the detector found in
+ * the body text — and all four need the same two values: the chat's id, which
+ * confines the path server-side, and its working directory, which absolutises a
+ * relative one. The id is already a prop; the folder is read from the chats store
+ * by id, the way the presence dot is, rather than threaded through `MessageList`.
+ * A chat with no folder simply draws none of it.
  */
 import clsx from 'clsx'
 import { ChevronRight } from 'lucide-react'
@@ -65,12 +80,17 @@ import type {
 import { translateNotice } from '../../i18n/notices'
 import { messageText, wasStopped } from '../../lib/message-view'
 import { useAgent, useAgentsStore } from '../../stores/agents'
+import { useChatWorkdir } from '../../stores/chats'
 import { useAgentPresence } from '../../stores/presence'
 import { useProvidersStore } from '../../stores/providers'
 import { Avatar, Badge } from '../ui'
+import { isExecutor } from '../agents/agent-display'
+import { DiffBlock } from './diff-block'
+import { FileRefChip } from './file-ref-chip'
 import { Markdown } from './markdown'
 import { ToolCard } from './tool-card'
 import { collectToolCalls } from './tool-call'
+import { collectDiffs, collectFileRefs } from './transcript-rows'
 
 /** Literal `t()` calls so the used-keys guard can see every status label. */
 function statusLabel(t: TFunction, message: Message): string | null {
@@ -195,6 +215,7 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
   const agents = useAgentsStore((state) => state.agents)
   const providers = useProvidersStore((state) => state.providers)
   const presence = useAgentPresence(chatId, message.senderId)
+  const workdir = useChatWorkdir(chatId)
 
   const mentionMembers: MentionMember[] = members.map((member) => ({
     agentId: member.id,
@@ -217,6 +238,8 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
   const reasoning = message.parts.filter(isReasoning).map((part) => part.text).join('')
   const notices = message.parts.filter(isNotice)
   const toolCalls = collectToolCalls(message.parts)
+  const diffs = collectDiffs(message.parts)
+  const fileRefs = collectFileRefs(message.parts)
   const label = statusLabel(t, message)
   const dimmed = message.status === 'passed' || message.status === 'skipped'
   const usageHint = usageTooltip(t, message, agent, providers)
@@ -304,6 +327,19 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
               {agent.modelId}
             </Badge>
           ) : null}
+          {/* The one member allowed to change things (S5.2). It belongs on every
+              message rather than only in the member panel: reading a transcript
+              afterwards, "who wrote to the disk" is the first question. */}
+          {agent && isExecutor(agent) ? (
+            <Badge
+              tone="accent"
+              font="sans"
+              data-testid="message-executor"
+              title={t('agents.executorBadgeTitle')}
+            >
+              {t('agents.executorBadge')}
+            </Badge>
+          ) : null}
           {message.round > 0 ? (
             <span data-testid="message-round" className="text-fg-faint">
               {t('chat.round', { round: message.round })}
@@ -355,8 +391,25 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
         ) : null}
 
         {toolCalls.map((call) => (
-          <ToolCard key={call.toolCallId} call={call} />
+          <ToolCard key={call.toolCallId} call={call} chatId={chatId} workdir={workdir} />
         ))}
+
+        {diffs.map((part, index) => (
+          <DiffBlock key={`${part.path}-${index}`} part={part} chatId={chatId} workdir={workdir} />
+        ))}
+
+        {fileRefs.length > 0 ? (
+          <div data-testid="message-file-refs" className="flex flex-wrap items-center gap-1.5">
+            {fileRefs.map((part, index) => (
+              <FileRefChip
+                key={`${part.path}-${part.line ?? ''}-${index}`}
+                part={part}
+                chatId={chatId}
+                workdir={workdir}
+              />
+            ))}
+          </div>
+        ) : null}
 
         {notices.map((part, index) => (
           <p
@@ -371,7 +424,9 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
 
         {text.length > 0 && !dimmed ? (
           <div data-testid="message-text">
-            <Markdown mentions={mentionMembers}>{text}</Markdown>
+            <Markdown mentions={mentionMembers} workdir={workdir} chatId={chatId}>
+              {text}
+            </Markdown>
             {message.status === 'streaming' ? (
               <span
                 data-testid="message-cursor"

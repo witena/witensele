@@ -17,6 +17,11 @@
  * a button and getting a red line. `validateDraft` is pure and exported so the
  * two stay comparable in a test rather than by inspection.
  *
+ * It covers the three fields the form can get wrong: name, provider and model.
+ * The handler also bounds `params.temperature` and `params.maxTokens`, but since
+ * S5.9 no control writes either, so the only values that can reach a draft come
+ * from a record the handler already accepted.
+ *
  * ## Why there is no `agent.created` event
  *
  * Agents are edited on one screen by one user, so the store applies its own
@@ -25,6 +30,7 @@
  * when an agent is renamed or deleted from the other page.
  */
 import { create } from 'zustand'
+import { suggestedModel, type AgentTemplate } from '@shared/agent-templates'
 import type { Agent, AgentInput, AgentParams, BackendErrorCode } from '@shared/types'
 import { AGENT_AVATAR_COLORS, DEFAULT_AGENT_AVATAR, avatarInitial } from '../components/agents/agent-display'
 import { BackendClientError } from '../lib/backend'
@@ -44,16 +50,13 @@ export type AgentEditorMode = 'idle' | 'create' | 'edit'
  */
 export const DUPLICATE_SUFFIX = 'copy'
 
-/** Bounds the editor enforces, mirroring `src/main/handlers/agents.ts`. */
-export const TEMPERATURE_MIN = 0
-export const TEMPERATURE_MAX = 2
-
 /**
  * A params patch where a field may be set to `undefined` to *remove* it.
  *
  * `Partial<AgentParams>` cannot express that under `exactOptionalPropertyTypes`:
  * there, an absent key and a key holding `undefined` are different types, and
- * "clear the temperature field" has to be spellable.
+ * "turn the reasoning toggle back off" has to mean "remove the field" rather
+ * than "store `undefined`", which is not JSON.
  */
 export type AgentParamsPatch = { [K in keyof AgentParams]?: AgentParams[K] | undefined }
 
@@ -62,8 +65,6 @@ export interface AgentDraftErrors {
   name?: 'required' | 'at' | 'taken'
   providerId?: 'required'
   modelId?: 'required'
-  temperature?: 'range'
-  maxTokens?: 'range'
 }
 
 function describe(cause: unknown): string {
@@ -137,16 +138,10 @@ export function validateDraft(
   if (draft.providerId.trim().length === 0) errors.providerId = 'required'
   if (draft.modelId.trim().length === 0) errors.modelId = 'required'
 
-  const { temperature, maxTokens } = draft.params
-  if (
-    temperature !== undefined &&
-    (!Number.isFinite(temperature) || temperature < TEMPERATURE_MIN || temperature > TEMPERATURE_MAX)
-  ) {
-    errors.temperature = 'range'
-  }
-  if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens <= 0)) {
-    errors.maxTokens = 'range'
-  }
+  // `params.temperature` / `params.maxTokens` are not checked here any more: no
+  // control writes them since S5.9, so the only values that reach a draft come
+  // from a stored record the handler already accepted. `agents.create` /
+  // `agents.update` still enforce the ranges for any other caller.
 
   return errors
 }
@@ -217,6 +212,20 @@ export interface AgentsState {
   remove: (id: string) => Promise<void>
   /** Copies the selected agent under a free name and opens it. Never rejects. */
   duplicate: (id: string) => Promise<Agent | null>
+  /**
+   * Creates an agent from one of `AGENT_TEMPLATES` (S7.5). Never rejects.
+   *
+   * Deliberately does **not** open the editor: the caller is the first-run card
+   * on the chat page, and leaving the agents page holding a draft the user
+   * never asked for would be a surprise the next time they went there. The name
+   * is uniquified the way `duplicate` does, so pressing the same tile twice
+   * yields `Critic copy` rather than the handler's `name taken` refusal.
+   */
+  createFromTemplate: (
+    template: AgentTemplate,
+    providerId: string,
+    models: readonly string[]
+  ) => Promise<Agent | null>
 
   startCreate: () => void
   startEdit: (id: string) => void
@@ -297,6 +306,43 @@ export const useAgentsStore = create<AgentsState>()((set, get) => ({
       const created = await get().create(input)
       set({ mode: 'edit', selectedId: created.id, draft: draftFromAgent(created), dirty: false })
       return created
+    } catch (cause) {
+      set({ error: describe(cause), errorCode: classify(cause) })
+      return null
+    }
+  },
+
+  async createFromTemplate(template, providerId, models) {
+    const modelId = suggestedModel(template, models)
+    // No model means no provider worth pointing at; the card keeps the step open
+    // rather than writing an agent that cannot speak.
+    if (!providerId || !modelId) return null
+
+    const palette = AGENT_AVATAR_COLORS[template.paletteIndex] ?? DEFAULT_AGENT_AVATAR
+    // The tile's own name unless something already holds it, in which case the
+    // same `<name> copy` rule the duplicate button uses. `agents.create` refuses
+    // a clash, and a refusal on a first-run card explains nothing.
+    const taken = get().agents.map((agent) => agent.name)
+    const clash = taken.some(
+      (name) => name.trim().toLowerCase() === template.name.toLowerCase()
+    )
+
+    const input: AgentInput = {
+      name: clash ? duplicateName(template.name, taken) : template.name,
+      avatar: { kind: 'initial', text: avatarInitial(template.name), ...palette },
+      description: template.description,
+      systemPrompt: template.systemPrompt,
+      providerId,
+      modelId,
+      params: {},
+      skillNames: [],
+      mcpServerIds: [],
+      memoryEnabled: false,
+      role: 'participant'
+    }
+
+    try {
+      return await get().create(input)
     } catch (cause) {
       set({ error: describe(cause), errorCode: classify(cause) })
       return null

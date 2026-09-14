@@ -21,16 +21,31 @@ import { createMcpManager, createSupervisor, MEMORY_DIR } from './app-context'
 import { createRepositories } from './db/repositories'
 import type { TestDatabase } from './db/testing'
 import { createEventBus } from './events/bus'
+import { createPermissionGate } from './executor/permissions'
 import type { McpManager, McpManagerOptions } from './mcp/manager'
 import { createMemoryStore } from './memory/store'
 import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat-runner'
 import type { AgentSupervisor } from './presence/supervisor'
+import type { AnthropicCli } from './providers/anthropic-cli'
+import { antMissing } from './providers/anthropic-cli'
+import type { GoogleCli } from './providers/google-cli'
+import { gcloudMissing } from './providers/google-cli'
 import type { FetchImpl } from './providers/discovery'
 import { createInsecureSecretStore, type SecretStore } from './secrets'
 
 export interface TestAppContextOptions {
   /** Injected outbound HTTP, so a test never opens a socket. */
   fetchImpl?: FetchImpl
+  /**
+   * The secret store, for a suite that is about encryption itself (S7.6).
+   *
+   * Defaults to the insecure `plain:` fallback, which is what every other suite
+   * wants: it needs no key file and no platform support. A test that exercises
+   * the file key or the migration passes `createFileKeySecretStore` here, and
+   * the repositories are bound to whatever arrives — `encrypt` and
+   * `secrets.decrypt` must always be two halves of the same store.
+   */
+  secrets?: SecretStore
   /** Passed to every `ChatRunner`; a test injects `createModel` here. */
   runner?: ChatRunnerOptions
   /**
@@ -50,6 +65,85 @@ export interface TestAppContextOptions {
    * `npx` download, and a deterministic tool list.
    */
   mcp?: Omit<McpManagerOptions, 'getServer'>
+  /**
+   * The Anthropic CLI (S5.3). Defaults to `absentAnthropicCli()`, which reports
+   * "not installed" and spawns nothing: a unit test must never run a binary that
+   * happens to be on the developer's machine, or the suite's result would depend
+   * on whether they had signed in.
+   */
+  anthropicCli?: AnthropicCli
+  /**
+   * The Google CLI (S5.13). Defaults to `absentGoogleCli()`, for the same
+   * reason: a machine that has never installed the Google Cloud SDK is the
+   * honest baseline, and a suite whose result depended on the developer's own
+   * `gcloud auth application-default login` would be no test at all.
+   */
+  googleCli?: GoogleCli
+  /**
+   * Request ids for the `PermissionGate` (S5.4).
+   *
+   * A suite that answers a prompt has to know its id; injecting a counter is
+   * simpler than fishing the `permission.requested` event out of the array,
+   * and it makes the assertions readable (`request-1`).
+   */
+  newRequestId?: () => string
+}
+
+/**
+ * A stand-in for Electron's `safeStorage` (S7.6).
+ *
+ * Used two ways: as the **wrapper** around the key file on a signed build, and
+ * as the **legacy reader** the secret migration decrypts pre-S7.6 rows with. It
+ * reproduces the one property that matters — a value is only readable by a store
+ * built with the same `identity`, which is exactly what repackaging an unsigned
+ * build changes — and produces the same `djEw…` shape the user's database holds,
+ * so the prefix rules are tested against realistic input.
+ */
+export function fakeSafeStorage(identity = 'build-1'): SecretStore {
+  return {
+    isAvailable: () => true,
+    encrypt: (plain) => Buffer.from(`v10:${identity}:${plain}`, 'utf8').toString('base64'),
+    decrypt: (cipher) => {
+      const raw = Buffer.from(cipher, 'base64').toString('utf8')
+      const prefix = `v10:${identity}:`
+      if (!raw.startsWith(prefix)) throw new Error('decryption failed')
+      return raw.slice(prefix.length)
+    }
+  }
+}
+
+/**
+ * A CLI that is not there.
+ *
+ * The default for every test context, and the honest baseline: `ant` is
+ * software the user installs separately, so "absent" is the state the suite
+ * should assume unless it is the thing under test.
+ */
+export function absentAnthropicCli(): AnthropicCli {
+  // Exactly what the real implementation does with no binary to run: `status`
+  // answers with a state, everything that would have to *execute* rejects.
+  const missing = (): Promise<never> => Promise.reject(antMissing())
+  return {
+    status: () => Promise.resolve({ state: 'not-installed' }),
+    login: missing,
+    logout: missing,
+    accessToken: missing
+  }
+}
+
+/**
+ * A Google CLI that is not there. The Google half of `absentAnthropicCli`.
+ */
+export function absentGoogleCli(): GoogleCli {
+  const missing = (): Promise<never> => Promise.reject(gcloudMissing())
+  return {
+    status: () => Promise.resolve({ state: 'not-installed' }),
+    login: missing,
+    logout: missing,
+    accessToken: missing,
+    project: missing,
+    setQuotaProject: missing
+  }
 }
 
 export interface TestAppContext {
@@ -67,7 +161,7 @@ export function createTestAppContext(
   const bus = createEventBus()
   const events: BackendEvent[] = []
   bus.subscribe((event) => events.push(event))
-  const secrets = createInsecureSecretStore()
+  const secrets = options.secrets ?? createInsecureSecretStore()
 
   const ctx: AppContext = {
     db: database.handle,
@@ -77,15 +171,23 @@ export function createTestAppContext(
     repos: createRepositories(database.handle.db, { encrypt: (plain) => secrets.encrypt(plain) }),
     events: bus,
     secrets,
+    unreadableSecrets: new Set<string>(),
     userId: LOCAL_USER_ID,
     // Tied off immediately below, as in `createAppContext`.
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
     memory: createMemoryStore(join(database.dir, MEMORY_DIR)),
+    permissions: createPermissionGate({
+      emit: (event) => bus.emit(event),
+      ...(options.newRequestId ? { newRequestId: options.newRequestId } : {})
+    }),
+    anthropicCli: options.anthropicCli ?? absentAnthropicCli(),
+    googleCli: options.googleCli ?? absentGoogleCli(),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close: () => {
       ctx.supervisor.stop()
+      ctx.permissions.abortAll()
       void ctx.mcp.closeAll().catch(() => undefined)
       database.cleanup()
     }

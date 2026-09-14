@@ -12,7 +12,7 @@
  * Chinese — CLAUDE.md rule #1 exempts only `briefing.zh-CN.ts`.
  */
 import { describe, expect, it } from 'vitest'
-import type { Language } from '@shared/types'
+import type { ChatGoal, Language } from '@shared/types'
 import {
   buildGroupBriefing,
   PASS_TOKEN,
@@ -76,6 +76,142 @@ describe('buildGroupBriefing', () => {
 
     expect(briefing).toContain(architect.name)
     expect(briefing).toContain(PASS_TOKEN)
+  })
+})
+
+/**
+ * The goal section (S5.10).
+ *
+ * Content, not wording, like the rest of this file — with one exception that is
+ * the whole point of the feature: the user's **description** has to appear
+ * verbatim in every language, because it is the one part of the prompt they
+ * wrote themselves.
+ */
+describe('buildGroupBriefing (goal)', () => {
+  const goal = (patch: Partial<ChatGoal> = {}): ChatGoal => ({
+    kind: 'discussion',
+    description: 'Decide whether to split the runner',
+    materials: [],
+    ...patch
+  })
+
+  const brief = (language: Language, value: ChatGoal | null): string =>
+    buildGroupBriefing({ language, self: architect, members: [architect, reviewer], goal: value })
+
+  for (const language of LANGUAGES) {
+    describe(language, () => {
+      it('says nothing about a goal when the chat has none', () => {
+        // A chat with no goal is a discussion nobody bothered to name, and a
+        // paragraph explaining that would be prompt spent on nothing.
+        expect(brief(language, null)).toBe(
+          buildGroupBriefing({ language, self: architect, members: [architect, reviewer] })
+        )
+      })
+
+      it('carries the description verbatim for every kind', () => {
+        expect(brief(language, goal())).toContain(goal().description)
+        expect(brief(language, goal({ kind: 'codebase' }))).toContain(goal().description)
+        expect(
+          brief(language, goal({ kind: 'document', deliverable: 'docs/plan.md' }))
+        ).toContain(goal().description)
+      })
+
+      it('names the deliverable of a document goal', () => {
+        expect(brief(language, goal({ kind: 'document', deliverable: 'docs/plan.md' }))).toContain(
+          'docs/plan.md'
+        )
+      })
+
+      it('tells a codebase chat that the executor makes the change, not them', () => {
+        // PLAN.md's one-writer rule is invisible to a participant otherwise, and
+        // a model told to change a codebase will write the change out in prose
+        // as if it had.
+        const codebase = brief(language, goal({ kind: 'codebase' }))
+        expect(codebase).toContain('executor')
+        expect(brief(language, goal())).not.toContain('executor')
+      })
+
+      it('does not name a deliverable a discussion has no business having', () => {
+        expect(brief(language, goal())).not.toContain('docs/plan.md')
+      })
+    })
+  }
+
+  it('says it in a different language in each, as the rest of the briefing does', () => {
+    expect(brief('en', goal({ kind: 'codebase' }))).not.toBe(
+      brief('zh-CN', goal({ kind: 'codebase' }))
+    )
+  })
+})
+
+/**
+ * S5.12: the review block, for the round a hand-off schedules after the executor.
+ *
+ * Content rather than wording again, and the one thing that has to be *placed*
+ * rather than merely present: the block comes after the goal, so the sentence
+ * that says what to judge the change against is next to the thing it names.
+ */
+describe('buildGroupBriefing (review)', () => {
+  const goal: ChatGoal = {
+    kind: 'codebase',
+    description: 'Split the runner in two',
+    materials: []
+  }
+
+  const brief = (language: Language, reviewing: boolean, value: ChatGoal | null = goal): string =>
+    buildGroupBriefing({
+      language,
+      self: reviewer,
+      members: [architect, reviewer],
+      goal: value,
+      reviewing
+    })
+
+  for (const language of LANGUAGES) {
+    describe(language, () => {
+      it('says nothing at all in an ordinary round', () => {
+        expect(brief(language, false)).toBe(
+          buildGroupBriefing({
+            language,
+            self: reviewer,
+            members: [architect, reviewer],
+            goal
+          })
+        )
+      })
+
+      it('adds a block, after the goal, when the round is a review', () => {
+        const reviewing = brief(language, true)
+        const ordinary = brief(language, false)
+
+        expect(reviewing.length).toBeGreaterThan(ordinary.length)
+        expect(reviewing.startsWith(ordinary)).toBe(true)
+        // The goal's own text is still the last thing before it, which is what
+        // "judge it against the goal above" depends on.
+        expect(reviewing).toContain(goal.description)
+        expect(reviewing.indexOf(goal.description)).toBeLessThan(ordinary.length)
+      })
+
+      it('points a chat with no goal at the conclusion instead', () => {
+        // A hand-off in a chat that never set a goal is legal, and a briefing
+        // that told the reviewer to judge against "the goal above" would then be
+        // pointing at nothing.
+        const none = brief(language, true, null)
+        expect(none.length).toBeGreaterThan(
+          buildGroupBriefing({ language, self: reviewer, members: [architect, reviewer] }).length
+        )
+      })
+    })
+  }
+
+  it('names the executor role in English so the reviewer knows whose work it is', () => {
+    expect(brief('en', true)).toMatch(/executor of this chat has just changed files/)
+    expect(brief('en', true)).toMatch(/judge it against the goal of this chat/)
+    expect(brief('en', true, null)).toMatch(/judge it against the conclusion the group reached/)
+  })
+
+  it('says it in a different language in each, as the rest of the briefing does', () => {
+    expect(brief('en', true)).not.toBe(brief('zh-CN', true))
   })
 })
 

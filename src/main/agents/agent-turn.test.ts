@@ -9,12 +9,13 @@
  * usage — is exercised for real. A stub around `streamText` would prove none of
  * that, which is the whole reason this is an integration test.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendEvent, MessageDeltaEvent } from '@shared/events'
-import type { Agent, Chat, McpServer, Message } from '@shared/types'
+import type { Agent, Chat, McpServer, Message, MessagePart } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { skillsDir } from '../app-context'
 import {
@@ -30,6 +31,7 @@ import { createTestAppContext } from '../testing'
 import {
   FLUSH_EVERY_DELTAS,
   NOTICE_TOOLS_UNSUPPORTED,
+  diffPartsFrom,
   looksLikeToolRejection,
   runAgentTurn,
   toUsage
@@ -310,6 +312,30 @@ describe('runAgentTurn', () => {
     expect(model.doStreamCalls[0]).toMatchObject({ temperature: 0.2, maxOutputTokens: 64 })
   })
 
+  it('sets neither option for an agent with no parameters', async () => {
+    // S5.9 took the two controls off the agent form, so this is what every agent
+    // created from now on looks like: the provider's own defaults decide the
+    // sampling, and `fitHistory` reserves `DEFAULT_OUTPUT_RESERVE` instead of a
+    // number nobody chose.
+    const untuned = ctx.repos.agents.update(agent.id, { params: {} }, ctx.userId)
+    const model = mockModel(textChunks(['ok']))
+
+    await runAgentTurn({
+      ctx,
+      chat,
+      agent: untuned,
+      members: [untuned],
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+
+    const call = model.doStreamCalls[0]
+    expect(untuned.params).toEqual({})
+    expect(call?.temperature).toBeUndefined()
+    expect(call?.maxOutputTokens).toBeUndefined()
+  })
+
   it('stores the mentions parsed out of the finished reply', async () => {
     const bob = ctx.repos.agents.create(
       agentInput({ name: 'Bob', providerId: agent.providerId, modelId: 'deepseek-chat' }),
@@ -565,6 +591,14 @@ describe('runAgentTurn with MCP tools', () => {
   const turn = (model: MockLanguageModelV4) =>
     runAgentTurn({ ctx, chat, agent, members: [agent], round: 1, signal: new AbortController().signal, model })
 
+  /** Answers every permission prompt with `allow`. Returns the unsubscribe. */
+  const allowEveryPrompt = (): (() => void) =>
+    ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision: 'allow' })
+      }
+    })
+
   it('runs the tool and stores the call, the result and the answer in order', async () => {
     bind()
 
@@ -627,17 +661,40 @@ describe('runAgentTurn with MCP tools', () => {
     expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
   })
 
-  it('attaches the same server to an executor', async () => {
+  it('attaches the same server to an executor, and confirms every call (S5.4)', async () => {
     bind({ sideEffects: true, role: 'executor' })
     const model = toolThenAnswer()
+    // Nobody is at the keyboard in a unit test, so the answer is automatic; what
+    // is being asserted is that the call *waited* for one.
+    const stopAllowing = allowEveryPrompt()
 
-    await turn(model)
+    const result = await turn(model)
 
     expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
       'everything__echo',
       'everything__fail',
       'everything__slow'
     ])
+    const prompts = events.filter((event) => event.type === 'permission.requested')
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toMatchObject({ toolName: 'echo', input: { message: 'WITENA-42' } })
+    expect(result.message.parts[1]).toMatchObject({ type: 'tool-result', output: 'Echo: WITENA-42' })
+    stopAllowing()
+  })
+
+  it('returns a tool error the model can read when a side-effecting call is denied', async () => {
+    bind({ sideEffects: true, role: 'executor' })
+    const stopDenying = ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision: 'deny' })
+      }
+    })
+
+    const result = await turn(toolThenAnswer())
+
+    expect(result.message.parts[1]).toMatchObject({ type: 'tool-result', isError: true })
+    expect(String((result.message.parts[1] as { output: unknown }).output)).toMatch(/declined/)
+    stopDenying()
   })
 
   it('offers no tools at all when the server is disabled', async () => {
@@ -1033,5 +1090,937 @@ describe('runAgentTurn with skills and memory', () => {
         'A secret of Bob'
       )
     })
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.4: the executor's own tools and the permission prompt                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A whole turn of the executor, against a real temporary folder.
+ *
+ * The point of these cases is the seam the unit suites cannot reach: a model
+ * really asks for `write_file`, `collectAgentTools` really decides whether that
+ * agent may have it, the gate really suspends the turn inside `streamText`'s
+ * tool loop, and `permission.reply` really releases it. The "user" is an event
+ * subscriber that answers instantly — which is also why the denial case is
+ * worth having, since the turn has to survive being told no.
+ */
+describe('runAgentTurn with executor tools', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let agent: Agent
+  let chat: Chat
+  let workdir: string
+
+  /** A model that calls `toolName` with `input` once, then answers. */
+  function callThenAnswer(toolName: string, input: Record<string, unknown>): MockLanguageModelV4 {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                {
+                  type: 'tool-call',
+                  toolCallId: 'call-1',
+                  toolName,
+                  input: JSON.stringify(input)
+                },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks(['Done.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  /**
+   * A model that makes each of `calls` in a step of its own, then answers.
+   *
+   * One call per step, not several in one: an executor that creates a file and
+   * then edits it depends on its own previous call having finished, which is how
+   * a real multi-step turn is shaped — and two dependent calls issued in a single
+   * step would race, with the edit finding no file to edit.
+   */
+  function callsThenAnswer(
+    calls: { toolCallId: string; toolName: string; input: Record<string, unknown> }[]
+  ): MockLanguageModelV4 {
+    let steps = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        const call = calls[steps]
+        steps += 1
+        const chunks: StreamPart[] = call
+          ? [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: call.toolCallId,
+                toolName: call.toolName,
+                input: JSON.stringify(call.input)
+              },
+              {
+                type: 'finish',
+                finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                usage: USAGE
+              }
+            ]
+          : textChunks(['Done.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    const created = createTestAppContext(database)
+    ctx = created.ctx
+    events = created.events
+
+    workdir = mkdtempSync(join(tmpdir(), 'witena-turn-executor-'))
+    writeFileSync(join(workdir, 'README.md'), '# Project\n\nHello.\n', 'utf8')
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({
+        name: 'Ada',
+        providerId: provider.id,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Implementation', workdir }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'Add a NOTES.md.' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const turn = (model: MockLanguageModelV4, members: Agent[] = [agent]) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members,
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+
+  /** Answers every prompt with `decision`. Returns the unsubscribe. */
+  const answerEveryPrompt = (decision: 'allow' | 'deny' | 'allowAlways'): (() => void) =>
+    ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision })
+      }
+    })
+
+  const writeCall = (): MockLanguageModelV4 =>
+    callThenAnswer('write_file', { path: 'NOTES.md', content: '# Notes\n' })
+
+  it('offers the seven tools and names the folder in the prompt', async () => {
+    const stop = answerEveryPrompt('allow')
+    const model = writeCall()
+
+    await turn(model)
+
+    expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
+      'read_file',
+      'list_dir',
+      'search_files',
+      'write_file',
+      'edit_file',
+      'run_command',
+      'git_diff'
+    ])
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain(workdir)
+    stop()
+  })
+
+  it('asks before writing, and the file appears once the user allows', async () => {
+    const stop = answerEveryPrompt('allow')
+
+    const result = await turn(writeCall())
+
+    const prompts = events.filter((event) => event.type === 'permission.requested')
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toMatchObject({
+      chatId: chat.id,
+      agentId: agent.id,
+      toolName: 'write_file',
+      input: { path: 'NOTES.md', content: '# Notes\n' }
+    })
+    expect(events.filter((event) => event.type === 'permission.resolved')).toHaveLength(1)
+
+    expect(readFileSync(join(workdir, 'NOTES.md'), 'utf8')).toBe('# Notes\n')
+    expect(result.status).toBe('done')
+    expect(result.message.parts[0]).toMatchObject({ type: 'tool-call', toolName: 'write_file' })
+    const done = result.message.parts[1] as { type: string; isError?: boolean; output: unknown }
+    expect(done.type).toBe('tool-result')
+    expect(done.isError).toBeUndefined()
+    expect(done.output).toMatchObject({ path: 'NOTES.md', created: true })
+    expect(String((done.output as { patch: string }).patch)).toContain('+# Notes')
+    stop()
+  })
+
+  it('writes nothing and stores a tool error when the user denies', async () => {
+    const stop = answerEveryPrompt('deny')
+
+    const result = await turn(writeCall())
+
+    expect(existsSync(join(workdir, 'NOTES.md'))).toBe(false)
+    const failed = result.message.parts[1] as { type: string; isError?: boolean; output: unknown }
+    expect(failed).toMatchObject({ type: 'tool-result', isError: true })
+    expect(String(failed.output)).toMatch(/declined/)
+    // The turn itself is fine: the model was told no and answered anyway.
+    expect(result.status).toBe('done')
+    stop()
+  })
+
+  it('does not ask a second time after "always allow in this chat"', async () => {
+    const stop = answerEveryPrompt('allowAlways')
+
+    await turn(writeCall())
+    await turn(callThenAnswer('write_file', { path: 'MORE.md', content: 'more\n' }))
+
+    expect(events.filter((event) => event.type === 'permission.requested')).toHaveLength(1)
+    expect(readFileSync(join(workdir, 'MORE.md'), 'utf8')).toBe('more\n')
+    stop()
+  })
+
+  /**
+   * S5.11 changed this case rather than removed it: a participant in a chat with
+   * a folder now gets the four tools that read and — the half that matters —
+   * still none of the three that change anything.
+   */
+  it('gives a participant in the same chat the read-only tools and nothing else', async () => {
+    agent = ctx.repos.agents.update(agent.id, { role: 'participant' }, ctx.userId)
+    const model = writeCall()
+
+    await turn(model)
+
+    const offered = (model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)
+    expect(offered).toEqual(['read_file', 'list_dir', 'search_files', 'git_diff'])
+    // Asserted one by one, so a regression names the tool it let through.
+    expect(offered).not.toContain('write_file')
+    expect(offered).not.toContain('edit_file')
+    expect(offered).not.toContain('run_command')
+    // …and the folder is in its prompt, because it can now read it (S5.11).
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain(workdir)
+  })
+
+  it('withholds the writing tools from a participant whatever the goal says', async () => {
+    agent = ctx.repos.agents.update(agent.id, { role: 'participant' }, ctx.userId)
+    chat = ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: {
+          kind: 'codebase',
+          description: 'Rewrite the parser',
+          materials: []
+        }
+      },
+      ctx.userId
+    )
+    const model = writeCall()
+
+    await turn(model)
+
+    const offered = (model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)
+    for (const forbidden of ['write_file', 'edit_file', 'run_command']) {
+      expect(offered).not.toContain(forbidden)
+    }
+    // The model asked for `write_file` anyway; it was simply not there.
+    expect(existsSync(join(workdir, 'NOTES.md'))).toBe(false)
+    expect(events.filter((event) => event.type === 'permission.requested')).toEqual([])
+  })
+
+  it('gives an executor in a chat without a folder no executor tools', async () => {
+    chat = ctx.repos.chats.update(chat.id, { workdir: null }, ctx.userId)
+    const model = writeCall()
+
+    await turn(model)
+
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+  })
+
+  it('arms only the first executor when a chat somehow holds two', async () => {
+    // `agents.update` can still promote a participant that is already a member,
+    // which S5.2 recorded as a known gap: the tie is broken by `position`.
+    const second = ctx.repos.agents.create(
+      agentInput({
+        name: 'Bob',
+        providerId: agent.providerId,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      }),
+      ctx.userId
+    )
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    const members = [agent, second]
+    const stop = answerEveryPrompt('allow')
+
+    const first = writeCall()
+    await turn(first, members)
+    expect((first.doStreamCalls[0]?.tools ?? []).length).toBe(7)
+
+    const model = writeCall()
+    await runAgentTurn({
+      ctx,
+      chat,
+      agent: second,
+      members,
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+    // The second executor is disarmed down to what every member of a chat with a
+    // folder now has (S5.11): it reads, it does not write.
+    expect((model.doStreamCalls[0]?.tools ?? []).map((tool) => tool.name)).toEqual([
+      'read_file',
+      'list_dir',
+      'search_files',
+      'git_diff'
+    ])
+    stop()
+  })
+
+  it('does not confirm a read-only tool', async () => {
+    const result = await turn(callThenAnswer('read_file', { path: 'README.md' }))
+
+    expect(events.filter((event) => event.type === 'permission.requested')).toEqual([])
+    expect(result.message.parts[1]).toMatchObject({
+      type: 'tool-result',
+      output: { path: 'README.md', content: '# Project\n\nHello.\n' }
+    })
+  })
+
+  it('refuses a path that leaves the folder without asking the user', async () => {
+    const result = await turn(callThenAnswer('read_file', { path: '../../etc/passwd' }))
+
+    expect(events.filter((event) => event.type === 'permission.requested')).toEqual([])
+    const failed = result.message.parts[1] as { isError?: boolean; output: unknown }
+    expect(failed.isError).toBe(true)
+    expect(String(failed.output)).toMatch(/outside the working directory/)
+  })
+
+  /* S5.5: the diffs the finished turn appends to its own message. */
+
+  it('appends one diff part per written file, with the real patch', async () => {
+    const stop = answerEveryPrompt('allowAlways')
+
+    const result = await turn(
+      callsThenAnswer([
+        { toolCallId: 'call-1', toolName: 'write_file', input: { path: 'NOTES.md', content: '# Notes\n' } },
+        { toolCallId: 'call-2', toolName: 'write_file', input: { path: 'TODO.md', content: '- one\n' } }
+      ])
+    )
+
+    const diffs = result.message.parts.filter((part) => part.type === 'diff')
+    expect(diffs.map((part) => (part as { path: string }).path)).toEqual(['NOTES.md', 'TODO.md'])
+    expect((diffs[0] as { patch: string }).patch).toContain('+# Notes')
+
+    // The renderer learns about them as a `part` delta, like a tool card, and
+    // the stored message carries them after the tool results.
+    const appended = events.filter(
+      (event) =>
+        event.type === 'message.delta' &&
+        event.delta.kind === 'part' &&
+        event.delta.part.type === 'diff'
+    )
+    expect(appended).toHaveLength(2)
+    stop()
+  })
+
+  it('joins two writes to the same file into one block', async () => {
+    const stop = answerEveryPrompt('allowAlways')
+
+    const result = await turn(
+      callsThenAnswer([
+        { toolCallId: 'call-1', toolName: 'write_file', input: { path: 'NOTES.md', content: 'one\n' } },
+        {
+          toolCallId: 'call-2',
+          toolName: 'edit_file',
+          input: { path: 'NOTES.md', oldString: 'one', newString: 'two' }
+        }
+      ])
+    )
+
+    const diffs = result.message.parts.filter((part) => part.type === 'diff')
+    expect(diffs).toHaveLength(1)
+    const { patch } = diffs[0] as { patch: string }
+    expect(patch).toContain('+one')
+    expect(patch).toContain('+two')
+    expect(readFileSync(join(workdir, 'NOTES.md'), 'utf8')).toBe('two\n')
+    stop()
+  })
+
+  it('appends no diff when the user denied the write', async () => {
+    const stop = answerEveryPrompt('deny')
+
+    const result = await turn(writeCall())
+
+    expect(result.message.parts.some((part) => part.type === 'diff')).toBe(false)
+    stop()
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.12: the deliverable chip and the review briefing                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The chip that says the file this chat exists for is now on disk.
+ *
+ * The rule `deliveredRef` documents has three edges and each of them is a whole
+ * turn here rather than a unit call, because the interesting part is *when* the
+ * two `existsSync` samples are taken: before the stream and after it. A pure
+ * test of the helper would prove the rule and none of the timing.
+ */
+describe('runAgentTurn and a document goal', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let agent: Agent
+  let participant: Agent
+  let chat: Chat
+  let workdir: string
+
+  const DELIVERABLE = 'docs/REPORT.md'
+
+  /**
+   * A model that writes `path` once and then answers.
+   *
+   * The same shape as the executor block's `callThenAnswer`, restated here
+   * because that one is scoped to its own `describe`; hoisting it would put a
+   * tool-call helper in front of every test in this file.
+   */
+  const writes = (path: string, content = '# Report\n'): MockLanguageModelV4 => {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                {
+                  type: 'tool-call',
+                  toolCallId: 'call-1',
+                  toolName: 'write_file',
+                  input: JSON.stringify({ path, content })
+                },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks(['Done.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  /** Re-reads the chat row, which is what a real turn is handed. */
+  const reload = (): void => {
+    chat = ctx.repos.chats.get(chat.id, ctx.userId)
+  }
+
+  const setGoal = (deliverable: string | undefined): void => {
+    ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: {
+          kind: 'document',
+          description: 'Write the quarterly report',
+          materials: [],
+          ...(deliverable === undefined ? {} : { deliverable })
+        }
+      },
+      ctx.userId
+    )
+    reload()
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    const created = createTestAppContext(database)
+    ctx = created.ctx
+
+    workdir = mkdtempSync(join(tmpdir(), 'witena-turn-deliver-'))
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({ name: 'Hands', providerId: provider.id, modelId: 'deepseek-chat', role: 'executor' }),
+      ctx.userId
+    )
+    participant = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Report', workdir }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id, participant.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'Write it.' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    setGoal(DELIVERABLE)
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const turn = (model: MockLanguageModelV4, speaker: Agent = agent, extra = {}) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent: speaker,
+      members: [agent, participant],
+      round: 1,
+      signal: new AbortController().signal,
+      model,
+      ...extra
+    })
+
+  const allow = (): (() => void) =>
+    ctx.events.subscribe((event) => {
+      if (event.type === 'permission.requested') {
+        ctx.permissions.reply({ requestId: event.requestId, decision: 'allowAlways' })
+      }
+    })
+
+  const refs = (message: { parts: MessagePart[] }): MessagePart[] =>
+    message.parts.filter((part) => part.type === 'file-ref')
+
+  it('appends a file-ref to the turn that brought the deliverable into existence', async () => {
+    const stop = allow()
+
+    const result = await turn(writes(DELIVERABLE))
+
+    // The absolute path, because that is what `system.openInEditor` takes and
+    // what `chats.goalStatus` answers with for the header chip.
+    expect(refs(result.message)).toEqual([{ type: 'file-ref', path: join(workdir, DELIVERABLE) }])
+    expect(existsSync(join(workdir, DELIVERABLE))).toBe(true)
+    stop()
+  })
+
+  it('appends nothing on a later turn, once the file is already there', async () => {
+    const stop = allow()
+    mkdirSync(join(workdir, 'docs'), { recursive: true })
+    writeFileSync(join(workdir, DELIVERABLE), '# Old\n', 'utf8')
+
+    // The turn really does write to it — the diff proves that — and still gets
+    // no chip: it did not deliver the document, it edited one that was there.
+    const result = await turn(writes(DELIVERABLE, '# New\n'))
+
+    expect(refs(result.message)).toEqual([])
+    expect(result.message.parts.some((part) => part.type === 'diff')).toBe(true)
+    stop()
+  })
+
+  it('appends nothing when the turn wrote some other file', async () => {
+    const stop = allow()
+
+    const result = await turn(writes('SCRATCH.md'))
+
+    expect(refs(result.message)).toEqual([])
+    stop()
+  })
+
+  it('appends nothing for a chat whose goal names no file', async () => {
+    const stop = allow()
+    ctx.repos.chats.update(
+      chat.id,
+      { goal: { kind: 'discussion', description: 'Just talk', materials: [] } },
+      ctx.userId
+    )
+    reload()
+
+    const result = await turn(writes(DELIVERABLE))
+
+    expect(refs(result.message)).toEqual([])
+    stop()
+  })
+
+  it('appends nothing for a participant, whatever appeared while it spoke', async () => {
+    // A participant cannot write, so the file here is created by something else
+    // entirely — which is exactly the case the chip must not claim credit for.
+    mkdirSync(join(workdir, 'docs'), { recursive: true })
+    const model = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        writeFileSync(join(workdir, DELIVERABLE), '# Someone else\n', 'utf8')
+        return { stream: simulateReadableStream({ chunks: textChunks(['Noted.']) }) }
+      }
+    })
+
+    const result = await turn(model, participant)
+
+    expect(refs(result.message)).toEqual([])
+  })
+
+  it('tells the reviewers of a hand-off what they are reading, and the executor nothing of the kind', async () => {
+    const reviewer = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => ({ stream: simulateReadableStream({ chunks: textChunks(['Fine.']) }) })
+    })
+
+    await turn(reviewer, participant, { reviewing: true })
+    const reviewPrompt = JSON.stringify(reviewer.doStreamCalls[0]?.prompt)
+    expect(reviewPrompt).toMatch(/This round is a review/)
+    // The goal is one line above it, which is the whole point of the placement.
+    expect(reviewPrompt).toMatch(/judge it against the goal of this chat/)
+
+    const plain = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => ({ stream: simulateReadableStream({ chunks: textChunks(['Hm.']) }) })
+    })
+    await turn(plain, participant)
+    expect(JSON.stringify(plain.doStreamCalls[0]?.prompt)).not.toMatch(/This round is a review/)
+  })
+
+  it('briefs the executor to write the deliverable when the hand-off says deliver', async () => {
+    const stop = allow()
+    const model = writes(DELIVERABLE)
+
+    await turn(model, agent, { handoff: 'deliver' })
+
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
+    expect(prompt).toMatch(/write the deliverable of this chat now/)
+    expect(prompt).toMatch(/exactly two lines/)
+    expect(prompt).toContain(DELIVERABLE)
+    // The other intent's paragraph is not also in there: one instruction, once.
+    expect(prompt).not.toMatch(/Implement the conclusion the group reached/)
+    stop()
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.11: the workspace briefing and the materials                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A **participant** in a chat with a folder, which is what S5.11 changed.
+ *
+ * Three things have to be true at once and only a whole turn proves them
+ * together: the four read-only tools are really offered to an agent that is not
+ * the executor, the prompt really describes the folder it can read, and a
+ * material the user marked is really in the prompt before anybody asks for it.
+ * The last case is the acceptance sentence — the model calls `read_file` on a
+ * file nobody marked and gets its contents back.
+ */
+describe('runAgentTurn in a chat with a workspace', () => {
+  let database: TestDatabase
+  let ctx: AppContext
+  let agent: Agent
+  let chat: Chat
+  let workdir: string
+
+  /** A model that calls `toolName` once and then answers. */
+  function callThenAnswer(toolName: string, input: Record<string, unknown>): MockLanguageModelV4 {
+    let calls = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        calls += 1
+        const chunks: StreamPart[] =
+          calls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                { type: 'tool-call', toolCallId: 'call-1', toolName, input: JSON.stringify(input) },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  usage: USAGE
+                }
+              ]
+            : textChunks(['Read it.'])
+        return { stream: simulateReadableStream({ chunks }) }
+      }
+    })
+  }
+
+  beforeEach(() => {
+    database = createTestDatabase()
+    const created = createTestAppContext(database)
+    ctx = created.ctx
+
+    workdir = mkdtempSync(join(tmpdir(), 'witena-turn-workspace-'))
+    writeFileSync(join(workdir, 'BRIEF.md'), 'The brief says: build a kite.\n', 'utf8')
+    writeFileSync(join(workdir, 'OTHER.md'), 'The other file says: buy string.\n', 'utf8')
+    mkdirSync(join(workdir, 'src'), { recursive: true })
+    writeFileSync(join(workdir, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    agent = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    chat = ctx.repos.chats.create({ title: 'Kite', workdir }, ctx.userId)
+    ctx.repos.chats.setMembers(ctx.userId, chat.id, [agent.id])
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: ctx.userId,
+        parts: [{ type: 'text', text: 'What does the brief say?' }],
+        status: 'done',
+        round: 0,
+        mentions: []
+      },
+      ctx.userId
+    )
+    created.events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const turn = (model: MockLanguageModelV4) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent],
+      round: 1,
+      signal: new AbortController().signal,
+      model
+    })
+
+  /** Everything the model was sent as its system prompt. */
+  const systemOf = (model: MockLanguageModelV4): string =>
+    JSON.stringify(model.doStreamCalls[0]?.prompt ?? '')
+
+  it('briefs a participant with the folder and lists it', async () => {
+    const model = mockModel(textChunks(['Reading.']))
+
+    await turn(model)
+
+    const prompt = systemOf(model)
+    expect(prompt).toContain('Workspace')
+    expect(prompt).toContain('BRIEF.md')
+    expect(prompt).toContain('app.ts')
+    expect(prompt).toContain('you cannot change anything in it')
+  })
+
+  it('puts a marked material in the prompt before anyone asks for it', async () => {
+    chat = ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: { kind: 'discussion', description: 'Decide the design', materials: ['BRIEF.md'] }
+      },
+      ctx.userId
+    )
+    const model = mockModel(textChunks(['Understood.']))
+
+    const result = await turn(model)
+
+    const prompt = systemOf(model)
+    expect(prompt).toContain('Materials')
+    expect(prompt).toContain('build a kite')
+    // The unmarked file is listed in the tree but its contents are not in the
+    // prompt: that is what `read_file` is for.
+    expect(prompt).not.toContain('buy string')
+    expect(result.materialsOmitted).toBe(0)
+  })
+
+  it('lets a participant read an unmarked file with read_file', async () => {
+    const model = callThenAnswer('read_file', { path: 'OTHER.md' })
+
+    const result = await turn(model)
+
+    expect(result.status).toBe('done')
+    expect(result.message.parts[0]).toMatchObject({ type: 'tool-call', toolName: 'read_file' })
+    expect(result.message.parts[1]).toMatchObject({
+      type: 'tool-result',
+      output: { path: 'OTHER.md', content: 'The other file says: buy string.\n' }
+    })
+  })
+
+  it('reports the materials it had to list rather than inline', async () => {
+    writeFileSync(join(workdir, 'HUGE.md'), 'w'.repeat(200_000), 'utf8')
+    chat = ctx.repos.chats.update(
+      chat.id,
+      {
+        goal: {
+          kind: 'discussion',
+          description: 'Decide the design',
+          materials: ['HUGE.md', 'BRIEF.md']
+        }
+      },
+      ctx.userId
+    )
+    const model = mockModel(textChunks(['Noted.']))
+
+    const result = await turn(model)
+
+    expect(result.materialsOmitted).toBe(2)
+    const prompt = systemOf(model)
+    expect(prompt).toContain('HUGE.md')
+    expect(prompt).not.toContain('wwwwwwwwww')
+  })
+
+  it('gives a chat with no folder no workspace section and no tools', async () => {
+    chat = ctx.repos.chats.update(chat.id, { workdir: null }, ctx.userId)
+    const model = mockModel(textChunks(['Nothing to read.']))
+
+    await turn(model)
+
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([])
+    expect(systemOf(model)).not.toContain('Workspace')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.5: the diff parts a finished executor turn appends                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `diffPartsFrom` on its own, against the part shapes a turn really stores.
+ *
+ * The grouping rule is the whole point: an executor that writes a file and then
+ * edits it twice changed **one** file, and the transcript has to say so with one
+ * block rather than three. The rest of the cases are the ones where a patch
+ * exists but does not belong in the message.
+ */
+describe('diffPartsFrom', () => {
+  const call = (toolCallId: string, toolName: string): MessagePart => ({
+    type: 'tool-call',
+    toolCallId,
+    toolName,
+    input: {}
+  })
+  const result = (toolCallId: string, output: unknown, isError?: boolean): MessagePart => ({
+    type: 'tool-result',
+    toolCallId,
+    output,
+    ...(isError ? { isError: true } : {})
+  })
+
+  it('is empty for a turn that wrote nothing', () => {
+    expect(diffPartsFrom([{ type: 'text', text: 'Nothing to change.' }])).toEqual([])
+  })
+
+  it('makes one part per written file', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', { path: 'a.ts', patch: '--- a.ts\n+++ a.ts\n+one\n' }),
+      call('c2', 'edit_file'),
+      result('c2', { path: 'b.ts', patch: '--- b.ts\n+++ b.ts\n+two\n' })
+    ]
+
+    expect(diffPartsFrom(parts).map((part) => part.path)).toEqual(['a.ts', 'b.ts'])
+  })
+
+  it('concatenates several writes to one file, in order, at its first position', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', { path: 'a.ts', patch: '--- a.ts\n+++ a.ts\n+one\n' }),
+      call('c2', 'write_file'),
+      result('c2', { path: 'b.ts', patch: '--- b.ts\n+++ b.ts\n+other\n' }),
+      call('c3', 'edit_file'),
+      result('c3', { path: 'a.ts', patch: '--- a.ts\n+++ a.ts\n-one\n+two\n' })
+    ]
+
+    const diffs = diffPartsFrom(parts)
+    expect(diffs.map((part) => part.path)).toEqual(['a.ts', 'b.ts'])
+    expect(diffs[0]?.patch).toBe('--- a.ts\n+++ a.ts\n+one\n--- a.ts\n+++ a.ts\n-one\n+two\n')
+  })
+
+  it('separates two patches that do not end in a newline', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', { path: 'a.ts', patch: '+one' }),
+      call('c2', 'write_file'),
+      result('c2', { path: 'a.ts', patch: '+two' })
+    ]
+
+    expect(diffPartsFrom(parts)[0]?.patch).toBe('+one\n+two\n')
+  })
+
+  it('ignores a denied or failed write', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', 'The user declined to allow write_file.', true)
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
+  })
+
+  it('ignores an edit that changed nothing', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'edit_file'),
+      result('c1', { path: 'a.ts', replacements: 0, unchanged: true, patch: '' })
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
+  })
+
+  it('ignores git_diff, which reports rather than changes', () => {
+    // Its output carries a `patch` too, and posting it would claim the executor
+    // wrote something it only looked at.
+    const parts: MessagePart[] = [
+      call('c1', 'git_diff'),
+      result('c1', { patch: '--- a.ts\n+++ a.ts\n+someone else\n' })
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
+  })
+
+  it('ignores a result whose output is not the shape the write tools return', () => {
+    const parts: MessagePart[] = [
+      call('c1', 'write_file'),
+      result('c1', 'wrote it'),
+      call('c2', 'write_file'),
+      result('c2', { path: 'a.ts' })
+    ]
+
+    expect(diffPartsFrom(parts)).toEqual([])
   })
 })

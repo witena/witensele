@@ -372,6 +372,2441 @@ added on top. Docs in `docs/features/packaging/`.
 
 ---
 
-## Phase 5: Later (post-MVP, see "Future extension" in PLAN.md)
+## Phase 5: Executors and external systems (PLAN "Future extension", points 1–3)
 
-Connector gallery, executor agent with a working directory, VS Code open and extension, server and multi-user.
+The MVP is complete. This phase builds the three layers PLAN.md reserves
+interfaces for: the connector gallery, the executor agent, and opening files in
+the editor — plus one step (S5.3) that was added while the phase was under
+way: signing in to Anthropic instead of pasting a key. Point 4 (server and multi-user) and the VS Code *extension* (the
+second half of point 3) stay out: the extension needs a backend reachable from
+outside Electron, which is the server work, so both move together to a later
+phase.
+
+Every step below follows the same rules as Phases 1–4 and they are repeated
+here because a step is handed to a fresh session: `docs/features/<feature>/`
+(all four documents) updated in the same commit as the code; a new feature is
+started from `docs/features/_template/` and gets a row in `docs/README.md`;
+every user-facing string is a key in **both** `en.json` and `zh-CN.json`;
+main-process text is a `SystemNoticePart` key; nothing outside
+`src/main/index.ts` and `src/main/ipc/` imports electron (the handler modules
+live in `src/main/handlers/`, the electron-only overlays in `src/main/ipc/`);
+`npm run typecheck` and `npm test` pass; everything committed is English; the
+step's marker here is flipped to `[x]` with the date in the same commit.
+
+### S5.1 Connector gallery `[x] (2026-09-13)`
+What: a preset table of common MCP servers and a picker that prefills the MCP
+editor from one, so "add the GitHub server" is one click plus a token rather
+than a command typed from memory.
+- `src/shared/mcp-presets.ts`, shaped like `src/shared/presets.ts`: static data,
+  no electron, no node. `McpPreset { id, name, transport, command?, args?,
+  env?, url?, sideEffects, docsUrl, requires? }`. `env` lists the variables the
+  server needs with **empty** values (`GITHUB_PERSONAL_ACCESS_TOKEN: ''`), so
+  the environment box opens showing `KEY=` lines to fill in. `requires` names
+  the runner the command needs (`npx`, `uvx`, `docker`) for the card hint.
+  Presets, at least: `everything` (demo, read-only), `filesystem` (side
+  effects; one path argument the user edits), `git` via `uvx mcp-server-git`
+  (side effects), `github` (side effects, token), `fetch` via `uvx
+  mcp-server-fetch` (read-only), `brave-search` (read-only, key),
+  `sequential-thinking` (read-only), `slack` (side effects, token), `notion`
+  (side effects, token), `playwright` (`@playwright/mcp`, side effects). Names
+  are brand names and are not translated; each preset's one-line description
+  is `settings.mcp.presets.<id>` in both locale files.
+- Settings → MCP servers → "Add server" opens the editor with a preset grid
+  above the form (reuse or generalise `components/settings/preset-grid.tsx`;
+  a "Custom" tile is the blank form). Picking a tile calls a new store action
+  `applyPreset(id)` that replaces the draft's transport, command, args, env,
+  url and `sideEffects` and keeps the name if the user already typed one,
+  otherwise uses the preset id. Each tile shows a read-only / side-effects
+  badge and the `requires` hint; the editor keeps working exactly as before
+  once a tile is picked. The gallery is not shown when editing a saved server.
+- Unit tests: ids unique; every preset has a description key in both locale
+  files (extend the pattern of `i18n/locales.test.ts` rather than duplicating
+  it); stdio presets have a command and http presets a URL; `applyPreset`
+  keeps a typed name and sets `sideEffects` from the preset.
+- e2e: in `e2e/mcp.spec.ts`, register `everything` **through the gallery**
+  (tile → Test → tools listed → Save) instead of typing the command; keep the
+  typed-Enter assertion on the arguments box.
+Acceptance: picking "GitHub" yields a stdio draft running `npx -y
+@modelcontextprotocol/server-github` with `GITHUB_PERSONAL_ACCESS_TOKEN=` in the
+environment box and the side-effects switch on; picking "Fetch" leaves it off;
+the tests above pass. Docs: `docs/features/mcp/` (all four).
+Done: `src/shared/mcp-presets.ts` is the table — eleven entries (the ten the step
+names plus `custom`, which is the blank form), shaped like `presets.ts` and
+static in the same way: no electron, no node, no backend method, and **no stored
+`presetId`**. Unlike a provider, nothing in an MCP server's life depends on which
+tile it came from — there is no logo to pick again and no key rule to derive — so
+the gallery's selection is view state in `McpEditor` rather than a column and a
+migration. `env` values are empty strings on purpose (`GITHUB_PERSONAL_ACCESS_TOKEN: ''`),
+which is what makes the environment box open as a form to fill in and what keeps
+a preset from ever carrying a secret; `sideEffects` is set from what a server's
+tools *can* do (`git` writes because `git_commit` exists, `playwright` because a
+browser clicks real buttons), because that flag is the one field a tile writes
+that is not cosmetic — `collectAgentTools` reads it. `components/settings/mcp-preset-grid.tsx`
+is a **sibling** of `preset-grid.tsx`, not a generalisation of it: a connector
+tile answers "what is this and will it change anything" with a badge, a
+description and the runner hint, and folding both into one component would have
+meant six optional slots and would have pulled the providers feature into this
+step to gain a shared `<button>`. The grid is mounted only while `mode ===
+'create'`, and `applyPreset` rewrites transport, command, args, env, url and
+`sideEffects` **unconditionally** — `custom` after `github` has to leave an empty
+form — while keeping a name the user already typed and otherwise filling it with
+the preset **id**, since the name is also the tool prefix (`everything__echo`).
+Five keys plus the `settings.mcp.presets.*` subtree in both locale files; brand
+names stay data. The description is a runtime key, so `locales.test.ts` gained the
+check `used-keys.test.ts` cannot do: the description keys in both files are
+exactly the preset ids, in both directions. `src/shared/mcp-presets.test.ts`
+asserts the table's invariants including the acceptance sentence itself;
+`src/renderer/src/stores/mcp.test.ts` covers `applyPreset`; `e2e/mcp.spec.ts` now
+registers `everything` through the tile — prefill asserted, then the arguments
+retyped key by key with a real Enter, which is the regression the gallery must
+not hide — and checks the grid is gone once the row is saved. Docs in
+`docs/features/mcp/`.
+
+### S5.2 Executor role and the chat working directory `[x]` (2026-09-13)
+What: make the two reserved fields real. `agents.role = 'executor'` becomes a
+first-class choice with an explanation, and a chat can be bound to a local
+folder.
+- `Chat.workdir`: `ChatPatch` accepts `workdir: string | null`. The `chats.update`
+  handler validates it (absolute; exists; is a directory; `validation` error
+  code otherwise, checked with `node:fs` — allowed in handlers) and the runner
+  reads it from the chat record. A chat settings row "Working directory" with
+  "Choose…" (`system.pickFolder`, which already exists) and "Clear"; the chat
+  header shows the folder's basename as a chip with the full path in `title`.
+- One executor per chat: adding a second executor member is refused by the
+  member handler (`validation`, key `notices.secondExecutor` or an error code
+  the renderer translates — follow how member errors are surfaced today) and
+  the member picker greys the candidate with a hint. A chat with an executor
+  member but no `workdir` is allowed; S5.4 simply attaches no executor tools.
+- Agent editor: the existing role control gets the PLAN.md explanation inline
+  (discussion agents are read-only; one executor writes, with confirmation)
+  and the agent list, member rows and message headers show an "executor"
+  badge. `agents.mcpServerIds` and the side-effects checklist keep their
+  current behaviour.
+- Unit tests: `chats.update` workdir validation (relative path, missing path, a
+  file), the second-executor refusal, the chats store patch; renderer display
+  helpers for the badge and the chip.
+- e2e: `e2e/members.spec.ts` (or a new `executor.spec.ts`) creates an executor
+  agent, adds it to a chat, sees the badge, and sees a second executor refused.
+  The folder picker is native and is not driven; set `workdir` through the
+  backend client in the test and assert the chip.
+Acceptance: a chat shows its folder chip after `chats.update({ workdir })`; an
+invalid path is refused with a translated error; two executors cannot join one
+chat. Docs: `docs/features/chats/` and `docs/features/agents/` (all four each).
+Done: `ChatPatch.workdir` is `string | null` and `assertWorkdir` in
+`src/main/handlers/chats.ts` checks it against the **real filesystem** —
+absolute, `statSync` succeeds, `isDirectory()` — which is why that module now
+reads `node:fs` and `node:path` (rule #5 is about electron, not about Node).
+`statSync` follows symlinks on purpose: a symlink to a directory is a perfectly
+good working directory, and the check that matters — a path *inside* the folder
+whose realpath leaves it — is per file and belongs to S5.4. The race is
+acknowledged rather than closed: the folder can vanish between the check and the
+first tool call, which is why S5.4 resolves every path again at use. The same
+rules run on `chats.create`, because `assertChatPatch` is shared. Nothing new
+was needed in the runner: `ChatRunner` already re-reads the chat record every
+round, so `workdir` reaches the orchestrator with no plumbing at all, and
+attaching tools to it is S5.4's job rather than dead code written early.
+
+`assertOneExecutor` refuses a member list holding two `executor` agents, on both
+`chats.members.set` and `chats.create`. It lives where membership is **written**
+because `members.set` replaces the whole list and is therefore the only place
+that can see the resulting set — which also makes swapping one executor for
+another in a single call correctly legal. The **known gap** is recorded rather
+than papered over: `agents.update` can still *promote* a participant that is
+already in a chat with an executor, so S5.4 must pick a chat's executor
+deterministically (first `executor` in `position` order) instead of assuming the
+set has exactly one.
+
+The step's one real design decision was how a refusal says *which* rule it broke.
+`BackendErrorCode` is a failure taxonomy of seven classes, and "the request was
+rejected as invalid" is the right sentence almost everywhere because the control
+that sent the request is on screen saying what it wanted — but not for a folder
+that turned out to be a file. So `shared/types.ts` gained `VALIDATION_REASONS` /
+`ValidationReason` (`workdir_not_absolute`, `workdir_missing`,
+`workdir_not_directory`, `second_executor`), carried in `BackendError.details` as
+an **identifier the renderer translates**, never a sentence the backend wrote.
+`i18n/errors.ts` gained `validationReasonOf` (narrowing, so an unknown reason
+from a newer backend degrades to the generic copy rather than printing a raw
+id), a literal-`switch` `validationReasonMessage`, and `translateFailure(t, code,
+details)` — which is also the one place a store's `errorCode` + `errorDetails`
+becomes copy, so no component rebuilds a `BackendError` literal in JSX any more.
+
+Renderer: `stores/chats.ts` keeps `errorDetails` beside `errorCode` and gained
+`setWorkdir` and `chooseWorkdir` (two calls rather than one method, exactly as
+`stores/skills.ts` imports a folder — the dialog is the single thing the backend
+cannot do without electron, and a cancelled dialog must write nothing and leave
+no error). The group-settings block has a "Working directory" row with "Choose…"
+and "Clear", and the header carries an accent chip holding `folderName(workdir)`
+with the whole path in `title` — `lib/workdir.ts` is `basename` written by hand,
+because the renderer project has no Node types. The path itself is printed, never
+translated: it is data. **The role control did not exist** despite the step's
+wording — only the `allowSideEffects={draft.role === 'executor'}` site read the
+field — so the agent editor gained a two-segment control with PLAN.md's rule
+printed under it rather than in a tooltip, and picking "Executor" immediately
+un-greys the `sideEffects` rows in the MCP checklist below it. The badge is drawn
+from `isExecutor` / `hasExecutor` in `agent-display.ts` by all four surfaces that
+show it (agent list, member row, member picker, message header) rather than from
+four literal comparisons; the picker uses `hasExecutor` to disable a second
+executor and replace its model line with `chat.executorTaken`, so the click that
+the backend would refuse is not offered at all.
+
+One deliberate non-change: a refused `workdir` prints in the left column's
+`chats-error` line with every other chats-store failure rather than under the row
+the user clicked. One store, one error field, one place it is rendered — and the
+reason sentence is now specific enough to read correctly anywhere.
+
+Tests: `handlers/chats.test.ts` covers `workdir` accepted, cleared, and refused
+as relative / blank / missing / a file, plus the second-executor refusal on both
+handlers and the two shapes that must stay legal; `stores/chats.test.ts` covers
+both new actions including the cancelled dialog; `lib/workdir.test.ts` and
+`agent-display.test.ts` cover the display helpers; `i18n/errors.test.ts` now
+proves the reason mapping is total and that `errors` holds exactly the codes plus
+the reasons. `e2e/executor.spec.ts` is new and offline — it drives the role
+control, both badges, the greyed candidate, the chip appearing after a
+`chats.update({ workdir })` made through the backend client, "Clear", the three
+refusals with their reasons, and a restart. The native picker is not driven,
+which the file says in its header. `e2e/members.spec.ts` needed no change and
+still passes. Docs in `docs/features/{chats,agents,i18n}/`.
+
+### S5.3 Anthropic sign-in `[x]` (2026-09-13)
+What: an Anthropic provider can authenticate with the user's Anthropic account
+instead of an API key. Closed-source providers gain an authentication mode;
+open-source and local providers keep API keys only. This step implements the
+mode for Anthropic; OpenAI and Google get the field and a disabled control,
+and their sign-in flows are left for a later step once their programs allow it.
+- **Mechanism: delegate to the official Anthropic CLI (`ant`).** `ant auth
+  login` runs the OAuth flow in the system browser and stores a profile under
+  `~/.config/anthropic/` (`$ANTHROPIC_CONFIG_DIR` when set); `ant auth
+  print-credentials --access-token` prints a short-lived access token and
+  refreshes it when needed; `ant auth status` reports the active credential
+  source and workspace; `ant auth logout` clears the profile. Witena stores
+  **no token of its own** — the CLI owns the credentials — so `SecretStore` is
+  untouched. Requests made with such a token carry `Authorization: Bearer
+  <token>` and the header `anthropic-beta: oauth-2025-04-20`, and must **not**
+  carry `x-api-key`. Install on macOS: `brew install anthropics/tap/ant` then
+  `xattr -d com.apple.quarantine "$(brew --prefix)/bin/ant"`.
+- `ProviderInput.auth: 'apiKey' | 'oauth'` (default `'apiKey'`), a new
+  nullable `auth` column on `providers` through an additive migration (follow
+  `docs/features/database/`), and validation: `oauth` is accepted only for
+  `type === 'anthropic'` with no custom `baseUrl`, and an `oauth` provider is
+  valid without a key. `providerRequiresApiKey` returns false for it.
+- `src/main/providers/anthropic-cli.ts` (Electron-free, `node:child_process`
+  allowed): an `AnthropicCli` interface injected into the registry —
+  `status()`, `login()`, `logout()`, `accessToken()` — with the real
+  implementation spawning `ant`. A missing binary (`ENOENT`) maps to a new
+  `BackendErrorCode` `ant_missing`; a profile that is not logged in maps to
+  `ant_not_logged_in`. **Derive the status from `ant auth print-credentials`
+  with no flags**, which prints JSON (`type`, `access_token`, `expires_at`
+  as unix seconds, `refresh_token`, `scope`, `organization_uuid`,
+  `organization_name`, `account_email`, `workspace_id`, `workspace_name`) and
+  fails when no profile is logged in; never parse the text of `ant auth
+  status` (its `--format json` flag does not apply to that command, verified
+  on `ant` 1.32.0). Keep the token fields inside the main process: the status
+  sent to the renderer carries `organizationName`, `accountEmail`,
+  `workspaceName` and `expiresAt` only. Tokens are fetched per model
+  construction through `--access-token` and cached in memory until 60 seconds
+  before `expires_at`.
+- Model construction (`providers/registry.ts`): for an `oauth` provider,
+  `createAnthropic({ apiKey: '', fetch })` where `fetch` is a wrapper that
+  deletes `x-api-key`, sets `Authorization: Bearer <token>` and merges
+  `oauth-2025-04-20` into `anthropic-beta`. `providers.fetchModels` and
+  `providers.testConnection` go through the same wrapper.
+- Backend methods `providers.authStatus()`, `providers.login()` (resolves when
+  the CLI exits; the CLI opens the browser itself) and `providers.logout()`,
+  added to `BackendApi`, `BACKEND_METHODS` and `shared/contracts.test.ts`.
+- Provider editor: an "Authentication" `SegmentedControl` (API key / Sign in
+  with Anthropic), rendered only for the Anthropic type, disabled with a hint
+  for OpenAI and Google, absent for everything else. In sign-in mode the key
+  field is replaced by a panel with the status line (signed in as
+  `<workspace>` / not signed in / `ant` not installed, with the install
+  command shown in monospace), "Sign in" and "Sign out" buttons and a spinner
+  while the CLI runs. Test connection and Fetch models keep working. The
+  provider card shows a "signed in" badge instead of the key indicator.
+- Unit tests: the fetch wrapper (headers replaced, `x-api-key` removed,
+  existing `anthropic-beta` merged); `anthropic-cli.ts` against a **fake
+  `ant`** — a temporary executable script placed first on `PATH` — covering
+  missing binary, logged in, not logged in, `print-credentials` and a failing
+  exit; validation (`oauth` rejected for OpenAI, accepted without a key for
+  Anthropic); the registry building an `oauth` model; the providers store and
+  the editor's mode switch.
+- e2e: `e2e/providers.spec.ts` gains a case with `ant` absent from `PATH`
+  (launch with a PATH that lacks it): the sign-in panel shows the
+  "not installed" state and Save is refused with a translated error; the
+  sign-in click itself is not driven (it needs a browser and an account).
+Acceptance: with `ant` installed and `ant auth login` done, an Anthropic
+provider in sign-in mode passes Test connection, fetches the model list and
+completes a chat turn with no key stored; without `ant` the editor explains
+what to install; the tests above pass. Docs: `docs/features/providers/` and
+`docs/features/database/` (all four each).
+Done: `ProviderAuth` is a **field on the provider**, not a fifth `ProviderType`.
+The endpoint, the model list and the adapter are identical either way — only the
+headers differ — so a new type would have forked `registry.ts`, `discovery.ts`,
+the preset table and the logo rules to express one boolean. The column is
+nullable with no default (`0002_mysterious_madelyne_pryor.sql`, one `ALTER TABLE
+… ADD auth text`), and the meaning of `NULL` lives in `providerAuth()` in
+`shared/presets.ts` rather than in SQL: `NOT NULL DEFAULT 'apiKey'` would have
+rewritten every row *and* stated the same fact in two places. `providerRequiresApiKey`
+answers `false` for an `oauth` provider, which is what makes the form saveable
+with the key field gone.
+
+`src/main/providers/anthropic-cli.ts` is the only module in the app that ever
+holds a token, and it holds one for as long as the CLI says it is valid, minus
+sixty seconds. **Witena stores no credential of its own**: `SecretStore` is
+untouched, no column holds a token, and `ant auth logout` signs Witena out too,
+because there was never a second copy. Two deliberate readings of the step. First,
+the status is derived from `ant auth print-credentials` — the step's own
+instruction, because `ant auth status` prints prose and its `--format json` flag
+does not apply to that subcommand — and **the same call also supplies the token**,
+rather than a second spawn of `--access-token`: it is the call that carries
+`expires_at`, which the cache rule needs, so using both would mean two child
+processes per cache miss for one fact. Second, `not-installed` and `signed-out`
+are **states, not rejections**: they are the ordinary condition of a machine that
+has never used the CLI and the panel exists to render them, so `providers.authStatus`
+never rejects and the two new `BackendErrorCode`s (`ant_missing`,
+`ant_not_logged_in`) are reserved for calls that had to *do* something —
+`providers.login`, `providers.logout`, and Save. That split is also why those two
+are codes while the form's two refusals (`oauth_unsupported_provider`,
+`oauth_custom_base_url`) are S5.2 `ValidationReason`s: a reason narrows the
+refusal of one request, a code describes the state of the machine.
+
+`oauthFetch` is one wrapper used by both paths, which is the only way the beta
+flag cannot be forgotten in one of them: it deletes `x-api-key` (the API refuses
+a request carrying both), sets `Authorization: Bearer`, and **merges**
+`oauth-2025-04-20` into `anthropic-beta` rather than assigning it, because the
+SDK sets that header itself for other features. `createAnthropic({ apiKey: '' })`
+is deliberate — omitting `apiKey` makes the adapter hunt for `ANTHROPIC_API_KEY`
+and throw — and the empty header it produces is deleted before the request
+leaves. The token is fetched **per request** through the injected `AnthropicCli`,
+so a model instance built once and used for an hour keeps working. Binary
+resolution walks `PATH` and then `/opt/homebrew/bin`, `/usr/local/bin` and
+`$HOME/go/bin`, because a packaged Electron app is launched by `launchd` with a
+minimal `PATH` and cannot see a Homebrew install; `WITENA_ANT_BIN` replaces the
+whole search with one absolute path.
+
+Save refuses a provider the CLI cannot authenticate, on `create` and on `update`,
+and the `auth` rules are checked against the **stored row merged with the patch** —
+`{ auth: 'oauth' }` alone says nothing about the type it lands on. The editor
+renders the Authentication control for the three first-party types only: live for
+Anthropic, disabled with a hint for OpenAI and Google ("not yet" and "never" are
+different statements), and absent for `openai-compatible`, which is somebody
+else's URL with no account behind it. In sign-in mode the panel **replaces** the
+key field; the install command is printed as data, not as copy, exactly like a
+working directory path. The card's badge is neutral rather than green: the record
+says this provider signs in, which is not a claim that the login still works —
+only a probe can make that claim, and it then shows "Connected".
+
+Tests: `anthropic-cli.test.ts` drives the **real** implementation against a fake
+`ant` — an executable script first on the injected `PATH` — covering resolution,
+all three states, the cache expiring early and being dropped on logout, a
+non-zero exit, output that is not JSON, and the rule that `stdout` (the token)
+never reaches an error message while `stderr` does. `registry.test.ts` pins the
+wrapper's three header edits and inspects the headers of a real `doGenerate`;
+`handlers.test.ts` covers the two reasoned refusals, both `ant_*` refusals of
+Save, and the merged check on update; `provider-display.test.ts` tests the
+editor's mode switch as `authControl`, which is how a decision made in JSX stays
+testable in a suite with no DOM. `e2e/providers.spec.ts` relaunches the app with
+`WITENA_ANT_BIN` pointing at nothing — the only way to get a machine with no
+`ant` on a developer machine that has one — and drives everything except the
+browser flow itself.
+
+**Verified against the real API**, with the developer's own `ant auth login`:
+the status reads back (organisation, account, workspace, expiry), and
+`providers.fetchModels` returns the live list of 11 models through the wrapper,
+which proves the header rewriting end to end. A generation is refused by the API
+with `Your credit balance is too low…` — HTTP 400 `invalid_request_error`, an
+account-balance answer rather than an authentication one, and the identical
+refusal comes back from a bare `curl` with the same headers. So the acceptance
+sentence "completes a chat turn with no key stored" is **unverified for want of
+API credit on that account**, not for want of code; it is recorded in the Phase 6
+backlog. Docs: `docs/features/providers/` and `docs/features/database/` (all four
+each), plus the `i18n` and `backend-client` documents that the two new error
+codes and the three new methods made out of date.
+
+
+### S5.4 Executor tools and the permission gate `[x]` (2026-09-13)
+What: the built-in tools an executor uses on the chat's folder, and the prompt
+that runs before anything with side effects. Backend only; S5.5 builds the UI.
+- New feature `executor` (`docs/features/executor/`, README row). Code in
+  `src/main/executor/`: `paths.ts` (confinement: resolve against `workdir`,
+  refuse `..` escapes and symlinks whose realpath leaves the folder),
+  `tools.ts` (AI SDK tools: `read_file`, `list_dir`, `search_files`,
+  `write_file`, `edit_file` — exact-string replace —, `run_command` with
+  `cwd = workdir`, a timeout from `settings.timeouts.toolTimeoutMs`, output
+  capped and truncated with a marker, and `git_diff`), and `permissions.ts`.
+  `write_file` and `edit_file` return the unified diff of what they changed
+  (add the `diff` package; do not hand-roll a diff) so S5.5 can post it.
+- `PermissionGate`: `ask({ chatId, agentId, toolName, input, signal })` emits
+  the reserved `permission.requested` event and resolves when
+  `permission.reply({ requestId, decision })` arrives with `allow`, `deny` or
+  `allowAlways` (remembered per chat + tool for the life of the process, as
+  PLAN.md's "always allow in this chat"). Add `permission.reply` to
+  `BackendApi`, `BACKEND_METHODS` and `shared/contracts.test.ts`, and a
+  `permission.resolved` event so the renderer can dismiss a prompt the run
+  cancelled. Stop aborts pending prompts through the turn's signal; a denied
+  or aborted call returns a tool error the model reads ("the user declined").
+- Which calls prompt: `write_file`, `edit_file`, `run_command`, and every tool
+  of an MCP server flagged `sideEffects` (the flag's reserved purpose in
+  `schema.ts`). `read_file`, `list_dir`, `search_files`, `git_diff` do not.
+- `collectAgentTools` gains the chat (it needs `workdir`): executor tools are
+  attached only when `agent.role === 'executor'` **and** the chat has a
+  `workdir`; a participant never gets them, whatever the chat says. The
+  executor's system prompt gets a briefing: the folder, the tools, and the
+  instruction to finish with a summary of what changed and to ask for review.
+- Unit tests: confinement (`../x`, an absolute path outside, a symlink out),
+  each tool against a temp directory, the gate (allow, deny, always, abort by
+  signal, an unknown `requestId`), and `agent-turn.test.ts` with a
+  `MockLanguageModel` that calls `write_file`: a `permission.requested` event,
+  a reply of `allow` writes the file and the turn ends with a `tool-result`;
+  `deny` ends with a `tool-error`; a participant with the same chat gets no
+  executor tools.
+Acceptance: the tests above; `npm run typecheck`; nothing under
+`src/main/executor/` imports electron. Docs: `docs/features/executor/` (new,
+all four) and `docs/features/agent-turn/` (all four).
+Done: `src/main/executor/` is three files that know nothing about each other's
+callers. `paths.ts` is `resolveInWorkdir(workdir, path) → { absolute, relative }`
+and the boundary is the whole module. It is **not** `skills/loader.ts`'s
+`resolveInside` with a different root: that function refuses every absolute path,
+which is right for a skill's bundled files and wrong for an executor that is told
+its folder in the briefing and reads absolute paths out of compiler output — so
+an absolute path inside the folder is resolved like any other and held to the
+same test. The case a shorter implementation gets wrong is the **write**:
+`existsSync` is false for a file that is about to be created, so realpathing the
+target proves nothing, and `realPathOf` climbs to the deepest existing ancestor,
+resolves *that*, and re-appends the missing tail. `workdir/link/new.txt` where
+`link` points at `/etc` is refused for that reason and has its own test. Every
+resolution starts from `realpathSync(workdir)`, so S5.2's acknowledged race — the
+folder can vanish between the picker and the first tool call — is closed by
+re-resolving rather than by trusting the earlier check.
+
+`tools.ts` is the seven tools plus `buildExecutorSection`. Four read
+(`read_file`, `list_dir`, `search_files`, `git_diff`) and run immediately; three
+change something (`write_file`, `edit_file`, `run_command`) and ask first, with
+`GATED_EXECUTOR_TOOLS` as the **actual** test rather than a comment — the `gate`
+wrapper checks membership, so moving a tool between the columns is one edit. A
+prompt per `read_file` was rejected outright: it trains the user to click Allow
+without looking, which is how a permission prompt stops being one. The tools
+return **objects**, not the rendered strings `mcp/tools.ts` produces, because two
+consumers want different things from one result — the model wants something to
+reason about, S5.5 wants `patch` — and JSON serves both. The diffs come from the
+`diff` package's `createPatch` (added to `dependencies`; its 4th and 5th
+parameters are file *headers*, the options object is the 6th). `edit_file`
+re-reads the file **after** the prompt and refuses if it changed, because writing
+the copy read before the prompt would silently revert an edit the user made while
+deciding. `run_command` spawns `/bin/sh -c` `detached`, so `process.kill(-pid)`
+takes the command's own children with it — `child.kill()` alone leaves a `sleep`
+behind that nothing can see — SIGTERM then SIGKILL after 2 s, on both the
+`toolTimeoutMs` budget and the turn's abort, and output is capped **as it
+arrives** rather than at the end. A non-zero exit is a returned result, not a
+throw: failing tests are the most useful thing the tool produces.
+
+`permissions.ts` is one promise per waiting prompt. A tool call is already an
+`await` inside `streamText`'s loop, so suspending it needs no state machine — the
+turn is simply not finished until the tool is — and several prompts can be open
+at once in a parallel round. `permission.resolved` is emitted **exactly once per
+`permission.requested`, on every path**, which is what lets S5.5 dismiss a card
+without knowing why it went away; `aborted` is that path for a stop. Two cases
+emit nothing at all rather than a card that dies in the same frame: a remembered
+`allowAlways`, and a signal that was already aborted when `ask` was called.
+`allowAlways` is keyed on **chat + tool** and is not persisted — PLAN.md's
+"always allow in this chat", and a grant that survived a restart would be a
+permission the user cannot see and does not remember giving. `permission.reply`
+answers `not_found` for an id nothing is waiting on (answered twice, or closed by
+a stop) and `validation` for a decision outside the union, deliberately **not**
+treating an unknown decision as `deny`: silently denying a call the user allowed
+is the worse of the two wrong answers, and the call stays pending.
+
+The attachment rule is `executorWorkdir(chat, agent, members)` in
+`agent-turn.ts`, and it is the single thing both `collectAgentTools` and
+`buildSystemPrompt` ask, so the prompt can never promise a tool the model was not
+given. It takes the member list because S5.2's **known gap** is real:
+`agents.update` can still promote a participant already sitting in a chat with an
+executor, so the chat's executor is the first `executor` in `position` order and
+the second one gets nothing. The MCP half of the rule moved into the `call`
+closure `collectAgentTools` builds rather than into `mcp/tools.ts`, which is pure
+and knows nothing about a chat — which also means the flag that decides whether
+an agent may *have* a tool and the flag that decides whether a call is
+*confirmed* are now read in one place from one record. That change made the
+existing `attaches the same server to an executor` case hang until the hard
+timeout, since nothing answered; it now subscribes a one-line "user" that
+replies, and gained a sibling proving a denial comes back as an errored tool
+result.
+
+A denied or cancelled call throws `PermissionDeniedError`, whose message the
+**model** reads on its next step ("The user declined to allow write_file… say
+what you wanted to do and why"). That is prompt content in the same class as an
+MCP server's error text, not backend-authored UI copy, so it is an English
+sentence rather than a `notices.*` key — and this step consequently adds **no
+locale keys at all**; the card's own copy lands with S5.5.
+
+Tests: `executor/paths.test.ts` (18) covers `..`, an absolute path outside, a
+symlink to a file and to a directory, a *new* file through a symlinked directory,
+an absolute path inside, a vanished workdir, and `isInside` on a sibling sharing
+a prefix; `executor/permissions.test.ts` (10) covers the five cases the step
+names plus the one-resolution-per-request invariant and `abortAll`;
+`executor/tools.test.ts` (36) drives all seven against a temp directory and a
+real `/bin/sh`, including the timeout kill, the abort kill and the output cap;
+`handlers/permissions.test.ts` (5) covers the handler's two refusals;
+`agent-turn.test.ts` gained a nine-case S5.4 block with a `MockLanguageModelV4`
+calling `write_file` — allow writes the file and stores a `tool-result` carrying
+the patch, deny stores a `tool-error` and writes nothing, `allowAlways` does not
+ask twice, a participant and a folderless chat get no tools, and the
+two-executor tie is broken by position. `npm test`: 75 files, 1078 tests.
+Docs in `docs/features/executor/` (new), `docs/features/agent-turn/`,
+`docs/features/mcp/` and `docs/features/backend-client/`.
+
+### S5.5 Permission prompt, diff and file-ref rendering `[x]` (2026-09-13)
+What: the renderer half of S5.4 — the user can answer the prompt, and what the
+executor changed is visible in the transcript.
+- `stores/permissions.ts`: pending requests keyed by `requestId`, filled from
+  `permission.requested`, cleared by `permission.resolved`; `reply(requestId,
+  decision)` calls `permission.reply`. A `PermissionCard` above the composer
+  (one per pending request, oldest first) shows the agent, the tool, a readable
+  rendering of the input (path and a preview for a write, the command line for
+  `run_command`, raw JSON otherwise) and three buttons: Allow, Always allow in
+  this chat, Deny. Enter allows, Escape denies. The card disappears on
+  `permission.resolved` however the request ended.
+- After an executor turn, the backend appends one `DiffPart` per file the turn
+  wrote (from the diffs S5.4's tools return; several writes to one file are
+  concatenated in order) to the executor's message. `message-item.tsx` renders
+  a `DiffPart` as a collapsible block headed by the path, using the existing
+  `code-block.tsx` with the `diff` language; `transcript-rows.ts` learns the
+  part. A `FileRefPart` renders as a `path:line` chip; in this step it copies
+  the path on click (S5.7 makes it open the editor).
+- Tool cards for the executor tools get readable labels (`write_file(path)`,
+  `run_command(cmd)`) through `tool-call.ts`.
+- Unit tests: the permissions store (request, resolve, reply, stop clears),
+  `transcript-rows` with `diff` and `file-ref` parts, the tool-call labels.
+- e2e: `e2e/executor.spec.ts` — with `qwen2.5:3b` on Ollama (the same guard as
+  `mcp.spec.ts`), an executor bound to a temp folder is asked to create a file;
+  the prompt card appears, Allow is clicked, the file exists on disk and a diff
+  block is in the transcript. Without the model the spec asserts only that a
+  chat without an executor shows no card.
+Acceptance: the flow above end to end with a real local model; the tests
+above. Docs: `docs/features/executor/` and `docs/features/chats/` (all four
+each).
+Done: the card is **above the composer, not a modal**, and that is the decision
+the rest follows from. Several prompts can be open at once — a parallel round, or
+two chats — the transcript above the card is exactly the context needed to judge
+the call, and a modal would have to hide it and pick one prompt to be about. So
+the cards stack oldest first between the message list and the composer, and Enter
+and Escape are bound **on the card** rather than on the document: a global
+listener would take Enter away from the composer, where Enter sends. The oldest
+card takes focus so the shortcuts work without a click, and the **card** takes it
+rather than the Allow button, because a focused default button is one stray Enter
+away from approving a write.
+
+`stores/permissions.ts` is a reducer over the two events and one call, and the
+rule that matters is that **nothing is optimistic**: a card is removed by
+`permission.resolved`, never by the click that answered it — the tool call has
+not returned when the reply resolves. A reply the gate refuses with `not_found`
+(answered twice, or a stop this window missed) drops the card silently: a stale
+permission prompt must stop being offered, not sit there with an error under it.
+A second answer while the first is in flight is ignored, which is also what makes
+Enter-on-a-focused-button harmless.
+
+`permission-input.ts` decides what a call looks like, and `run_command` is the
+case it exists for: the command line is printed **verbatim**, in monospace, and
+is the one body that is never capped, because the shell is not sandboxed and the
+prompt is therefore the entire boundary. `write_file` shows the path and a
+1 200-character preview of the content — not a diff, because the tool computes
+the patch only *after* the grant — `edit_file` shows the patch it already sent,
+and anything else falls back to raw JSON, which is also where arguments that are
+not the shape the schema promises land: a model that sent `write_file` without a
+`content` string is exactly when the user should see what it really sent.
+
+`diffPartsFrom` in `agent-turn.ts` runs once when the stream ends, over the parts
+already stored, and appends one `DiffPart` per **file**. Grouping is by the path
+the tool returned (the resolved one, not the string the model typed) and the walk
+is in **call** order rather than result order: two writes issued in one step
+finish in whichever order the filesystem answers, and a transcript that
+reshuffles between two identical turns cannot be compared with anything. It
+ignores `git_diff`, which returns a `patch` but only reports on the folder, and
+appends the blocks even when the turn was stopped or failed afterwards — the
+writes really happened. The pure helpers (`collectDiffs`, `collectFileRefs`,
+`countDiffLines`, `formatFileRef`) went into `transcript-rows.ts` so the
+components stayed markup and the cases could be tested without a DOM.
+
+S5.5 adds **no shared type, method or event and no `notices.*` key**. A denial is
+already visible as the errored tool card it was, carrying the English sentence
+the *model* read; a notice repeating it would be the app narrating the user's own
+click back to them. The eleven new keys are all under `chat.*`, and the three
+things on these surfaces that are never translated — the path, the command line
+and the patch — are data, the same rule the working-directory chip follows.
+
+Tests: `stores/permissions.test.ts` (9), `permission-input.test.ts` (8),
+`transcript-rows.test.ts` gained 9 (`collectDiffs`, `collectFileRefs`,
+`countDiffLines`, `formatFileRef`), `tool-call.test.ts` gained 6 for the executor
+labels, and `agent-turn.test.ts` gained an eight-case `diffPartsFrom` block plus
+three whole turns. Writing the last of those found a real ordering bug: two
+dependent calls in one step race, so the mock model now makes one call per step,
+and the grouping was moved from result order to call order. `npm test`: 77 files,
+1121 tests; `npm run typecheck` clean. `e2e/executor.spec.ts` ran with
+`qwen2.5:3b` present and all 8 cases passed — the card appeared, nothing was on
+disk while it waited, Allow wrote the file and the diff block opened onto a
+`diff` code block. Docs in `docs/features/executor/` (all four, `frontend.md`
+rewritten), `docs/features/chats/`, `docs/features/agent-turn/`,
+`docs/features/backend-client/` and `docs/features/i18n/`.
+
+### S5.6 Hand to executor and the review loop `[x]` (2026-09-13)
+What: PLAN.md's workflow — discuss → "hand to executor" → it implements the
+group's conclusion → posts what changed → the others review.
+- A "Hand to executor" action in the chat (next to the composer, or in the
+  header; pick the one that reads best with the existing `actions-card.tsx`),
+  enabled only when the run is idle, the chat has a `workdir` and an executor
+  member. It calls a new `chat.handoff({ chatId })` (add to `BackendApi`,
+  `BACKEND_METHODS`, `contracts.test.ts`).
+- `ChatRunner.handoff`: persists a user message that carries a
+  `notices.handoff` system-notice part and mentions the executor only; runs the
+  executor's turn; then schedules **one** review round in which every
+  participant member speaks (roundrobin order, regardless of the chat's
+  `mode`), fed by the executor's message and its diffs; then the normal `@`
+  mechanics apply, so the executor can be re-@'d to iterate and
+  `maxAutoRounds` still caps the chain. Stop works at every point.
+- The executor's briefing (S5.4) is extended for a handoff: implement the
+  conclusion of the discussion above, do not re-open the debate, report
+  changes with paths.
+- Unit tests in `chat-runner.test.ts`: the handoff message and its mentions;
+  the executor speaks first and alone; exactly one review round follows with
+  the participants; no review round when there are no participants; Stop
+  during the executor's turn ends the run and leaves no pending permission.
+- e2e: extend `e2e/executor.spec.ts` under the same model guard: two agents
+  plus an executor, a short discussion, "Hand to executor", a file appears, a
+  participant's review message follows.
+Acceptance: the tests above; the button is disabled without a folder or an
+executor and enabled with both. Docs: `docs/features/orchestration/`,
+`docs/features/executor/` and `docs/features/chats/` (all four each).
+Done: a hand-off is **two staged rounds of an ordinary run**, and everything else
+follows from that. `ChatRunner.handoff` validates, stores the message, sets
+`#handoffTo` and starts the normal loop; `#loop` *takes* that field once — not
+reads it, because `#start`'s restart would otherwise hand the same chat over
+twice — and spends it over two iterations: `planFromHandoff` (the executor,
+alone) and then `planFromReview` (everybody else, in `position` order, replying
+to it). Both are **merged** with whatever the previous round scheduled rather
+than replacing it, so a message the user sent while the executor was working is
+still answered by the review round. From the third round on it is ordinary `@`
+scheduling, which is what makes "re-`@` the executor to iterate" free: nothing in
+the runner knows the chain started as a hand-off. Stop, the barrier, the offline
+filter, the truncation notice and `maxAutoRounds` needed no change at all.
+
+Both plans ignore the chat's `mode` deliberately. `roundrobin` would put four
+models in front of the executor before it started working, and `mention-only`
+would answer a hand-off with the `noMentions` notice instead of a review — the
+mode describes how a *typed* message is answered, and this is not one. The review
+round is "everybody except the executor" rather than "every participant": the two
+sets differ only in S5.2's known gap (a promoted second executor), where the
+extra agent has no tools and nothing to lose by reviewing.
+
+What is stored is a **`user` message whose only part is the `handoff` notice
+key**, mentioning the executor alone. It is the user speaking — it is what the
+executor replies to, it carries the mention that schedules the turn, and it is
+what someone scrolling back has to see — so a `system` row would have been the
+app narrating an instruction the user gave. That also meant `history.ts` needed a
+`handoff` entry in `NOTICE_TEXT`: a notice with no prompt rendering is skipped,
+and the executor would have been handed an empty request.
+
+The briefing is `HANDOFF_BRIEFING`, appended by `buildExecutorSection(workdir,
+handoff)` and reached by `AgentTurnOptions.handoff`, which the runner sets for
+exactly one turn (`implementing` in `#runRound`). A reviewer must not be told to
+"implement the conclusion", and neither must an executor a reviewer `@`-ed
+afterwards: that one is being asked something specific, which is asserted by the
+*absence* of the paragraph in its second prompt.
+
+The three refusals are S5.2's layer: `handoff_no_workdir`, `handoff_no_executor`
+and `handoff_run_active` as `ValidationReason`s. `components/chat/handoff.ts`'s
+`handoffBlocker` computes the **same three from the same facts in the same
+order** in the renderer, so the disabled button's tooltip and a rejection's
+sentence are one string (`validationReasonMessage`), and only two locale keys
+were needed for the control itself. A hand-off is refused rather than queued
+while a run is active, because merging it into a round somebody else's mentions
+had filled would make "the executor speaks alone" untrue.
+
+The button is above the composer rather than in the Actions card: that card's two
+actions are ordinary messages and say so in its header comment — nothing there
+bypasses `chat.send` — while this is a backend path of its own. It is disabled,
+never hidden, and carries the reason in `data-blocked` so the end-to-end spec can
+assert *which* rule applies without reading copy.
+
+Tests: `chat-runner.test.ts` gained a nine-case `ChatRunner (hand to executor)`
+block (the stored message and its mentions; the executor alone in a `roundrobin`
+chat then one review round with the other two and their `inReplyTo`; the briefing
+in the handed-over prompt and the executor's answer in the reviewers'; no review
+round when the executor is the only member; a reviewer's `@` scheduling a third
+round whose prompt no longer carries the briefing, until `maxAutoRounds` takes
+the floor back; a Stop inside the executor's `write_file` leaving
+`permissions.pending()` empty, nothing on disk and no review round; and the three
+refusals), `scheduling.test.ts` six for the two new plans, `handoff.test.ts` five
+for the blocker, `run.test.ts` two for the store, plus `contracts.test.ts` and
+`handlers.test.ts`. `npm test`: 78 files, 1143 tests; `npm run typecheck` clean.
+`e2e/executor.spec.ts` ran with `qwen2.5:3b` present: 10 passed, including the
+new offline case and the full hand-off — two participants and an executor
+discussed, "Hand to executor" was clicked, the prompt was allowed, a file
+appeared in the folder and a participant reviewed it with nothing typed. Docs in
+`docs/features/orchestration/`, `docs/features/executor/`,
+`docs/features/chats/`, `docs/features/agent-turn/`,
+`docs/features/backend-client/` and `docs/features/i18n/`.
+
+### S5.7 Open in editor `[x] (2026-09-13)`
+What: PLAN.md point 3, step one — file paths and diffs in a message open in
+the user's editor. New feature `editor` (`docs/features/editor/`, README row).
+- Settings → Developer gains an "Editor" block: `vscode` (default, opens
+  `vscode://file/<path>:<line>`), `cursor` (`cursor://file/...`), or `custom`
+  with a command template (`{path}` and `{line}` placeholders, default
+  `code -g {path}:{line}`). `AppSettings.editor` with a default in
+  `DEFAULT_APP_SETTINGS`; settings migration is additive.
+- `system.openInEditor({ path, line? })`: the URL schemes need
+  `shell.openExternal`, which is electron, so the real implementation is an
+  overlay in `src/main/ipc/` exactly like `dialogs.ts`, and
+  `handlers/system.ts` declares the method and rejects with a clear code. The
+  custom command is spawned from the Electron-free handler (`node:child_process`
+  is allowed there). The path must be absolute and, when the chat has a
+  `workdir`, inside it; otherwise the call is refused.
+- Rendering: `FileRefPart` chips open the editor on click; the `DiffPart`
+  header path is clickable; a pure `components/chat/file-refs.ts` finds
+  `path:line` and `path` tokens in agent text that resolve inside the chat's
+  `workdir` (relative or absolute) and `markdown.tsx` renders them as the same
+  chip. Tool cards for `read_file` / `write_file` / `edit_file` get an "open"
+  icon.
+- Unit tests: the settings default and patch, the command-template expansion
+  (quoting a path with spaces), the path detector (inside the folder, outside,
+  a URL, a version number like `1.2:3` that is not a path), the refusal of a
+  path outside `workdir`.
+- e2e: the editor cannot be observed; assert that a `file-ref` chip is rendered
+  for a seeded message and that clicking it calls the backend once (stub
+  `system.openInEditor` through the developer settings test hook if one
+  exists, otherwise skip the click).
+Acceptance: with VS Code installed, clicking a chip in a chat bound to a folder
+opens that file at that line; the tests above. Docs: `docs/features/editor/`
+(new, all four), `docs/features/chats/` (all four).
+Done: the method is the **first one that is only half window-system**, and that
+is what shaped the code. `vscode://file/<path>:<line>` needs `shell.openExternal`;
+`code -g <path>:<line>` needs `node:child_process`, which the Electron-free layer
+may use. So instead of a stub plus an override, the whole *decision* went into
+`src/main/editor/open.ts` — confinement, the URL, the command and its quoting —
+and it returns a **plan** rather than doing anything. `handlers/system.ts` runs a
+`command` plan and rejects a `url` plan with `OPEN_IN_EDITOR_UNAVAILABLE`;
+`src/main/ipc/editor.ts` runs both. A server build with a custom editor
+configured therefore works unchanged, which neither `pickFolder` nor `applyTheme`
+can say — and, more to the point, the path cannot be confined differently in the
+two builds, because neither of them validates anything of its own.
+
+Rule 2 is `resolveInWorkdir` **imported**, not re-derived: S5.4's four ways out of
+a folder (`..`, an absolute path, a symlink, a symlink to a path that does not
+exist yet) are already closed there and a second implementation would be a second
+chance to get the fourth one wrong. Rule 1 — absolute — is the renderer's
+resolution arriving as an answer rather than a question: the detector already had
+to resolve a token against the folder in order to decide whether to draw a chip,
+so sending the result means one resolution, in one place, and
+`editor_path_not_absolute` names a real client bug rather than a user mistake.
+Confinement applies only when the call names a chat that has a folder, which is
+deliberate: a path in a message is *model* output and must be confined, while a
+call with no chat is the user asking for a specific file and refusing to open
+their own `~/notes.md` would be second-guessing a direct instruction.
+
+The detector (`components/chat/file-refs.ts`) is the part that needed the most
+restraint, because it draws a button over prose. Its rules are written as a table
+of **rejections** in the file header, and the one doing most of the work is that
+a relative token must end in an extension with a letter in it: that is what keeps
+`1.2:3`, `read/write` and `and/or` out, at the documented cost of never chipping
+`Makefile`. A URL, a Windows path, a leftover colon (`mailto:`) and an `@` in a
+token with no separator are the other four. It is lexical — the renderer has no
+filesystem and cannot follow a symlink — so it decides what to *draw* and the
+backend re-resolves through `realpathSync` on the click; the two are allowed to
+differ in one direction only, chip-then-refuse, never the reverse.
+
+Two deliberate widenings of the step as written. **Detection runs on every message
+body, the user's included**, because the sender does not change what a token
+means — a pasted stack trace deserves the same click — and because it is what
+makes the behaviour observable end to end without a live model: `e2e/editor.spec.ts`
+is entirely offline and always runs, rather than sitting behind an Ollama guard.
+And **an inline code span that is entirely one reference becomes a chip**, since
+`` `src/a.ts:42` `` is how a model writes a path more often than not; a fenced
+block is left alone, or a directory listing would become forty buttons.
+
+S5.5's copy-on-click is **gone** rather than kept beside the open: it was
+explicitly a placeholder for this step, and a 20-pixel target with two meanings is
+worse than either one — the reference is still selectable text in the message. A
+refused open paints the chip red for 2.5 seconds and says so in its tooltip;
+nothing is written into the transcript, because that would be the app narrating a
+click back at the user. The diff header became **two** buttons (expand, and the
+path) rather than one inside another, which is invalid markup and unreachable by
+keyboard.
+
+`{path}` is substituted **already quoted** (`shellQuote`: single quotes, with
+`'\''` for an embedded quote), which is what makes the naive default template
+correct for `/Users/ada/My Projects/a.ts` and what keeps `notes.md; rm -rf ~` a
+filename. The hint says not to quote the placeholder yourself, and writes its own
+`{path}` / `{line}` with **single** braces — i18next would have interpolated the
+double-brace spelling away to nothing. The Editor block sits in Settings →
+Developer because its custom mode is a shell command, and `settings.update`
+validates both fields for the reason `theme` is validated: an unknown kind falls
+through every branch of `planOpenInEditor` and a blank command spawns an empty
+shell line, neither of which fails in a way the user can see.
+
+Tests: `editor/open.test.ts` (22) drives both rules against a real temporary
+folder — including a symlink out and a `..` — plus the two URLs, the encoding, the
+quoting (a space, a single quote, a `;`, a missing line, a repeated placeholder)
+and the three plans; `file-refs.test.ts` (28) is weighted towards the rejections;
+`handlers.test.ts` gained nine (the URL branch's rejection, a custom command
+really running via a marker file the child writes, the two refusals, and
+`settings.update`'s `editor` validation); `tool-call.test.ts` six for which cards
+get an "open" icon; `settings.test.ts` four for the store. `npm test`: 82 files,
+1234 tests; `npm run typecheck` clean. `e2e/editor.spec.ts` ran after
+`npm run build`: 6 passed — the Editor block's three kinds and its conditional
+command field, both surviving a restart; a chip for `src/main.ts:12` and none for
+`/etc/passwd:1` or `1.2:3`; the backend really running the call the chip would
+make; both refusals; and no chip at all once the folder is cleared.
+`e2e/executor.spec.ts` was re-run for the diff and tool-card changes: 14 passed.
+The **click itself is not driven**: `shell.openExternal` would launch the
+developer's real editor, there is no test hook to stub the method, and
+`window.witena` is a `contextBridge` object whose methods cannot be replaced from
+the page — so the spec asserts the chip is a real button carrying the path and the
+line, and separately that the backend accepts exactly that call. That gap, and
+the fact that the acceptance sentence ("with VS Code installed…") was therefore
+verified by reading rather than by clicking, are in the Phase 6 backlog. Docs:
+`docs/features/editor/` (new, all four), `docs/features/chats/` (all four),
+`docs/features/{backend-client,executor,ui-shell,i18n}/` and the README index.
+
+### S5.8 Light theme `[x]` (2026-09-13)
+What: a light appearance next to the existing dark one, and a setting that
+follows the operating system.
+- `AppSettings.theme: 'system' | 'light' | 'dark'`, default `'system'` for a
+  fresh installation; a stored `'dark'` keeps meaning dark. `AppSettingsPatch.theme`
+  accepts the three values; the handler rejects anything else with the
+  `validation` code.
+- Tokens: keep the dark palette in `@theme static` as the base, and add a
+  complete light palette under `:root[data-theme='light']` that overrides
+  **every** `--color-*` token the base defines (backgrounds, borders, foreground
+  steps, accent, avatar, presence, danger, status surfaces). Set
+  `color-scheme: dark` / `light` on the root alongside so native controls and
+  scrollbars follow. Choose light values with the same roles and contrast steps
+  as the dark ones (warm off-white grounds, the same amber accent darkened
+  enough for AA contrast on white, status colours that stay distinguishable);
+  the presence-dot hues stay recognisable in both.
+- `src/renderer/src/lib/theme.ts`: a pure `resolveTheme(setting, prefersDark)`
+  returning `'light' | 'dark'`, and `applyTheme(setting)` that stamps
+  `data-theme` on `document.documentElement` and, for `'system'`, subscribes to
+  `matchMedia('(prefers-color-scheme: dark)')` and re-stamps on change (returns
+  the unsubscribe). Applied once at startup from the loaded settings and again
+  whenever the setting changes.
+- Code blocks: highlight with a light theme when the resolved theme is light
+  (shiki dual themes through CSS variables, or re-highlight on change — pick
+  what `code-block.tsx` already makes easy) so code is not a dark island on a
+  light page.
+- Settings → Appearance: a three-segment `SegmentedControl` — System / Light /
+  Dark — with test ids `theme-system`, `theme-light`, `theme-dark`, replacing
+  the placeholder text the section shows today. The section's existing language
+  control is untouched.
+- The Electron window: the initial `backgroundColor` should match the theme that
+  will be painted, so the first frame is not a dark flash on a light theme (read
+  the stored setting where the window is created, resolve `'system'` with
+  `nativeTheme.shouldUseDarkColors`), and `nativeTheme.themeSource` should follow
+  the setting so the title-bar traffic lights and native dialogs match. Both are
+  electron-only and belong in `src/main/index.ts` and an overlay in
+  `src/main/ipc/` (a `system.applyTheme` method declared in `handlers/system.ts`
+  as a no-op / rejection, exactly like `system.pickFolder`), never in business
+  logic.
+- Unit tests: `resolveTheme` for the six combinations; a test that reads
+  `index.css` and asserts every `--color-*` token in the `@theme static` block
+  has a light override (so a token added later cannot silently stay dark); the
+  settings store patch and the handler's validation of the three values and
+  rejection of a fourth.
+- e2e: a new `e2e/theme.spec.ts` — clicking Light sets `data-theme="light"` on
+  `html` and the body's computed background is light; Dark sets it back; System
+  follows `page.emulateMedia({ colorScheme })`; the choice survives a restart.
+Acceptance: the three-way control works, every screen is readable in light mode
+(no hard-coded dark colour left), the first frame after launch is not a dark
+flash on a light theme, the tests above pass. Docs: `ui-shell` and `i18n` (all
+four each) and `docs/features/backend-client/` for the new method.
+Done: the light theme is **one CSS block and one attribute**. `index.css` keeps
+the dark palette in `@theme static` as the base and adds
+`:root[data-theme='light']`, which redefines all 28 `--color-*` tokens;
+`lib/theme.ts` stamps `data-theme` on `<html>` and nothing else. No component
+branches on the theme, no class is written twice and no page has to subscribe to
+anything, because a Tailwind utility compiles to `var(--color-…)` and the
+variable is what changes. The palette is not an inversion. Each foreground keeps
+**at least** its dark counterpart's contrast on its own surface (`fg-faint` is
+4.05:1 on `bg-base` where the dark one is 3.37:1); the accent is *darkened*
+rather than lightened, because `#d8a656` is a 1.9:1 amber on white — `#92600f`
+is the same hue at 4.9:1, and `bg-accent` with `text-bg-base` on it is AA in both
+directions; and the rail stays the **recessed** surface in both themes, which
+literal lightness inversion would have put on top. The palette checks in
+`lib/theme.test.ts` read `index.css` as text and fail when a token added to the
+base has no override, which is the one way this can rot silently.
+
+`'system'` is a rule, not a value, so it is resolved at use and never stored
+resolved — the same decision the language made in S1.4, for the same reason: a
+machine that flips at sunset should take the app with it. `resolveTheme` lives in
+`@shared/theme` rather than in the renderer, because the main process makes the
+identical decision from `nativeTheme.shouldUseDarkColors` when it picks the
+window's `backgroundColor`, and two copies of that boolean would be two chances
+to disagree about the **first frame** — the one frame no stylesheet can correct.
+`WINDOW_BACKGROUND` is the app's only duplicated colour for the same reason, and
+the test asserts it equals `--color-bg-base` in both blocks. `activateTheme`
+exists on top of `applyTheme` to own the single `matchMedia` subscription: a
+leaked listener would be invisible until the OS flipped and repainted an app that
+was explicitly set to light.
+
+Code blocks switch through **CSS variables, not a re-highlight**: `highlightCode`
+asks shiki for `vitesse-dark` and `vitesse-light` at once with
+`defaultColor: false`, so every token span carries `--shiki-light` and
+`--shiki-dark` and two rules in `index.css` choose. Re-highlighting would have
+meant a second pass over a transcript holding hundreds of blocks, each flickering
+back to plain text mid-stream — and it would have had to reach into
+`components/chat/`, which this step deliberately did not touch. `highlighter.test.ts`
+asserts both variables are present and no literal `color:` is, because the
+function returns `null` on failure and a theme mistake would otherwise look like
+a passing app with duller code.
+
+`system.applyTheme` is the **second** method whose implementation must import
+electron, and it is arranged exactly like `system.pickFolder`: declared in
+`shared/backend.ts`, rejecting in `handlers/system.ts` with
+`APPLY_THEME_UNAVAILABLE`, real in `src/main/ipc/theme.ts`, layered by
+`registerIpc`. It carries no state — the setting is stored by `settings.update`
+like any other — so it is a notification, resolves `void`, and the store ignores
+its failure: window chrome that did not get tinted must never fail the setting.
+`settings.update` validates the *value* of `theme` (the only setting whose
+content is checked) because a stored `'sepia'` would resolve to light and leave
+the user with a theme no control in the app explains.
+
+`e2e/theme.spec.ts` drives the control, flips `prefers-color-scheme` with
+`page.emulateMedia` while `'system'` is selected (the `matchMedia` listener is
+the kind of code that works in a fake and not in Chromium), and after a restart
+asserts both `data-theme` and `BrowserWindow.getBackgroundColor()` — the frame
+painted before the renderer exists. Five light screenshots land in
+`test-results/shots/`; the chat, settings, agents, providers and agent-editor
+screens were looked at, and a real `qwen2.5:3b` transcript with a highlighted
+Python block was checked in light mode outside the suite. Docs in
+`docs/features/{ui-shell,i18n,backend-client}/`.
+
+### S5.9 No sampling parameters in the agent form `[x] (2026-09-13)`
+What: the agent editor stops asking for Temperature and Max tokens. The product
+decision, recorded here and in `docs/features/agents/context.md`: real users do
+not tune sampling, they pick a model and write a prompt; current models' provider
+defaults are what everyone should run with, and two numeric fields with
+validation copy were friction with no upside.
+- Remove the two controls, their draft fields, their range validation and their
+  locale keys (`agents.temperature`, `agents.maxTokens`, the two range messages,
+  and any hint keys) from `agent-editor.tsx`, `stores/agents.ts` and both locale
+  files. The `used-keys` and `locales` tests must stay green.
+- Keep `Agent.params.temperature` / `maxTokens` in the shared type, the row and
+  the handler validation: both are optional already, an agent that was saved with
+  values keeps behaving as before, and the backend needs no migration. The
+  handler continues to reject out-of-range values so a future API caller cannot
+  store nonsense.
+- `agent-turn.ts` and `context-budget.ts` keep their fallbacks
+  (`DEFAULT_OUTPUT_RESERVE`, provider-default sampling); confirm with a test that
+  an agent with no params streams with neither `maxOutputTokens` nor
+  `temperature` set.
+- `docs/PLAN.md`: adjust the wording that lists "parameters" among what the agent
+  page configures, so the plan does not promise a control the product removed.
+- Unit tests: the store no longer exposes the fields (or ignores them), the
+  editor's validation path for them is gone, the handler still validates them,
+  the turn falls back. e2e: `e2e/agents.spec.ts` no longer fills them; if it
+  asserted them, replace with an assertion that the fields are absent
+  (`agent-temperature` / `agent-max-tokens` test ids, whatever they were, have
+  count 0).
+Acceptance: the agent form shows model, prompt, role, skills, MCP servers and
+memory only; an agent saved earlier with a temperature still uses it; typecheck
+and tests pass. Docs: `docs/features/agents/` (all four) and
+`docs/features/agent-turn/` if its text mentions the controls.
+Done: this is a **deletion step**, and the whole of it is that the two fields
+stayed where they were useful and left where they were not. `AgentParams` is
+untouched, the `params` column is untouched, `assertParams` still bounds both
+values, and `agent-turn.ts` still spreads `temperature` / `maxOutputTokens` into
+`streamText` when an agent has them — so an agent configured before today keeps
+sampling exactly as it did and there is no migration to write. What went is the
+*writing* path: two `Field`s in `agent-editor.tsx`, `TEMPERATURE_MIN` /
+`TEMPERATURE_MAX` and the range branches in `validateDraft`, the
+`temperature` / `maxTokens` members of `AgentDraftErrors`, and four locale keys
+per language (`agents.temperature`, `agents.maxTokens`, the two
+`agents.validation.*Range` messages) — five, counting the already-dead
+`agents.parameters` section title, whose block no longer exists. The reasoning
+toggle stays and is now the only caller of `patchParams`: it changes what the
+model *produces* rather than how it samples, which is a product choice and not a
+knob.
+
+The fallbacks that were written as the exception are now the normal path, which
+is the one thing worth testing rather than asserting: `agent-turn.test.ts` gained
+a case where an agent with empty `params` streams with **neither** option set,
+next to the existing one where a tuned agent's values reach the call, and
+`fitHistory` therefore reserves `DEFAULT_OUTPUT_RESERVE` for practically every
+turn from now on. On the renderer side `validateDraft` deliberately stays silent
+about a temperature it can no longer produce — the store's test asserts the
+silence — and a separate test opens a stored agent that has both values and
+checks the draft carries them through an unrelated edit, because the draft is
+what `saveDraft` sends back and dropping them there would have quietly reset
+records this step promised not to touch. `e2e/agents.spec.ts` asserts the two
+test ids have count 0 while the editor is open; it never filled them, so there
+was nothing to remove.
+
+### S5.10 Chat goal `[x]` (2026-09-13)
+What: the right-hand panel lets the user say what the chat is for, and every
+agent is briefed with it.
+- `Chat.goal: ChatGoal | null` where `ChatGoal = { kind: 'discussion' |
+  'document' | 'codebase', description: string, deliverable?: string,
+  materials: string[] }`; a nullable JSON `goal` column on `chats` through an
+  additive migration (`docs/features/database/`). `ChatPatch.goal` accepts a
+  goal or `null`. Handler validation with `ValidationReason`s (S5.2's layer):
+  `description` non-empty and at most 2 000 characters; `deliverable` required
+  for `document`, a relative path with no `..` that stays inside `workdir`
+  (reuse `executor/paths.ts`), the parent folder need not exist; `materials`
+  relative paths that exist inside `workdir`; `document` and `codebase` require
+  a `workdir`.
+- Group settings (member panel) gains a **Goal** block under "Working
+  directory": a `SegmentedControl` Discussion / Document / Codebase (test ids
+  `goal-discussion`, `goal-document`, `goal-codebase`), a description
+  `TextArea` (`goal-description`), for `document` a deliverable path `Input`
+  relative to the folder (`goal-deliverable`) **plus a "Choose…" button**
+  (`goal-deliverable-pick`) that opens the native save dialog through a new
+  `system.pickSavePath({ defaultDir })` overlay in `src/main/ipc/dialogs.ts`
+  (`dialog.showSaveDialog`, starting in `workdir`; the file need not exist),
+  whose absolute result the renderer turns into the relative path and refuses
+  with a translated reason when it lies outside `workdir` — so the user may
+  type the path or pick it in Finder, and both end in the same field. The
+  **Materials** list (`goal-materials`, rows with a remove button, an "Add…"
+  button) calls a new `system.pickPaths` overlay in the same file — files and
+  folders, multi-select. Both overlays are declared and rejected in
+  `handlers/system.ts` exactly like `pickFolder`. Paths picked outside
+  `workdir` are refused with a translated reason. Saving is per field on blur,
+  as the rest of the panel does.
+- The chat header shows the goal kind as a chip next to the folder chip; for
+  `document` the chip carries the deliverable's basename and, once the file
+  exists, reads "delivered" and opens it in the editor on click (S5.7).
+- Briefing: `buildGroupBriefing` gains a "Goal" section for every member —
+  the kind in one sentence, the description verbatim, the deliverable path
+  for `document`, and for `codebase` the instruction that changes are made by
+  the executor after the discussion. The executor's hand-off briefing (S5.6)
+  names the deliverable or the change.
+- Unit tests: the validation table (each reason once), the store patch, the
+  briefing section for the three kinds, the chip states. e2e: set a
+  `document` goal on a chat bound to a temp folder, see the chip, create the
+  deliverable on disk, see "delivered".
+Acceptance: a goal round-trips through the panel and survives a restart;
+every agent's system prompt carries it; invalid paths are refused with a
+translated reason. Docs: `docs/features/chats/`, `docs/features/agent-turn/`,
+`docs/features/database/`, `docs/features/backend-client/` (all four each).
+Done: `Chat.goal` is one nullable JSON column (migration
+`0003_acoustic_vermin.sql`, the third of exactly the shape `0001` and `0002`
+established) holding the whole `ChatGoal`. One column rather than four, because
+the four fields are only ever read and written together and a `deliverable`
+means nothing without its `kind`; and **replaced** rather than merged, because
+`materials` is a list the user removes from and a merge has no spelling for
+"this list is now empty". That is the one patch field in the storage layer that
+is deliberately not a merge, and it is what makes the Goal block hold a draft.
+
+The step's real design work was the **path rule**, and it has two halves that
+land in different processes. A goal stores paths **relative to `workdir`**,
+because the folder is a machine-local binding while the goal describes a project
+that outlives it being moved, cloned or restored from a backup — so
+`assertGoal` refuses an absolute path and a `..` with one reason
+(`*_not_relative`: they share a fix, "write it relative to the folder") and a
+path that leaves the folder with another (`*_outside_workdir`: a different
+mistake, discovered by a different check). That second check is S5.4's own
+`resolveInWorkdir`, reused verbatim, which is what guarantees a goal can never
+name a file the executor would be refused at the moment of use — symlinks
+included, which each of the two has a test for. The other half is that **no
+native dialog on any platform this runs on can be confined to a directory**, so
+the conversion from the absolute path a dialog returns is the renderer's
+(`relativeToWorkdir` in `lib/workdir.ts`, hand-written like `folderName` because
+the renderer project has no Node types) and so is noticing that a pick fell
+outside the folder. That refusal is reported through the *same* three store
+fields, the same `ValidationReason` and the same `translateFailure` as a backend
+rejection, so the user cannot tell — and does not need to — which side noticed.
+A materials pick keeps what was inside and reports what was not: six files with
+one stray among them meant the six.
+
+The validation table is nine `ValidationReason`s and two refusals that carry
+**none**, and that line is the point rather than an omission: a reason is a
+sentence a user is meant to act on, so it exists for every refusal a control can
+produce and for none that only a hand-written call can (a `deliverable` on a
+`codebase` goal — the panel drops the field when the kind changes — and a
+malformed object). Two asymmetries are deliberate: a **deliverable is never
+checked for existence** and its parent folder need not exist, because not
+existing yet is the whole point of one, while a **material must exist**, because
+it is something the group reads. And `document` / `codebase` — or any material —
+require a `workdir`, which is why those two segments are **disabled with the
+reason under them** rather than hidden: the same argument as S5.6's hand-off
+button, and it needed a per-option `disabled` on `SegmentedControl`, the only
+shared primitive this step touched.
+
+"Delivered" is a **query** (`chats.goalStatus`), not a field on `Chat` or a
+column. Whether a file exists is a fact about the filesystem, so a stored boolean
+is wrong the moment anything creates, moves or deletes it — including something
+that is not this app — and `docs/features/chats/context.md` had already refused
+exactly this shape once, for the member count. The renderer asks when a chat is
+opened and again on every `chat.updated` for it (a primitive `updatedAt`
+selector, so the effect does not re-run on every store write), which covers
+every edit the panel makes; S5.12 adds the executor turn as one more moment, and
+a filesystem watcher is in the Phase 6 backlog. `goalStatus` uses `join` rather
+than `resolveInWorkdir` on purpose: the path was confined when it was saved, and
+a folder that has since gone should answer "not delivered" to a chip that only
+wants to know whether to say so.
+
+The Goal block is the **only** control in the group settings that holds a draft,
+and the column is why: there is no per-field patch to send, and persisting free
+text on every keystroke would be a write per character. So it writes on blur,
+which is what the chat title already does. Two edges fall out of
+`chats.update` refusing a blank description — a goal *is* its description, since
+a kind alone says nothing a model can act on — and both are deliberate rather
+than discovered: picking a kind while the box is empty changes the draft only,
+and **emptying** the description of a chat that has a goal removes the goal. The
+way out is the same gesture as the way in, instead of a second control that
+exists only to undo the first; that it is not discoverable is in the backlog.
+
+The briefing carries the goal for **every** member, executor or not — what the
+group is for is not a fact about one role — and it goes in the group briefing,
+**last**, rather than in a section of its own beside skills and memory: it is the
+same class of thing as the roster and the protocol, a rule of the room, so it
+must survive a prompt being cut before the reference material does, and the end
+of a long prompt is the part a model is still following. The description is
+placed **verbatim** in both languages, because it is the one part of the whole
+prompt the user wrote. A `codebase` goal adds the sentence that makes PLAN.md's
+one-writer rule visible to a participant — you change no file, the executor does
+it afterwards — without which a model told to change a codebase writes the change
+out in prose as if it had; a test asserts the word `executor` is absent from the
+other two kinds. A chat with no goal gets **no section at all**, asserted byte
+for byte, rather than a paragraph explaining that it has none. The hand-off
+briefing gains one sentence (`goalHandoffLine`) naming the deliverable or the
+change, and it **points at** the goal rather than restating it, because the goal
+is already in the group briefing of the same prompt and a model given one
+instruction twice in two wordings follows neither reliably.
+
+The chip is a button **only when it is openable**. Three of its four states are
+plain chips, because a delivered document is the only one with a file to open and
+a control whose click can only fail is worse than text; both branches carry the
+same `data-kind` / `data-delivered`, so the spec reads one place. It opens
+through S5.7's `openInEditor` and paints red for the same 2.5 s on a refusal,
+which makes it that feature's fifth caller and the first outside the transcript.
+
+Tests: `handlers/chats.test.ts` gained a 20-case `chats.update goal` block
+against a real temporary folder (one per reason, a symlink out for each of the
+two `outside_workdir` ones, the shapes that must stay legal, and `goalStatus`
+before and after the file appears), `briefing.test.ts` eleven across both
+languages, `executor/tools.test.ts` four for `goalHandoffLine`,
+`db/chats.test.ts` two for the whole-object replace across a reopen,
+`stores/chats.test.ts` nine, `lib/workdir.test.ts` six for
+`relativeToWorkdir`, and `components/chat/goal.test.ts` seven for the chip.
+`npm test`: 83 files, 1293 tests, all passing; `npm run typecheck` clean.
+`e2e/executor.spec.ts` ran after `npm run build`: **12 passed**, including the
+two new offline cases — the two kinds disabled with their hint before a folder
+is bound, the chip naming the deliverable after one is, `data-delivered`
+flipping to `true` once the file is written, the three refusals, and all of it
+surviving a restart — and the two Ollama-gated ones, which found `qwen2.5:3b`
+and really ran. `e2e/members.spec.ts`, `editor.spec.ts`, `i18n.spec.ts`,
+`theme.spec.ts` and `ui-shell.spec.ts` were re-run for the chat page and the
+`SegmentedControl` change: 23 passed. The two native dialogs and the chip's
+click are **not** driven, for the reasons S3.2 and S5.7 already record; that
+gap, the polled delivery check and the exact path comparison are in the Phase 6
+backlog. Docs: `docs/features/{chats,agent-turn,database,backend-client}/` (all
+four each) plus `docs/features/{executor,editor,i18n,ui-shell}/`.
+
+### S5.11 Read-only workspace tools and the materials briefing `[x] (2026-09-13)`
+What: every member can read the folder, and the materials the user marked are
+already in front of them when the first round starts.
+- `collectAgentTools` attaches `read_file`, `list_dir`, `search_files` and
+  `git_diff` to **every** member of a chat with a `workdir` (participants
+  included; the executor keeps its full set). These are the S5.4 tools,
+  unchanged, confined to `workdir`, and they never prompt. Nothing that writes
+  is ever attached to a participant, whatever the goal says — this is PLAN's
+  read-only rule, and a test proves it for each writing tool.
+- A **workspace briefing** section in every member's system prompt when the
+  chat has a `workdir`: the folder's basename, a tree listing capped at 200
+  entries and depth 3 that honours `.gitignore` and always skips `.git`,
+  `node_modules`, build outputs and files over 1 MB, and — for `codebase` —
+  the current branch and `git status --short` summary. Pure, tested, cached
+  per turn.
+- **Materials**: each `goal.materials` entry is inlined (a file: its text; a
+  folder: its tree plus each text file up to a per-file cap) as a "Materials"
+  section placed after the briefing and before the history. The section is
+  measured with `estimateTokens` and trimmed under the same budget rules as
+  `fitHistory` (S4.2): files are included in list order until the budget for
+  materials (a fixed share of the context window, e.g. 25 %) is spent; the
+  rest are listed by path with the note that `read_file` fetches them. Binary
+  files are listed, never inlined. A `notices.materialsTruncated` line is
+  emitted once per chat when trimming happened.
+- Unit tests: the tree walker (caps, ignores, depth), the materials assembly
+  under a small budget (inline then list), binary detection, the tools
+  attached to a participant (read-only four) versus the executor (all seven),
+  a `MockLanguageModel` participant turn that calls `read_file` and gets the
+  content. e2e (Ollama-gated as in `executor.spec.ts`): two participants and
+  a folder holding one text file marked as material; the first reply quotes
+  it without any tool call; a follow-up question makes an agent call
+  `read_file` on a second, unmarked file and a tool card appears.
+Acceptance: a participant reads but cannot write; a marked material is in the
+first reply's context; large materials degrade to a list rather than blowing
+the budget. Docs: `docs/features/executor/`, `docs/features/agent-turn/`,
+`docs/features/chats/` (all four each).
+Done: the step is two rules and two prompt sections, and the rules are what the
+code is organised around. `collectAgentTools` now asks **two** questions instead
+of one: `executorWorkdir(chat, agent, members)` (S5.4's, unchanged) decides who
+may write, and the new `workspaceWorkdir(chat)` — one condition, the chat has a
+folder — decides who may read, which since this step is everybody in the room.
+The read-only set is `READ_ONLY_EXECUTOR_TOOLS`, **derived** as the complement of
+`GATED_EXECUTOR_TOOLS` rather than written out a second time, so a tool that
+becomes gated stops reaching participants in the same edit; and a participant's
+`read_file` is literally the executor's, picked by key out of the same
+`buildExecutorTools` set, so the confinement, the caps and the refusals cannot
+drift into two behaviours. `agent-turn.test.ts`'s old "a participant gets no
+executor tools at all" case became "the four that read and none of the three that
+write", the three asserted **one by one** so a regression names what it let
+through, with a sibling that sets a `codebase` goal and proves the goal cannot
+buy a participant a writing tool.
+
+`executor/workspace.ts` is the briefing: `walkTree` (sorted, directories first,
+capped at 200 entries and depth 3, files over 1 MB and `SKIPPED_TREE_DIRS` left
+out), `formatTree`, a hand-written `.gitignore` parser, `gitInfo`, and
+`buildWorkspaceSection`. The `ignore` package was the alternative and was
+rejected on a narrow argument rather than on principle: nothing in this module
+decides what may be **read** — `paths.ts` is the boundary — so a pattern parsed
+wrongly costs one extra line in a listing, which is not worth a dependency. The
+parser covers what a root `.gitignore` contains (comments, blanks, `!`, a
+trailing `/`, a leading `/`, `*`, `?`, `**`, last match wins) and only the
+folder's own file is read; nested ones are in the backlog. Two decisions in the
+section itself: the git half is added for a **`codebase` goal only**, because
+`git status --short` in a working repository is dozens of lines nobody in a
+`document` chat asked for; and the read-only sentence is left out for the
+**executor**, whose own section already lists all seven tools — the same
+instruction in two wordings is followed less reliably than one. `gitInfo` is
+`spawnSync` with a 2 s timeout and every failure mapped to `null`, so a folder on
+a stalled mount costs the briefing its git half rather than costing the chat its
+turn.
+
+`agents/materials.ts` is the other half, and its two rules are the ones worth
+arguing about. The budget is a **fixed 25 % of the context window**, not what the
+history leaves over: the materials are assembled once per turn while the history
+grows all chat long, so a leftover rule would inline a document in round one and
+silently drop it in round six — a group that was quoting it would stop being able
+to, for no reason it could see. And once one item does not fit, **the rest are
+listed** rather than skipped over in favour of whatever still fits: a contiguous
+prefix is something a user can predict from the order they wrote, and each item
+is capped at 64 KB first, so one enormous file cannot starve a list on its own.
+A folder expands into its listing plus its files, so the cut falls between files;
+a binary file is listed and never inlined (extension first, then the same
+null-byte probe `read_file` uses, now exported so "binary" means one thing in the
+product); a material deleted since it was saved is dropped **silently** rather
+than listed, because listing it would tell the model to `read_file` something
+that will answer "no such file".
+
+The prompt order is unchanged where it matters and extended at both ends of the
+reference material: `Workspace` sits with the executor section (protocol — which
+folder, what is in it, what you may do to it) and `Materials` goes **last**,
+after skills and memory, because it is the bulkiest and purest reference material
+in the prompt and the same argument that puts skills after the briefing puts the
+document after skills — last is also immediately before the history it grounds.
+`buildSystemPrompt` split into `buildTurnPrompt` (returning `{ text,
+materialsOmitted }`) and a one-line wrapper, so the count reaches
+`AgentTurnResult` without every test that asserts on a prompt having to unwrap an
+object; the prompt is memoised **inside** `runAgentTurn` rather than hoisted out
+of `consume`, because `consume` runs twice for a model whose provider rejects
+tools and because a failure while assembling it has to stay on the turn's own
+error path — `runAgentTurn` promises never to throw.
+
+The notice is the one place this step deliberately differs from the thing it was
+told to mirror. `contextTruncated` is once per run per agent; `materialsTruncated`
+is once per **chat**, because the materials are a property of the goal and are
+identical in every round of every run until the user edits the list, so a second
+sentence would say exactly what the first said. The dedupe is therefore a scan of
+the transcript for an existing notice with that key behind a boolean field
+`#loop` does not clear — which also means a relaunch does not repeat it. Only the
+first agent that trimmed is named: different members have different windows and
+therefore different budgets, and naming each would be one complaint written four
+ways.
+
+Tests: `executor/workspace.test.ts` (22) covers the walker against real temporary
+folders — order, depth, the entry cap and its marker, the always-skipped folders,
+the size cap, and a `.gitignore` with a comment, a bare name, a `dir/`, a `*.tmp`
+and a `!keep.tmp` — the parser's anchoring, `?`, `**` and negation rules and that
+an uncompilable pattern throws nothing, `gitInfo` in and out of a repository, and
+the section's five shapes; `agents/materials.test.ts` (14) drives the budget with
+a deliberately tiny `contextWindow` rather than megabyte fixtures: list order, a
+folder expanded, nothing fitting, a prefix inlined with "the rest" listed
+(including the small file behind the large one that is *not* rescued), the share
+respected across twenty files, a binary file listed without spending budget, a
+missing and an escaping material dropped, and the per-file cut; `agent-turn.test.ts`
+gained a six-case S5.11 block — the four tools and the three absences, the folder
+and its listing in a participant's prompt, a marked material present while an
+unmarked file's contents are not, a real `read_file` call coming back with the
+file, `materialsOmitted` reported, and a folderless chat getting neither tools nor
+section; `chat-runner.test.ts` gained the notice once per chat and none when the
+materials fit. `npm test`: 85 files, 1337 tests, all passing; `npm run typecheck`
+clean. `e2e/executor.spec.ts` ran after `npm run build` with `qwen2.5:3b`
+present, so nothing was skipped: **13 passed**, including the new case — two
+participants, one marked file, a first reply that quotes its codeword with
+`tool-card` count 0, and a follow-up that produces a `read_file` card on the file
+nobody marked, with no permission card anywhere. The per-turn tree walk, the root
+`.gitignore` limitation and the panel's silence about what will fit are in the
+Phase 6 backlog. Docs: `docs/features/{executor,agent-turn,chats}/` (all four
+each) plus `docs/features/{orchestration,i18n}/`.
+
+### S5.12 Goal-aware delivery `[x] (2026-09-13)`
+What: the goal changes what "done" means, and the app shows it.
+- `document`: after any executor turn, if the deliverable now exists, the
+  turn's message gains a `FileRefPart` to it and the header chip flips to
+  "delivered"; the hand-off briefing tells the executor to write the
+  deliverable (creating parent folders) and to finish with a two-line summary.
+  A new quick action in `actions-card.tsx`, "Write the deliverable", is the
+  hand-off with that instruction, enabled under the same rules as
+  `chat-handoff`.
+- `codebase`: the review round (S5.6) is briefed with the goal, so reviewers
+  judge the diff against it; the hand-off briefing includes the branch and
+  asks for a summary that lists changed paths.
+- `discussion`: unchanged, except that the goal is in the briefing (S5.10).
+- Unit tests: the `FileRefPart` appended when the deliverable appears and not
+  otherwise; the review briefing includes the goal; the quick action's
+  enabled rule. e2e (Ollama-gated): a `document` goal, "Write the
+  deliverable", Allow on the prompt, the file exists, the chip reads
+  "delivered", clicking the chip calls `system.openInEditor` once (stubbed as
+  in S5.7's spec).
+Acceptance: the three kinds behave as the table in PLAN.md says; tests pass.
+Docs: `docs/features/orchestration/`, `docs/features/executor/`,
+`docs/features/chats/` (all four each).
+Done: the step is **one argument, one part and one prompt block**, and each of
+the three was the choice worth arguing about.
+
+`chat.handoff` takes an optional `intent` — `'implement'` (the default, S5.6
+unchanged) or `'deliver'` — rather than gaining a second method. The two differ
+in the notice key they store and the paragraph the executor's briefing gains, and
+in **nothing else**: the same executor is picked by the same rule, the same user
+message shape is stored, the same two staged rounds run, and `#loop` carries the
+intent beside the executor id without reading it. A `chat.deliver` would have
+been `handoff()` copied for the sake of its last paragraph, and the four refusals
+would then have had two orders to keep in step. `contracts.test.ts` pins the
+argument as optional, which is what lets the old button keep sending nothing:
+the backend's default is the one that decides what a plain hand-off means, and
+the renderer omits the field rather than spelling `'implement'` out. The fourth
+`ValidationReason`, `handoff_no_deliverable`, is checked **after** the folder and
+the executor and **before** the run — the transient rule is last, so a chat that
+is both running and has nothing to deliver is told about the deliverable, which
+is the one that will still be true in a minute. `handoffBlocker` grew the same
+argument rather than a `deliverBlocker` wrapper, for the same reason: a wrapper
+would have had its own idea of where the new rule goes.
+
+The `FileRefPart` rule is **the turn that delivered it, and only that turn**: the
+deliverable was not on disk when the turn started and is on disk now, sampled by
+two `existsSync` calls bracketing the stream. "Every executor turn while the file
+exists" would put a chip on the turn that fixed a typo in it, which is a claim
+that turn did not earn — the same argument `diffPartsFrom` already makes about
+`git_diff` — and "the first executor turn in a chat whose deliverable exists"
+needs a transcript scan and still cannot tell a file this chat wrote from one
+that was lying in the folder when it opened. The consequences are deliberate and
+each has a test: a rewrite gets no second chip (its `DiffPart` is the record), a
+deliverable that predates the chat gets none (the header chip has said
+"delivered" since it was opened), a file deleted by hand and written again gets a
+new one, and a participant never gets one whatever appeared while it spoke. It is
+not conditional on a *write tool* having run, because `run_command` produces
+files and returns no patch. `deliverablePath` moved into `executor/paths.ts` so
+`chats.goalStatus` and the turn compute the same path from the same code.
+
+The review round (S5.6) was, until now, the only round in the product that was
+never told what it was: four models handed a diff and left to guess. `reviewing`
+adds one block to the **group briefing** — not a section of its own — placed
+immediately after the goal, because "judge it against the goal above" is only
+true if the goal is one line up; a chat with no goal gets the same block pointing
+at the conclusion in the transcript, since a hand-off without a goal is legal.
+The `codebase` half of `goalHandoffLine` gained the **branch** and the request
+for a summary listing changed paths, which meant `buildTurnPrompt` had to run
+`gitInfo` itself and hand the one result to both the executor section and the
+workspace section: two probes would be two `spawnSync` calls on a large
+repository and a chance for one prompt to name two branches.
+
+Two things the step changed that were not in its text. `buildExecutorSection`
+became an options object, because a fourth positional parameter after
+`(workdir, handoff, goal)` is where a call site starts getting them wrong. And
+`loadGoalStatus` now writes **nothing** when the answer is unchanged — which is
+not a tidiness pass but a bug this step introduced and the end-to-end suite
+caught: refreshing the query at every round boundary meant a fresh
+`ChatGoalStatus` object during a streaming reply, the chat page re-rendered, and
+`react-virtuoso` re-measured the row the cursor was in. The chip's new moments
+are the round boundary and the end of the run, which between them cover a
+hand-off (the executor writes in its own round; the review round starting is what
+flips the header while the reviewers are still reading) and every other executor
+turn.
+
+Tests: `agent-turn.test.ts` gained a seven-case `runAgentTurn and a document goal`
+block (the chip appearing and the four ways it must not, the review block in a
+reviewer's prompt and not an ordinary one, the deliver briefing in the
+executor's); `briefing.test.ts` gained seven across both languages, including
+that the review block is byte-for-byte absent in an ordinary round and that it
+lands after the goal; `tools.test.ts` gained four (the deliver paragraph and its
+two-line summary, the implement one unchanged, all three shapes sharing one
+prefix, and the branch); `paths.test.ts` four for `deliverablePath`;
+`chat-runner.test.ts` seven (the `handoffDeliver` notice with the relative path
+and the same two rounds, the briefing reaching the executor and the notice
+reaching the reviewers as prose, the review round told and the executor not, the
+round after it told neither, the refusal with no goal and with a `codebase` one,
+the folder and the executor still checked first, and an unknown intent);
+`handoff.test.ts` five for the new rule and its place in the order;
+`stores/chats.test.ts` one for the unchanged-answer rule; `stores/run.test.ts`
+one for the intent on the wire; plus `contracts.test.ts`. `npm test`: 85 files,
+1374 tests, all passing; `npm run typecheck` clean. `e2e/executor.spec.ts` ran
+after `npm run build` with `qwen2.5:3b` present, so nothing was skipped: **15
+passed**, including the two new cases — the quick action's four disabled states
+with the backend refusing on the same rule, and the whole delivery: the action
+clicked, `handoffDeliver` in the transcript, Allow on the permission card,
+`docs/RELEASE.md` on disk, the header chip flipping to `data-delivered="true"`
+with nobody touching the goal, and the chip a real button carrying
+`data-path="docs/RELEASE.md"`. The chip's **click is not driven**, for the reason
+S5.7 recorded. The rest of the end-to-end suite was re-run for the chat-page and
+Actions-card changes: 82 passed, with one pre-existing failure that is not this
+step's — `chat.spec.ts`'s streaming-cursor race, which fails on a *warm* Ollama
+whenever the reply finishes between the two assertions, and which was confirmed
+to fail three times out of three on `3688233` under the same conditions. Docs:
+`docs/features/{orchestration,executor,chats}/` (all four each) plus
+`docs/features/{agent-turn,backend-client,editor,i18n}/`.
+
+### S5.13 Google sign-in `[x]` (2026-09-13)
+What: the Google provider gains the same authentication choice the Anthropic
+one has (S5.3): paste a Gemini API key, or sign in with a Google account. The
+mechanism mirrors S5.3 exactly — delegate to the official CLI, store no token
+of our own, only rewrite request headers.
+- **Mechanism: `gcloud` application-default credentials.** `gcloud auth
+  application-default login` runs Google's OAuth flow in the browser and
+  stores a refresh token under `~/.config/gcloud/application_default_credentials.json`;
+  `gcloud auth application-default print-access-token` prints a short-lived
+  access token, refreshing it when needed; `gcloud auth application-default
+  revoke` signs out; `gcloud config get-value project` and `gcloud auth
+  application-default set-quota-project <id>` name the Google Cloud project
+  the usage is billed to. Requests then carry `Authorization: Bearer <token>`
+  and `x-goog-user-project: <project>` and must **not** carry
+  `x-goog-api-key`. The user needs the Google Cloud SDK installed (`brew
+  install --cask google-cloud-sdk`) and a project with the Generative
+  Language API enabled and billing attached — the sign-in panel says so.
+  Not used, deliberately: the Gemini CLI / Antigravity OAuth client and the
+  `cloudcode-pa.googleapis.com` Code Assist endpoint that pi's extension
+  reuses. Those tokens are first-party to Google's own tools and are the same
+  shape as the Claude Code tokens Anthropic now refuses; Witena uses only the
+  public Gemini API with credentials the user's own CLI holds.
+- Data: `ProviderInput.auth` (S5.3) accepts `'oauth'` for `type === 'google'`
+  as well, with no custom `baseUrl`; the S5.3 validation reasons apply. No
+  migration (the column exists). `providerRequiresApiKey` returns false.
+- `src/main/providers/google-cli.ts` (Electron-free, `node:child_process`):
+  a `GoogleCli` interface injected into the registry — `status()`, `login()`,
+  `logout()`, `accessToken()`, `project()` — with the real implementation
+  spawning `gcloud`. Resolve the binary as S5.3 does for `ant` (`PATH`, then
+  `/opt/homebrew/bin`, `/usr/local/bin`, `~/google-cloud-sdk/bin`, with a
+  `WITENA_GCLOUD_BIN` override). Status is derived from
+  `print-access-token` succeeding plus the ADC file's presence and the
+  configured project; a missing binary maps to `gcloud_missing`, no ADC to
+  `gcloud_not_logged_in`, no project to `gcloud_no_project` (new
+  `BackendErrorCode`s, translated in the renderer). The status sent to the
+  renderer carries `account` (from `gcloud auth application-default
+  print-access-token` is opaque — read the account from `gcloud config
+  get-value account`) and `project` only; tokens never leave the main
+  process. Tokens are cached in memory until 60 s before their expiry
+  (`gcloud auth application-default print-access-token --format=json`
+  reports it if available; otherwise assume 55 minutes).
+- Model construction: `createGoogleGenerativeAI({ apiKey: '', fetch })`
+  with a wrapper that deletes `x-goog-api-key`, sets `Authorization` and
+  `x-goog-user-project`. `providers.fetchModels` and
+  `providers.testConnection` go through the same wrapper. Generalise the
+  S5.3 header-rewriting `fetch` helper so both providers share it.
+- Backend methods: extend `providers.authStatus` / `login` / `logout` to
+  take `{ type: 'anthropic' | 'google' }` (keep the contract test in step)
+  rather than adding three more methods.
+- Provider editor: the S5.3 "Authentication" control is enabled for the
+  Google type (it was disabled with a hint); the sign-in panel shows the
+  account and project, "Sign in", "Sign out", and — when no project is set —
+  a project id `Input` that calls `set-quota-project`. OpenAI stays disabled
+  with its hint.
+- Unit tests: the shared fetch wrapper for both header sets; `google-cli.ts`
+  against a fake `gcloud` script on `PATH` (missing, logged in, not logged
+  in, no project, failing exit); validation (`oauth` accepted for google,
+  still rejected for openai); the registry building an oauth Google model;
+  the editor's control enabled for google.
+- e2e: `e2e/providers.spec.ts` gains the Google sign-in panel's "not
+  installed" state (launch with `WITENA_GCLOUD_BIN` pointing nowhere).
+- Real-API check, as in S5.3: `gcloud` 553 is installed on the development
+  machine; if the developer has run `gcloud auth application-default login`
+  and set a quota project, build the provider through the registry and run
+  `fetchModels` and one `generateText`; report what came back. If ADC is
+  absent, say so — do not run the login yourself (it needs the browser and
+  the user's account).
+Acceptance: with ADC present and a project set, a Google provider in sign-in
+mode passes Test connection, lists models and completes a chat turn with no
+key stored; without `gcloud` the panel explains what to install; the tests
+above pass. Docs: `docs/features/providers/` (all four).
+Done: three things were **generalised** rather than duplicated, and each of them
+is the reason the other two were cheap. `oauthFetch` now takes the vendor's edits
+as data — `remove` the API-key header, `set` the headers whose value comes from
+the credential, `merge` into a comma-separated list one the SDK also writes —
+because the risk it exists to manage is *forgetting an edit*, and one place that
+applies them is the only way that cannot happen twice. `cli-process.ts` holds the
+`PATH` search and the child process, because sixty lines of ENOENT-versus-exit-code
+handling gets fixed in one copy and not the other. And `anthropic-sign-in.tsx`
+became `provider-sign-in.tsx` with a `type` prop rather than gaining a Google
+sibling: the three states, the busy flag, the error line, the two buttons and the
+"Sign in doubles as look again" rule *are* the component, and what differs is
+three strings, an install command and one extra control. `AnthropicAuthStatus`
+became `ProviderAuthStatus` for the same reason — every consumer treats it as
+"the machine's login state plus a few labels", and which labels a vendor fills is
+a fact about the vendor, not about the shape.
+
+The `{ type }` argument went on the three existing methods, as the step asked. A
+fourth method was still needed — `providers.setQuotaProject` — and it is
+deliberately *not* `{ type }`-shaped: a quota project is a Google concept with no
+Anthropic counterpart, and a method that is meaningless for half of its own
+argument's values is worse than one named after what it does.
+
+**Everything parsed was checked first.** `gcloud auth application-default
+print-access-token --format=json` prints one **object** whose token field is
+`token`, not `access_token`; its `expiry.datetime` is a **naive UTC** timestamp
+(05:14:51 while `date -u` read 04:14:51), so the `Z` is appended rather than
+letting the platform apply the local zone — which would be wrong by the offset
+everywhere outside UTC, and wrong in the unsafe direction east of it. `gcloud
+config get-value account` is **not** parsed: its unset answer is the word
+`(unset)` on stderr with an empty stdout and exit code 0, which is prose
+pretending to be a value; `config list --format=json` omits the key instead and
+answers account and project in one spawn. With no ADC, `print-access-token` exits
+**1** after about ten seconds — it probes the Compute Engine metadata server three
+times first — which is why the read timeout is 60 s rather than S5.3's 30 s.
+
+A **missing quota project is not a fourth state**: the user is signed in, the
+panel says so and offers a field, and `gcloud_no_project` is raised only where a
+request actually has to be made (the fetch wrapper, which asks `project()` before
+it asks for a token, so nothing is sent). Save accepts a project-less Google
+provider on purpose — refusing it would make a one-field gap look like a broken
+login.
+
+**The real-API check could not be completed, and the reason is new information.**
+ADC appeared on the development machine during the run (the developer signed in),
+so the wrapper was driven against the real `gcloud` 553.0.0: from a
+`launchd`-shaped `PATH` of `/usr/bin:/bin` it found the binary in
+`/opt/homebrew/bin`, reported `signed-in`, parsed the expiry (one hour out),
+returned a live `ya29.` token and rejected `gcloud_no_project`, there being no
+quota project. But a bare `curl` of `GET
+https://generativelanguage.googleapis.com/v1beta/models` with `Authorization:
+Bearer <ADC token>` answers **HTTP 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`**, with
+and without `x-goog-user-project`. The token carries the ADC defaults (`openid`,
+`userinfo.email`, `email`, `cloud-platform`, `sqlservice.login`), so the endpoint
+wants a scope `cloud-platform` does not imply — probably
+`https://www.googleapis.com/auth/generative-language.retriever`, which `gcloud
+auth application-default login --scopes=…` can request. That flag was **not**
+added speculatively: it turns a login known to complete into one that might be
+refused at the consent screen, and proving otherwise needs a browser and the
+user's own account, which this step is explicitly not allowed to drive. So the
+acceptance sentence is **unverified end to end**, and both halves of that — the
+missing quota project and the scope — are in the Phase 6 backlog.
+
+Tests: `google-cli.test.ts` drives the **real** implementation against a fake
+`gcloud` (33 cases), mirroring `anthropic-cli.test.ts` — resolution, all three
+states, signed-in-with-no-project, the `config list` fallback *and* the proof it
+is not spawned when the ADC carries both labels, the cache and its 55-minute
+assumption, `stdout` never reaching a message, and a refused project id.
+`registry.test.ts` pins both header sets through the one wrapper and proves a
+project-less Google credential makes no request at all. `handlers.test.ts` covers
+the `{ type }` routing, the Google refusals of Save, a project-less provider
+saving anyway, `setQuotaProject`, and `fetchModels` carrying the two headers with
+**no `key=` in the URL** — an empty `?key=` beside a bearer token is refused, so
+`discovery.ts` now omits the parameter rather than sending it blank.
+`e2e/providers.spec.ts` relaunches with `WITENA_GCLOUD_BIN` pointing at nothing
+alongside `WITENA_ANT_BIN` and adds the Google case on that run: the control is
+live rather than disabled, the panel is `data-auth-type="google"`, the install
+command is the cask one, and Save is refused with `gcloud_missing` — the Google
+code, which is exactly what a single shared status would have got wrong. Docs:
+`docs/features/providers/` (all four) plus `backend-client` and `i18n`, which the
+changed signatures and the three new codes made out of date.
+
+## Phase 6: Backlog (decided, not yet scheduled)
+
+Everything below is agreed work that is deliberately **not** in Phase 5. Each
+item becomes a numbered step, with acceptance criteria in the Phase 5 shape,
+when it is picked up; until then the order here is a suggestion, not a
+commitment. A Phase 5 step that leaves something unverified or out of scope
+adds a line here in the same commit.
+
+### Provider authentication beyond Anthropic
+
+- **OpenAI sign-in.** "Sign in with ChatGPT" is a gated program for
+  third-party apps; the Codex CLI's own ChatGPT login is not licensed for
+  reuse. S5.3 ships the `auth` field and a disabled control for OpenAI; enable
+  it once program access exists, using the same `auth: 'oauth'` shape and a
+  provider-specific fetch wrapper. Verify the policy at implementation time.
+- **A Gemini request through a signed-in Google provider, on an account whose ADC
+  has the scope the API wants.** S5.13 ships the whole path and proves every part
+  of it that can be proved offline, but `GET /v1beta/models` with a default ADC
+  token answers 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` — the token carries
+  `cloud-platform`, which that endpoint apparently does not accept. The likely fix
+  is `gcloud auth application-default login
+  --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/generative-language.retriever`,
+  which needs verifying at a real consent screen before `google-cli.ts` starts
+  passing `--scopes` — a scope the screen refuses would leave users unable to sign
+  in at all. Verify, then decide whether Witena requests the scope itself or the
+  panel tells the user which command to run.
+- **A Google provider with a quota project, end to end.** The development machine
+  has ADC but no project, so "Test connection lists models and a chat turn
+  completes" is unverified for Google as well. Needs a GCP project with the
+  Generative Language API enabled and billing attached; `providers.setQuotaProject`
+  is the control that names it.
+- **Vertex AI instead of the public Gemini API.** S5.13 bills the user's own
+  project through `x-goog-user-project` on `generativelanguage.googleapis.com`.
+  Vertex is the other shape of the same idea — a different endpoint, per-region
+  model ids and `@ai-sdk/google-vertex` — and belongs with the cloud-platform
+  providers below rather than beside this.
+- **A chat turn through a signed-in provider, on an account with API credit.**
+  S5.3 proved the headers as far as the API accepts them — `/v1/models` answers
+  200 through the OAuth wrapper — but the account used for verification has no
+  credit, so `/v1/messages` is refused with `invalid_request_error` ("your credit
+  balance is too low") for a bare `curl` as well as through the app. Run the
+  acceptance sentence again on a funded account before treating the generation
+  path as proven.
+- **Several logins of one vendor.** S5.13 added the second vendor's CLI, so
+  `providers.authStatus` names which one with `{ type }` — but *within* a vendor
+  each CLI still has one active profile, so the status stays a fact about the
+  machine. Supporting two `ant` profiles, or two Google accounts, means naming
+  which login a provider uses and a picker to choose it.
+- **Cloud-platform providers.** Claude on Vertex AI and Amazon Bedrock, GPT on
+  Azure, authenticated with the platform's own credentials or SSO rather than
+  a vendor key (`@ai-sdk/google-vertex`, `@ai-sdk/amazon-bedrock`,
+  `@ai-sdk/azure`). This is the enterprise route to "closed models without a
+  key" and reuses the provider registry; it needs its own presets and a
+  credential-source model per platform.
+
+### Executor safety and reach
+
+- **The shell is not sandboxed.** S5.4's `run_command` runs `/bin/sh -c` as the
+  user, with the user's environment and `PATH`; only `cwd` is confined, so
+  `cat ../../secret` *inside a command* is not stopped by `executor/paths.ts`.
+  The permission prompt is the entire boundary, which is why S5.5 must show the
+  command line verbatim and never summarised. A real sandbox — a container, a
+  restricted `PATH`, a seccomp profile, or delegating to a coding agent that has
+  one — is a step of its own, and it is the one item here that should be picked
+  up before the executor is recommended for an unfamiliar folder.
+- **No prompt timeout of its own.** A pending `permission.requested` is ended
+  only by a reply, by Stop, or by the turn's hard timeout, which then records the
+  turn as `skipped` rather than as "nobody answered". A prompt-specific timeout
+  with its own notice would read better.
+- **`allowAlways` is not visible or revocable.** It lives in a `Set` for the life
+  of the process, so a user who granted it cannot see what they granted or take
+  it back without quitting. A chat-settings row listing the grants, with a
+  "forget" button, is the obvious shape.
+- **`search_files` is a substring scan**, with a hard-coded prune list and no
+  regular expression or glob. Once `run_command` exists the executor can reach
+  for `rg` itself, so the question is whether the built-in should grow or go.
+- **`run_command` assumes `/bin/sh`**, which is correct for the macOS-only build
+  and needs a branch before any Windows or Linux packaging.
+- **A pending prompt is invisible from another chat.** S5.5's card is drawn per
+  chat, so a user looking at a different chat is not told that an executor is
+  waiting on them — the run simply appears to have stalled until they come back.
+  A count on the chat-list row, or a rail badge, is the obvious shape.
+- **The `write_file` card previews content, not a diff.** The tool computes the
+  patch only *after* the grant (deliberately: the file it would diff against can
+  change while the user decides), so the card shows the first 1 200 characters of
+  what will be written. `edit_file` already sends its patch. "Allow, but show me
+  the diff first" is the open question `docs/features/executor/context.md`
+  carries.
+- **`maxAutoRounds: 1` buys an implementation but no review.** S5.6's two rounds
+  count towards the cap like any others, so a chat capped at one round stops
+  after the executor with the `maxRoundsReached` notice. Exempting the review
+  round was rejected — the cap is the user's promise that the chat will not run
+  away, and a hand-off is the most expensive thing in the product to let run
+  away — but a hand-off that *knows* it needs two rounds could say so before it
+  starts, or the cap could be raised for the duration with a notice.
+- **A hand-off cannot be queued.** It is refused with `handoff_run_active` while
+  a run is in flight, and the button is disabled in that state. "Hand it over
+  when this round finishes" is the obvious shape, and needs a second pending
+  slot in the runner rather than the boolean it has.
+- **The review round reads the patches through the tool results**, not through
+  the `DiffPart`s: `history.ts` renders `text`, `tool-result` and
+  `system-notice` parts, and a `write_file` result already carries its `patch`
+  (capped at 4 KB). Rendering the diff blocks into the prompt as well would put
+  the same patch in twice; rendering them *instead* would mean parsing back what
+  the model already read. Worth revisiting when a turn's tool results start
+  being summarised rather than replayed.
+- **Almost nothing emits a `FileRefPart`.** S5.12 added the first: the
+  deliverable of a `document` goal, on the executor turn that produced it. Every
+  other chip a user actually sees still comes from S5.7's text **detector**. A
+  turn that reported the files it *read* as parts would be more precise than a
+  regular expression over prose, and would make the chip work for a path the
+  detector's extension rule refuses.
+
+### Chat goal (S5.10)
+
+- **The two native dialogs are not driven end to end.** `system.pickSavePath`
+  and `system.pickPaths` open native modals, which Playwright cannot answer —
+  the same gap `system.pickFolder` has had since S3.2. `e2e/executor.spec.ts`
+  writes the goal through the backend client instead, and the conversion those
+  buttons perform is unit-tested (`relativeToWorkdir`, `pickDeliverable`,
+  `pickMaterials`). The buttons themselves, and the `defaultDir` they open in,
+  were verified by reading rather than by clicking.
+- **The goal chip's click is not driven either**, for exactly the reason S5.7
+  records below: `shell.openExternal` would launch the developer's real editor
+  and `window.witena` cannot be stubbed from the page. The spec asserts the chip
+  is a button carrying the path; the backend accepting that call is asserted
+  separately by `e2e/editor.spec.ts`.
+- **"Delivered" is polled, not watched.** `chats.goalStatus` runs when a chat is
+  opened, on every `chat.updated` for it, and — since S5.12 — at every round
+  boundary and at the end of a run, so a deliverable written by something that is
+  not this app is noticed at the next such moment rather than immediately. A
+  filesystem watcher would make it immediate and would be the first one in the
+  product. It is also asked only for the chat that is **open**: a hand-off
+  finishing in a chat the user is not looking at leaves that chat's chip stale
+  until they open it.
+- **`relativeToWorkdir` compares paths exactly.** Both strings come from one
+  dialog rooted at the folder, so a case-insensitive volume cannot make them
+  differ — but a path assembled some other way, on such a volume, with different
+  case, is refused as outside the folder. Case-folding it here would be a guess
+  about the volume it lives on.
+- **A goal has no history and no per-round scope.** It is one row, replaced in
+  place, so a chat that changes what it is for loses what it used to be for —
+  including from the briefings of the messages already in the transcript, which
+  were written under the old one. Whether that matters is a real question once a
+  chat runs for days.
+- **There is one way out of a goal: empty its description.** That is deliberate
+  (a goal *is* its description, so the way out is the way in) but it is not
+  discoverable, and a user who wants to keep the text while turning the goal off
+  has to delete it and paste it back.
+- **A `discussion` goal may carry materials** as long as the chat has a folder.
+  Since S5.11 reads them that is a useful combination rather than an inert one,
+  but whether it should exist at all is still an open question in
+  `docs/features/chats/context.md`.
+
+### Goal-aware delivery (S5.12)
+
+- **The review round is briefed, not verified.** Reviewers are told to judge the
+  executor's change against the goal; nothing checks that they did, and a
+  `[PASS]` from every one of them ends the run as an approval nobody wrote. A
+  structured verdict — approve / change requested, per reviewer — is the obvious
+  shape, and is what a "the group approved this" state would need.
+- **A `deliver` hand-off is not told whether it worked.** The review round is
+  scheduled whether or not the deliverable appeared; it is the turn's own
+  `FileRefPart` and the header chip that say so. A hand-off that ended with
+  nothing written could say so in a notice rather than leaving the reviewers to
+  notice.
+- **The two-line summary is asked for, not enforced.** `DELIVER_BRIEFING` asks
+  the executor to close with the path and one sentence; a model that writes six
+  paragraphs instead is not corrected, and the review round reads whatever it
+  wrote.
+- **The deliverable's chip is not driven end to end.** `e2e/executor.spec.ts`
+  asserts that the header chip is a real button carrying `data-path` after a
+  delivery, and the transcript chip is covered by the unit suite; the **click**
+  of either is not driven, for the reason S5.7 records below —
+  `shell.openExternal` would launch the developer's real editor and
+  `window.witena` cannot be stubbed from the page.
+- **A `codebase` hand-off names the branch but cannot hold it.** The executor is
+  told which branch the working tree is on and asked not to switch; nothing stops
+  `run_command` from doing so, and nothing re-checks the branch afterwards. The
+  permission prompt is the only boundary, which is the same gap the shell has.
+
+### Workspace briefing and materials (S5.11)
+
+- **The folder is walked once per turn, not once per round.** The tree is
+  memoised inside a turn, so a tool-rejection retry does not walk twice, but four
+  members in one round walk the same folder four times and read the same
+  materials four times. A per-run cache keyed on the folder is the obvious shape
+  and needs an invalidation rule an executor's own writes would trip.
+- **Only the folder's own `.gitignore` is read.** Nested ignore files,
+  `.git/info/exclude` and the user's global excludes are not, so a monorepo that
+  ignores per package lists a few files it would not have. The always-skipped set
+  covers the folders that matter, and nothing here decides what may be *read*.
+- **The materials panel says nothing about what will fit.** How much of a list
+  reaches a model is decided per turn, per model, and the only feedback the user
+  gets is the `materialsTruncated` notice after the fact. A size hint next to
+  each row would be honest but is a guess until a member is chosen — and two
+  members with different context windows genuinely inline different amounts.
+- **A material deleted after it was saved is dropped silently.** The panel still
+  lists it, the prompt does not mention it, and nothing tells the user which of
+  the two is right. The same filesystem watcher the goal chip wants would fix
+  both.
+- **The tree is a listing, not a map.** It carries no file sizes, no line counts
+  and no symbol index, so a model picking what to `read_file` is choosing by
+  name. A `search_files` call is the current answer and is a round trip.
+- **`git_diff` is attached to every member of a chat with a folder**, including
+  in a `document` or `discussion` chat where the git state is deliberately kept
+  out of the briefing. It is read-only and harmless, but the set of four is not
+  currently narrowed by the goal's kind; whether it should be is open.
+
+### Editor integration (S5.7)
+
+- **The click is not covered end to end.** `system.openInEditor` ends in
+  `shell.openExternal`, which would launch the developer's real editor during a
+  test run, and `window.witena` is a `contextBridge` object whose methods cannot
+  be replaced from the page — so there is no way to intercept the call.
+  `e2e/editor.spec.ts` asserts the chip is a real button carrying the path and
+  the line, and separately that the backend accepts exactly that call. A test
+  hook in the developer settings that stubs the method (S5.7's own suggestion,
+  which was not built) would close it; so would a fake editor binary and a
+  `custom` command driven through the UI.
+- **The acceptance sentence was read, not clicked.** "With VS Code installed,
+  clicking a chip in a chat bound to a folder opens that file at that line" is
+  proved in pieces — the URL is unit-tested, the round trip is end-to-end-tested
+  through a custom command — but no automated run has opened VS Code.
+- **The detector cannot tell whether a file exists.** It draws a chip on
+  `src/typo.ts:3` and refuses `Makefile` and any path containing a space. A
+  cheap batched `exists` check per message, cached per chat, would fix both
+  directions; the renderer has no filesystem, so it has to come from the backend.
+- **No editor is probed.** Choosing Cursor on a machine without Cursor is
+  accepted and fails two seconds at a time on a red chip. Probing at settings
+  time, or after the first failure, would be friendlier.
+- **A path in a chat with no folder is never clickable**, even when it is
+  absolute and unambiguous, because the detector returns nothing without a folder
+  to confine against.
+- **`{line}` cannot be omitted from a custom template.** A reference with no line
+  substitutes 1, because the default template welds `:{line}` on; a template that
+  wanted "open the file, no line" has no way to say so.
+
+### Appearance
+
+- **The light theme has not been reviewed on a full transcript.** S5.8 looked at
+  the chat, settings, agents, providers and agent-editor screens, and at one real
+  reply with a highlighted code block, but the screens that only exist while
+  something is running — a streaming message, a tool card, an error message, the
+  four presence dots side by side, S5.5's permission card and diff block — were
+  read from their tokens rather than seen. They use no colour of their own, so
+  the risk is a *step* that is too subtle rather than an unreadable screen.
+- **Avatar and provider-logo colours stay dark in both themes.** They are data,
+  not tokens: an agent's `avatar.color` is stored in its record and
+  `provider-logo.ts` picks from a fixed palette, so a dark tile with a light
+  monogram is what both themes show. It reads as a brand chip on white and was
+  left alone deliberately — theming it means either rewriting stored rows or a
+  second palette keyed by theme, which is a step of its own.
+- **`prefers-contrast` and `prefers-reduced-transparency` are not honoured**, and
+  there is no high-contrast variant of either palette.
+- **The new accent has not been seen on every accent surface (S7.1).** The rail,
+  the settings screens, the agents screens and both themes' chat screens were
+  looked at, and every accent pair was computed against all six surface tokens
+  (worst case 4.71:1 dark, 5.14:1 light — both AA). What was *not* seen is the
+  accent on the surfaces that only exist mid-run: the streaming cursor, S5.5's
+  permission card, the "Jump to latest" pill and the `@mention` chips in a live
+  transcript. They take the token like everything else, so the risk is a hue that
+  reads warm next to `presence-working` rather than an unreadable control — the
+  two are 1.15:1 apart, which is fine for a dot beside text and would be wrong if
+  they ever had to be told apart on their own.
+- **The mark is only drawn at 28 px and up inside the app (S7.1).** Below roughly
+  20 px the six blades merge into a ring; the application icon's 16 px variant is
+  re-rendered with a thickened stroke for exactly that reason, and no in-app
+  surface renders it smaller than the rail's 28 px today. A favicon, a menu-bar
+  item or a notification icon would be the first thing that does, and would need
+  the same treatment or a simplified mark.
+- **The agent avatar palette was left on the amber-era hues (S7.1).** The eight
+  pairs in `agent-display.ts` are **data** — they are copied into `agents.avatar`
+  and stored in SQLite — so changing them would restyle new agents while every
+  existing one kept its old pair, which is worse than leaving all of them alone.
+  None of them was derived from the old accent (they are the mockup's five agents
+  plus three in the same family) and none clashes with terracotta. Re-picking them
+  is a step of its own, with a migration, if it is ever wanted.
+- **The dmg has no custom background.** S7.1's brief allowed for one; nothing was
+  added, because `dmg.background` also fixes the window size and the icon
+  positions, and the default Finder layout electron-builder produces is correct
+  today. It is a design task rather than a packaging one.
+
+### Server and editor
+
+- **Server and multi-user** (PLAN "Reserved server capability"): lift the
+  main-process business logic into a Node server, swap the `BackendClient`
+  implementation for HTTP + WebSocket, real `userId`s, a server-side
+  `SecretStore`, and — only if several server instances or worker processes
+  exist — an `EventBus` / `MessageRepository` implementation over Redis
+  Streams, Postgres LISTEN/NOTIFY or NATS.
+- **VS Code extension** embedding the chat panel over that server backend
+  (PLAN "Future extension", point 3, step two). Depends on the item above.
+
+### Release workflow (S7.2)
+
+- **Neither workflow has executed.** `ci.yml` and `release.yml` are validated by
+  `actionlint` and by reading only; GitHub has never run them. The first push
+  and the first `v*` tag are the first executions, and three things are most
+  likely to need a second commit: whether `npm ci`'s `postinstall` Electron
+  rebuild fits the runner's patience, whether electron-builder infers
+  `owner`/`repo` from the checkout's git remote as expected, and whether the
+  draft Release created by the first artifact upload is reused by the rest.
+  Until a tag has been pushed, "a tag produces a draft Release" is a design, not
+  an observation.
+- **The x64 dmg has never been opened on an Intel Mac.** It packages correctly
+  (an x86_64 `Witena.app` carrying `prebuilds/darwin-x64.node`), but running it
+  needs hardware this project does not have. `e2e/packaged.spec.ts` is only ever
+  run against the arm64 bundle.
+- **`actionlint` is pinned to 1.7.12 with a hand-copied SHA-256**, and nothing
+  updates either. A dependency bot or a scheduled check would notice a release;
+  today a human does or nobody does.
+- **Every bundle ships all eight `better-sqlite3` prebuilds** — 16 MB, of which
+  the 14 MB for Windows, Linux and the other macOS architecture is dead weight
+  in each dmg. A `files` exclusion could drop it, and would need the packaged
+  spec run afterwards to prove `node-gyp-build` still resolves the one that is
+  left.
+- **Release notes are written by hand** into the draft. Nothing derives them
+  from the commits between two tags.
+- **`npm run e2e` is not in CI** (it needs Ollama) and `npm run e2e:packaged` is
+  not either (it needs a built dmg). Both remain a human's pre-release step, so
+  a release whose author skips them is packaged and uploaded exactly as one
+  whose author does not.
+
+### First run and About (S7.5)
+
+- **The licence list carries names, versions and SPDX ids, not licence texts.**
+  MIT, BSD and Apache-2.0 all ask for the licence text (and, for Apache, a
+  NOTICE) to travel with a binary distribution. Settings → About links each
+  package's homepage instead. Collecting 244 `LICENSE` files into the bundle and
+  rendering them — or shipping one concatenated `THIRD-PARTY-NOTICES.txt` next
+  to the app — is a packaging decision of its own, and it should be made before
+  the first public dmg rather than after.
+- **The generated list is never regenerated while the app is running.** The
+  hooks run at `predev` / `prebuild`, so a dependency installed mid-session
+  appears at the next start. Fine for a file that changes only when
+  `package.json` does; worth remembering when a licence question is urgent.
+- **A dependency that `node_modules` does not hold is warned about and
+  omitted.** An `npm ci --omit=optional` or a platform-specific package that is
+  not installed on the machine doing the build therefore never reaches the
+  screen. A stricter mode — fail the build instead — is the alternative, and it
+  is the right one once the list is a legal artifact rather than a courtesy.
+- **The first-run card and the settings provider editor share one draft.**
+  Filling half the card, then opening Settings → Providers and pressing "Add
+  provider", discards what the card held — the same silent discard as switching
+  between two providers in the editor, and it needs the same dirty-state guard
+  the editor has never had.
+- **Skip cannot be undone from the UI.** `onboardingDismissed` is written once
+  and nothing writes it back: a user who skips and then wants the walkthrough
+  has no control for it. A "show the first-run steps again" row in Settings →
+  About is the obvious shape, and costs one action.
+- **The three agent templates were not reviewed by anyone but their author.**
+  Their prompts are short and plausible; whether Assistant / Critic / Planner is
+  the *right* first trio — and whether `modelHints` picks sensible models on a
+  provider other than Ollama — has not been tried against a real discussion.
+- **`e2e/chat.spec.ts` still races a warm Ollama.** Its cursor assertion reads
+  `data-status` and then checks the cursor, and a 1.5B model can finish between
+  the two lines; it failed once in the S7.5 full-suite run and passed on a
+  re-run. The file's other assertions already avoid the race (see the commit
+  that introduced them); this one line did not get the same treatment.
+
+### API keys and the key file (S7.6)
+
+- **The dmg-over-dmg case is verified by hand, not by a spec.** The end-to-end
+  suite proves the two halves separately — a key survives a relaunch on the same
+  `userData`, and a row the build cannot decrypt is left alone and explained —
+  because producing a genuine reinstall needs two differently packaged unsigned
+  dmgs and a Gatekeeper prompt. The first S7.6 dmg that replaces an older one is
+  the first real observation.
+- **Nothing re-wraps an existing key file when the build becomes signed** (S7.3).
+  A machine that has been running unsigned builds keeps a plain `secrets.key`;
+  only a file created after `WITENA_SIGNED_BUILD` exists is wrapped. Rewriting
+  the user's stored secrets silently on launch is not a side effect an update
+  should have, so the shape of the answer is an offer — "protect the key file
+  with the Keychain" — in Settings, and it needs a screen and a confirmation.
+- **`WITENA_SIGNED_BUILD` has to reach the packaged app**, not only the build
+  shell. It is read by the running process, so S7.3 has to inject it into the
+  bundle (a build-time constant is the obvious form) rather than exporting it in
+  a workflow step and assuming the app sees it.
+- **The key is never rotated**, and there is no way to re-encrypt every stored
+  key under a new one. Nothing needs it today; a compromised key file would.
+- **A copy of `witena.db` alone is no longer a complete backup.** Every `fk1:`
+  value in it needs `secrets.key`. Whatever S4.x builds for export and backup has
+  to take the key file with it, or exclude the keys deliberately and say so on
+  the screen that offers it.
+- **A key written on another machine is indistinguishable from a corrupted one.**
+  Both read as `key_unreadable`, and the sentence names the likely cause (an
+  update) rather than the certain one. Telling them apart would mean storing the
+  key file's identity beside every ciphertext.
+
+### Open questions carried from the feature documents
+
+- `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
+  per agent instead of all-or-nothing; tune `MAX_TOOL_STEPS = 8` on a real
+  multi-step task; render `McpPreset.docsUrl`; record the README tour through
+  the connector gallery (`e2e/demo.record.ts` still types the command).
+- `memory`: pruning, deduplication, search with stemming or synonyms, and
+  validation of the index on write.
+- `skills`: a filesystem watcher for `SKILL.md` edited outside the app, and a
+  per-skill file allowlist for `read_skill_file`.
+- `providers`: replace the hand-written `fetchModels` per provider family
+  with the SDK's own listing where one exists; Google's list endpoint
+  authenticates with a query parameter.
+- `executor`: whether the permission prompt should be able to answer "allow,
+  but show me the diff first" for `write_file` — the tool computes the patch
+  only *after* the grant today, so the card previews the content it was given
+  rather than the diff (`edit_file` already sends the patch in its input).
+
+## Phase 7: Local release (PLAN "Local release and online version")
+
+A double-click app. Steps S7.3 and S7.4 need an Apple Developer account; S7.1
+and S7.2 do not and come first.
+
+### S7.1 Brand mark and application icon `[x] (2026-09-13)`
+What: replace the placeholder "W" tile with the chosen mark.
+- Pick one of the proposed marks (modern, minimal; see the proposal page
+  linked in the `Done:` paragraph) and commit it as `build/icon.svg`; render
+  `build/icon.png` (1024 px) and `build/icon.icns` with the documented
+  pipeline; use the same mark for the rail avatar in `ui-shell`, the README
+  header and the dmg background if one is added. Both themes must keep the
+  mark legible (S5.8).
+- Tests: the existing icon pipeline check; a unit test that the rail avatar
+  renders the mark component rather than a letter.
+Acceptance: `npm run dist:dir` produces an app whose Dock and Finder icon is
+the new mark at 16–1024 px; the rail shows it in both themes. Docs:
+`docs/features/packaging/` and `docs/features/ui-shell/` (all four each).
+Done: the mark is the **Aperture** — six near-black blades closing on a single
+terracotta point inside a hexagon whose corners are eased with a 52 px radius.
+The design record is the proposal page
+<https://claude.ai/code/artifact/f20594f0-f036-43fc-83b6-ba891bd36df8>, where it
+was picked from the alternatives; "Aperture" is the internal name for the drawing
+and the product is still Witena. It reads as what the app does — many separate
+members converging on one answer — which is the only reason to prefer it to a
+letter.
+
+**One drawing, two cuts.** `build/icon.svg` is the tiled version the application
+icon is rendered from; `components/ui/brand-mark.tsx` inlines the identical
+geometry with no tile, so the rail can colour the blades `currentColor` and the
+mark becomes ink on the light palette and near-white on the dark one with no
+branch, no `data-theme` lookup and no second asset — the same argument S5.8 makes
+for the whole theme. The two are held together by `brand-mark.test.ts`, which
+compares the hexagon path, all six blade endpoints, the point and the stroke
+weight against `build/icon.svg` read as text. That is the **only** gate the icon
+has: nothing in `npm test` rasterises anything, so without it the Dock icon and
+the app's own rail could drift apart silently. The same file asserts the S7.1
+acceptance criterion against `nav-rail.tsx`'s source — `<BrandMark` is rendered,
+the `W` tile's exact classes are gone — because the repository has **no DOM test
+setup** (`vitest.config.ts` is `environment: 'node'`, no jsdom, no
+testing-library), and `PresenceDot` had already established the answer: export the
+checkable part as values and test those.
+
+**The accent became the brand colour.** `--color-accent` is the mark's terracotta
+`#d97757` in the dark palette (5.79:1 on `bg-base`, 4.71:1 at worst on `bg-hover`)
+with `--color-accent-hover` lightened to `#e1937a` (7.45:1); the light palette
+darkens the same hue to `#a13917` (6.15:1 on `bg-base`, 6.75:1 on `bg-elevated`,
+5.14:1 at worst on `bg-hover`) with `#812e12` as its hover (8.20:1). Every pair is
+AA on every one of the six surface tokens, in both directions where the accent is
+a background carrying `text-bg-base`. Keeping the old amber beside a terracotta
+mark was the alternative and it is the wrong one: two warm colours a hue apart do
+not read as a palette. **No other token moved.** The presence, status and danger
+hues are a different axis (green / red / amber / grey as *states*) and none of them
+was derived from the accent; the eight agent-avatar pairs are stored data, so
+re-picking them would restyle new agents and leave existing ones behind — both are
+recorded under "Appearance" in Phase 6 with the reasoning.
+
+`--color-brand-point` is new and is the **one** token deliberately identical in
+both palettes. It is an identity, not a role, and a mark whose colour shifted with
+the appearance would be two marks. S5.8's palette test says every token is
+overridden *and* every override differs, so the second half gained a named
+exception set, `CONSTANT_TOKENS`, plus a new assertion that a constant token is
+still *declared* in both blocks — exempting it from the difference check without
+exempting it from the existence check, which is the half that catches a token
+silently staying dark.
+
+**Rasterisation was the part with real content.** `sips` cannot render an SVG, so
+the pipeline S4.4 documented — Chromium in `node_modules` as the rasteriser,
+captured at 2048 and downsampled to 1024 — is exactly right, and every iconset
+size is a downscale of that 1024 bitmap rather than a fresh render at a tiny size.
+`shape-rendering="geometricPrecision"` was added to both SVGs and to the inlined
+component, because every edge in this mark is a diagonal meeting another at a
+shallow angle and the default lets a renderer snap them to the pixel grid. The
+tile carries **no border**: the proposal drew a hairline on its light-rail preview
+and it is not in the shipped mark, because a hairline is invisible on a light Dock
+and grey fuzz at 16 px. The 1024 px render was checked pixel by pixel across the
+tile edge — transparent, one pixel at alpha 198, then opaque white, with no colour
+fringe.
+
+One variant needed help. 30 px of stroke on a 1024 canvas is 0.47 px at 16, and
+the blades averaged to a uniform grey smudge — smooth, but unreadable.
+`icon_16x16.png` alone is now re-rendered from the same `icon.svg` with
+`stroke-width` substituted to **56** (~0.9 px at 16), chosen by rendering 44 / 56 /
+68 / 80 and looking at all four blown up: 44 is still washed out, 68 and up close
+the white gaps into a blob. It is a `sed` over the committed SVG rather than a
+second committed file, so there is still exactly one drawing. Nothing from 32 px
+up is touched.
+
+**Verified.** `npm run typecheck` clean; `npm test` 90 files / 1441 tests passed.
+`npm run dist:dir` built `dist/mac-arm64/Witena.app`, whose
+`Contents/Resources/icon.icns` is byte-identical to `build/icon.icns` (same
+SHA-256) and whose `Info.plist` names `icon.icns`. The icns round-trips through
+`iconutil -c iconset` to all ten expected PNGs, and the 16 / 32 / 64 / 128 px
+variants were blown up with nearest-neighbour and looked at: anti-aliased
+diagonals, no stair-stepping, no halo, the point still a point. `e2e/ui-shell.spec.ts`
+and `e2e/theme.spec.ts` pass (9 tests), the former with a new case that screenshots
+the rail into `test-results/shots/rail-{dark,light}.png`, asserts the mark's box is
+exactly 28x28 CSS pixels, and reads the computed colours back — the point is
+`rgb(217, 119, 87)` in both themes and the blades are not. Both crops were looked
+at. The README header now carries `build/icon.png` at 96 px, checked against
+GitHub's light, dark and dark-dimmed page grounds.
+
+**Deviations from the brief, both deliberate.** The geometry is byte-for-byte the
+approved file except for `shape-rendering="geometricPrecision"` on the `<svg>`
+root, which the "no rough edges" instruction asked for explicitly and which
+changes no coordinate. And the rail avatar had **no** test id to keep — the old
+tile was an `aria-hidden` div with none — so `data-testid="brand-mark"` was added,
+which is what the new e2e case addresses. Docs in `docs/features/packaging/` and
+`docs/features/ui-shell/` (all four each).
+
+### S7.2 Release workflow `[x] (2026-09-13)`
+What: a tag builds the dmg.
+- `.github/workflows/ci.yml`: on every push and pull request — `npm ci`,
+  `npm run typecheck`, `npm test`, `npm run build`; e2e stays local (it needs
+  Ollama) and is documented as such.
+- `.github/workflows/release.yml`: on a `v*` tag — the same checks, then
+  `npm run dist` for `arm64` and `x64` on a macOS runner, and a **draft**
+  GitHub Release carrying both dmgs, `latest-mac.yml` and the blockmaps.
+  Signing and notarization run only when the secrets exist (S7.3), so the
+  workflow is complete now and gains signing later without changes.
+- `electron-builder.yml`: add `x64`; `publish: github` so `electron-updater`
+  has a feed (S7.4); the version comes from `package.json`, bumped by an
+  `npm version` step documented in the packaging docs.
+- Tests: the workflow files are validated with `actionlint` in CI; a unit
+  test checks `electron-builder.yml` lists both arches and the publish
+  provider.
+Acceptance: pushing a tag on a fork produces a draft Release with two dmgs;
+`ci.yml` is green on the PR. Docs: `docs/features/packaging/` (all four).
+Done: `.github/workflows/ci.yml` runs `npm ci`, `npm run typecheck`, `npm test`
+and `npm run build` on `macos-latest` for every push and pull request — macOS
+because `postinstall` rebuilds `better-sqlite3` against the Electron ABI and the
+artifact is a macOS bundle — plus a second job on `ubuntu-latest` that lints
+both workflow files with **actionlint 1.7.12, pinned by version and SHA-256** of
+the release tarball rather than by an npm dependency or a third-party action
+tag. `npm run e2e` is deliberately absent: the specs that prove anything need a
+local Ollama, and a suite that skips its own assertions is worse than one that
+is honestly local; it stays step 1 of the release procedure.
+
+`.github/workflows/release.yml` runs on `v*`: the same checks, then
+`npm run dist -- --publish always` — one electron-builder invocation for **both
+architectures**, because `latest-mac.yml` describes a release rather than an
+architecture and two parallel jobs would each upload a feed naming only their
+own dmg. The upload is electron-builder's own GitHub publisher (`GH_TOKEN`,
+`permissions: contents: write`) rather than `softprops/action-gh-release`: the
+blockmaps and the update feed are computed while it packages, and S7.4's
+`electron-updater` reads exactly that feed. `publish: {provider: github,
+releaseType: draft}` in `electron-builder.yml` makes the Release a **draft**;
+`owner`/`repo` are left out so they come from the checkout's git remote and a
+tag on a fork publishes to the fork.
+
+The signing seam is wired and gated. **`secrets` is not an available context in
+an `if:` expression at either job or step level**, so the gate is a step that
+reads `CSC_LINK` into `env` and writes `enabled=true|false` to `$GITHUB_OUTPUT`;
+`steps.signing.outputs.enabled` then guards the `codesign --verify --deep
+--strict` / `spctl --assess` verification and supplies
+`CSC_IDENTITY_AUTO_DISCOVERY`, which keeps an unsigned CI build from picking up
+a runner keychain identity. All `CSC_*` / `APPLE_*` secrets are passed through
+unconditionally and are ignored while empty, so S7.3 adds secrets and edits
+`electron-builder.yml` (`identity`, `hardenedRuntime`, `notarize`) without
+touching the workflow. `mac.target[0].arch` is now `[arm64, x64]`; `identity:
+null` and `hardenedRuntime: false` stay until S7.3.
+
+A release is now `npm version <patch|minor|major>` → `git push --follow-tags` →
+publish the draft. `preversion` reruns typecheck and the tests, and the `version`
+lifecycle script (`scripts/sync-version.mjs`) rewrites `APP_VERSION` in
+`src/shared/version.ts` from the manifest and stages it, so the tagged commit
+carries one version number in two files rather than two numbers.
+`src/main/packaging.test.ts` parses `electron-builder.yml` — with
+**gray-matter**, already a dependency for `SKILL.md` frontmatter, rather than a
+new YAML devDependency — and asserts both arches, `${arch}` in `artifactName`,
+the draft publish provider, the still-`null` identity and that `APP_VERSION`
+equals `package.json`'s version.
+
+Verified locally: `npm run typecheck`, `npm test` (`Test Files 86 passed`,
+`Tests 1379 passed`), `npm run build`, `npm run dist:dir`, and — because `--dir`
+replaces the configured target and builds only the host architecture —
+`npx electron-builder --mac --dir --x64`, which produced an x86_64
+`Witena.app`. Cross-architecture packaging costs nothing because
+`better-sqlite3` 13 ships **N-API** prebuilds, ABI-stable across Node and
+Electron, so `@electron/rebuild` has nothing to compile. Both workflow files
+pass `actionlint` 1.7.12 locally. **Neither workflow has ever run** — GitHub has
+not executed them — and the x64 dmg has never been opened on an Intel Mac; both
+are in the Phase 6 backlog. Docs: `docs/features/packaging/` (all four) and the
+README's build section.
+
+### S7.3 Signing and notarization `[ ]` (needs an Apple Developer account)
+What: the dmg opens on a double-click on any Mac.
+- Developer ID Application certificate in CI secrets (`CSC_LINK`,
+  `CSC_KEY_PASSWORD`), `hardenedRuntime: true`, an entitlements file for the
+  native module (`allow-unsigned-executable-memory`,
+  `disable-library-validation` only if `better-sqlite3` needs it — verify),
+  `notarize` with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`;
+  `identity: null` removed; the README's Gatekeeper note deleted.
+- Verification in CI: `codesign --verify --deep --strict`, `spctl -a -vv`
+  reporting `Notarized Developer ID`, and `e2e/packaged.spec.ts` against the
+  signed app.
+Acceptance: a fresh Mac with default Gatekeeper opens the downloaded app
+with no dialog. Docs: `docs/features/packaging/` (all four).
+
+### S7.4 Auto-update `[ ]` (after S7.3)
+What: the app updates itself from GitHub Releases.
+- `electron-updater` in the main process behind an injected interface (rule
+  5: the updater is electron and lives in `src/main/ipc/` or `index.ts`),
+  checking on launch and every 6 hours; `system.updateStatus` /
+  `system.installUpdate` methods and a `update.available` /
+  `update.downloaded` event pair; Settings → About shows the version, the
+  channel and "Check for updates"; a notice bar offers "Restart to update".
+- Tests: the status state machine with a fake updater; e2e for the About
+  block with the updater stubbed absent.
+Acceptance: an older installed build sees a newer draft-published Release,
+downloads it and restarts into it. Docs: `docs/features/packaging/` and the
+settings owner (all four each).
+
+### S7.5 First run `[x] (2026-09-13)`
+What: a new user reaches a working chat without reading the README.
+- When no provider exists, the chats page shows an onboarding card: pick a
+  preset, paste a key or sign in (S5.3), fetch models, create the first agent
+  from a template, start a chat — each step done in place, dismissable.
+- Settings → About: version, licenses of bundled dependencies, links.
+Acceptance: e2e from an empty `userData` to a streamed reply through the
+card alone. Docs: `docs/features/ui-shell/` and `docs/features/providers/`
+(all four each).
+Done: the card is **not a second provider form**. The three blocks that matter
+were extracted out of `provider-editor.tsx` into `provider-credential.tsx` and
+`provider-models.tsx` (the preset grid was already one), and both screens render
+those same components against the one draft in `stores/providers.ts`. The rules
+that could have been re-implemented subtly differently are exactly the ones a
+first-time user would be hurt by — an empty key field *clears* a stored key, a
+fetch *replaces* the model list, sign-in *replaces* the field rather than sitting
+beside it — so there is one implementation and two layouts. The extraction cost
+one new store action: `ensureDraft`, which makes a draft without touching `mode`.
+`startCreate` sets `mode` too, and `e2e/providers.spec.ts` caught the
+consequence within a minute — a user who had never visited Settings → Providers
+found the Add form already open on it, because a card on the *chat* page had
+opened it. `mode` is the settings editor's own state; only the settings editor
+sets it.
+
+`lib/onboarding.ts` is the whole state machine, pure and unit-tested: five steps,
+the current one is the first incomplete one, and completion is read from the
+stores rather than counted. The first three steps are complete the moment a
+provider is **stored** — not when the draft looks full — which is what makes the
+card correct for a user who added a provider in Settings and never saw step one,
+and which is why the models step's action is Save. Visibility reconciles the two
+sentences in this step: it *appears* because no provider exists and *disappears*
+once a chat has a member, and the card has to survive the four steps in between
+or it would vanish the moment the first provider was saved and leave the user on
+an empty screen three clicks from a working chat. `dismissed === null` (settings
+still loading) renders nothing rather than flashing a card that is about to be
+hidden.
+
+Two smaller decisions the walk forced. `chats.create` grew an optional
+`memberAgentIds` because the backend only adds the bootstrap agent while the
+agents table is **empty** — by step five it holds the template agent, so a
+card that said nothing would have produced a chat with no members and a first
+send refused with "this chat has no members". And `agentsStore.createFromTemplate`
+deliberately does **not** open the editor, unlike every other way an agent is
+created: its caller is on the chat page, and a draft left behind on the Agents
+page is a surprise the next time someone goes there. It uniquifies the name with
+the same `<name> copy` rule Duplicate uses, because `agents.create` refuses a
+clash and a refusal on a first-run card explains nothing.
+
+`@shared/agent-templates.ts` is static data beside `presets.ts` and
+`mcp-presets.ts`: three entries — Assistant, Critic, Planner — each with a name,
+a description, a system prompt, `modelHints` and a palette index. **The name and
+the prompt are stored content, not copy**, so they are English literals exactly
+like `DEFAULT_AGENT_NAME`: the name goes into `agents.name`, `@mentions` resolve
+against it and every model sees it, and a name that changed with the UI language
+would break both. Only the one-line description is a key
+(`agents.templates.<id>`), and because it is a *runtime* key the usage guard
+cannot see it, `locales.test.ts` checks the subtree against the table in both
+directions — the shape S5.1 established for the connector gallery. `modelHints`
+is ordered lowercase substrings rather than model ids, because a template cannot
+know whether the user's provider is Ollama or Anthropic; `suggestedModel` falls
+back to the provider's first model, which is what `default-agent.ts` does too.
+
+Skip is `AppSettings.onboardingDismissed`, a settings row rather than
+`localStorage`: it is a fact about the installation, it must survive cleared web
+storage, and Phase 8 will want it per account. It needed **no migration** —
+settings reads merge the stored object over `DEFAULT_APP_SETTINGS`, so a row
+written by an older version answers `false` — and it is validated like `theme`
+and `editor` rather than trusted like the language, because it is read back as a
+boolean by code with no other branch and a stored `'no'` is truthy. It is
+one-way on purpose; nothing writes `false` back, and the "show it again" control
+that would is in the Phase 6 backlog.
+
+**Settings → About** is `about` in `SETTINGS_SECTIONS`, directly above
+`developer`. The version and the repository URL come from `@shared/version`
+(`APP_REPOSITORY_URL` is new beside `APP_VERSION`); the licences are
+**generated, not maintained**. `scripts/generate-licenses.mjs` walks the
+transitive closure of `package.json`'s `dependencies` through
+`node_modules/*/package.json` — 244 packages here — reads both of npm's licence
+spellings, writes `UNKNOWN` rather than hiding a package that declares neither,
+warns about a declared dependency that is not installed, and produces
+`src/renderer/src/generated/licenses.json`. That file is **gitignored**: it is
+derived, a hand-maintained copy would be wrong the first time a dependency moved
+and *nothing would fail*, and committing it would mean reviewing a 244-entry
+diff on every `npm update`. It exists everywhere it is needed because
+`package.json` runs the script from `pretypecheck`, `pretest`, `pretest:watch`,
+`predev` and `prebuild` — which is what lets a clean `npm ci && npm run
+typecheck` on CI work without the workflow file being touched. `licenses.test.ts`
+drives the script as an **executable** against a fixture `node_modules`, the way
+`anthropic-cli.test.ts` drives a fake `ant`, because what ships is the script and
+because a plain `.mjs` under `scripts/` belongs to neither TypeScript project.
+About prints the version, the package rows and the URL as **data** with
+translated labels around them: an identifier is the same in both languages, the
+call `ANT_INSTALL_COMMAND` already made. The repository is a real
+`target="_blank"` anchor, which `setWindowOpenHandler` in `src/main/index.ts`
+hands to the system browser and otherwise denies — the path a link in a message
+body already takes.
+
+Verified: `npm run typecheck` clean, `npm test` `Test Files 89 passed`,
+`Tests 1426 passed`, `npm run build`, and `e2e/onboarding.spec.ts` **9 passed**
+against a real local Ollama — an empty `userData` to a streamed `Hello!` from
+`qwen2.5:1.5b` through the card alone, the card staying gone after a restart,
+Skip hiding it on a second installation across a restart, and About showing the
+manifest's version, a GitHub link and a non-trivial licence list. The full
+`npm run e2e` is 91 passed with one re-run: `e2e/chat.spec.ts`'s cursor
+assertion raced a warm Ollama (it reads `data-status` and then checks the
+cursor, and a 1.5B model can finish between the two lines) and passed on its own
+immediately afterwards; that pre-existing race is recorded in the Phase 6
+backlog rather than patched from inside this step. Docs:
+`docs/features/{ui-shell,providers,chats,agents,i18n,packaging}/` (all four
+each) and the `docs/README.md` index.
+
+### S7.6 API keys that survive an unsigned update `[x] (2026-09-13)`
+What: provider keys must not become unreadable when the app is rebuilt.
+Today they are encrypted with Electron `safeStorage`, whose key lives in the
+macOS Keychain item "Witena Safe Storage"; the Keychain grants access per
+application identity, and an **unsigned** build has a new identity every
+time it is packaged. After the S7.1 dmg replaced the S4.4 one, the stored
+DeepSeek and Moonshot ciphertexts (`v10…`, real `safeStorage` output) could
+no longer be decrypted, `resolve.ts` threw, and the UI showed "no key" and a
+failed probe. The data was never lost; the key to it was.
+- **A file-held key, wrapped by `safeStorage` only when that can be trusted.**
+  New `FileKeySecretStore` in `src/main/secrets.ts` (Electron-free: `node:crypto`,
+  `node:fs`): a random 32-byte key in `userData/secrets.key` (mode `0600`,
+  created on first use), AES-256-GCM with a random 12-byte IV per value, a
+  versioned prefix (`fk1:` + base64(iv‖tag‖ciphertext)). The main process uses
+  it for every provider key. The `safeStorage` implementation in
+  `src/main/ipc/secret-store.ts` is kept and becomes the **wrapper** for the
+  file key on signed builds (S7.3): when `process.env.WITENA_SIGNED_BUILD` (set
+  by the release workflow once signing exists) is present, `secrets.key` is
+  stored wrapped; otherwise it is stored plain with `0600`. Document the trade
+  in `docs/features/providers/context.md`: on an unsigned build an attacker
+  who can read the user's files can read the key file — exactly what they
+  could already do to the Keychain item of an unsigned app after one prompt —
+  and the file survives updates, which the Keychain item does not.
+- **Migration of existing rows, once, at startup**: for every provider whose
+  `api_key_encrypted` is `safeStorage` ciphertext (base64 of `v10…`), try
+  `safeStorage.decryptString`; on success re-encrypt with the file key and
+  write the row back; on failure leave the row untouched and mark the provider
+  `keyState: 'unreadable'` (a runtime field on `Provider`, not a column) so the
+  UI can explain. Never overwrite a ciphertext that could not be read.
+- **The UI says what happened.** A provider whose key is unreadable shows a
+  translated line under its card and in the editor — "This key was saved by a
+  previous version of the app and cannot be read after the update. Paste it
+  again." — with the key field focused; probing and model fetching for such a
+  provider return a `key_unreadable` error code rather than a generic failure.
+  `resolve.ts` maps a decrypt failure to that code instead of throwing raw.
+- Unit tests: round-trip and tamper detection for `FileKeySecretStore`; the
+  key file's mode; the `fk1:` / `v10` / `plain:` discrimination; the migration
+  with a fake `safeStorage` that succeeds, fails, or is absent; `resolve.ts`
+  surfacing `key_unreadable`; the store and editor showing the notice.
+- e2e: `e2e/providers.spec.ts` — save a key, restart the app, the key is
+  still there and the probe passes (the file key survives a relaunch); a
+  seeded `v10…` row the build cannot read shows the "paste it again" line.
+Acceptance: a key saved in one unsigned build is readable by the next unsigned
+build from the same `userData`; an unreadable legacy key is explained, not
+reported as a failed probe. Docs: `docs/features/providers/` and
+`docs/features/database/` (all four each), `docs/features/packaging/backend.md`
+(the security posture and the S7.3 hand-off).
+Done: `createFileKeySecretStore` in `src/main/secrets.ts` — AES-256-GCM with a
+fresh 12-byte IV per value, under 32 random bytes in `userData/secrets.key`
+(mode `0600`, created on first use, `wx` so two processes starting at once
+cannot each write one), stored as `fk1:` + base64(iv‖tag‖ciphertext) and failing
+with a typed `key_unreadable` on a wrong key, a failed tag, a truncated value or
+a value that is not its own. `src/main/ipc/secret-store.ts` now exposes
+`createSafeStorageStore()`, which returns the store **or `null`**, and is used
+for exactly two things: reading the old rows, and wrapping the key file when
+`WITENA_SIGNED_BUILD` is set. `migrateProviderSecrets`
+(`src/main/providers/migrate-secrets.ts`, Electron-free, called from
+`index.ts` after the context exists) re-encrypts every `djEw…` / `plain:` row
+through the repository's own `encrypt`, skips anything already `fk1:` — so the
+second launch writes nothing — and **never overwrites a ciphertext it could not
+read**, collecting those ids in `AppContext.unreadableSecrets` instead.
+`Provider.keyState` (`ok` / `unreadable` / `none`) is filled from that set by the
+`providers.*` handlers and cleared by a patch that touches `apiKey`; it is a
+runtime field, so there is no column and no migration.
+
+**The key file records how it is stored** (`fkkey1:` versus `fkkey1w:`) rather
+than trusting the environment variable at read time — the variable describes the
+running build, not the file it found, and a mismatch would hand the wrong 32
+bytes to AES, which fails exactly like "your keys are gone". **Wrapping is off
+unless the build is signed**, because `safeStorage` on an unsigned build is
+granted to an identity that changes with every package: wrapping there would
+recreate the bug. `djEw` is not a magic string either — it is base64 of `v10`,
+Chromium's `OSCrypt` prefix, which survives the encoding because base64 maps
+three bytes to four characters; `djEx` is `v11`, Linux's keyring-less fallback.
+
+`resolve.ts` maps a failed decrypt to `key_unreadable` (new `BackendErrorCode`,
+translated in the renderer) and marks the provider, so a probe, a model fetch and
+a chat turn all say the same thing — and the card and the editor explain it with
+nothing probed at all: one line under the card, one above the key field, the
+field focused, and the "a key is stored" hint replaced rather than shown beside
+it, because it would be true and reassuring. The renderer store also stopped
+flattening a **rejected** probe to `internal`, which is what made the new code
+visible under the Test button.
+
+Verified: `npm test` (93 files, 1521 tests, all passing) and `npm run typecheck`,
+plus the full Playwright suite (99 passed) with a local Ollama running, so
+`e2e/providers.spec.ts`'s new "a key saved in one launch is still readable by the
+next" really does save a key, relaunch the app on the same `userData` and probe
+green through the restored key — and its companion seeds a `djEw…` row with the
+`sqlite3` CLI while the app is closed and watches the UI ask for it again. What
+is **not** verified is the reinstall itself: that needs two differently packaged
+unsigned dmgs, so the relaunch is the automated half and the dmg-over-dmg case
+stays a manual check. Recorded, with the two follow-ups the step deliberately did
+not do, in "API keys and the key file (S7.6)" in the Phase 6 backlog.
+
+## Phase 8: Online version (PLAN "Local release and online version")
+
+Ordered so that each step runs end to end on a laptop before AWS is involved.
+
+### S8.1 Server host and Postgres `[ ]`
+What: the business logic runs in a plain Node process.
+- `src/server/index.ts`: builds `AppContext` with injected storage, secrets
+  and event bus, mounts every `BACKEND_METHODS` entry as `POST /api/<method>`
+  (JSON in, JSON out, `BackendError` → HTTP status + body) and the event bus
+  as `GET /ws` (WebSocket, one connection per client, events as JSON). No
+  electron import anywhere under `src/server/` — enforced by a test.
+- drizzle with the `pg` driver next to `better-sqlite3`; the schema stays
+  one file; migrations generated per dialect or written dialect-neutral —
+  decide, record it in `docs/features/database/`. Local dev runs Postgres in
+  Docker (`docker-compose.yml`).
+- Tests: every handler test runs against both dialects through a shared
+  fixture; an HTTP contract test drives `chat.send` and watches the WebSocket.
+Acceptance: `npm run server` + the existing renderer over a
+`HttpBackendClient` (S8.3) streams a reply. Docs: new feature `server`
+(`docs/features/server/`), `docs/features/database/`, `backend-client`.
+
+### S8.2 Accounts `[ ]`
+What: sign in, and everything is yours only.
+- Cognito user pool (hosted UI, email + password, optional Google), JWT
+  verified by the server on every request and at WebSocket connect;
+  `userId` = `sub`; the `local` user disappears from the server path.
+- Renderer: a sign-in page, token storage (memory + refresh), sign-out,
+  and the `Authorization` header in `HttpBackendClient`.
+- Tests: an unauthenticated request is refused; two users cannot see each
+  other's chats (handler tests with two `userId`s); token refresh.
+Acceptance: two accounts on one server each see only their own data.
+Docs: `server`, `backend-client`, `ui-shell`.
+
+### S8.3 Web client and capabilities `[ ]`
+What: the renderer runs in a browser.
+- A Vite web build target for `src/renderer/` producing a static SPA;
+  `HttpBackendClient` + WebSocket subscription; `system.capabilities`
+  returned by every host (`{ pickFolder, openInEditor, stdioMcp, workdir,
+  antSignIn, nativeTheme }`) and used by the pages to hide what the host
+  lacks — no page imports anything Electron-specific (rule 6 holds).
+- Materials online: uploaded files stored per chat (S3), listed the way
+  folder materials are, so document goals still work without a folder.
+- Tests: the capabilities gate per control; a Playwright run of the SPA
+  against the local server.
+Acceptance: the same chat flows in Chrome against the local server as in
+the desktop app, minus the hidden features. Docs: `server`,
+`backend-client`, `chats`, `ui-shell`.
+
+### S8.4 Secrets, limits and observability `[ ]`
+What: what a hosted product must have before strangers use it.
+- `KmsSecretStore` (envelope encryption, one data key per user); per-user
+  spend and rate limits enforced in `ChatRunner` (the usage tables exist);
+  structured logs and a `/healthz`; an audit log of sign-ins and key changes.
+Acceptance: keys at rest are ciphertext; a user over their cap gets a
+translated notice, not a 500. Docs: `server`, `providers`, `usage`.
+
+### S8.5 AWS deployment `[ ]`
+What: it is on the internet.
+- `infra/` CDK app: VPC, RDS Postgres, ECS Fargate service (the server
+  image), ALB with WebSocket, S3 + CloudFront for the SPA, ACM, Route 53,
+  Cognito; GitHub Actions builds the image and deploys on a `cloud-v*` tag;
+  migrations run as a one-off task before the service flips.
+Acceptance: `https://<domain>` signs in, streams a reply, survives a redeploy
+without dropping a running chat's events for longer than the WebSocket
+reconnect. Docs: `server` and a new `infra` feature.
+
+### S8.6 Desktop app signs in to the cloud `[ ]`
+What: the promise in "Reserved server capability".
+- A "Witena Cloud" mode in the desktop app: sign in, and the app swaps its
+  `BackendClient` to the HTTP one; local-only features stay available when
+  in local mode; switching modes is explicit and never merges data.
+Acceptance: the same chat opened on the web and in the app shows the same
+messages live. Docs: `backend-client`, `ui-shell`.
+
+### S8.7 Cloud workspaces `[ ]` (later)
+The executor online: a per-user container with the folder, the same seven
+tools over a small agent inside it, the permission prompt unchanged.
+

@@ -13,10 +13,10 @@
 |---|---|
 | `src/shared/backend.ts` | The `BackendClient` interface every renderer file depends on |
 | `src/renderer/src/lib/backend.ts` | The Electron implementation — wraps the preload bridge, unwraps the response envelope, rebuilds the error. The **only** renderer file allowed to touch `window.witena` |
-| `src/renderer/src/pages/settings/developer-section.tsx` | The smoke surface that exercises both directions, translated in S1.4 and moved here from `App.tsx` in S1.5. A deliberate test surface, not product UI |
+| `src/renderer/src/pages/settings/developer-section.tsx` | The smoke surface that exercises both directions, translated in S1.4 and moved here from `App.tsx` in S1.5. A deliberate test surface, not product UI — with one piece of real product settings since S5.7: the Editor block, which lives here because its custom mode is a shell command ([`editor`](../editor/frontend.md)) |
 | `src/renderer/src/lib/backend-provider.ts` | S1.4: `getBackend()` / `setBackend()`. The injection point stores use instead of importing the singleton, so a store is testable in plain Node with a fake client. It replaced the planned `backendContext.tsx` — the bootstrap needs the client *before* the React tree exists, which a context cannot provide |
 | `src/renderer/src/lib/event-bridge.ts` | S1.7: the **single** `subscribe` call for the whole renderer, started by `main.tsx` before the first render. `applyBackendEvent(event)` is its exported reducer, which the store tests drive directly |
-| `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, `stores/providers.ts` in S1.6, and `chats` / `messages` / `run` / `presence` / `agents` in S1.7 |
+| `src/renderer/src/stores/*.ts` | The zustand stores that call `invoke` and reduce events; no component calls the client directly. `stores/settings.ts` landed in S1.4, `stores/providers.ts` in S1.6, `chats` / `messages` / `run` / `presence` / `agents` in S1.7, and `stores/permissions.ts` in S5.5 |
 
 Rule (CLAUDE.md #6): components call store actions, stores call `BackendClient`,
 and only `lib/backend.ts` knows a transport exists. A component that imports
@@ -72,15 +72,19 @@ follows.
 | `invoke('system.ping')` | `DeveloperSection` on mount (S1.3 smoke widgets) | Proves the bridge is alive end to end |
 | `invoke('system.emitTestEvent', { payload })` | The Developer section's button | Proves the push direction |
 | `subscribeTo('system.test', …)` | `DeveloperSection` effect | Renders the last payload received |
-| `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher | Language, theme, timeouts |
+| `invoke('settings.get' / 'settings.update')` | `stores/settings.ts` since S1.4 — `load()` from the renderer bootstrap, `setLanguage()` from the switcher, `setTheme()` from the appearance control (S5.8) | Language, theme, timeouts |
 | `subscribe(…)` | `startEventBridge()` in `main.tsx`, once at app start (S1.7) | Fans every `BackendEvent` out to the stores. It is deliberately never unsubscribed: the bridge lives as long as the window, so no event can be lost between the first `list` call and the first render |
-| `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test |
+| `invoke('providers.*')` | Settings → Providers | CRUD, `/models` fetch, connection test, and (S5.3, S5.13) one vendor CLI's sign-in status, login and logout — named by `{ type }` — plus Google's quota project |
 | `invoke('agents.*')` | Agents page | CRUD for the configuration form |
 | `invoke('mcp.*')`, `invoke('skills.*')`, `invoke('memory.*')` | Settings and the agent configuration page | Servers, the skills library, the per-agent memory panel |
-| `invoke('system.pickFolder')` | `stores/skills.ts`, behind "Import folder" | The native folder dialog. Resolves `null` when the user cancels, which the store treats as a non-event rather than an error — the only method whose implementation is Electron-specific (S3.2) |
+| `invoke('system.pickFolder')` | `stores/skills.ts`, behind "Import folder", and `stores/chats.ts`, behind "Choose…" | The native folder dialog. Resolves `null` when the user cancels, which the store treats as a non-event rather than an error — the first of the methods whose implementation is Electron-specific (S3.2) |
+| `invoke('system.pickSavePath')` + `invoke('system.pickPaths')` | `stores/chats.ts`, behind the Goal block's "Choose…" and "Add…" (S5.10) | The native save and multi-select dialogs. Both answer **absolute** paths, which the store converts with `relativeToWorkdir` before a goal can hold them; a pick outside the chat's folder is refused by the renderer, with a `ValidationReason` in the same error fields a backend rejection would use |
+| `invoke('system.applyTheme', { theme })` | `stores/settings.ts`, after a successful `settings.update` | Tints the title bar and the native dialogs (S5.8). Another Electron-specific method, and the only call in the app whose rejection is deliberately ignored: the page is already repainted, and a transport without a window must not fail the setting |
+| `invoke('system.openInEditor', { path, line, chatId })` | `lib/editor.ts`, from the transcript's four clickable file surfaces | Opens a file (S5.7). The third method whose implementation may need a window, and the first that needs one only for some settings; see [`editor`](../editor/frontend.md) |
 | `invoke('chats.*')`, `invoke('chats.members.list')` | Chat list and member panel, since S1.7 | Chat CRUD and reading the membership. `chats.members.set` gets its UI in S2.2 |
 | `invoke('messages.list')` | Chat view on open and when scrolling up | Initial page and history paging |
 | `invoke('chat.send' / 'chat.stop')` | Composer and Stop button | Starts and aborts a run |
+| `invoke('chat.handoff')` | The "Hand to executor" button (S5.6), and the Actions card's "Write the deliverable" with `intent: 'deliver'` (S5.12) | Starts the implement + review run. Its four `validation` refusals are read through `translateFailure(t, code, details)`, which is why the run store keeps `errorDetails` beside `errorCode` |
 
 Event handling worth writing down once:
 
@@ -99,6 +103,10 @@ Event handling worth writing down once:
 - `presence.changed` → update the dot in the member panel and on that agent's
   message avatars (the dot shows the agent's *current* state, not the state at
   send time).
+- `permission.requested` → add a card to `stores/permissions.ts`;
+  `permission.resolved` → remove it, whatever the decision says. Exactly one
+  `resolved` per `requested`, on every path, which is what lets the card be
+  dismissed without knowing why (S5.4, drawn in S5.5).
 
 ## Interaction states
 

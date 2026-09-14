@@ -5,7 +5,8 @@
 | File | Responsibility |
 |---|---|
 | `electron-builder.yml` | The whole build configuration: app id, product name, file selection, asar unpacking, extra resources, the macOS target and the signing decision |
-| `build/icon.svg` | The mark, drawn by hand: a rounded square in the accent colour `#d8a656` with a white stroked "W" |
+| `build/icon.svg` | The mark: the Aperture — six near-black blades closing on a terracotta point inside an eased hexagon, on a white rounded tile (S7.1) |
+| `build/icon-dark.svg` | The same geometry on an ink tile with white blades. **Not** the shipped icon; kept for the README and other dark surfaces |
 | `build/icon.png` | The 1024 px rasterisation of it, and the only input to the iconset |
 | `build/icon.icns` | What `mac.icon` points at. Binary, committed, regenerated only when the mark changes |
 | `build/icon.iconset/` | The ten intermediate PNGs `iconutil` reads. **Gitignored** — derived and reproducible in one loop |
@@ -13,6 +14,12 @@
 | `playwright.packaged.config.ts` | Runs `e2e/packaged.spec.ts` and nothing else |
 | `e2e/packaged.spec.ts` | The acceptance test against the shipped bundle |
 | `playwright.demo.config.ts`, `e2e/demo.record.ts` | The tour recording that produces `docs/assets/` |
+| `.github/workflows/ci.yml` | The gate on every push and pull request, plus the `actionlint` job that lints both workflow files |
+| `.github/workflows/release.yml` | A `v*` tag → checks → both dmgs → a draft GitHub Release |
+| `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
+| `scripts/generate-licenses.mjs` | **S7.5.** Writes `src/renderer/src/generated/licenses.json` (gitignored) from the production dependency tree, for Settings → About. Run by the `pretypecheck` / `pretest` / `predev` / `prebuild` hooks, so it happens before anything that reads the file — including `npm ci && npm run typecheck` on CI. Owned by [`../ui-shell/backend.md`](../ui-shell/backend.md); listed here because it is part of every build |
+| `src/main/packaging.test.ts` | The unit test over `electron-builder.yml` and the two copies of the version number |
+| `src/renderer/src/components/ui/brand-mark.test.ts` | The other half of the icon's gate: it proves `build/icon.svg` and the rail's inlined mark are the same drawing. Owned by [`../ui-shell/implement.md`](../ui-shell/implement.md); listed here because it is the only test that looks at `build/` at all |
 
 `package.json` carries no `build` key: electron-builder finds
 `electron-builder.yml` on its own, and one configuration in two places is the
@@ -29,12 +36,14 @@ kind of thing that goes stale.
 | `files` | `out/**`, `package.json`, minus `*.map` and `.DS_Store` | Everything electron-vite produced, plus the manifest that carries `main` and the dependency list. **`node_modules` is deliberately absent**: electron-builder appends the production dependency tree itself, and a second hand-written copy of that fact would drift |
 | `asarUnpack` | `**/node_modules/better-sqlite3/**` | `dlopen` takes a filesystem path. A `.node` binary inside an asar archive is not at one, and the app would fail to open its database on the first launch |
 | `extraResources` | `resources` → `resources` | Ships `resources/skills/`. See the path note below |
-| `mac.target` | `dmg`, `arch: [arm64]` | One artifact. The zip target exists for auto-update, which the MVP does not have |
+| `mac.target` | `dmg`, `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The zip target exists for auto-update, which does not exist yet (S7.4) |
 | `mac.category` | `public.app-category.developer-tools` | `LSApplicationCategoryType` in the Info.plist |
 | `mac.icon` | `build/icon.icns` | Copied to `Contents/Resources/icon.icns` |
 | `mac.hardenedRuntime` | `false` | The hardened runtime is a notarization requirement; without a signature it only adds restrictions for nothing |
 | `mac.identity` | `null` | No Developer ID signing. Explicit rather than omitted: without it electron-builder picks up whatever identity is in the building machine's keychain, which makes the artifact depend on who built it. See "The unsigned caveat" |
-| `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` — the name `e2e/packaged.spec.ts`'s instructions and the release notes both use |
+| `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` and `Witena-0.1.0-x64.dmg` — `${arch}` is what keeps two builds of one version from overwriting each other in `dist/` and in the Release |
+| `publish.provider` | `github` | electron-builder uploads the artifacts itself and writes the `latest-mac.yml` feed S7.4 will read. `owner` / `repo` are deliberately absent: they are inferred from the checkout's git remote, so a tag pushed on a fork publishes to that fork |
+| `publish.releaseType` | `draft` | The review step. CI packages; a human reads the artifacts and presses Publish |
 
 ## The resources path
 
@@ -100,9 +109,9 @@ Witena.app/Contents/
 ```
 
 Outside it, unchanged: the app still writes only to `app.getPath('userData')` —
-`witena.db`, `skills/`, `memory/` — and the `WITENA_USER_DATA` override still
-works in a packaged build, which is what lets `e2e/packaged.spec.ts` run against
-a throwaway directory.
+`witena.db`, `skills/`, `memory/` and, since S7.6, `secrets.key` — and the
+`WITENA_USER_DATA` override still works in a packaged build, which is what lets
+`e2e/packaged.spec.ts` run against a throwaway directory.
 
 ## The unsigned caveat
 
@@ -130,6 +139,53 @@ Removing the caveat is a purchase, not a code change: a Developer ID certificate
 `hardenedRuntime: true`, `identity` set to the certificate name, and the
 `notarize` block with an App Store Connect key.
 
+### What being unsigned does to the stored secrets (S7.6)
+
+The caveat is not only a Gatekeeper dialog. macOS grants the `safeStorage`
+Keychain item ("Witena Safe Storage") **per application identity**, and an
+unsigned bundle's identity is whatever this particular packaging run produced —
+so the next dmg is, as far as the Keychain is concerned, a different application.
+That is not theoretical: when the S7.1 dmg replaced the S4.4 one, every provider
+key already in the user's database (`v10…`, genuine `safeStorage` ciphertext)
+became undecryptable, and the app reported it as "no key" and a failed probe.
+
+S7.6's answer is to stop keying the secrets off the bundle at all. The
+encryption key is 32 random bytes in `userData/secrets.key` (mode `0600`,
+created on first use), provider keys are AES-256-GCM under it, and a startup
+pass re-encrypts anything still in the old format — leaving a row it cannot read
+untouched and explaining it in the UI. The file is part of the user's data, so
+an update, a reinstall and a rebuild all leave it alone.
+
+**The security posture, stated exactly.** On an unsigned build the key file is
+plain on disk: anyone who can read the user's home directory can read it and
+every API key it protects. That is the same class of exposure the Keychain item
+of an *unsigned* app already had — it is granted to an identity nothing vouches
+for — and it buys the property the Keychain could not give: the keys survive the
+next build. It is a deliberate trade, not an oversight, and it is documented in
+`docs/features/providers/context.md` as well as here.
+
+**The S7.3 hand-off: signing turns the wrapper on.** When the release workflow
+sets `WITENA_SIGNED_BUILD` (any non-empty value other than `0` / `false`), the
+key file is stored **wrapped** by `safeStorage` instead of plain — the Keychain
+protects the key file, and because the build is signed the identity it is granted
+to stops changing between releases. Nothing else about the secret path changes:
+the same `fk1:` ciphertext, the same column, the same migration. Wrapping is off
+by default precisely because doing it on an unsigned build would recreate the
+bug S7.6 fixed.
+
+Two things S7.3 has to remember:
+
+- **Set the variable for the packaged app, not only for the build.** It is read
+  by the running process (`isSignedBuild`, `src/main/secrets.ts`), so exporting
+  it in the workflow shell protects nothing by itself; it has to reach the
+  launched application — the simplest honest way being a signed-build constant
+  injected at build time, which is a change to make *with* S7.3, not before it.
+- **Existing key files are not re-wrapped.** A machine that has been running
+  unsigned builds keeps its plain `secrets.key` after the first signed build;
+  only a file created afterwards is wrapped. Rewriting the user's stored secrets
+  silently on launch is not something to do as a side effect of an update —
+  whether to offer it as an action is in the Phase 6 backlog.
+
 ## Building the icon
 
 Covered step by step in [`implement.md`](./implement.md). The short version:
@@ -138,18 +194,147 @@ Electron window and writing `webContents.capturePage()`, downsampled to 1024 px
 with `sips`, expanded into `build/icon.iconset/` at the five sizes plus their
 `@2x` variants, and packed with `iconutil -c icns`.
 
+Three things about that pipeline are load-bearing, and S7.1 is the step that
+found out why:
+
+- **The rasteriser has to be a real one.** `sips` converts images; it cannot
+  render an SVG's curves. Chromium (the Electron binary in `node_modules`) draws
+  the mark with Skia, which anti-aliases properly, and `shape-rendering="geometricPrecision"`
+  on the `<svg>` root tells it not to snap the diagonals to the pixel grid. Every
+  edge in this mark is a diagonal meeting another at a shallow angle, so that hint
+  is the difference between a smooth blade and a staircase.
+- **Every size below 1024 is a downscale, never a re-render.** Rendering directly
+  at 32 px would anti-alias a 0.9 px stroke against nothing; downscaling a 1024 px
+  bitmap with `sips -z` averages the supersampled pixels instead. The render
+  itself is the same idea one level up: Chromium captures at 2048 on a Retina
+  display and `sips` takes it to 1024.
+- **The 16 px variant is drawn with a thicker stroke, and only that variant.**
+  30 px on a 1024 canvas is 0.47 px at 16 — the blades average to a uniform grey
+  and the mark becomes a smudge. It is re-rendered from the same `icon.svg` with
+  `stroke-width` substituted to **56**, which is ~0.9 px at 16 and gives a legible
+  dark aperture with the terracotta point still readable. 56 was picked by
+  rendering 44 / 56 / 68 / 80 and looking at all four: 44 is still washed out and
+  68 upwards closes the white gaps into a blob. Nothing else in the iconset is
+  touched — 32 px and up are legible at the drawn weight — and the substitution is
+  a `sed` over the committed SVG rather than a second committed file, so there is
+  still exactly one drawing.
+
+Each blade starts 16 px inside its hexagon corner, along its own direction,
+rather than at the true vertex. The frame's corners are eased with a 52 px
+radius, which pulls the frame's centreline about 8 px inside the vertex; a blade
+that began at the vertex poked a few pixels past the rounded outline as a small
+nub on every corner (seen in the first S7.1 render). 16 px puts the whole butt
+end of the blade inside the frame's 30 px stroke band — no nub outside, no notch
+inside — and `brand-mark.tsx` carries the same coordinates.
+
 The 64 px inset in the SVG is the padding macOS expects around an app icon — an
-icon drawn edge to edge looks oversized next to every other one in the Dock —
-and the 76 px stroke on the "W" is what keeps the mark legible at the 16 px
-variant.
+icon drawn edge to edge looks oversized next to every other one in the Dock. The
+tile carries **no border**: a hairline around a white tile is invisible on a light
+Dock and a grey fuzz at 16 px, and the tile's own anti-aliased edge is one pixel
+of partial alpha with no colour fringe (verified by reading the pixels either side
+of x=64 in the 1024 px render).
 
-## How to release
+## Continuous integration
 
-See [`implement.md`](./implement.md), "Making a release". In short: run the
-existing gate (`npm run typecheck && npm test && npm run e2e`), `npm run dist`,
-mount the dmg, copy `Witena.app` off it, detach, and run `npm run e2e:packaged`
-against the copy. Then `hdiutil info` to confirm no volume of ours is still
-mounted.
+`.github/workflows/ci.yml`, on every push and every pull request:
+
+| Job | Runner | Steps |
+|---|---|---|
+| `check` | `macos-latest` | `npm ci`, `npm run typecheck`, `npm test`, `npm run build` |
+| `actionlint` | `ubuntu-latest` | Downloads `actionlint` 1.7.12, checks its SHA-256, lints `.github/workflows/` |
+
+macOS for the `check` job is not a preference: `postinstall` rebuilds
+`better-sqlite3` against the Electron ABI and the artifact this repository
+produces is a macOS bundle. A Linux runner would prove something about a
+platform Witena is not shipped on.
+
+`npm run e2e` is **not** part of CI — it needs a local Ollama. See
+[`implement.md`](./implement.md), "What CI does not run".
+
+`actionlint` is pinned by version *and* checksum and downloaded in a `run:`
+step. An npm devDependency would put a workflow linter in the product's
+dependency tree; a third-party action pinned by tag would trust a pointer
+someone else can move.
+
+## Publishing
+
+`.github/workflows/release.yml`, on a `v*` tag: the same checks, then
+
+```sh
+npm run dist -- --publish always
+```
+
+`npm run dist` is `npm run build && electron-builder --mac`, and npm appends
+what follows `--` to the end of that string, so the flag reaches
+electron-builder. Both architectures come from `mac.target[0].arch` and are
+built in **one** invocation deliberately: `latest-mac.yml` describes a release,
+not an architecture, so two parallel jobs would each write a feed naming only
+their own dmg and the second upload would win.
+
+What lands in the draft Release: `Witena-<version>-arm64.dmg`,
+`Witena-<version>-x64.dmg`, a `.blockmap` beside each, and `latest-mac.yml`.
+The upload is electron-builder's own GitHub publisher rather than a separate
+upload action, because the feed and the blockmaps are things the builder
+computes while it packages; regenerating them in a later step would be a second
+implementation of a fact it already knows, and S7.4's `electron-updater` reads
+exactly that feed.
+
+Authentication is `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` plus
+`permissions: contents: write` on the job. No personal token is involved.
+
+### The signing gate (S7.3 adds secrets, not workflow steps)
+
+The `secrets` context is **not** available to an `if:` expression — not at job
+level and not at step level — so `if: ${{ secrets.CSC_LINK != '' }}` is not a
+condition that can work. The workflow reads the secret into `env` in a step
+that is allowed to see it and publishes the *answer* as a step output:
+
+```yaml
+- name: Decide whether this build can be signed
+  id: signing
+  env:
+    CSC_LINK: ${{ secrets.CSC_LINK }}
+  run: |
+    if [ -n "${CSC_LINK:-}" ]; then
+      echo 'enabled=true' >> "$GITHUB_OUTPUT"
+    else
+      echo 'enabled=false' >> "$GITHUB_OUTPUT"
+    fi
+```
+
+`steps.signing.outputs.enabled` then gates the `codesign --verify --deep
+--strict` / `spctl --assess` verification, and it is also what
+`CSC_IDENTITY_AUTO_DISCOVERY` is set to — false on an unsigned build, so
+electron-builder cannot quietly sign with whatever identity a runner's keychain
+happens to hold. The `CSC_*` and `APPLE_*` secrets are passed to the packaging
+step unconditionally; absent, they arrive as empty strings and are ignored.
+
+What S7.3 still has to change is `electron-builder.yml` — `identity`,
+`hardenedRuntime: true`, an entitlements file and a `notarize` block — the
+README's Gatekeeper note, and `WITENA_SIGNED_BUILD` reaching the packaged app so
+the key file is wrapped (see "What being unsigned does to the stored secrets").
+Not this workflow's structure.
+
+## Cutting a release
+
+`npm version <patch|minor|major>` bumps `package.json`, commits and tags.
+Two npm lifecycle scripts hang off it:
+
+| Script | When | What |
+|---|---|---|
+| `preversion` | Before the bump | `npm run typecheck && npm test` — a tag is not worth creating if the suite is red |
+| `version` | After the bump, before npm's commit | `node scripts/sync-version.mjs && git add src/shared/version.ts` |
+
+`APP_VERSION` in `src/shared/version.ts` is a second copy of the version number
+(`src/shared/` is imported by main, preload and renderer, so reading
+`package.json` there would pull the manifest into every bundle), and
+`src/main/mcp/manager.ts` sends it to every MCP server in the client handshake.
+The `version` script rewrites it and stages it so the tagged commit carries both
+copies; `src/main/packaging.test.ts` fails if they ever disagree.
+
+Then `git push --follow-tags`, wait for the draft, publish it. The full
+procedure, including verifying the uploaded dmg with `npm run e2e:packaged`, is
+in [`implement.md`](./implement.md), "Making a release".
 
 ## External dependencies
 
@@ -159,4 +344,6 @@ mounted.
 | `dmgbuild` (vendored by electron-builder) | The disk image | Downloaded on the first `--mac` run, so the first build is several minutes slower than the rest and needs the network |
 | `sips`, `iconutil` (macOS) | PNG scaling and the icns | `sips -z H W` takes **height first**. `iconutil` refuses an iconset that is missing any of the ten expected names, and the names are exact: `icon_16x16@2x.png`, not `icon_32x32.png` under a different name |
 | `ffmpeg` | The demo GIF | `palettegen` / `paletteuse` must be two passes over the *same* filtered frames, or the palette describes footage that is not what gets encoded. This build of ffmpeg has no `drawtext` filter, so frame-timestamp overlays are not available while inspecting a recording — use `tile` contact sheets and arithmetic instead |
+| GitHub Actions (`actions/checkout@v4`, `actions/setup-node@v4`) | CI and release | Pinned to major tags. `setup-node`'s `cache: npm` needs `package-lock.json`, which is committed. `npm ci` runs the `postinstall` electron-rebuild, which downloads the Electron binary — the slow step of every job |
+| `actionlint` 1.7.12 | Linting the workflows | Pinned by version and SHA-256 of the release tarball. On a runner with `shellcheck` installed — the Ubuntu images have it — it also lints every `run:` block, so findings can appear in CI that a local run without shellcheck does not report |
 | Playwright `_electron.launch` | Both extra specs | `executablePath` plus an empty `args` is how a *packaged* app is launched; the `args: ['.']` every other spec uses points electron at a project directory and is wrong for a bundle. `recordVideo` on the launch options records the window, and `page.video().path()` only resolves after the context has closed |

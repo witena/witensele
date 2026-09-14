@@ -104,6 +104,15 @@ test('creates an agent with a provider, a model and a system prompt', async () =
   await expect(window.getByTestId('agent-save')).toBeDisabled()
 })
 
+test('offers no sampling parameters', async () => {
+  // S5.9: the form asks for a model and a prompt, not for a temperature. The
+  // fields are gone from the editor rather than hidden, so the count is zero
+  // while an editor is open and every other control is on screen.
+  await expect(window.getByTestId('agent-model')).toBeVisible()
+  await expect(window.getByTestId('agent-temperature')).toHaveCount(0)
+  await expect(window.getByTestId('agent-max-tokens')).toHaveCount(0)
+})
+
 test('rejects a second agent with the same name', async () => {
   await window.getByTestId('agents-new').click()
   await window.getByTestId('agent-name').fill('reviewer')

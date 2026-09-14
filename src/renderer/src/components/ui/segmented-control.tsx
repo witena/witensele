@@ -20,6 +20,15 @@ export interface SegmentedOption<T extends string> {
   label: string
   /** Optional `data-testid`; the language switcher's segments are addressed by it. */
   testId?: string | undefined
+  /**
+   * Disables this segment alone, on top of the control's own `disabled` (S5.10).
+   *
+   * The Goal block needs it: "Document" and "Codebase" are impossible until the
+   * chat is bound to a folder, and a segment that vanished would leave the user
+   * with no way to find out that those kinds exist. Disabled-with-a-hint says it;
+   * a missing segment says nothing.
+   */
+  disabled?: boolean | undefined
 }
 
 export interface SegmentedControlProps<T extends string> {
@@ -51,7 +60,7 @@ export function SegmentedControl<T extends string>({
             key={option.value}
             type="button"
             aria-pressed={active}
-            disabled={disabled}
+            disabled={disabled || option.disabled === true}
             data-testid={option.testId}
             onClick={() => onChange(option.value)}
             className={clsx(

@@ -40,6 +40,34 @@ before deciding what to do with it) without the store having to guess.
     refused until the chat has a member
 ```
 
+### The first run, which is the same flow with the steps drawn (S7.5)
+
+```
+empty installation, chat page, no chat selected
+  → useOnboarding()  =  onboardingState({ dismissed, providerCount, draft,
+                                          authStatus, agentCount,
+                                          hasChatWithMembers })
+  → visible → <OnboardingCard /> instead of the "Nothing here yet" EmptyState
+
+step 1-3  the provider editor's own components against the one draft
+          (PresetGrid → ProviderCredential → ProviderModels + Save)
+            → providers.saveDraft() → providers.create
+step 4    a template tile
+            → agents.createFromTemplate(template, providerId, provider.models)
+            → agents.create                    // the editor is NOT opened
+step 5    "Start chat"
+            → chats.create([agent.id])
+            → invoke('chats.create', { input: { memberAgentIds: [id] } })
+  → the chat has a member → hasChatWithMembers → the card returns null
+```
+
+The member list is the part worth remembering: **the backend only adds the
+bootstrap agent when the agents table is empty**, and by step 5 it is not, so a
+card that called `create()` with no argument would produce a chat with nobody in
+it — and then a send refused with "this chat has no members" on the very first
+try. `ChatsState.create` therefore takes an optional `memberAgentIds`; the "+"
+button still passes nothing and still lets the backend decide.
+
 ### Changing the members
 
 ```
@@ -61,6 +89,160 @@ a select / the segmented control changes
   → handler validates the field, repository merges it into the stored object
   → store applies the returned chat; the header badge re-renders from it
 ```
+
+### Binding the working directory (S5.2)
+
+```
+"Choose…"
+  → useChatsStore.chooseWorkdir(chatId)
+  → invoke('system.pickFolder')            // native modal, src/main/ipc/dialogs.ts
+      cancelled → null → nothing happens, and no error is left behind
+  → useChatsStore.setWorkdir(chatId, path)
+  → invoke('chats.update', { id, patch: { workdir: path } })
+  → assertWorkdir: absolute, statSync, isDirectory
+      refused → validation + { reason: 'workdir_not_absolute' | 'workdir_missing'
+                              | 'workdir_not_directory' }
+  → store applies the returned chat
+  → the header chip and the settings row re-render from it
+
+"Clear" → setWorkdir(chatId, null)         // the one path that needs no dialog
+```
+
+Two calls rather than one backend method, for the reason `stores/skills.ts`
+imports a folder the same way: the dialog is the single thing the backend cannot
+do without electron, and keeping it a separate call keeps `chats.update` a plain
+validated write that a future HTTP client can make on its own.
+
+The chip prints `folderName(workdir)` with the whole path in `title`
+(`lib/workdir.ts`) — the interesting half of a path is its last segment, and the
+rest does not fit beside a title or in a 288px panel.
+
+### Setting the chat goal (S5.10)
+
+```
+the Goal block (components/chat/goal-settings.tsx)
+  a draft: { kind, description, deliverable, materials }, seeded from chat.goal
+  kind changed      → draft; persisted too, if the description already has text
+  description blur  → persist
+  deliverable blur  → persist
+  material added / removed → persist immediately (no blur to wait for)
+  → composeGoal(draft)      // null when the description is blank
+  → useChatsStore.setGoal(chatId, goal)
+  → invoke('chats.update', { id, patch: { goal } })
+  → assertGoal(goal, patch.workdir ?? stored.workdir)
+      refused → validation + { reason: 'goal_…' }   // nine of them, see backend.md
+  → store applies the returned chat, then re-reads chats.goalStatus
+  → the panel re-seeds from the stored value; the header chip re-renders
+```
+
+The block is the **only** control in the group settings that holds a draft, and
+the reason is the column: a goal is one JSON field, so there is no per-field
+patch to send, and persisting free text on every keystroke would be a write per
+character. So it writes on blur — which is what the chat title already does.
+
+Two edges fall out of "a goal is its description", and both are deliberate:
+picking a kind while the box is empty changes the draft only, and **emptying**
+the description of a chat that has a goal removes the goal. The way out is the
+same gesture as the way in, rather than a second control that exists only to
+undo the first.
+
+### Picking a deliverable or a material (S5.10)
+
+```
+"Choose…"                              |  "Add…"
+  pickDeliverable(workdir)             |    pickMaterials(workdir)
+  → invoke('system.pickSavePath')      |    → invoke('system.pickPaths')
+       cancelled → null → nothing      |         cancelled → [] → nothing
+  → relativeToWorkdir(workdir, picked) |    → the same, per pick
+       outside → null + errorDetails   |         outside → dropped + errorDetails
+         { reason: goal_deliverable_…  |           { reason: goal_material_… }
+           outside_workdir }           |
+  → the draft field / the list, then persisted
+```
+
+The conversion is the point. The dialogs answer **absolute** paths and a
+`ChatGoal` stores **relative** ones, because the folder is a machine-local
+binding while the goal describes a project that outlives it. And because no
+native dialog on any platform this runs on can be confined to a directory,
+`relativeToWorkdir` returning `null` is the only place "you picked something
+outside this chat's folder" can be noticed — so the renderer reports it the way
+a backend rejection is reported: the same three store fields, a
+`ValidationReason`, the same `translateFailure`, the same `chats-error` line.
+
+A materials pick keeps what was inside and reports what was not, rather than
+discarding the lot: a user who selected six files and one stray meant the six.
+
+### Is the deliverable there yet? (S5.10, S5.12)
+
+```
+open a chat, or chat.updated for it,
+or a round boundary, or the end of a run          (S5.12)
+  → useChatsStore.loadGoalStatus(chatId)
+  → invoke('chats.goalStatus', { chatId })
+  → deliverablePath(goal, workdir) + existsSync
+  → goalStatusByChat[chatId]                      (only if the answer changed)
+  → goalChipState(goal, status) → the header chip
+```
+
+A **query**, not a column. Whether a file exists is a fact about the filesystem,
+so a stored boolean would be wrong the moment anything created, moved or deleted
+it — including something that is not this app — and the same reasoning already
+keeps the member count off `Chat`. It is re-asked whenever the chat row changes,
+which covers every edit the panel makes.
+
+S5.12 adds the two moments an **executor turn** can have written the deliverable.
+A round boundary is what catches a hand-off — the executor writes in a round of
+its own and the review round starts the moment it finishes, so the chip flips
+while the reviewers are still reading — and the end of the run catches the rest,
+including a hand-off with nobody to review it. In `chats-page.tsx` that is two
+extra dependencies on one effect (`running` and the active round).
+
+Asking far more often made one thing matter that did not before: **an unchanged
+answer must not write**. `loadGoalStatus` compares the two fields and returns an
+empty patch when they match, because a fresh `ChatGoalStatus` object for a fact
+that has not changed re-renders the chat page — message list included — in the
+middle of a reply that is still streaming, and `react-virtuoso` re-measures the
+row the streaming cursor is in.
+
+`deliverablePath` (`executor/paths.ts`) is shared with the executor turn that
+appends the deliverable's `FileRefPart`, so the header chip and the chip in the
+transcript cannot come to name two different files.
+
+### Adding an executor member (S5.2)
+
+```
+"+ Add" → the picker
+            hasExecutor(members) && isExecutor(candidate)
+              → the row is disabled, and its sub-line becomes chat.executorTaken
+          otherwise → the usual setMembers path
+  → invoke('chats.members.set')
+  → assertOneExecutor over the resulting list
+      two executors → validation + { reason: 'second_executor' }
+```
+
+The picker is the **explanation**; the handler is the **rule**. Disabling the row
+is what stops the user wondering why a click did nothing, and the backend refusal
+is what makes the invariant true for a second window or a later HTTP client.
+
+### Handing the chat to its executor (S5.6)
+
+```
+HandoffButton                      // above the composer, below the permission stack
+  handoffBlocker({ workdir, members, running })
+    → 'handoff_no_workdir' | 'handoff_no_executor' | 'handoff_run_active' | null
+  disabled = blocker !== null
+  title    = blocker ? validationReasonMessage(t, blocker) : t('chat.handoffTitle')
+  click → run.handoff(chatId) → invoke('chat.handoff', { chatId })
+                                  → ChatRunner.handoff  (orchestration)
+  ← message.created (a user row carrying the `handoff` notice)
+  ← run.started / run.round … the executor, then everybody else
+```
+
+The button reads the three rules the backend applies, in the backend's order, so
+the tooltip on the disabled control and the sentence under the composer after a
+refusal are the same sentence. It is drawn for every selected chat and disabled
+rather than hidden; the reason also lands in `data-blocked` for the end-to-end
+spec, which must not assert on copy.
 
 ### Opening a chat
 
@@ -183,7 +365,13 @@ kebab → Delete → Delete again
 ## Key types and contracts
 
 `Chat`, `ChatMember`, `Message`, `MessagePart`, `MessageStatus` and `Usage` are
-unchanged from S1.1. S2.2 added two input types next to them —
+unchanged from S1.1 except that **`Chat.goal` was added** (S5.10, with
+`ChatGoal`, `GoalKind`, `GOAL_KINDS`, `MAX_GOAL_DESCRIPTION_CHARS` and
+`ChatGoalStatus` beside it, plus nine more `VALIDATION_REASONS`) and that
+**`Chat.workdir` is no longer reserved** (S5.2):
+`ChatPatch` accepts it, and `VALIDATION_REASONS` / `ValidationReason` were added
+beside `BackendError` for the refusals the renderer names precisely. S2.2 added
+two input types next to them —
 **`ChatCreateInput`** (a `ChatPatch` plus `memberAgentIds`) and **`ChatPatch`**
 (every field optional, `settings` a partial that the backend merges) — plus the
 `MIN_AUTO_ROUNDS` / `MAX_AUTO_ROUNDS` bounds both layers validate against.
@@ -193,14 +381,16 @@ unchanged from S1.1. S2.2 added two input types next to them —
 | `chats.list` | — | `Chat[]` | Newest `updatedAt` first |
 | `chats.get` | `{ id }` | `Chat` | `not_found` for an unknown id |
 | `chats.create` | `{ input: ChatCreateInput }` | `Chat` | `memberAgentIds` seeds the members; without it the chat is empty unless the agent library is |
-| `chats.update` | `{ id, patch: ChatPatch }` | `Chat` | Rename and a **partial** `settings` merge; always bumps `updatedAt` |
+| `chats.update` | `{ id, patch: ChatPatch }` | `Chat` | Rename, `workdir` (absolute, existing, a directory — or `null`) and a **partial** `settings` merge; always bumps `updatedAt` |
 | `chats.delete` | `{ id }` | `void` | Stops the run first; cascades |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **New in S1.7.** Ordered by `position` |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the list; array index becomes `position` |
 | `chats.search` | `{ query }` | `string[]` | Chat ids whose title or any message text matches; blank query means every chat |
+| `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | S5.10. Where the `document` goal's deliverable is and whether it exists. A chat with no such goal answers `{ deliverable: null, delivered: false }` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is a message id |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` | Tokens and estimated cost, total and per agent, over the whole transcript |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written |
+| `chat.handoff` | `{ chatId }` | `Message` | S5.6. The stored hand-off row; the executor's round and the review round after it arrive as events. Refused with `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent |
 
 | Event | Payload | Emitted when |
@@ -219,9 +409,16 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | File | Covers |
 |---|---|
 | `src/main/orchestration/chat-runner.test.ts` (`describe('chats handlers')`) | `chats.create` default title and settings; the `validation` refusal with no usable provider; rename bumping `updatedAt` and emitting `chat.updated`; the empty-title rejection; `messages.list` order and the `before` cursor; delete stopping the run and emitting `chat.deleted`. Also: the runner re-reads the members on the next run, and `chat.send` on an empty chat stores nothing |
-| `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, and every `ChatSettings` bound |
+| `src/main/handlers/chats.test.ts` | Who a new chat starts with (bootstrap / empty / explicit order), `members.set` validation and its event, every `ChatSettings` bound, S5.10's whole goal table against a **real** temporary folder (one case per `ValidationReason` — including a symlink out for each of the two `outside_workdir` ones — plus the shapes that must stay legal: a discussion on an unbound chat, a deliverable whose parent does not exist, a folder as a material, a folder and a goal in one call, clearing with `null`, and `chats.goalStatus` before and after the file appears), and S5.2's two rules: `workdir` accepted / cleared / refused as relative, blank, missing and a file, and the second-executor refusal on both `members.set` and `chats.create` (with one executor beside participants, and an executor-for-executor swap, both allowed) |
 | `src/main/handlers/handlers.test.ts` | Every declared method has a handler; the ones still stubbed reject with `internal` |
-| `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection |
+| `src/renderer/src/stores/chats.test.ts` | `groupChats` (all three buckets, empty groups omitted, the 23:50 case, a future timestamp, order inside a group); load, create, rename guard; `chat.updated` upsert and re-sort; `chat.deleted` clearing the selection; `setWorkdir` binding and clearing, the rejection's `reason` kept in `errorDetails`, and `chooseWorkdir` writing nothing at all when the dialog is cancelled; and S5.10's `setGoal` (the whole object, `null` to remove, the refusal's reason kept), `pickDeliverable` (converted, refused outside, nothing left behind on cancel), `pickMaterials` (the ones inside kept and the stray reported, `[]` on cancel) and a deleted chat forgetting its goal status |
+| `src/renderer/src/lib/workdir.test.ts` | `folderName`: the last segment, trailing separators, Windows separators, the filesystem root, a bare name, a name with a dot or a space. S5.10 adds `relativeToWorkdir`: the conversion, a path outside the folder, a sibling whose name starts with the same characters, the folder itself, no folder bound, and both separators |
+| `src/renderer/src/components/chat/goal.test.ts` | `goalChipState` (S5.10): nothing without a goal, the kind for `discussion` and `codebase` (including a stale `document` status arriving for one), the file name and path for a `document`, openable **only** once delivered, and not delivered while the query has not answered |
+| `src/renderer/src/stores/chats.test.ts` (S5.12) | `loadGoalStatus` keeping the **same object** when the answer has not changed, and writing a new one the moment `delivered` really flips |
+| `src/renderer/src/lib/onboarding.test.ts` | `onboardingState` (S7.5): the first step of an empty installation, staying hidden while the settings row is still loading, hidden after Skip, hidden once a chat has a member, **still visible** with a provider saved, each of the five steps becoming current in turn, a local preset passing the credential step with an empty field, the models step needing a *stored* provider rather than a full draft, and a user who added a provider in Settings never being asked for one. Plus `credentialReady` over the sign-in states and a whitespace-only key |
+| `src/renderer/src/stores/chats.test.ts` (S7.5) | `create(['agent-1'])` sending `memberAgentIds` and `create()` still sending `{}` |
+| `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker` (S5.6): the enabled case, each of the three refusals, a blank `workdir`, and the order the rules are applied in when more than one is broken |
+| `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` and every `ValidationReason` resolving to distinct real copy; `validationReasonOf` narrowing a known reason and ignoring everything else; `translateFailure` preferring a reason only under `validation` |
 | `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
 | `src/renderer/src/stores/usage.test.ts` | Client-side aggregation: the total moving on `message.updated`, the per-agent split, a local provider costing nothing, an unknown model reporting no cost, and the page-vs-whole-transcript fallback to the backend |
 | `src/main/db/chats.test.ts` (`describe('search')`) | Title and message-text matches, one hit per chat, non-text parts ignored, `%` / `_` escaped, blank query, ordering and the user scope |
@@ -229,9 +426,15 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/stores/messages.test.ts` | `applyDeltaToParts` (append, kind switch, first part, whole part, no mutation); created / delta / updated reduction; ignored deltas; page reversal; failed load as state |
 | `src/renderer/src/lib/reorder.test.ts` | The drag's index arithmetic in both directions, the no-op and the out-of-range cases |
 | `e2e/chat.spec.ts` | The whole feature against a real local model: create, send, stream, stop, second chat, restart |
+| `e2e/onboarding.spec.ts` | S7.5's acceptance sentence: an empty `userData` reaching a streamed reply **through the card alone** — preset, model typed in, provider saved, template agent, first chat, one reply — plus the card staying gone after a restart, Skip hiding it on its own installation across a restart, and Settings → About. Gated on a local Ollama like `chat.spec.ts` |
 | `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
+| `e2e/editor.spec.ts` | S5.7, offline and always run: a path in a message body becomes a chip in a chat bound to a folder and nothing outside it does, the chat's folder is what decides, and the Editor setting round-trips through a restart. Owned by [`editor`](../editor/implement.md) |
+| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client. S5.5 adds the acceptance sentence: a chat with no executor shows no card (offline, always runs) and — behind the same `qwen2.5:3b` guard `mcp.spec.ts` uses — an executor asked for a file raises the card, nothing is on disk while it waits, Allow writes the file, the card disappears and the diff block appears and opens onto a `diff` code block. S5.6 adds two more: offline, the hand-off button is enabled with a folder and an executor and carries `data-blocked` naming the rule when either is missing (with the backend refusing on the same rule); behind the guard, two participants and an executor hold a short discussion, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again with nothing typed |
 | `src/renderer/src/components/chat/tool-call.test.ts` | `previewToolArgs`, `countToolResults` over the shapes a tool actually returns, `describeToolCall`'s three states, and `collectToolCalls` pairing by id rather than by position |
-| `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp) and `buildTranscriptRows`' interleaving and key stability |
+| `src/renderer/src/components/chat/file-refs.test.ts` | S5.7's detector, owned by [`editor`](../editor/implement.md): what resolves inside the folder, what is refused (a URL, `1.2:3`, a Windows path, prose with a slash), and the punctuation stripping |
+| `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp), `buildTranscriptRows`' interleaving and key stability, and (S5.5) `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines` ignoring the `+++` / `---` headers and counting a concatenation of two patches, and `formatFileRef` with and without a line |
+| `src/renderer/src/stores/permissions.test.ts` | The permission store (S5.5): a request drawing a card, several ordered oldest first and split per chat, `reply` calling `permission.reply` without removing anything optimistically, `permission.resolved` dismissing the card for all four decisions including `aborted`, a stop clearing every open prompt, a `not_found` rejection dropping the stale card, a second answer while the first is in flight being ignored, and a deleted chat forgetting only its own |
+| `src/renderer/src/components/chat/permission-input.test.ts` | `describePermissionInput` (S5.5): a command line kept **verbatim** however long or oddly spaced, a write's path plus its capped content preview, an empty file still reading as a write, an edit's patch, and the fallback to raw JSON for an MCP tool and for arguments that are not the shape the schema promises |
 | `src/renderer/src/components/chat/mention-query.test.ts` | `extractMentionQuery`'s boundary rules, `filterMentionCandidates`' longest-first order, and both insertion helpers' spacing |
 | `src/renderer/src/components/chat/code-language.test.ts` | Every id, every alias, the first-word rule, and `null` for an unknown language |
 | `e2e/polish.spec.ts` | Against a real local model: the header and member-row token counts, an automatic title replacing `New chat`, and the search box filtering the list down to the chat with the distinctive word in it. Captures `test-results/shots/polish.png` |
@@ -265,9 +468,49 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   Adding one is a row in `SHIKI_LANGUAGE` and a loader in `lib/highlighter.ts`.
 - **The Copy button does not report failure.** `navigator.clipboard` is either
   available or it is not, and a red message on a copy button is noise.
+- **The permission card is not a modal**, so a user can switch chats with a
+  prompt open. The card is per chat and comes back when that chat is reopened;
+  nothing warns the user that another chat is waiting on them. A count on the
+  chat-list row is the obvious fix and is not in S5.5.
+- **A `file-ref` chip opens the file** since S5.7, and the chips a user actually
+  sees come from the path **detector** over the body text: nothing produces a
+  `FileRefPart` yet, so the stored-part rendering is still waiting for the step
+  that emits them. See [`editor`](../editor/context.md).
 - **Tool cards are unexercised by a real tool.** The parts are rendered and
   unit-tested against fixtures, and S3.1 produces the first real ones: a
   `tool-call` part now also carries `serverId` / `serverName`, which is what the
   card's `serverName · toolName` line reads.
 - **`chats.members.list` is one call per chat** on load. See the trade-off table
   in `context.md`.
+- **A goal's `materials` are recorded, validated and listed here; what is done
+  with them is S5.11's** — they are inlined in every member's prompt up to a
+  quarter of that model's context window, and named by path beyond it
+  ([`agent-turn`](../agent-turn/implement.md)). Two consequences for this
+  feature: the panel gives no indication of how much of a list will fit, and a
+  material deleted after it was saved is dropped from the prompt silently, while
+  the panel still lists it.
+- **"Delivered" is polled, not watched.** `chats.goalStatus` runs when a chat is
+  opened, on every `chat.updated` for it, at every round boundary and at the end
+  of a run (S5.12), so a deliverable written by something that is not this app is
+  noticed at the next such moment rather than immediately. A filesystem watcher
+  is deliberately not in Phase 5.
+- **The chip only flips for the chat that is open.** The query is asked for
+  `selectedId`, so a hand-off finishing in a chat the user is not looking at
+  leaves that chat's chip stale until they open it — which is the same moment it
+  would have been asked anyway.
+- **The Goal block's two dialogs are not driven end to end.** They are native
+  modals, like the folder picker, so `e2e/executor.spec.ts` writes the goal
+  through the backend client and asserts what the UI does with it. The
+  conversion those buttons perform is unit-tested instead
+  (`relativeToWorkdir`, and the two store actions).
+- **`relativeToWorkdir` compares paths exactly.** Both strings come from one
+  dialog rooted at the folder, so a case-insensitive volume cannot make them
+  differ — but a path assembled some other way, on such a volume, with different
+  case, would be refused as outside.
+- **The one-executor rule is enforced on membership only.** Promoting an agent
+  to `executor` while it is already in a chat that has one is not refused; see
+  the known gap in `backend.md`.
+- **A refused `workdir` prints in the left column**, with every other chats-store
+  failure, rather than under the row the user clicked. The sentence names the
+  reason, so it reads correctly there — but it is further from the control than
+  it could be.

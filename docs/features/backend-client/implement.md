@@ -46,8 +46,8 @@ i18n `key` and `params` instead of a sentence.
 ### Events
 
 `BackendEvent` is one union covering message lifecycle, chat changes, presence,
-run progress, the reserved permission prompt, and `system.test` (the S1.3
-acceptance probe). `BackendEventType` is its `type` tag and
+run progress, the executor's permission prompt and its resolution (S5.4), and
+`system.test` (the S1.3 acceptance probe). `BackendEventType` is its `type` tag and
 `EventOf<'message.delta'>` narrows to a single member.
 
 ### Method names as data
@@ -204,33 +204,42 @@ Naming conventions the whole app follows:
 | `settings.update` | `{ patch }` | `AppSettings` | Implemented in S1.3; shallow merge, `timeouts` merges per field, unknown keys rejected |
 | `presence.list` | `{ chatId }` | `AgentPresence[]` | S2.4; every member of the chat, in member order |
 | `presence.retry` | `{ chatId, agentId }` | `AgentPresence` | S2.4; probes the agent's provider once. A failed probe resolves, it does not reject |
-| `providers.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Provider[]` / `Provider` / `Provider` / `Provider` / `void` | Omitting `apiKey` in a patch keeps the stored key; `''` clears it |
+| `providers.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Provider[]` / `Provider` / `Provider` / `Provider` / `void` | Omitting `apiKey` in a patch keeps the stored key; `''` clears it. Every returned record carries S7.6's runtime `keyState` (`ok` / `unreadable` / `none`), which is filled by the handler and is **not** a column |
 | `providers.fetchModels` | `{ provider: ProviderRef }` | `string[]` | `ProviderRef` is `{ id }` or `{ draft }`, so an unsaved form can fetch |
 | `providers.testConnection` | `{ provider: ProviderRef }` | `ConnectionTestResult` | Result object, not a rejection: a failed test is a normal outcome |
+| `providers.authStatus` / `login` / `logout` | `{ type: 'anthropic' \| 'google' }` | `ProviderAuthStatus` | S5.3, widened by S5.13. The status carries the account and whatever label that vendor gives it (organisation and workspace for `ant`, the quota project for `gcloud`) plus the expiry — **never a token**. `authStatus` never rejects for either state the panel exists to show, because "not installed" and "signed out" are states; `login` and `logout` reject `ant_missing` / `gcloud_missing` when there is no CLI to run |
+| `providers.setQuotaProject` | `{ project }` | `ProviderAuthStatus` | S5.13, Google only. Runs `gcloud auth application-default set-quota-project` and answers with the new status; rejects `gcloud_no_project` when the CLI refuses the id |
 | `agents.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Agent[]` / `Agent` / `Agent` / `Agent` / `void` | |
 | `mcp.list` / `create` / `update` / `delete` | — / `{ input }` / `{ id, patch }` / `{ id }` | `McpServer[]` / `McpServer` / `McpServer` / `void` | |
 | `mcp.testConnection` | `{ id }` | `McpConnectionTestResult` | Success also returns `toolNames` |
-| `system.pickFolder` | — | `string \| null` | **S3.2**; the one method implemented in `src/main/ipc/` because it needs a window. `null` means the user cancelled, which is not an error |
+| `system.pickFolder` | — | `string \| null` | **S3.2**; the first of the methods implemented in `src/main/ipc/` because they need a window. `null` means the user cancelled, which is not an error |
+| `system.pickSavePath` | `{ defaultDir? }` | `string \| null` | **S5.10**; the native **save** dialog, for a `document` goal's deliverable. The file need not exist, so nothing is checked here; `null` is a cancelled dialog |
+| `system.pickPaths` | `{ defaultDir? }` | `string[]` | **S5.10**; files and folders, multi-select, for a goal's materials. Cancelling resolves `[]`, because a caller appending to a list treats that and "picked nothing" the same |
+| `system.applyTheme` | `{ theme }` | `void` | **S5.8**. A notification, not a write — the setting is stored by `settings.update` — so it carries no state and its caller ignores a rejection. `validation` for a theme outside `THEME_SETTINGS` |
+| `system.openInEditor` | `{ path, line?, chatId? }` | `void` | **S5.7**; the one that needs a window only for *some* settings — a `vscode://` URL does, a custom command line does not. `validation` with `editor_path_not_absolute` / `editor_path_outside_workdir`; owned by [`editor`](../editor/implement.md) |
 | `skills.list` | — | `{ skills: SkillMeta[]; warnings: SkillWarning[] }` | S3.2. The warnings name folders that look like a skill and could not be used |
 | `skills.import` | `{ sourcePath, overwrite? }` | `SkillMeta` | S3.2; refuses an existing folder name unless `overwrite` |
 | `skills.read` / `skills.delete` | `{ name }` | `SkillDetail` / `void` | **Added in S3.2** |
 | `memory.list` / `read` / `write` | `{ agentId }` / `{ agentId, path }` / `{ agentId, path, content }` | `MemoryEntry[]` / `{ path, content }` / `MemoryEntry` | S3.3. `path` is relative to the agent's memory directory; `MEMORY.md` is the index |
 | `memory.delete` / `memory.search` | `{ agentId, path }` / `{ agentId, query }` | `void` / `MemorySearchHit[]` | **Added in S3.3** |
 | `chats.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Chat[]` / `Chat` / `Chat` / `Chat` / `void` | `chats.create` takes a partial input; defaults come from `DEFAULT_CHAT_SETTINGS` |
+| `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | **S5.10**. Whether the `document` goal's deliverable is on disk, and where. A query rather than a field on `Chat`, because it is a fact about the filesystem; a chat with no document goal answers `{ deliverable: null, delivered: false }` rather than rejecting |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` | **Added in S1.7**: the contract had a setter but no getter, and both chat columns read the membership |
 | `chats.members.set` | `{ chatId, agentIds }` | `ChatMember[]` | Replaces the whole list; array order becomes `position` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is an exclusive message-id cursor |
 | `chat.send` | `{ chatId, text, mentions? }` | `Message` | Resolves with the stored user message; agent output arrives as events |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent when nothing is running |
+| `chat.handoff` | `{ chatId, intent? }` | `Message` | S5.6, S5.12. Stores the hand-off message and starts the implement + review run; resolves as soon as it is scheduled, like `chat.send`. `intent` is `'implement'` (the default) or `'deliver'` — one method with an argument rather than two, because they differ in one paragraph of briefing and one notice key. Rejects `validation` with `handoff_no_workdir` / `handoff_no_executor` / `handoff_no_deliverable` / `handoff_run_active` in `details` |
 
 As of **S3.3 every declared method is implemented.** The stub mechanism stays —
 `buildHandlers()` still fills any gap with
 `{ code: 'internal', message: 'Not implemented yet: <method> (see docs/STEPS.md)' }`,
 and `handlers.test.ts` asserts the builder directly rather than through a method
 that happens to be missing — so the next method added to `BackendApi` before its
-step lands still rejects with a pointer instead of crashing. The one method that
-rejects in the Electron-free layer *by design* is `system.pickFolder`; see
-[`backend.md`](./backend.md).
+step lands still rejects with a pointer instead of crashing. The two methods that
+reject in the Electron-free layer *by design* are the three `pick*` dialogs and
+`system.applyTheme`, and `system.openInEditor` joins them for two of its three
+editor settings; see [`backend.md`](./backend.md).
 
 | Event | Payload | Emitted when |
 |---|---|---|
@@ -243,14 +252,15 @@ rejects in the Electron-free layer *by design* is `system.pickFolder`; see
 | `run.started` | `{ chatId, round }` | A user message starts a run |
 | `run.round` | `{ chatId, round, speakers }` | A round begins, with its speaker ids in order |
 | `run.finished` | `{ chatId, reason }` | The run ends: `completed` / `stopped` / `max-rounds` / `error` |
-| `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | Reserved for the executor's confirmation prompt; nothing emits it yet |
+| `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | A gated executor or `sideEffects` MCP tool is about to run and the turn is suspended (S5.4) |
+| `permission.resolved` | `{ requestId, chatId, decision }` — a `PermissionDecision` or `'aborted'` | That prompt ended, however it ended. Exactly one per `permission.requested`, so a card can be dismissed without knowing why (S5.4) |
 | `system.test` | `{ payload }` | `system.emitTestEvent` was called — the only event emitted as of S1.3 |
 
 ## Tests
 
 | File | Covers |
 |---|---|
-| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list, has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
+| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus` to it), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
 | `src/main/events/bus.test.ts` | Delivery order, payload identity, unsubscribe (twice is harmless), a throwing listener being logged without stopping the others, a listener added during delivery not receiving the in-flight event |
 | `src/main/secrets.test.ts` | Insecure store round trip including empty, long and non-ASCII values; the `plain:` marker; `isAvailable()` false; exactly one warning |
 | `src/main/app-context.test.ts` | The context opens a real temporary database, defaults to `LOCAL_USER_ID`, binds the repositories to the injected secret store, and `close()` is idempotent. From S3.2 it is also given `userDataDir`, from which `skillsDir()` / `memoryDir()` and `ctx.memory` are derived |
@@ -268,10 +278,13 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   implemented handlers check their own payload and reject with
   `code: 'validation'`; zod arrives with the first domain that needs a real
   schema.
-- **`system.pickFolder` is the one method that is not transport-agnostic.** It
-  is declared here, stubbed in the handler layer and implemented in
-  `src/main/ipc/dialogs.ts`; a server build has to answer it some other way (an
-  upload, or a path field). Everything else moves across untouched.
+- **`system.pickFolder`, `system.applyTheme` and (conditionally)
+  `system.openInEditor` are the methods that are not transport-agnostic.** Both are declared here, stubbed in the handler
+  layer and implemented in `src/main/ipc/` (`dialogs.ts`, `theme.ts`); a server
+  build has to answer the first some other way (an upload, or a path field) and
+  simply leaves the second rejecting — a browser tab has no window chrome to
+  tint, and the page itself is themed by `data-theme` either way. Everything
+  else moves across untouched.
 - **No backpressure or replay.** Events are fire-and-forget and go to every open
   window. A renderer that was not listening during a run recovers by calling
   `messages.list`, not by replaying events.

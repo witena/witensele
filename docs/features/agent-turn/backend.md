@@ -4,25 +4,64 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends; from S5.11 `workspaceWorkdir` (the read-only rule), `buildTurnPrompt` (the prompt plus `materialsOmitted`) and the read-only branch of `collectAgentTools`; and from S5.12 `TurnStage` (the `handoff` intent and `reviewing`) and `deliveredRef`, which appends the deliverable's `FileRefPart` after the diffs |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]`. From S4.2 it also caps each replayed `tool-result` at `MAX_TOOL_RESULT_CHARS` (4 KB) and strips a trailing `[PASS]` from a reply that had real content |
 | `src/main/agents/context-budget.ts` | `estimateTokens` and `fitHistory`: the character-count estimate and the drop-oldest-first budget (S4.2). Pure; no database, no `AppContext` |
+| `src/main/agents/materials.ts` | `buildMaterialsSection`: the goal's materials as a prompt section, inside a quarter of the model's window, with the rest named by path (S5.11). Reads the files it is pointed at through `executor/paths.ts`; no database, no `AppContext` |
 | `src/main/agents/title.ts` | `sanitizeTitle`, `fallbackTitle` and `generateChatTitle` — the automatic chat title (S4.3). `ChatRunner` is what calls it; see [`orchestration`](../orchestration/backend.md) |
 | `src/shared/pass.ts` | `PASS_TOKEN`, `isPassOnly` and `stripTrailingPass`: shared, because the status decision here and the rendering in the transcript have to read the identical rule |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
-| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3) |
+| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3) and the `Goal of this chat` section (S5.10) |
 | `src/main/agents/briefing.zh-CN.ts` | The Chinese wording, same rules in the same order. **The only `.ts` file in the repository that may contain Chinese** — see below |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, documented under [`chats`](../chats/backend.md) |
 
 None of them imports electron. `agent-turn.ts` reaches the outside world only
-through `ctx.repos`, `ctx.events`, `ctx.mcp`, `ctx.memory`, `ctx.userDataDir` and
-the injected model factory — all of them injected, which is what lets a turn with
-skills and memory be driven from vitest against a temporary directory.
+through `ctx.repos`, `ctx.events`, `ctx.mcp`, `ctx.memory`, `ctx.permissions`,
+`ctx.userDataDir` and the injected model factory — all of them injected, which is
+what lets a turn with skills, memory and an executor's tools be driven from
+vitest against a temporary directory.
 
 The prompt sections and the built-in tools themselves live with their features:
-`skills/tools.ts` ([`../skills/backend.md`](../skills/backend.md)) and
-`memory/tools.ts` ([`../memory/backend.md`](../memory/backend.md)). This file
-decides the **order** of the sections and **which** tools an agent gets.
+`skills/tools.ts` ([`../skills/backend.md`](../skills/backend.md)),
+`memory/tools.ts` ([`../memory/backend.md`](../memory/backend.md)) and
+`executor/tools.ts` ([`../executor/backend.md`](../executor/backend.md)). This
+file decides the **order** of the sections and **which** tools an agent gets.
+
+`buildTurnPrompt(ctx, chat, agent, members, stage?)` is the assembler since
+S5.11 and returns `{ text, materialsOmitted }`; `buildSystemPrompt` is its
+`text`, which is what every caller that only wants the prompt uses. It takes the
+chat since S5.4, because the executor section names the folder — and since S5.10 for a
+second reason: `chat.goal` reaches `buildGroupBriefing`, so **every** member is
+briefed with what the chat is for, executor or not.
+
+`stage` is S5.12's shape for what used to be a bare `handoff` boolean, and it
+carries the two things a *round* can be:
+
+| Field | Set by | Effect on the prompt |
+|---|---|---|
+| `handoff: HandoffIntent \| null` | `ChatRunner`, for the executor of the implement round only | `buildExecutorSection` appends `HANDOFF_BRIEFING` or `DELIVER_BRIEFING`, plus `goalHandoffLine` |
+| `reviewing: boolean` | `ChatRunner`, for every speaker of the review round | `buildGroupBriefing` appends the review block, after the goal |
+| `readGit` | The tests | Replaces the one `gitInfo` probe (see below) |
+
+`collectAgentTools(ctx, chat, agent, { signal, toolTimeoutMs, members })` takes
+the member list for the same reason the prompt does: it is how the chat's
+executor is picked deterministically. Since S5.10 `buildExecutorSection` takes
+the goal as well, and appends `goalHandoffLine` to the hand-off suffix — the
+deliverable to write, or the change to make, and since S5.12 the branch it is
+being made on.
+
+That branch is why `buildTurnPrompt` runs `gitInfo` itself, once, and hands the
+result to **both** the executor section and `buildWorkspaceSection`. Two probes
+for one prompt would be two `spawnSync` calls on a large repository and a chance
+for the two halves of the same prompt to name two different branches.
+
+S5.11 adds the second attachment rule, `workspaceWorkdir(chat)`, which asks only
+whether the chat has a folder: an agent that is not the chat's executor gets the
+four tools in `READ_ONLY_EXECUTOR_TOOLS` and the `Workspace` section, and never
+anything that writes. Both sections it adds — `Workspace` between the executor
+section and the skills, `Materials` last — are built inside `buildTurnPrompt`, so
+the prompt and the tool set are decided by the same two functions and cannot
+disagree.
 
 ## Database
 
@@ -57,6 +96,8 @@ None. This feature is called by `ChatRunner`, never by the transport.
 | `message.delta` | `{ delta: { kind: 'part', part } }` | A `tool-call` or `tool-result` part was appended (S3.1) |
 | `message.created` | the `agentSkipped` notice | The turn ended on the supervisor's hard timeout |
 | `message.created` | the `toolsUnsupported` notice | The provider rejected the tools and the turn was retried without them — once per chat per agent (S3.1) |
+| `permission.requested` / `permission.resolved` | see [`executor`](../executor/backend.md) | A gated tool suspends inside a turn and is released. Emitted by `ctx.permissions`, not by this file, but they are part of a turn's observable event stream |
+| `message.delta` with a `diff` part | `{ chatId, messageId, delta: { kind: 'part', part } }` | After the stream ends, one per file the turn wrote (S5.5). The rules — only the write tools, only successful calls, grouped by path in call order — are in [`executor`](../executor/backend.md), "Diff parts" |
 
 ## External dependencies
 
@@ -113,7 +154,10 @@ Pitfalls, each one hit while writing this step:
   request open; the loop always runs to completion or to an abort.
 - `maxOutputTokens` and `temperature` are spread in only when the agent sets
   them, because `exactOptionalPropertyTypes` forbids passing an explicit
-  `undefined`.
+  `undefined`. Since S5.9 the agent form no longer writes either, so the common
+  case is that **neither** option reaches the call and the provider's own
+  defaults decide the sampling; an agent saved before S5.9 still carries its
+  values and they still reach `streamText` unchanged.
 
 ### The group briefing, and why Chinese lives in a `.ts` file
 

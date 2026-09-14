@@ -63,19 +63,34 @@
  *   asked instead of timing out once per round. A round that has nobody left to
  *   ask finishes `completed` with the `allOffline` notice rather than in silence.
  *
- * - **Two things are announced by the runner rather than by the turn** (S4.2,
- *   S4.3), because both are facts about a *run* and `AgentTurn` does not know one
- *   is happening: the `contextTruncated` notice, stored once per run per agent
- *   from the `droppedMessages` each turn reports, and the automatic title, which
- *   replaces `New chat` once the run has produced one finished agent reply. See
- *   `#noticeTruncation` and `#maybeTitle`.
+ * - **"Hand to executor" is two scheduled rounds, not a special mode** (S5.6).
+ *   `handoff()` stores an ordinary user message carrying the `handoff` notice
+ *   key and mentioning the executor, then the loop schedules the executor alone
+ *   — whatever the chat's `mode` says, because one member writes and the rest
+ *   read (PLAN.md) — and after it exactly one review round with everybody else.
+ *   From there the ordinary `@` mechanics resume, so a reviewer that writes
+ *   `@Hands` starts another executor round and `maxAutoRounds` caps the chain
+ *   exactly as it does for a typed message. Since S5.12 the call carries an
+ *   `intent` — `implement` or `deliver` — which changes the notice it stores and
+ *   the paragraph the executor's briefing gains, and nothing else; and the
+ *   review round tells its speakers that is what they are doing, so they judge
+ *   the diff against the chat's goal instead of guessing why they were woken.
+ *
+ * - **Three things are announced by the runner rather than by the turn** (S4.2,
+ *   S4.3, S5.11), because each is a fact about a *run* and `AgentTurn` does not
+ *   know one is happening: the `contextTruncated` notice, stored once per run per
+ *   agent from the `droppedMessages` each turn reports; the `materialsTruncated`
+ *   notice, stored once per **chat** from the `materialsOmitted` each turn
+ *   reports; and the automatic title, which replaces `New chat` once the run has
+ *   produced one finished agent reply. See `#noticeTruncation`,
+ *   `#noticeMaterials` and `#maybeTitle`.
  *
  * No electron here (CLAUDE.md rule #5): the runner takes an `AppContext` and
  * reaches the outside world only through `ctx.repos` and `ctx.events`.
  */
 import type { BackendEvent, RunFinishReason } from '@shared/events'
 import { parseMentions } from '@shared/mentions'
-import type { Agent, Chat, Message } from '@shared/types'
+import { HANDOFF_INTENTS, type Agent, type Chat, type HandoffIntent, type Message } from '@shared/types'
 import type { AppContext } from '../app-context'
 import {
   createModelFromRegistry,
@@ -94,7 +109,9 @@ import { validation } from '../errors'
 import {
   EMPTY_PLAN,
   mergePlans,
+  planFromHandoff,
   planFromReplies,
+  planFromReview,
   planFromUserMessages,
   reachedRoundLimit,
   type RoundPlan
@@ -107,6 +124,46 @@ export const NOTICE_RUN_FAILED = 'runFailed'
 export const NOTICE_ALL_OFFLINE = 'allOffline'
 /** Stored once per run per agent when `fitHistory` had to drop messages (S4.2). */
 export const NOTICE_CONTEXT_TRUNCATED = 'contextTruncated'
+/** Stored once per chat when the goal's materials did not fit a turn's prompt (S5.11). */
+export const NOTICE_MATERIALS_TRUNCATED = 'materialsTruncated'
+/**
+ * The key on the **user** message "Hand to executor" writes (S5.6).
+ *
+ * A notice part rather than a sentence for the usual reason (CLAUDE.md rule #4),
+ * and on a `user` message rather than a `system` one because the click *is* the
+ * user speaking: it is what the executor is replying to, it carries the mention
+ * that schedules the turn, and `history.ts` renders it into every later prompt
+ * as the request it was.
+ */
+export const NOTICE_HANDOFF = 'handoff'
+/**
+ * The same message for `intent: 'deliver'` — the "Write the deliverable" action
+ * (S5.12).
+ *
+ * A key of its own rather than a parameter on `handoff`, because the sentence
+ * the user reads is a different sentence and not the same one with a word
+ * swapped: one says "implement what the group decided", the other names a file.
+ * It carries the deliverable's **relative** path, which is what the goal stores
+ * and what the header chip shows — an absolute path in a transcript is the
+ * user's home directory printed into every later prompt.
+ */
+export const NOTICE_HANDOFF_DELIVER = 'handoffDeliver'
+
+/**
+ * Which round of a hand-off `#runRound` is running, if it is one (S5.6, S5.12).
+ *
+ * One object rather than three parameters because the three are one fact: a
+ * round is the executor's, or the review of it, or neither, and a call that
+ * could say both would be a state that does not exist.
+ */
+interface HandoffStage {
+  /** The executor being handed the work this round, or `null`. */
+  implementing: string | null
+  /** What it is being handed; only read when `implementing` is set. */
+  intent: HandoffIntent
+  /** True in the round after that one, for everybody speaking in it. */
+  reviewing: boolean
+}
 
 /** One turn that is in flight right now. Read by the tests and by S2.4. */
 export interface ActiveTurn {
@@ -185,6 +242,27 @@ export class ChatRunner {
    * beginning any more.
    */
   #truncationNoticed = new Set<string>()
+  /**
+   * Whether this chat has already been told that its materials did not all fit.
+   *
+   * Per **chat**, not per run: the materials are a property of the goal and they
+   * do not change between rounds or between runs, so the second sentence would
+   * say exactly what the first one said. The flag only short-circuits the
+   * database check below — the transcript itself is the durable record, which is
+   * what makes the rule survive a restart.
+   */
+  #materialsNoticed = false
+  /**
+   * The hand-off a `handoff()` call scheduled, until `#loop` picks it up: which
+   * executor, and which of the two things it is being asked for (S5.12).
+   *
+   * A field rather than a message on `#pending`, because the two rounds a
+   * hand-off schedules are not what a user message schedules: the executor
+   * speaks alone whatever the chat's `mode` says, and the round after it is a
+   * review by everybody else. Consumed at the top of the run, so the restart in
+   * `#start`'s `finally` cannot replay it.
+   */
+  #handoff: { agentId: string; intent: HandoffIntent } | null = null
 
   constructor(ctx: AppContext, chatId: string, options: ChatRunnerOptions = {}) {
     this.#ctx = ctx
@@ -257,6 +335,114 @@ export class ChatRunner {
     return message
   }
 
+  /**
+   * "Hand to executor" (S5.6): the discussion is over, one member implements it,
+   * and the others review what it did.
+   *
+   * PLAN.md's workflow — *discuss → hand to executor → it implements the group's
+   * conclusion → posts a diff summary back to the chat → other agents review →
+   * iterate* — is three decisions, and all three are made here rather than in the
+   * renderer:
+   *
+   * - **Who the executor is** is `executorWorkdir`'s rule, the same one that
+   *   decides which agent the file tools were attached to: the first `executor`
+   *   in `position` order. A renderer that named the executor itself could name
+   *   the one that has no tools (S5.2's known gap).
+   * - **What is stored** is an ordinary `user` message whose single part is the
+   *   `handoff` notice key and whose mention set is the executor alone. Nothing
+   *   about the transcript is special-cased afterwards: the turn reads it like
+   *   any other request, the UI renders it like any other message, and a user
+   *   scrolling back sees what was asked.
+   * - **What runs** is one round for the executor and then exactly one review
+   *   round, scheduled by `#loop` from `#handoffTo`. After those, the ordinary
+   *   `@` mechanics resume — a reviewer that writes `@Hands` starts another
+   *   executor round — and `maxAutoRounds` caps that chain as it always does.
+   *
+   * `intent` (S5.12) is the fourth decision and the only one the renderer makes:
+   * `'implement'` — the default, and S5.6 unchanged — or `'deliver'`, the "Write
+   * the deliverable" action, which stores a different notice and briefs the
+   * executor to write the `document` goal's file instead of implementing the
+   * conclusion. Everything else on this path is identical, which is why it is an
+   * argument rather than a second method: the executor is chosen by the same
+   * rule, the same message shape is stored, and the same two rounds run.
+   *
+   * Refused with `validation` in the four states the buttons are disabled in, so
+   * a stale window, a second client or a folder deleted since the last render
+   * meets the same rule the UI shows.
+   */
+  async handoff(input: { chatId: string; intent?: HandoffIntent }): Promise<Message> {
+    if (input.chatId !== this.chatId) {
+      throw validation('chat.handoff reached the runner of a different chat', {
+        expected: this.chatId,
+        received: input.chatId
+      })
+    }
+    const intent: HandoffIntent = input.intent ?? 'implement'
+    if (!HANDOFF_INTENTS.includes(intent)) {
+      throw validation(`Unknown hand-off intent: ${String(input.intent)}`)
+    }
+    // `not_found` for a chat that is gone, before anything else is read.
+    const chat = this.#ctx.repos.chats.get(this.chatId, this.#ctx.userId)
+    if (typeof chat.workdir !== 'string' || chat.workdir.trim().length === 0) {
+      throw validation('this chat is not bound to a working directory', {
+        reason: 'handoff_no_workdir'
+      })
+    }
+
+    const members = this.#members(chat)
+    // The same tie-break `executorWorkdir` applies, and for the same reason: the
+    // agent that gets the turn has to be the agent that has the tools.
+    const executor = members.find((member) => member.role === 'executor')
+    if (!executor) {
+      throw validation('this chat has no executor member', { reason: 'handoff_no_executor' })
+    }
+
+    // Before the run check, so the two configuration mistakes are both reported
+    // while they can be fixed and the transient one is reported last: a user
+    // whose chat has no deliverable *and* is running should be told about the
+    // deliverable, which is the one that will still be true in a minute.
+    const deliverable = chat.goal?.kind === 'document' ? chat.goal.deliverable : undefined
+    if (intent === 'deliver' && (typeof deliverable !== 'string' || deliverable.length === 0)) {
+      throw validation('this chat has no deliverable to write', {
+        reason: 'handoff_no_deliverable'
+      })
+    }
+
+    // A hand-off is not a message that can join a running chain: it schedules
+    // two rounds of its own, and merging them into a round somebody else's
+    // mentions already filled would make "the executor speaks alone" untrue.
+    if (this.#running !== null) {
+      throw validation('a run is already active in this chat', { reason: 'handoff_run_active' })
+    }
+
+    const notice =
+      intent === 'deliver'
+        ? {
+            type: 'system-notice' as const,
+            key: NOTICE_HANDOFF_DELIVER,
+            params: { agent: executor.name, path: deliverable as string }
+          }
+        : { type: 'system-notice' as const, key: NOTICE_HANDOFF, params: { agent: executor.name } }
+
+    const message = this.#ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'user',
+        senderId: this.#ctx.userId,
+        parts: [notice],
+        status: 'done',
+        round: 0,
+        mentions: [executor.id]
+      },
+      this.#ctx.userId
+    )
+    this.#emit({ type: 'message.created', message })
+
+    this.#handoff = { agentId: executor.id, intent }
+    this.#start()
+    return message
+  }
+
   /** Aborts the active run and drops anything pending. Idempotent. */
   stop(): void {
     this.#pending = []
@@ -311,6 +497,15 @@ export class ChatRunner {
     let reason: RunFinishReason = 'completed'
     /** Rounds run since the last user message; what `maxAutoRounds` caps. */
     let roundsSinceUser = 0
+    /**
+     * The two rounds a hand-off owns, consumed one per iteration (S5.6).
+     *
+     * Taken here rather than read per round so `#start`'s restart — the sliver
+     * where a message lands as the loop ends — cannot hand the same chat to its
+     * executor twice.
+     */
+    const handoff = this.#takeHandoff()
+    let handoffStage: 'executor' | 'review' | 'done' = handoff ? 'executor' : 'done'
     /** What the round that just ended scheduled. */
     let carried: RoundPlan = EMPTY_PLAN
     let chat: Chat | null = null
@@ -350,6 +545,29 @@ export class ChatRunner {
         }
         carried = EMPTY_PLAN
 
+        // The hand-off's own two rounds, in order, merged with whatever else was
+        // scheduled rather than replacing it: a user message that landed while
+        // the executor was working is still answered in the review round.
+        //
+        // `implementing` is the agent that is being handed the work *this*
+        // round; it is what extends its briefing (see `#runRound`), and it is
+        // null in the review round and in every ordinary run. `reviewing` is the
+        // other half of the same fact (S5.12): in the round after it, everybody
+        // who speaks is reading what the executor changed, and is told so.
+        let implementing: string | null = null
+        let reviewing = false
+        if (handoff !== null && handoffStage !== 'done') {
+          if (handoffStage === 'executor') {
+            implementing = handoff.agentId
+            plan = mergePlans(memberIds, planFromHandoff(memberIds, handoff.agentId), plan)
+            handoffStage = 'review'
+          } else {
+            reviewing = true
+            plan = mergePlans(memberIds, planFromReview(memberIds, handoff.agentId), plan)
+            handoffStage = 'done'
+          }
+        }
+
         if (plan.speakers.length === 0) {
           // `mention-only` with nothing mentioned: say so, or the silence looks
           // like a failure.
@@ -388,8 +606,13 @@ export class ChatRunner {
         const speakers = plan.speakers
           .map((id) => members.find((member) => member.id === id))
           .filter((member): member is Agent => member !== undefined)
-        const outcomes = await this.#runRound(chat, members, speakers, plan, controller.signal)
+        const outcomes = await this.#runRound(chat, members, speakers, plan, controller.signal, {
+          implementing,
+          intent: handoff?.intent ?? 'implement',
+          reviewing
+        })
         this.#noticeTruncation(chat, members, outcomes)
+        this.#noticeMaterials(chat, members, outcomes)
 
         if (controller.signal.aborted || outcomes.some((outcome) => outcome.result.aborted)) {
           reason = 'stopped'
@@ -447,7 +670,9 @@ export class ChatRunner {
     members: Agent[],
     speakers: Agent[],
     plan: RoundPlan,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Which round of a hand-off this is, if it is one (S5.6, S5.12). */
+    stage: HandoffStage = { implementing: null, intent: 'implement', reviewing: false }
   ): Promise<TurnOutcome[]> {
     const round = this.#round
     const parallel = chat.settings.speaking === 'parallel'
@@ -467,6 +692,14 @@ export class ChatRunner {
           round,
           signal,
           ...(plan.inReplyTo[agent.id] ? { inReplyTo: plan.inReplyTo[agent.id] } : {}),
+          // Only the agent the work was handed to, and only in that round: the
+          // extra briefing tells it to implement the conclusion above — or to
+          // write the deliverable (S5.12) — rather than re-open the discussion,
+          // which is wrong advice for a reviewer.
+          ...(stage.implementing === agent.id ? { handoff: stage.intent } : {}),
+          // …and the round after that one, where everybody who speaks is reading
+          // what it changed and is told to judge it against the chat's goal.
+          ...(stage.reviewing ? { reviewing: true } : {}),
           ...(snapshot ? { history: snapshot } : {}),
           ...(this.#options.createModel ? { createModel: this.#options.createModel } : {}),
           // The turn's own events pass straight through; the wrapper only picks
@@ -516,7 +749,8 @@ export class ChatRunner {
             message: { mentions: [] } as unknown as Message,
             status: 'error',
             aborted: signal.aborted,
-            droppedMessages: 0
+            droppedMessages: 0,
+            materialsOmitted: 0
           }
         })
       }
@@ -543,6 +777,44 @@ export class ChatRunner {
         dropped: outcome.result.droppedMessages
       })
     }
+  }
+
+  /**
+   * Tells the user, once per chat, that the goal's materials did not all fit
+   * (S5.11).
+   *
+   * The grain is the difference between this and `#noticeTruncation`. A truncated
+   * history is a fact about one long conversation and is worth repeating in a new
+   * run, because what the agent can no longer see keeps changing; materials that
+   * are too large are a fact about the *goal*, identical in every round of every
+   * run until the user changes the list. So the transcript is consulted rather
+   * than a per-run set: an existing notice anywhere in this chat is the end of it,
+   * which also means a relaunch does not repeat the sentence.
+   *
+   * The first agent that had to trim is the one named. Members can have different
+   * context windows and therefore different budgets, and naming each of them in
+   * turn would be the same complaint written four ways.
+   */
+  #noticeMaterials(chat: Chat, members: Agent[], outcomes: TurnOutcome[]): void {
+    if (this.#materialsNoticed) return
+    const trimmed = outcomes.find((outcome) => outcome.result.materialsOmitted > 0)
+    if (!trimmed) return
+    this.#materialsNoticed = true
+    if (this.#alreadyNoticed(NOTICE_MATERIALS_TRUNCATED)) return
+    const agent = members.find((member) => member.id === trimmed.agentId)
+    this.#notice(chat, NOTICE_MATERIALS_TRUNCATED, {
+      agent: agent?.name ?? trimmed.agentId,
+      omitted: trimmed.result.materialsOmitted
+    })
+  }
+
+  /** True when this chat's transcript already carries a notice with that key. */
+  #alreadyNoticed(key: string): boolean {
+    return this.#ctx.repos.messages
+      .listForContext(this.chatId, this.#ctx.userId)
+      .some((message) =>
+        message.parts.some((part) => part.type === 'system-notice' && part.key === key)
+      )
   }
 
   /**
@@ -613,6 +885,13 @@ export class ChatRunner {
     } catch (error) {
       console.debug(`[witena] could not store a title for ${this.chatId}: ${describe(error)}`)
     }
+  }
+
+  /** Takes the pending hand-off, if there is one, and forgets it. */
+  #takeHandoff(): { agentId: string; intent: HandoffIntent } | null {
+    const handoff = this.#handoff
+    this.#handoff = null
+    return handoff
   }
 
   /** Empties the pending list and returns what was in it. */
@@ -719,6 +998,11 @@ export class ChatRunnerRegistry {
 
   send(input: ChatSendInput): Promise<Message> {
     return this.for(input.chatId).send(input)
+  }
+
+  /** Hands a chat to its executor and starts the implement/review run (S5.6). */
+  handoff(input: { chatId: string; intent?: HandoffIntent }): Promise<Message> {
+    return this.for(input.chatId).handoff(input)
   }
 
   /** Aborts a chat's run. Safe when nothing is running or the chat is unknown. */

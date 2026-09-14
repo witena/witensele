@@ -14,16 +14,19 @@
 | `src/shared/index.ts` | Single import point for the three above plus `version.ts` |
 | `src/main/events/bus.ts` | `EventBus` + `createEventBus()`. Services emit here; a listener that throws is logged and skipped so one broken window cannot abort a run |
 | `src/main/secrets.ts` | `SecretStore` + `createInsecureSecretStore()`, the base64 `plain:` fallback used when the OS has no key storage |
-| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `close`) and `createAppContext({ databasePath, secrets, userId?, events?, fetchImpl?, runner?, supervisor? })`. `close()` stops every run and the supervisor's loops before closing the database |
+| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `mcp`, `memory`, `permissions`, `anthropicCli`, `close`) and `createAppContext({ databasePath, userDataDir, secrets, userId?, events?, fetchImpl?, anthropicCli?, runner?, supervisor?, mcp? })`. `close()` stops every run, the supervisor's loops and every pending permission prompt before closing the database |
 | `src/main/handlers/types.ts` | `HandlerMap` — `BackendApi` with an `AppContext` threaded in front of each method's arguments — and `HandlerModule` (`Partial<HandlerMap>`) |
-| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, and the `system.pickFolder` **stub** (see "The one electron exception") |
+| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, the `system.pickFolder` / `system.pickSavePath` / `system.pickPaths` / `system.applyTheme` **stubs**, and `system.openInEditor`, which is half implemented here (see "The electron exceptions") |
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
 | `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
+| `src/main/handlers/permissions.ts` | `permission.reply` — two validations over `ctx.permissions` (S5.4) |
 | `src/main/ipc-protocol.ts` | `IPC_INVOKE`, `IPC_EVENT`, `InvokeResponse`, `toBackendError`. Shared with preload, imports no electron |
 | `src/main/ipc/register.ts` | `registerIpc(ipcMain, ctx, handlers)` and `forwardEvents(events, getWindows)` |
 | `src/main/ipc/secret-store.ts` | `createElectronSecretStore()` over `safeStorage` |
-| `src/main/ipc/dialogs.ts` | `system.pickFolder` over `dialog.showOpenDialog`, layered over the stub inside `registerIpc` (S3.2) |
+| `src/main/ipc/dialogs.ts` | The three native dialogs, layered over their stubs inside `registerIpc`: `system.pickFolder` over `dialog.showOpenDialog` (S3.2), and S5.10's `system.pickSavePath` over `dialog.showSaveDialog` and `system.pickPaths` over a multi-select `showOpenDialog` |
+| `src/main/ipc/theme.ts` | `system.applyTheme` over `nativeTheme.themeSource`, layered the same way (S5.8) |
+| `src/main/ipc/editor.ts` | `system.openInEditor`'s URL branch over `shell.openExternal`, layered the same way (S5.7). Owned by [`editor`](../editor/backend.md) |
 | `src/main/index.ts` | Applies `WITENA_USER_DATA`, builds the secret store and the context on ready, registers IPC and event forwarding **before** the first window, closes the context on `before-quit` |
 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld('witena', { invoke, onEvent })` |
 | `src/preload/index.d.ts` | Ambient `Window['witena']` for the renderer project |
@@ -39,7 +42,7 @@ which must print nothing. Moving the backend to a Node server means replacing
 `src/main/ipc/`, `src/main/index.ts` and the preload bridge — the handlers, the
 context, the bus and the repositories go across untouched.
 
-### The one electron exception: `system.pickFolder`
+### The electron exceptions: the three `pick*` dialogs, `system.applyTheme` and half of `system.openInEditor`
 
 Every other `BackendApi` method is a pure function of storage, the filesystem and
 the network, so every other handler lives in `src/main/handlers/`. A **native
@@ -47,18 +50,58 @@ folder picker** is not: it belongs to the window system, there is no injectable
 stand-in for it, and the alternative — a text field the user pastes an absolute
 path into — would be a worse product for the sake of a rule.
 
+S5.8 added the second, and the shape of the exception is what made it cheap to
+add: the renderer paints the page, but the traffic lights of
+`titleBarStyle: 'hiddenInset'` and the native dialogs are drawn by the platform,
+and only `nativeTheme.themeSource` tells it which way. The difference from
+`pickFolder` is that nothing depends on the answer — the page is already themed
+by `data-theme` — so it resolves `void` and the store swallows its rejection.
+
 So the exception is made deliberately and kept honest rather than waived:
 
 | Layer | What it does |
 |---|---|
-| `shared/backend.ts` | Declares `'system.pickFolder': () => Promise<string \| null>`, with the reason in its doc comment |
-| `handlers/system.ts` | Implements it as a **rejection** (`internal`, `PICK_FOLDER_UNAVAILABLE`), so `buildHandlers()` stays total and a unit test gets a clear answer instead of a crash |
-| `ipc/dialogs.ts` | The real one, in the directory that may already import electron |
-| `ipc/register.ts` | `const table = { ...handlers, ...dialogHandlers }` — the override exists only in this transport |
+| `shared/backend.ts` | Declares `'system.pickFolder': () => Promise<string \| null>` and `'system.applyTheme': (input: { theme: ThemeSetting }) => Promise<void>`, with the reason in each doc comment |
+| `handlers/system.ts` | Implements both as **rejections** (`internal`, `PICK_FOLDER_UNAVAILABLE` / `APPLY_THEME_UNAVAILABLE`), so `buildHandlers()` stays total and a unit test gets a clear answer instead of a crash |
+| `ipc/dialogs.ts`, `ipc/theme.ts` | The real ones, in the directory that may already import electron |
+| `ipc/register.ts` | `const table = { ...handlers, ...dialogHandlers, ...themeHandlers }` — the overrides exist only in this transport |
+
+S5.10 added two more of the **same** shape as the first, which is the cheapest
+kind of exception to add and the reason the shape was worth keeping honest:
+`system.pickSavePath` (`dialog.showSaveDialog`, for the deliverable of a
+`document` goal — the file need not exist, which is what a save dialog is for)
+and `system.pickPaths` (files **and** folders, multi-select, for a goal's
+materials). Neither widens `pickFolder` with a mode flag, because a caller would
+then have to read the flag to know whether it gets a string, a `null` or an
+array. Cancelling resolves `null` for the save dialog and an **empty array** for
+the multi-select, because a caller appending to a list treats "cancelled" and
+"picked nothing" identically.
+
+Every one of the three returns **absolute** paths — the platform knows no other
+kind — and none of them can be confined to a directory on any platform this runs
+on. So converting to the relative paths a `ChatGoal` stores, and refusing a pick
+that fell outside the chat's folder, is the **renderer's** job
+(`lib/workdir.ts`'s `relativeToWorkdir`); see
+[`chats`](../chats/frontend.md).
+
+S5.7 added the conditionally window-system one. `system.openInEditor` opens a `vscode://` or `cursor://` URL —
+`shell.openExternal`, electron — *or* runs a command line — `node:child_process`,
+not electron — and which of the two is a stored setting. So the shape had to bend
+one notch: the whole decision lives in an Electron-free module
+(`src/main/editor/open.ts`) that returns a **plan**, `handlers/system.ts` runs the
+command plan and rejects the URL plan, and `ipc/editor.ts` runs both. A server
+build with a custom editor configured therefore works unchanged, which no
+previous exception could say.
+
+| Layer | What `system.openInEditor` adds |
+|---|---|
+| `editor/open.ts` | `planOpenInEditor(ctx, input)` — confinement, the URL, the command and its quoting. No electron |
+| `handlers/system.ts` | Runs a `command` plan; rejects a `url` plan with `OPEN_IN_EDITOR_UNAVAILABLE` |
+| `ipc/editor.ts` | Runs a `command` plan, and hands a `url` plan to `shell.openExternal` |
 
 A server build layers nothing, and the rejection is the truth: a browser cannot
-hand a backend a path either. The grep above still prints nothing, because
-`dialogs.ts` is inside `src/main/ipc/`.
+hand a backend a path either, and a tab has no title bar to tint. The grep above
+still prints nothing, because all three files are inside `src/main/ipc/`.
 
 Cancelling the dialog resolves **`null`**, which is not an error — the renderer
 must not show a failure for a user who changed their mind.
@@ -99,6 +142,8 @@ Two channels carry everything:
 | `system.emitTestEvent` | `{ payload: string }` | `void` | `validation` when `payload` is not a string |
 | `settings.get` | none | `AppSettings` | — |
 | `settings.update` | `{ patch: AppSettingsPatch }` | `AppSettings` | `validation` when the patch is not an object or carries a key other than `language`, `theme`, `timeouts` |
+| `permission.reply` | `{ requestId, decision }` | `void` | `validation` for a blank id or a decision outside `PERMISSION_DECISIONS`; `not_found` when nothing is waiting on that id (S5.4 — see [`executor`](../executor/backend.md)) |
+| `chat.handoff` | `{ chatId, intent? }` | `Message` | `validation` for a blank id or an unknown `intent`, and `validation` carrying a `ValidationReason` (`handoff_no_workdir`, `handoff_no_executor`, `handoff_no_deliverable`, `handoff_run_active`) from the runner; `not_found` for an unknown chat (S5.6, S5.12 — see [`orchestration`](../orchestration/backend.md)) |
 | every other `BACKEND_METHODS` entry | see `implement.md` | see `implement.md` | `internal`: `Not implemented yet: <method> (see docs/STEPS.md)` |
 
 Failure rules the transport enforces:
@@ -118,6 +163,12 @@ Failure rules the transport enforces:
 - `providers.testConnection` and `mcp.testConnection` **resolve** with an
   `ok: false` result instead of rejecting: a failed connection test is an expected
   answer, not an exception. *(Planned with S1.6 / S3.1.)*
+- `providers.authStatus` resolves with a *state* for both of the conditions the
+  sign-in panel exists to show — `not-installed` and `signed-out` — for the same
+  reason (S5.3, and for `gcloud` since S5.13). The four `ant_*` / `gcloud_*`
+  codes are kept for the calls that had to make
+  the machine do something and could not: `providers.login`, `providers.logout`,
+  and saving a provider that authenticates with an account.
 
 ## Events emitted
 
@@ -189,7 +240,10 @@ temporary directory. `SkillMeta.path` and `MemoryEntry.path` are declared in
 | electron `ipcMain.handle` | The request/response channel | A rejected handler promise reaches the renderer as an `Error` with only the message. Hence the `InvokeResponse` envelope — never reject out of the handler |
 | electron `webContents.send` | The push channel | Throws on a destroyed window; `forwardEvents` checks `isDestroyed()` first |
 | electron `safeStorage` | Encrypting provider API keys | `isEncryptionAvailable()` can be false on a machine with no keyring, and returns a `Buffer` that must be base64-encoded for a `text` column |
-| electron `dialog.showOpenDialog` | `system.pickFolder` (S3.2) | Resolves `{ canceled, filePaths }` rather than rejecting when the user cancels, so the handler answers `null`. `properties: ['openDirectory']` only — no multi-select, no file creation |
+| electron `dialog.showOpenDialog` | `system.pickFolder` (S3.2) and `system.pickPaths` (S5.10) | Resolves `{ canceled, filePaths }` rather than rejecting when the user cancels, so the handlers answer `null` / `[]`. `pickFolder` passes `['openDirectory']` only; `pickPaths` passes `['openFile', 'openDirectory', 'multiSelections']`, which on macOS is one panel that accepts either |
+| electron `dialog.showSaveDialog` | `system.pickSavePath` (S5.10) | Resolves `{ canceled, filePath }` — singular, and a **string**, not an array. `properties: ['createDirectory', 'showOverwriteConfirmation']`: a deliverable is routinely the first file in a folder that does not exist yet, which is also why nothing about the answer is checked against the filesystem |
+| electron `shell.openExternal` | `system.openInEditor`'s URL branch (S5.7) | It resolves when the platform *accepted* the URL, and on macOS rejects when nothing is registered for the scheme — which is a real answer ("VS Code is not installed") and is why the renderer paints a failed chip from it |
+| electron `nativeTheme` | `system.applyTheme` (S5.8), and `backgroundColor` in `src/main/index.ts` | `themeSource` accepts `'system'` verbatim and is process-wide, so it also covers windows opened later and needs no listener of ours. `shouldUseDarkColors` is the *resolved* answer and is only read where a colour is needed now |
 | electron structured clone | Payload serialization | It preserves `undefined` and does **not** preserve prototypes. Do not rely on either — a future HTTP transport goes through `JSON.stringify`, which drops `undefined` keys, so treat an absent optional field and an explicit `undefined` as the same thing |
 | `@playwright/test` (`_electron`) | The end-to-end harness | Needs the built output in `out/`, launches with `args: ['.']` from the repository root, and needs no downloaded browsers. Config lives in `playwright.config.ts` with `testDir: 'e2e'`; vitest excludes `e2e/` so `npm test` stays unit-only |
 | TypeScript 5.9 | The contract itself | `exactOptionalPropertyTypes` is on: `baseUrl?: string` will not accept an explicit `undefined`, so build the object without the key. `verbatimModuleSyntax` is on: type-only imports must say `import type`. A `.d.ts` next to an `.ts` of the same name is excluded from the project that contains the `.ts`, which is why `src/preload/index.d.ts` restates the envelope instead of importing it |

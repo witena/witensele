@@ -43,10 +43,16 @@ function fakeBackend(initial: AppSettings = DEFAULT_APP_SETTINGS): {
         stored = {
           ...stored,
           ...(patch.language !== undefined ? { language: patch.language } : {}),
+          ...(patch.theme !== undefined ? { theme: patch.theme } : {}),
+          ...(patch.onboardingDismissed !== undefined
+            ? { onboardingDismissed: patch.onboardingDismissed }
+            : {}),
+          editor: { ...stored.editor, ...patch.editor },
           timeouts: { ...stored.timeouts, ...patch.timeouts }
         }
         return stored
       }
+      if (method === 'system.applyTheme') return undefined
       throw new Error(`unexpected method ${method}`)
     }) as BackendClient['invoke'],
     subscribe: () => () => {}
@@ -64,6 +70,26 @@ function fakeBackend(initial: AppSettings = DEFAULT_APP_SETTINGS): {
 
 function resetStore(): void {
   useSettingsStore.setState({ settings: null, status: 'idle', error: undefined })
+}
+
+/**
+ * `setTheme` stamps `data-theme` on the document element, so the store needs one
+ * — in plain Node, where there is none. Two globals are enough (S5.8); see
+ * `lib/theme.test.ts` for the same fakes driving the theme module itself.
+ */
+function stubDocument(): () => string | undefined {
+  const attributes = new Map<string, string>()
+  vi.stubGlobal('document', {
+    documentElement: {
+      setAttribute: (name: string, value: string) => attributes.set(name, value)
+    }
+  })
+  vi.stubGlobal('matchMedia', () => ({
+    matches: true,
+    addEventListener: () => {},
+    removeEventListener: () => {}
+  }))
+  return () => attributes.get('data-theme')
 }
 
 beforeEach(() => {
@@ -155,5 +181,142 @@ describe('setLanguage', () => {
     // The click must not wait for a round trip to highlight the new choice.
     expect(useSettingsStore.getState().settings?.language).toBe('zh-CN')
     await pending
+  })
+})
+
+describe('setTheme', () => {
+  it('sends the patch, stores the answer and repaints the window', async () => {
+    const theme = stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setTheme('light')
+
+    expect(backend.calls.map((call) => call.method)).toContain('settings.update')
+    expect(backend.stored().theme).toBe('light')
+    expect(useSettingsStore.getState().settings?.theme).toBe('light')
+    expect(theme()).toBe('light')
+  })
+
+  it('tells the main process, which owns the window chrome', async () => {
+    stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setTheme('dark')
+
+    expect(backend.calls.at(-1)).toEqual({
+      method: 'system.applyTheme',
+      input: { theme: 'dark' }
+    })
+  })
+
+  it('resolves "system" through the machine without storing the resolved value', async () => {
+    // The fake `matchMedia` reports dark, so the *painted* theme is dark while
+    // the *setting* stays `system` — the same split as `language`.
+    const theme = stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setTheme('system')
+
+    expect(backend.stored().theme).toBe('system')
+    expect(theme()).toBe('dark')
+  })
+
+  it('repaints before the backend answers', async () => {
+    const theme = stubDocument()
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    const pending = useSettingsStore.getState().setTheme('light')
+    // A click that repaints the whole window must not wait for a round trip.
+    expect(theme()).toBe('light')
+    expect(useSettingsStore.getState().settings?.theme).toBe('light')
+    await pending
+  })
+})
+
+describe('settings store (editor)', () => {
+  it('starts on VS Code with the default command template', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await useSettingsStore.getState().load()
+
+    expect(useSettingsStore.getState().settings?.editor).toEqual(DEFAULT_APP_SETTINGS.editor)
+  })
+
+  it('writes the kind without clearing the command, and the other way round', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setEditor({ kind: 'custom' })
+    expect(backend.stored().editor).toEqual({
+      kind: 'custom',
+      command: DEFAULT_APP_SETTINGS.editor.command
+    })
+
+    await useSettingsStore.getState().setEditor({ command: 'subl {path}:{line}' })
+    expect(backend.stored().editor).toEqual({ kind: 'custom', command: 'subl {path}:{line}' })
+  })
+
+  it('sends the patch as a partial of editor, never the whole settings object', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    await useSettingsStore.getState().setEditor({ kind: 'cursor' })
+
+    expect(backend.calls.at(-1)).toEqual({
+      method: 'settings.update',
+      input: { patch: { editor: { kind: 'cursor' } } }
+    })
+  })
+
+  it('rejects rather than swallowing a refused write', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+    backend.fail(new Error('settings.update: editor.command must be a non-empty string'))
+
+    // `pages/settings/editor.ts` is what turns this into the store's `error`.
+    await expect(useSettingsStore.getState().setEditor({ command: ' ' })).rejects.toThrow()
+  })
+})
+
+describe('settings store (first run)', () => {
+  it('starts with the first-run card not skipped', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await useSettingsStore.getState().load()
+
+    expect(useSettingsStore.getState().settings?.onboardingDismissed).toBe(false)
+  })
+
+  it('persists Skip as one boolean, and hides the card before the round trip', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    await useSettingsStore.getState().load()
+
+    const pending = useSettingsStore.getState().dismissOnboarding()
+    // The card has to disappear under the cursor, not a round trip later.
+    expect(useSettingsStore.getState().settings?.onboardingDismissed).toBe(true)
+    await pending
+
+    expect(backend.calls.at(-1)).toEqual({
+      method: 'settings.update',
+      input: { patch: { onboardingDismissed: true } }
+    })
+    expect(backend.stored().onboardingDismissed).toBe(true)
+    // Nothing else in the row was touched on the way.
+    expect(backend.stored().language).toBe(DEFAULT_APP_SETTINGS.language)
+    expect(backend.stored().editor).toEqual(DEFAULT_APP_SETTINGS.editor)
   })
 })

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod } from '@shared/backend'
 import type { Agent, AgentInput } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
+import { AGENT_TEMPLATES, getAgentTemplate, type AgentTemplate } from '@shared/agent-templates'
 import { resetBackend, setBackend } from '../lib/backend-provider'
 import {
   draftFromAgent,
@@ -110,18 +111,13 @@ describe('validateDraft', () => {
     expect(errors).toEqual({ providerId: 'required', modelId: 'required' })
   })
 
-  it('reports parameters outside the range the backend accepts', () => {
-    expect(validateDraft(validDraft({ params: { temperature: 2.1 } }), [], null).temperature).toBe(
-      'range'
-    )
-    expect(validateDraft(validDraft({ params: { temperature: -1 } }), [], null).temperature).toBe(
-      'range'
-    )
-    expect(validateDraft(validDraft({ params: { maxTokens: 0 } }), [], null).maxTokens).toBe('range')
-    expect(validateDraft(validDraft({ params: { maxTokens: 1.5 } }), [], null).maxTokens).toBe(
-      'range'
-    )
-    // Absent is not invalid: both fields mean "the provider's default".
+  it('says nothing about the sampling parameters the form no longer offers', () => {
+    // S5.9 removed the two controls. A value can still reach a draft — from a
+    // record saved before the change — and it is not the form's to complain
+    // about; `agents.create` / `agents.update` still bound both fields for any
+    // caller that sets them.
+    expect(validateDraft(validDraft({ params: { temperature: 2.1 } }), [], null)).toEqual({})
+    expect(validateDraft(validDraft({ params: { maxTokens: 0 } }), [], null)).toEqual({})
     expect(validateDraft(validDraft({ params: {} }), [], null)).toEqual({})
   })
 })
@@ -238,11 +234,28 @@ describe('agents store', () => {
     setBackend(fakeBackend().client)
 
     useAgentsStore.getState().startCreate()
-    useAgentsStore.getState().patchParams({ temperature: 0.7 })
-    expect(useAgentsStore.getState().draft?.params).toEqual({ temperature: 0.7 })
+    useAgentsStore.getState().patchParams({ reasoning: true })
+    expect(useAgentsStore.getState().draft?.params).toEqual({ reasoning: true })
 
-    useAgentsStore.getState().patchParams({ temperature: undefined })
+    useAgentsStore.getState().patchParams({ reasoning: undefined })
     expect(Object.keys(useAgentsStore.getState().draft?.params ?? {})).toEqual([])
+  })
+
+  it('carries a stored temperature through the draft untouched', () => {
+    // The form cannot write one any more, but editing an agent that has one must
+    // not drop it: the draft is what `saveDraft` sends back.
+    const { client } = fakeBackend()
+    setBackend(client)
+
+    const tuned = agentFrom('a1', validDraft({ params: { temperature: 0.2, maxTokens: 64 } }))
+    useAgentsStore.setState({ agents: [tuned], status: 'ready' })
+    useAgentsStore.getState().startEdit('a1')
+
+    expect(useAgentsStore.getState().draft?.params).toEqual({ temperature: 0.2, maxTokens: 64 })
+
+    useAgentsStore.getState().patchDraft({ description: 'edited' })
+    expect(useAgentsStore.getState().draft?.params).toEqual({ temperature: 0.2, maxTokens: 64 })
+    expect(useAgentsStore.getState().dirty).toBe(true)
   })
 
   it('picks an avatar colour pair from the palette', () => {
@@ -294,5 +307,80 @@ describe('agents store', () => {
 
     expect(useAgentsStore.getState().agents[0]?.name).toBe('Ada')
     expect(draftFromAgent(ada).skillNames).not.toBe(ada.skillNames)
+  })
+})
+
+describe('createFromTemplate (S7.5)', () => {
+  const template = (id: string): AgentTemplate => {
+    const found = getAgentTemplate(id)
+    if (!found) throw new Error(`missing template: ${id}`)
+    return found
+  }
+
+  it('writes the template verbatim, on the model its hints prefer', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    const assistant = template('assistant')
+
+    const created = await useAgentsStore
+      .getState()
+      .createFromTemplate(assistant, 'p1', ['deepseek-r1:7b', 'qwen2.5:3b-instruct'])
+
+    expect(created?.name).toBe(assistant.name)
+    expect(created?.systemPrompt).toBe(assistant.systemPrompt)
+    expect(created?.description).toBe(assistant.description)
+    expect(created?.providerId).toBe('p1')
+    // The hint wins over the provider's own order.
+    expect(created?.modelId).toBe('qwen2.5:3b-instruct')
+    expect(created?.role).toBe('participant')
+    expect(created?.avatar.text).toBe('A')
+    expect(useAgentsStore.getState().agents).toHaveLength(1)
+  })
+
+  it('leaves the editor closed, unlike every other way an agent is created', async () => {
+    setBackend(fakeBackend().client)
+
+    await useAgentsStore.getState().createFromTemplate(template('critic'), 'p1', ['x'])
+
+    const state = useAgentsStore.getState()
+    expect(state.mode).toBe('idle')
+    expect(state.draft).toBeNull()
+  })
+
+  it('does not write an agent that would have no model to speak through', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    expect(await useAgentsStore.getState().createFromTemplate(template('planner'), 'p1', [])).toBe(
+      null
+    )
+    expect(await useAgentsStore.getState().createFromTemplate(template('planner'), '', ['x'])).toBe(
+      null
+    )
+    expect(backend.calls).toEqual([])
+  })
+
+  it('renames rather than colliding when the template name is taken', async () => {
+    const assistant = template('assistant')
+    const backend = fakeBackend([agentFrom('a1', validDraft({ name: assistant.name }))])
+    setBackend(backend.client)
+    await useAgentsStore.getState().load()
+
+    const created = await useAgentsStore.getState().createFromTemplate(assistant, 'p1', ['x'])
+
+    // `agents.create` refuses a duplicate name, and a refusal on a first-run
+    // card explains nothing to the person reading it.
+    expect(created?.name).toBe(`${assistant.name} copy`)
+  })
+
+  it('gives each template a different avatar colour', async () => {
+    setBackend(fakeBackend().client)
+
+    for (const entry of AGENT_TEMPLATES) {
+      await useAgentsStore.getState().createFromTemplate(entry, 'p1', ['x'])
+    }
+
+    const colors = useAgentsStore.getState().agents.map((agent) => agent.avatar.color)
+    expect(new Set(colors).size).toBe(AGENT_TEMPLATES.length)
   })
 })

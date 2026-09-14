@@ -163,9 +163,22 @@ test('sends a message and streams one agent reply token by token', async () => {
   await expect(userMessages().first()).toContainText('Reply with the single word hello')
 
   // The agent's message is created empty and streaming, with a cursor on it.
+  // A warm Ollama answers a one-word prompt in well under a second, so the
+  // `streaming` state may already be over by the time the assertion runs: the
+  // message must exist as `streaming` or `done`, and the cursor is checked only
+  // while it is still streaming. What is asserted unconditionally is below.
   const reply = agentMessages().first()
-  await expect(reply).toHaveAttribute('data-status', 'streaming', { timeout: 30_000 })
-  await expect(reply.getByTestId('message-cursor')).toBeVisible()
+  await expect(reply).toHaveAttribute('data-status', /^(streaming|done)$/, { timeout: 30_000 })
+  // One polled predicate rather than "read the status, then assert the cursor":
+  // the model can finish between those two lines. Either the cursor is on the
+  // streaming message, or the message is already done and the cursor is gone.
+  await expect
+    .poll(async () => {
+      const status = await reply.getAttribute('data-status')
+      const cursors = await reply.getByTestId('message-cursor').count()
+      return (status === 'streaming' && cursors === 1) || (status === 'done' && cursors === 0)
+    })
+    .toBe(true)
 
   // …and then fills in. A cold Ollama loads the weights first, hence the budget.
   await expect(reply).toHaveAttribute('data-status', 'done', { timeout: COLD_START_MS })

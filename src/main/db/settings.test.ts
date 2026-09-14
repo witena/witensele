@@ -50,6 +50,20 @@ describe('db/repositories/settings', () => {
     })
   })
 
+  it('carries the first-run flag through a write, and defaults it for an old row', () => {
+    // S7.5 added `onboardingDismissed` with no migration: reads merge the stored
+    // object over the defaults, so a row written before it existed simply
+    // answers `false` — which is the row the test above inserts.
+    expect(database.repos.settings.get().onboardingDismissed).toBe(false)
+
+    expect(database.repos.settings.update({ onboardingDismissed: true }).onboardingDismissed).toBe(
+      true
+    )
+    expect(database.repos.settings.get().onboardingDismissed).toBe(true)
+    // A later write of something else must not take the flag back off.
+    expect(database.repos.settings.update({ language: 'en' }).onboardingDismissed).toBe(true)
+  })
+
   it('keeps one row per user', () => {
     database.repos.settings.update({ language: 'en' }, 'user-a')
     database.repos.settings.update({ language: 'zh-CN' }, 'user-b')

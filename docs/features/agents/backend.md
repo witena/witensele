@@ -8,6 +8,7 @@
 | `src/main/db/repositories/agents.ts` | Straight CRUD over the `agents` table (S1.2) |
 | `src/main/db/repositories/chats.ts` | `listChatIdsForAgent`, added in S2.1 so deletion and rename know which chats to announce |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, now reached only while the agents table is empty |
+| `src/shared/agent-templates.ts` | **S7.5.** The three first-run templates. Shared rather than main-only, and read by nothing in the main process: it is listed here because its `name` and `systemPrompt` are *stored content* subject to the same rules as `DEFAULT_AGENT_NAME` next to it — committed English, no `@` in a name, and a prompt short enough that the group briefing stays the explanation of the protocol |
 
 Nothing here imports electron (CLAUDE.md rule #5): the handlers take an
 `AppContext` and reach the world through `ctx.repos`, `ctx.events` and
@@ -34,7 +35,7 @@ what makes `agents.delete` remove memberships. That requires
 |---|---|
 | `agents.list` | Every agent of the user, oldest first |
 | `agents.get` | One agent; `not_found` for an unknown id |
-| `agents.create` | Validates the whole input, trims the name, inserts |
+| `agents.create` | Validates the whole input, trims the name, inserts. **S7.5 added no path around it**: an agent made from a template is this method with an input the renderer assembled, so the name rules, the provider check and the model check apply to a template exactly as to the form |
 | `agents.update` | `not_found` first, then validates only the fields the patch carries; emits `chat.updated` for every chat the agent is in |
 | `agents.delete` | Stops the run of every chat the agent is in, deletes the row, then emits `chat.updated` for those chats |
 
@@ -49,8 +50,14 @@ agent may keep its name):
 - `providerId`: a string, and `repos.providers.get` must find it (`not_found`).
 - `modelId`: non-empty after trimming.
 - `params.temperature`: finite and within `[0, 2]`; `params.maxTokens`: a positive
-  integer. Absent means "the provider's default" and is always valid.
-- `role`: `participant` or `executor`. The UI writes only the first.
+  integer. Absent means "the provider's default" and is always valid — and since
+  S5.9 that is what every agent created through the UI holds, because the form
+  dropped both controls. The checks stay because the handler is the authority for
+  any caller, and the fields stay on the record so an agent saved earlier keeps
+  the values it was given.
+- `role`: `participant` or `executor`. **Both are written by the UI from S5.2**;
+  the role decides whether `collectAgentTools` attaches a `sideEffects` MCP
+  server (S3.1), and whether S5.4 attaches the executor's own tools.
 - `memoryEnabled`: a boolean. From S3.3 it is what `agent-turn` reads to decide
   whether to attach `memory_save` / `memory_search` and inject the `MEMORY.md`
   index; turning it off leaves every file in place.
@@ -94,3 +101,11 @@ agents *through* a chat, which `chat.updated` already covers.
 - `ensureDefaultAgent` still throws `validation('no provider with models')` when
   the provider list is empty. That is now reachable only on a first run, because
   after S2.2 a chat is created without members unless the library is empty.
+- **"One executor per chat" is not checked here.** The rule is a property of a
+  chat's membership and lives in `chats.members.set` / `chats.create`
+  (`assertOneExecutor`, see [`../chats/backend.md`](../chats/backend.md)). The
+  consequence is a known gap: `agents.update` will happily promote a
+  `participant` that is already in a chat with an executor, which reaches the
+  forbidden state by another door. S5.4 must therefore pick a chat's executor
+  deterministically — the first `executor` in `position` order — rather than
+  assuming the set has exactly one.

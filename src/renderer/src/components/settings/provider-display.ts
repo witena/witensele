@@ -9,8 +9,13 @@
  * it lives in the store for this session and is deliberately never persisted, so
  * a restart shows "not tested" rather than a stale green dot.
  */
-import { providerRequiresApiKey } from '@shared/presets'
-import type { ConnectionTestResult, Provider, ProviderType } from '@shared/types'
+import { providerAuth, providerRequiresApiKey, supportsOAuth } from '@shared/presets'
+import type {
+  ConnectionTestResult,
+  Provider,
+  ProviderAuthStatus,
+  ProviderType
+} from '@shared/types'
 import type { StatusTone } from '../ui'
 
 /** What each adapter talks to when the record stores no base URL of its own. */
@@ -41,14 +46,18 @@ export function providerHost(provider: Pick<Provider, 'type' | 'baseUrl'>): stri
 }
 
 /**
- * The four states a card can be in.
+ * The five states a card can be in.
  *
  * `untested` is not in the artboard, which only draws the three outcomes of a
  * probe. It exists because the honest answer for a provider nobody has tested yet
  * is "we do not know", and painting it green would be a lie the user only
  * discovers in the middle of a chat.
+ *
+ * `signed-in` (S5.3) is what replaces the key indicator for a provider that
+ * authenticates with the user's account: "no key" would be true and completely
+ * misleading, because having no key is the *point* of that mode.
  */
-export type ProviderStatus = 'connected' | 'failed' | 'no-key' | 'untested'
+export type ProviderStatus = 'connected' | 'failed' | 'no-key' | 'signed-in' | 'untested'
 
 /** Combines the stored record with this session's probe result. */
 export function providerStatus(
@@ -56,8 +65,24 @@ export function providerStatus(
   result: ConnectionTestResult | undefined
 ): ProviderStatus {
   if (!provider.hasApiKey && providerRequiresApiKey(provider)) return 'no-key'
-  if (!result) return 'untested'
-  return result.ok ? 'connected' : 'failed'
+  // A probe outranks the badge: it is the stronger statement, and a provider
+  // that signs in can still fail for a model id or an expired login.
+  if (result) return result.ok ? 'connected' : 'failed'
+  if (providerAuth(provider) === 'oauth') return 'signed-in'
+  return 'untested'
+}
+
+/**
+ * Whether this provider's stored key cannot be read by this build (S7.6).
+ *
+ * A predicate rather than a comparison spelled out in three components, and a
+ * pure one so the rule is tested without a DOM — the same reason `authControl`
+ * lives here. `keyState` is absent on a provider that did not come from a
+ * `providers.*` answer (an editor draft, an older backend), and absent means
+ * "not determined", which must never render the notice.
+ */
+export function keyUnreadable(provider: Pick<Provider, 'keyState'> | undefined | null): boolean {
+  return provider?.keyState === 'unreadable'
 }
 
 /** Which `StatusPill` tone a status wears. Total over `ProviderStatus`. */
@@ -68,7 +93,56 @@ export function providerStatusTone(status: ProviderStatus): StatusTone {
     case 'failed':
       return 'warn'
     case 'no-key':
+    // Neutral rather than green on purpose, for the same reason `untested` is:
+    // the record says this provider signs in, which is not a claim that the
+    // login is still valid. Only a probe can say that.
+    case 'signed-in':
     case 'untested':
       return 'idle'
   }
+}
+
+/**
+ * Whether the editor shows the Authentication control, and whether it is live.
+ *
+ * Three outcomes rather than two, because "this provider will gain a sign-in
+ * later" and "this provider has no account to sign in to" are different
+ * statements: an `openai-compatible` endpoint is a URL somebody else operates,
+ * so it gets no control at all, while OpenAI — the one first-party type with no
+ * flow yet — gets a disabled one with a hint. Pure, so the rule is tested
+ * without rendering the editor.
+ */
+export interface AuthControlState {
+  shown: boolean
+  available: boolean
+}
+
+export function authControl(type: ProviderType): AuthControlState {
+  return { shown: type !== 'openai-compatible', available: supportsOAuth(type) }
+}
+
+/**
+ * Who the user is signed in as, in one string.
+ *
+ * The account email is the identity a person recognises; a profile without one
+ * falls back to whatever label the answering CLI did give — the Anthropic
+ * workspace or organisation, the Google project — so the line never reads
+ * "Signed in as ".
+ */
+export function signedInName(status: ProviderAuthStatus): string {
+  return (
+    status.account ?? status.workspaceName ?? status.organizationName ?? status.project ?? ''
+  )
+}
+
+/**
+ * `expiresAt` as a local date-time, or `''` when the CLI did not say.
+ *
+ * Formatted in the renderer rather than in the backend for the usual reason: the
+ * main process does not know the UI language, and a date it formatted would be
+ * frozen in whichever one was active when it was written.
+ */
+export function formatExpiry(expiresAt: number | undefined, locale: string): string {
+  if (expiresAt === undefined) return ''
+  return new Date(expiresAt).toLocaleString(locale)
 }

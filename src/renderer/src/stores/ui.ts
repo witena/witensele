@@ -25,6 +25,7 @@ export type SettingsSection =
   | 'timeouts'
   | 'appearance'
   | 'data'
+  | 'about'
   | 'developer'
 
 /** Rail order. The rail renders `chats` and `agents`; `settings` is pinned last. */
@@ -33,6 +34,8 @@ export const PAGES = ['chats', 'agents', 'settings'] as const satisfies readonly
 /**
  * Settings nav order. `developer` is last on purpose: it is the transport and
  * i18n smoke surface the end-to-end tests drive, not a user-facing feature.
+ * `about` (S7.5) sits directly above it — the version, the repository and the
+ * licences are the end of the list on every desktop app there is.
  */
 export const SETTINGS_SECTIONS = [
   'providers',
@@ -41,6 +44,7 @@ export const SETTINGS_SECTIONS = [
   'timeouts',
   'appearance',
   'data',
+  'about',
   'developer'
 ] as const satisfies readonly SettingsSection[]
 

@@ -4,12 +4,16 @@
 // later on (CLAUDE.md rule #5).
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
+import { resolveTheme, WINDOW_BACKGROUND } from '@shared/theme'
+import { DEFAULT_APP_SETTINGS, type ThemeSetting } from '@shared/types'
 import { APP_NAME } from '@shared/version'
 import { createAppContext, skillsDir, type AppContext } from './app-context'
 import { buildHandlers } from './handlers'
-import { createElectronSecretStore } from './ipc/secret-store'
+import { createSafeStorageStore } from './ipc/secret-store'
 import { forwardEvents, registerIpc } from './ipc/register'
+import { migrateProviderSecrets } from './providers/migrate-secrets'
+import { createFileKeySecretStore, SECRETS_KEY_FILE } from './secrets'
 import { seedSkills } from './skills/loader'
 
 const isDev = !app.isPackaged
@@ -89,7 +93,26 @@ function isExternalUrl(url: string): boolean {
   }
 }
 
+/**
+ * The appearance the next window should open in (S5.8).
+ *
+ * Read from the settings row rather than assumed, because `backgroundColor` is
+ * what the window paints **before the renderer exists**: getting it wrong is a
+ * dark flash on a light theme, which is the one frame every launch shows and
+ * nobody can style away afterwards. `'system'` is resolved here through
+ * `nativeTheme.shouldUseDarkColors` — the main process's answer to the renderer's
+ * `matchMedia` — using the same `resolveTheme` both sides share.
+ *
+ * Falls back to the default setting before the context exists, which only
+ * happens if the database could not be opened; a dark first frame is then the
+ * least of the problems.
+ */
+function currentThemeSetting(): ThemeSetting {
+  return context?.repos.settings.get().theme ?? DEFAULT_APP_SETTINGS.theme
+}
+
 function createWindow(): BrowserWindow {
+  const theme = resolveTheme(currentThemeSetting(), nativeTheme.shouldUseDarkColors)
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -97,7 +120,7 @@ function createWindow(): BrowserWindow {
     minHeight: 700,
     show: false,
     title: APP_NAME,
-    backgroundColor: '#171614',
+    backgroundColor: WINDOW_BACKGROUND[theme],
     autoHideMenuBar: true,
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: {
@@ -140,11 +163,40 @@ app.setName(APP_NAME)
 applyUserDataOverride()
 
 void app.whenReady().then(() => {
-  const secrets = createElectronSecretStore()
   const userDataDir = app.getPath('userData')
   const databasePath = join(userDataDir, DATABASE_FILE)
+
+  // S7.6: provider keys are encrypted with a key held in `userData`, not with a
+  // Keychain item the next unsigned rebuild would lose. `safeStorage` is still
+  // constructed — it reads the rows written before S7.6, and on a signed build
+  // (S7.3, `WITENA_SIGNED_BUILD`) it wraps the key file. This file is the only
+  // one allowed to know where either of them lives.
+  const legacySecrets = createSafeStorageStore()
+  if (!legacySecrets) {
+    console.warn('[witena] safeStorage reports no encryption backend on this machine')
+  }
+  const secrets = createFileKeySecretStore({
+    keyPath: join(userDataDir, SECRETS_KEY_FILE),
+    ...(legacySecrets ? { wrapper: legacySecrets } : {})
+  })
+
   context = createAppContext({ databasePath, userDataDir, secrets })
   console.log(`[witena] database: ${databasePath}`)
+
+  // Once per launch, and a no-op from the second one on: every key still stored
+  // in the pre-S7.6 format is read with the store that wrote it and re-encrypted
+  // with the file key. A row that cannot be read is left untouched and its id is
+  // reported to the UI as `keyState: 'unreadable'`.
+  const moved = migrateProviderSecrets(context, { legacy: legacySecrets })
+  if (moved.migrated.length > 0) {
+    console.log(`[witena] re-encrypted ${moved.migrated.length} provider key(s) with the file key`)
+  }
+  if (moved.unreadable.length > 0) {
+    console.warn(
+      `[witena] ${moved.unreadable.length} provider key(s) cannot be decrypted by this build; ` +
+        'they were left untouched and have to be pasted again'
+    )
+  }
 
   // First launch only: an empty library is filled with the skills shipped with
   // the build, so a new installation has something real to look at under
@@ -157,6 +209,13 @@ void app.whenReady().then(() => {
   // `invoke` in its first effect can never race the registration.
   registerIpc(ipcMain, context, buildHandlers())
   stopForwarding = forwardEvents(context.events, () => BrowserWindow.getAllWindows())
+
+  // The window chrome the renderer cannot paint — the traffic lights of
+  // `titleBarStyle: 'hiddenInset'` and the native dialogs — follows the stored
+  // setting from the first window on, not only after the user visits Settings.
+  // `themeSource` takes `'system'` verbatim, so following the machine keeps
+  // working with no listener of our own (see `src/main/ipc/theme.ts`).
+  nativeTheme.themeSource = currentThemeSetting()
 
   createWindow()
 

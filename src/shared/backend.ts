@@ -15,18 +15,22 @@
  * - Rejections carry a `BackendError`; the renderer switches on `code`.
  */
 import type { BackendEvent, BackendEventType, EventOf } from './events'
+import type { OAuthProviderType } from './presets'
 import type { ChatUsageSummary } from './usage'
 import type {
   Agent,
   AgentInput,
   AgentPresence,
+  ProviderAuthStatus,
   AppSettings,
   AppSettingsPatch,
   Chat,
   ChatCreateInput,
+  ChatGoalStatus,
   ChatMember,
   ChatPatch,
   ConnectionTestResult,
+  HandoffIntent,
   McpConnectionTestResult,
   McpServer,
   McpServerInput,
@@ -34,11 +38,13 @@ import type {
   MemoryEntry,
   MemorySearchHit,
   Message,
+  PermissionDecision,
   Provider,
   ProviderInput,
   SkillDetail,
   SkillMeta,
-  SkillWarning
+  SkillWarning,
+  ThemeSetting
 } from './types'
 
 /**
@@ -87,6 +93,76 @@ export interface BackendApi {
    * build implements it by rejecting, or by an upload dialog in the browser.
    */
   'system.pickFolder': () => Promise<string | null>
+  /**
+   * Opens the native **save** dialog and resolves with the chosen absolute path,
+   * or `null` when the user cancelled (S5.10).
+   *
+   * The fourth method whose implementation must import electron, and a sibling
+   * of `system.pickFolder` in every respect: it exists so the deliverable of a
+   * `document` goal can be picked in Finder instead of typed from memory. The
+   * file **need not exist** — that is the whole point of a save dialog — so
+   * nothing here checks the filesystem; the renderer converts the answer to a
+   * path relative to the chat's folder and `chats.update` validates it.
+   *
+   * `defaultDir` is where the dialog opens, normally the chat's `workdir`.
+   */
+  'system.pickSavePath': (input: { defaultDir?: string }) => Promise<string | null>
+  /**
+   * Opens the native open dialog for **files and folders, multi-select**, and
+   * resolves with the chosen absolute paths (S5.10).
+   *
+   * The fifth, and the last of the `pick*` family. `system.pickFolder` cannot
+   * serve here: a goal's materials are usually files, often several at once, and
+   * sometimes a folder. Cancelling resolves with an **empty array** rather than
+   * `null`, because "nothing was picked" and "the list is empty" are the same
+   * answer for a caller that is about to append.
+   */
+  'system.pickPaths': (input: { defaultDir?: string }) => Promise<string[]>
+  /**
+   * Tells the window system which appearance the app is showing (S5.8).
+   *
+   * The **second** method whose implementation must import electron, and for the
+   * same kind of reason as `system.pickFolder`: the renderer paints the page, but
+   * the title bar's traffic lights, the native dialogs and the window's own
+   * background are drawn by the platform, and only `nativeTheme.themeSource` can
+   * tell it which way to draw them. The setting itself is stored by
+   * `settings.update` like any other — this call carries no state, it is a
+   * notification, which is why it resolves `void` and why a failure is ignored by
+   * the caller. `handlers/system.ts` declares it and rejects; `src/main/ipc/theme.ts`
+   * is the real one, layered in by `registerIpc`. A server build leaves it
+   * rejecting: a browser tab has no window chrome to tint.
+   */
+  'system.applyTheme': (input: { theme: ThemeSetting }) => Promise<void>
+  /**
+   * Opens one file in the user's editor, at a line when one is known (S5.7).
+   *
+   * The **third** method whose implementation may need electron, and the first
+   * whose need is conditional. `AppSettings.editor` decides: `'vscode'` and
+   * `'cursor'` are URL schemes, and only `shell.openExternal` can hand a URL to
+   * the platform, so those two are implemented in `src/main/ipc/editor.ts`;
+   * `'custom'` is a command line, which `node:child_process` runs from the
+   * Electron-free handler. Both branches share one module
+   * (`src/main/editor/open.ts`) so the validation cannot differ between them.
+   *
+   * `path` must be **absolute**, and when `chatId` names a chat bound to a
+   * folder it must resolve inside that folder — the same confinement rule the
+   * executor's tools are held to (`src/main/executor/paths.ts`). A refusal
+   * carries `editor_path_not_absolute` or `editor_path_outside_workdir` as its
+   * `ValidationReason`. `chatId` is optional because the call is also reachable
+   * from surfaces that are not inside a chat; without it only the first rule
+   * applies.
+   *
+   * Resolves `void`: the platform does not report back whether the editor
+   * actually came to the front, and a caller that waited for that would wait
+   * forever.
+   */
+  'system.openInEditor': (input: {
+    path: string
+    /** 1-based, as every editor counts. Omitted means "the top of the file". */
+    line?: number
+    /** The chat whose `workdir` confines the path, when the call came from one. */
+    chatId?: string
+  }) => Promise<void>
 
   /* -- settings ----------------------------------------------------------- */
 
@@ -113,6 +189,41 @@ export interface BackendApi {
     provider: ProviderRef
     modelId?: string
   }) => Promise<ConnectionTestResult>
+  /**
+   * Whether the vendor's CLI is installed and logged in, and as whom (S5.3,
+   * extended to Google in S5.13).
+   *
+   * `type` names which login is being asked about — the panel is rendered for
+   * one provider type at a time, and `ant` and `gcloud` are independent facts
+   * about the machine. It is an argument rather than three more methods per
+   * vendor for the obvious reason: the question is the same question.
+   *
+   * Never rejects for either of the two states the panel exists to show — "not
+   * installed" and "signed out" are values, not failures — so the editor can
+   * render them without an error path.
+   */
+  'providers.authStatus': (input: { type: OAuthProviderType }) => Promise<ProviderAuthStatus>
+  /**
+   * Runs the vendor's login (`ant auth login`, `gcloud auth application-default
+   * login`), which opens the system browser itself, and resolves with the
+   * resulting status when the CLI exits. Rejects `ant_missing` / `gcloud_missing`
+   * when there is no binary to run.
+   */
+  'providers.login': (input: { type: OAuthProviderType }) => Promise<ProviderAuthStatus>
+  /** Signs the vendor's CLI out and resolves with the resulting status. */
+  'providers.logout': (input: { type: OAuthProviderType }) => Promise<ProviderAuthStatus>
+  /**
+   * Writes the Google Cloud quota project into the application-default
+   * credentials (`gcloud auth application-default set-quota-project`) and
+   * resolves with the new status (S5.13).
+   *
+   * Deliberately **not** `{ type }`-shaped like the three above: a quota project
+   * is a Google concept with no Anthropic counterpart, and a method that is
+   * meaningless for half of its own argument's values is worse than a method
+   * named after what it does. Rejects `gcloud_no_project` when the CLI refuses
+   * the id — usually because the ADC lacks `serviceusage.services.use` on it.
+   */
+  'providers.setQuotaProject': (input: { project: string }) => Promise<ProviderAuthStatus>
 
   /* -- agents ------------------------------------------------------------- */
 
@@ -204,6 +315,17 @@ export interface BackendApi {
    * "the user cleared the box".
    */
   'chats.search': (input: { query: string }) => Promise<string[]>
+  /**
+   * Whether this chat's `document` deliverable is on disk yet (S5.10).
+   *
+   * A query rather than a field on `Chat` because it is a fact about the
+   * **filesystem**: a stored column would be wrong the moment anything wrote,
+   * moved or deleted the file, and the renderer would be drawing a chip from a
+   * value nobody refreshed. A chat with no `document` goal answers
+   * `{ deliverable: null, delivered: false }` rather than rejecting — the header
+   * asks for every chat it shows.
+   */
+  'chats.goalStatus': (input: { chatId: string }) => Promise<ChatGoalStatus>
   /** The chat's members ordered by `position`. Read by the member panel. */
   'chats.members.list': (input: { chatId: string }) => Promise<ChatMember[]>
   /** Replaces the whole member list; array order becomes `ChatMember.position`. */
@@ -243,6 +365,22 @@ export interface BackendApi {
    */
   'messages.usageSummary': (input: { chatId: string }) => Promise<ChatUsageSummary>
 
+  /* -- executor permissions ----------------------------------------------- */
+
+  /**
+   * Answers one permission prompt (S5.4).
+   *
+   * `requestId` comes from a `permission.requested` event. The call resolves as
+   * soon as the waiting tool has been released; the tool's own result arrives in
+   * the transcript as usual. A `requestId` that is not pending — because the run
+   * was stopped, or because the same card was answered twice — rejects with
+   * `not_found`, which is the renderer's cue that the card is stale.
+   *
+   * `allowAlways` runs this call **and** remembers the chat + tool pair for the
+   * life of the process; see `PermissionDecision`.
+   */
+  'permission.reply': (input: { requestId: string; decision: PermissionDecision }) => Promise<void>
+
   /* -- running a chat ----------------------------------------------------- */
 
   /**
@@ -252,6 +390,28 @@ export interface BackendApi {
   'chat.send': (input: { chatId: string; text: string; mentions?: string[] }) => Promise<Message>
   /** Aborts the whole chain for this chat. Idempotent when nothing is running. */
   'chat.stop': (input: { chatId: string }) => Promise<void>
+  /**
+   * Hands the discussion to the chat's executor (S5.6).
+   *
+   * Persists a user message carrying the `notices.handoff` key and mentioning
+   * the executor, then runs the executor's turn and **one** review round in
+   * which the other members read what it changed. Resolves with that stored
+   * message as soon as the run is scheduled, exactly like `chat.send`.
+   *
+   * `intent` (S5.12) says what is being handed over and defaults to
+   * `'implement'`, which is S5.6's behaviour unchanged. `'deliver'` — the
+   * "Write the deliverable" action — stores the `notices.handoffDeliver` key
+   * instead and briefs the executor to write the `document` goal's file rather
+   * than to implement the conclusion. Everything else about the call is
+   * identical, which is why it is an argument and not a second method.
+   *
+   * Rejects with `validation` and a `ValidationReason` in `details` when the
+   * chat has no working directory (`handoff_no_workdir`), no executor member
+   * (`handoff_no_executor`), `intent: 'deliver'` on a chat whose goal names no
+   * deliverable (`handoff_no_deliverable`), or a run is already in flight
+   * (`handoff_run_active`) — the four states the buttons are disabled in.
+   */
+  'chat.handoff': (input: { chatId: string; intent?: HandoffIntent }) => Promise<Message>
 }
 
 /** The name of any backend method. */
@@ -286,6 +446,10 @@ export const BACKEND_METHODS = [
   'system.ping',
   'system.emitTestEvent',
   'system.pickFolder',
+  'system.pickSavePath',
+  'system.pickPaths',
+  'system.applyTheme',
+  'system.openInEditor',
   'settings.get',
   'settings.update',
   'providers.list',
@@ -295,6 +459,10 @@ export const BACKEND_METHODS = [
   'providers.delete',
   'providers.fetchModels',
   'providers.testConnection',
+  'providers.authStatus',
+  'providers.login',
+  'providers.logout',
+  'providers.setQuotaProject',
   'agents.list',
   'agents.get',
   'agents.create',
@@ -322,14 +490,17 @@ export const BACKEND_METHODS = [
   'chats.update',
   'chats.delete',
   'chats.search',
+  'chats.goalStatus',
   'chats.members.list',
   'chats.members.set',
   'presence.list',
   'presence.retry',
   'messages.list',
   'messages.usageSummary',
+  'permission.reply',
   'chat.send',
-  'chat.stop'
+  'chat.stop',
+  'chat.handoff'
 ] as const satisfies readonly BackendMethod[]
 
 /** A method name that appears in `BACKEND_METHODS`. */

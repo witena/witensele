@@ -7,7 +7,8 @@
 > decided handling of a user message that arrives mid-run. What is still missing
 > S2.4 then plugged in the supervisor: offline agents are dropped from a round's
 > speakers, and a turn the hard timeout skips releases the barrier like any other
-> terminal status.
+> terminal status. **S5.6** added the second way a run can start: "Hand to
+> executor", which schedules the executor alone and then one review round.
 
 ## Problem
 
@@ -35,8 +36,18 @@ that owns the `AbortController` the Stop button reaches.
   (`runFailed`).
 - `RunState` through `ChatRunnerRegistry.getState(chatId)`: the round, its
   speakers, the turns in flight and the pending user messages.
+- **`handoff`** (S5.6): the second entry point. It stores a `user` message
+  carrying the `handoff` notice key and mentioning the chat's executor, then runs
+  the executor alone — whatever the chat's `mode` — followed by exactly one
+  review round with every other member. It refuses with a `ValidationReason`
+  when the chat has no folder, no executor, or a run in flight.
 - **The `contextTruncated` notice** (S4.2): the turn measures, the runner tells,
   once per run per agent.
+- **The `materialsTruncated` notice** (S5.11): the same shape with a different
+  grain — the turn reports `materialsOmitted`, the runner tells **once per
+  chat**, because the goal's materials are the same in every round of every run
+  until the user edits the list, while what a truncated history hides keeps
+  changing.
 - **The automatic chat title** (S4.3): after the first run that produced a
   finished reply, and only while the title is still the default.
 
@@ -48,6 +59,29 @@ that owns the `AbortController` the Stop button reaches.
 | **`allOffline`.** A round that had speakers but lost all of them to that filter finishes `completed` with a notice, rather than in silence | `NOTICE_ALL_OFFLINE` |
 | **`skipped` in the barrier.** Nothing changed here: `allSettled` already treated every terminal status as complete, and `runAgentTurn` reports `aborted: false` for a timeout, so a skip is not read as a Stop | — |
 | **The supervisor, the heartbeat and "retry this agent"** | [`presence`](../presence/context.md) |
+
+## What S5.6 added
+
+| Change | Where |
+|---|---|
+| **`ChatRunner.handoff`** and `ChatRunnerRegistry.handoff`, behind the `chat.handoff` method | `chat-runner.ts`, `handlers/chats.ts` |
+| **Two staged rounds.** `#handoffTo` is taken once at the top of `#loop`; the first iteration merges `planFromHandoff`, the second `planFromReview`, and the third is ordinary `@` scheduling again | `#loop`, `scheduling.ts` |
+| **`implementing`**, the agent handed the work this round, which becomes `AgentTurnOptions.handoff` for that one turn and extends its briefing | `#runRound`, [`executor`](../executor/context.md) |
+| **The `handoff` notice key**, on a `user` message rather than a `system` one | `NOTICE_HANDOFF` |
+| **Three `ValidationReason`s** — `handoff_no_workdir`, `handoff_no_executor`, `handoff_run_active` — and the button that reads the same three rules before offering the action | `shared/types.ts`, `components/chat/handoff.ts` |
+
+## What S5.12 added
+
+| Change | Where |
+|---|---|
+| **`intent` on the hand-off** — `implement` (the default, S5.6 unchanged) or `deliver` — carried on `chat.handoff` and stored on `#handoff` beside the executor id | `chat-runner.ts`, `shared/types.ts` |
+| **A second notice key**, `handoffDeliver`, naming the agent *and* the deliverable's relative path | `NOTICE_HANDOFF_DELIVER`, `agents/history.ts` |
+| **A fourth `ValidationReason`**, `handoff_no_deliverable`, refused after the folder and the executor and **before** the run check, so the configuration mistake is reported ahead of the transient one | `shared/types.ts`, `components/chat/handoff.ts` |
+| **`reviewing`**, the other half of `implementing`: true for every speaker of the review round, and the only thing that sets `AgentTurnOptions.reviewing` | `#runRound`, [`agent-turn`](../agent-turn/context.md) |
+
+The scheduling is **untouched**: the same two staged plans, the same merge, the
+same cap. An intent changes one paragraph of one prompt and one stored key; a
+review round changes one section of the prompts of the round after it.
 
 ## Out of scope (permanently, for this feature)
 
@@ -84,10 +118,21 @@ that owns the `AbortController` the Stop button reaches.
 | A run with no members emits **nothing** | Emit `run.started` + `run.finished { error }` | A chat the user has emptied is not an error; emitting a run would make the composer wait for a reply that was never scheduled |
 | **`mention-only` with no mentions writes a notice** | Finish silently | Silence is indistinguishable from a failure. The notice says which rule applied, and `history.ts` renders it into later prompts so the models see it too |
 | Stop writes **no** notice | Write `runStopped` | The interrupted message already says "Stopped" on its own row, and a second line for the same fact would double every cancelled exchange in the transcript. The key stays in the locale files, unused |
+| **A hand-off is a method of its own, not a message with a magic prefix** | `chat.send` with a well-known text; a `handoff` flag on `chat.send` | The two rounds it schedules are not what any `mode` describes, and the refusals (no folder, no executor, a run in flight) are about the *run*, not about the text. A prefix would also be one copy-paste away from being triggered by an agent |
+| **What it stores is an ordinary `user` message**, whose only part is the `handoff` notice key | A `system` message; a flag on the chat; nothing at all | It *is* the user speaking: it is what the executor replies to, it carries the mention that schedules the turn, and it is what a reader scrolling back has to see. A `system` row would be the app narrating an instruction the user gave. The key rather than a sentence is CLAUDE.md rule #4, which also means `history.ts` renders it into prompts in its own English |
+| **The executor speaks alone, whatever `mode` says**, and the review round runs whatever `mode` says | Respect `mode` in both rounds | PLAN.md's one-writer rule is the whole point: a `roundrobin` chat putting four models in front of the executor would bury the request, and a `mention-only` chat would answer a hand-off with a `noMentions` notice instead of a review |
+| **The review round is everybody except the executor** | Only `role === 'participant'` members | They are the same set in every chat the rules allow. They differ only in S5.2's known gap — a second executor promoted into a chat — and there the extra agent has no tools and nothing to lose by reviewing. "Whoever did not just write the code reads it" also survives a third role |
+| **A hand-off cannot join a running chain**; it is refused while a run is active | Queue it like a user message | A hand-off's rounds are scheduled, not merged: joining a round somebody else's mentions already filled would make "the executor speaks alone" untrue, and the click would silently mean something else than it said |
+| **`maxAutoRounds` counts the hand-off's rounds like any others** | Exempt the implement + review pair | The setting is the user's promise that the chat will not run away, and a hand-off is the *most* expensive thing in the product to let run away. The cost is that `maxAutoRounds: 1` implements without a review, which the `maxRoundsReached` notice explains — recorded in "Known limitations" rather than hidden |
 | **Offline members are filtered out of `plan.speakers`, not out of `members`** | Drop them before the plan is computed | A reply that says `@Ghost` still resolves to a real member, so the round ends with the `allOffline` notice rather than with `noMentions` — the difference between "that agent is down" and "you mentioned nobody" |
 
 ## Open questions
 
+- Whether a hand-off should be allowed to **queue** behind a running chain rather
+  than being refused, now that the button is disabled in exactly that state
+  anyway.
+- Whether `maxAutoRounds: 1` should still buy the review round. Today it does
+  not: the executor implements and the cap takes the floor back.
 - Whether a `max-rounds` finish should offer a "continue" action rather than
   making the user type something. The notice currently tells them to send a
   message.

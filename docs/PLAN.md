@@ -126,11 +126,32 @@ Scan `userData/skills/*/SKILL.md`, parse frontmatter with gray-matter. Progressi
 
 Claude Code style: `MEMORY.md` is the index, `notes/` holds one file per entry. `memory_save(title, content)` writes a file and appends an index line; `memory_search(query)` does a text search. The agent configuration page can view and edit memory by hand.
 
+### Chat goal and workspace
+
+A chat may be bound to a folder (`chats.workdir`, S5.2) and, from S5.10, to a
+**goal**: what the group is working towards, in one of three shapes.
+
+| `goal.kind` | What it means | Who reads, who writes |
+|---|---|---|
+| `discussion` | Reach a conclusion in the transcript (today's default) | Nobody touches the folder unless an executor is handed the conclusion |
+| `document` | Produce one file, `goal.deliverable` (a path relative to `workdir`) | Participants read the folder; the executor writes the deliverable |
+| `codebase` | Change the code in `workdir` as `goal.description` says | Participants read the code and `git` state; the executor edits, the group reviews the diff (S5.6) |
+
+`goal.materials` lists files or folders under `workdir` the group must start
+from. Their contents are placed in every member's context ahead of the first
+round, within the context budget, so the discussion opens grounded instead of
+with a request for the material.
+
+The read-only rule of "Future extension" point 2 is what makes the folder
+readable by everyone: participants get the executor's **read-only** tools
+(`read_file`, `list_dir`, `search_files`, `git_diff`) confined to `workdir`,
+never the writing ones, and no permission prompt is needed for a read.
+
 ## User interface
 
 - **Navigation rail**: Chats, Agents, Settings.
 - **Main view**: left column chat list (new, rename, delete, search); middle column message stream (avatar, name, model badge, collapsible reasoning and tool calls, streaming cursor, dimmed passed messages) and composer (`@` autocomplete for members, Enter to send, Shift+Enter for newline, Stop button while running); right column member panel (each agent's state, token usage in this chat; add / remove members from the agent library; chat settings: mode, sequential or parallel, max auto rounds, drag-to-reorder speaking order).
-- **Agent configuration page**: agent list on the left, form on the right: basic info, provider and model dropdowns, parameters, system prompt, skills multi-select, MCP servers multi-select, memory toggle and viewer.
+- **Agent configuration page**: agent list on the left, form on the right: basic info, provider and model dropdowns, system prompt, skills multi-select, MCP servers multi-select, memory toggle and viewer. The form asks for no sampling parameters (S5.9): a user picks a model and writes a prompt, and the provider's defaults decide the rest. `agents.params` keeps `temperature` / `maxTokens` for records written before that and for API callers, and the reasoning toggle stays.
 - **Settings page**: providers (preset picker, key, model list), MCP servers (stdio command or HTTP URL, test connection), skills (list, import), timeouts and heartbeat, appearance and language, data and backup.
 - **Presence dots**: both the member panel and the avatar of every message show a presence dot (green / red / orange / grey). Colours come from AgentSupervisor events; the dot on a message reflects the agent's *current* state, not its state when the message was sent.
 - **UI mockup**: https://claude.ai/code/artifact/6730ad03-5843-4e6a-8adb-7b70bfa3405e (three artboards: group chat, agent configuration, settings). It is the visual reference for implementation.
@@ -151,7 +172,7 @@ Discussion output must eventually land in code, documents and email. Three layer
 2. **Executor agent.** A special agent role bound to the chat's local working directory, with built-in file read/write, shell and git tools and a permission-confirmation UI (confirm before every write or command, with "always allow in this chat"). Workflow: discuss → user clicks "hand to executor" → the executor implements the group's conclusion → posts a diff summary back to the chat → other agents review → iterate. Two implementation paths: our own tool loop on the AI SDK, or an existing coding agent (Claude Agent SDK / Codex CLI / Aider) as a backend. Build the former first; the latter becomes an optional provider.
 
    **Decision: discussion agents are read-only; all writes go through one executor.** Participant agents may be given read-only tools (a filesystem MCP server in read-only mode, search, git log / diff) so they can ground their discussion in the real code, but they never write files, run commands or commit. Every side-effecting change is made by a single executor agent per chat, after the discussion, with permission prompts and a diff posted back for review. Rationale: several models writing to the same directory overwrite each other and nothing is reviewable; one writer plus a diff-review loop keeps the chain clean. Enforcement: `mcp_servers.sideEffects` marks servers whose tools mutate state; the MCP layer (S3.1) refuses to expose those tools to `participant` agents and only attaches them to `executor` agents. Until the executor exists, users should attach only read-only MCP servers to agents, because MVP tool calls run without confirmation.
-3. **Editor integration.** Step one: open file paths and diffs from a message directly in VS Code (`code -g file:line` or `vscode://` links). Step two: a VS Code extension embedding the chat panel in the sidebar, reusing the same backend. This is exactly why business logic must not depend on Electron and the frontend must only depend on the BackendClient abstraction.
+3. **Editor integration.** Step one: open file paths and diffs from a message directly in VS Code (`code -g file:line` or `vscode://` links). Step two: a VS Code extension embedding the chat panel in the sidebar, reusing the same backend. This is exactly why business logic must not depend on Electron and the frontend must only depend on the BackendClient abstraction. Step two depends on the backend being reachable from outside Electron, so it is scheduled together with the server work below (STEPS.md Phase 6), after step one (S5.7).
 
 Fields and interfaces reserved in the MVP for this: `chats.workdir` (nullable), `agents.role` (`participant` | `executor`), `diff` and `file-ref` message part types, a `permission` event and reply channel before tool execution, and a `sideEffects` flag on MCP server records.
 
@@ -165,6 +186,44 @@ The MVP runs entirely locally, but is written under these constraints so that a 
 - Business logic in the main process (ChatRunner, AgentTurn, MCPManager, memory) never imports Electron APIs; it depends only on injected storage and an event bus, so it can move to a Node server as a block.
 - API key access goes through a `SecretStore` interface: Electron `safeStorage` in the MVP, backend secret management in the server version.
 - Concurrency and messaging middleware: the MVP needs none. All agent concurrency lives inside the single main process (parallel turns are concurrent promises, the round barrier is `Promise.all`), SQLite has one writer, and events reach the renderer through an in-process bus. Business logic depends only on two injected interfaces, `EventBus` and `MessageRepository`. Redis Streams / pub-sub (or Postgres LISTEN/NOTIFY, NATS) become relevant only in the server version when there are multiple server instances or agent workers in separate processes; at that point they are alternative implementations of those two interfaces, not a change to ChatRunner.
+
+## Local release and online version
+
+Two ways to run Witena, one codebase, one renderer.
+
+### Local version
+
+A macOS app that installs and opens like any other: a dmg, a signed and
+notarized `Witena.app`, updates that arrive by themselves. Nothing about the
+product changes; what changes is that the user never sees a checkout, a
+Gatekeeper warning or a version number they have to fetch by hand.
+
+| Decision | Why |
+|---|---|
+| Developer ID signing + notarization, hardened runtime | The only way a downloaded app opens on a double-click. Requires an Apple Developer account; until it exists CI still builds the dmg, unsigned, and the README keeps the right-click → Open note |
+| `electron-updater` over GitHub Releases | The build already emits `latest-mac.yml`; Releases are where the dmg lives anyway. macOS requires a signed app for updates to install, so this waits on signing |
+| Build both `arm64` and `x64`, not a universal binary | Two dmgs are half the size each and the native module is compiled per arch already; a universal build doubles every download for the many who need one arch |
+| A release is a git tag | `v1.2.3` pushed → CI runs typecheck, tests, packages, uploads a **draft** Release; a human publishes it |
+
+### Online version
+
+The same renderer served from a URL, talking to a Node server that runs the
+main-process business logic unchanged. Accounts, agents, chats, messages,
+provider keys and settings live on the server; a user signs in from any browser
+and sees their chats, the way any chat product works. The desktop app gains a
+"sign in to Witena Cloud" mode that points its `BackendClient` at the server.
+
+| Layer | Choice | Why |
+|---|---|---|
+| Server | Node, one process serving the existing handler map over HTTP (`POST /api/<method>`) and the event bus over WebSocket | The handlers, `ChatRunner`, `AgentTurn`, `McpManager` and memory already receive storage, secrets and events by injection (rule 5); the server is a second host for them, not a rewrite |
+| Client transport | `HttpBackendClient` implementing `BackendClient` | Rule 6: page code does not change. A `system.capabilities` method tells the renderer which Electron-only features (folder picker, open in editor, stdio MCP, the executor's folder, the `ant` / `gcloud` sign-ins) are absent |
+| Database | Postgres on RDS through drizzle; SQLite stays for the desktop | drizzle already owns the schema; the SQL in migrations must become dialect-neutral or be maintained twice — decided at S8.1 |
+| Accounts | Amazon Cognito (hosted UI, OIDC) issuing JWTs the server verifies; `userId` is the Cognito subject | Every table and query already carries `userId`; nothing has to be retrofitted. Cognito keeps passwords, MFA and social sign-in out of our code |
+| Secrets | `SecretStore` backed by AWS KMS envelope encryption | Provider keys are the most sensitive thing the server holds; the interface already exists |
+| Hosting | ECS Fargate behind an ALB (WebSocket-capable), the SPA on S3 + CloudFront, infrastructure as CDK in TypeScript, deployed by GitHub Actions on a tag | Managed, one language across app and infra, no servers to patch |
+| Executors online | Not in the first online release. The executor needs a folder; a per-user cloud workspace (a container) is its own phase | Everything else works without it: discussion, document goals written by an HTTP MCP server, materials uploaded to the chat |
+
+What online deliberately does **not** do at first: stdio MCP servers (a child process on a shared host is not safe), CLI sign-in (both `ant` and `gcloud` are local), local folders. Each is either replaced (HTTP MCP, API keys, uploads) or waits for cloud workspaces.
 
 ## Test gate
 
@@ -196,7 +255,10 @@ Language rule: everything committed to the repository (docs, code comments, comm
 2. **Multi-agent**: agent configuration page, member panel, ChatRunner with roundrobin and mention-only, sequential and parallel, @parsing, PASS, maxAutoRounds, stop, AgentSupervisor heartbeat and presence dots.
 3. **Capabilities**: MCP server settings and tool calls, skills loading and read_skill, memory tools and viewer.
 4. **Polish**: usage statistics, context truncation, automatic titles, electron-builder packaging for macOS.
-5. **Later** (post-MVP): connector gallery, executor agent and working directory, VS Code open and extension, server and multi-user.
+5. **Executors and external systems**: connector gallery, executor role and chat working directory, executor tools behind a permission prompt, diff and file references in the transcript, hand-to-executor with a review round, open in editor, chat goals and workspace materials (STEPS.md Phase 5).
+6. **Backlog**: decided work that is not yet scheduled (STEPS.md Phase 6).
+7. **Local release**: the brand mark, a signed and notarized dmg built by CI, auto-update, a first-run experience (STEPS.md Phase 7; see "Local release and online version").
+8. **Online version**: the same product served from AWS with accounts, the agents and chats stored on the server, and a web client — plus the desktop app able to sign in to it (STEPS.md Phase 8).
 
 ## Verification
 

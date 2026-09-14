@@ -20,14 +20,25 @@ the name is an **identifier the models will type**, not a label.
 - The Agents page: the 264px list (avatar, name, `modelId · provider`, count in
   the header, "+" opens a draft) and the configuration editor beside it.
 - The editor: basic info (name, avatar monogram and an eight-colour palette,
-  description), model (provider select, model select or free-text id, temperature,
-  max tokens, reasoning toggle), system prompt, the skills checklist, the MCP
-  checklist, and the memory toggle with its panel.
+  description, and since S5.2 the **role**), model (provider select, model select
+  or free-text id, reasoning toggle), system prompt, the skills checklist, the
+  MCP checklist, and the memory toggle with its panel. Since S5.9 it asks for no
+  sampling parameters.
+- The `executor` role itself (S5.2): the segmented control, PLAN.md's
+  explanation printed under it, and the badge four surfaces draw from
+  `isExecutor` — the agent list, the chat's member rows, the member picker and
+  every message header.
 - Duplicate (under a free name) and a two-click Delete.
 - `stores/agents.ts`: the list plus the editor draft, `dirty`, and the validation
   that gates Save.
 - `components/agents/agent-display.ts`: the derived strings two screens print
   about an agent, and the avatar palette.
+- **The agent templates (S7.5)**: `src/shared/agent-templates.ts` — three
+  entries of name, description, system prompt, model hints and a palette index —
+  and `agentsStore.createFromTemplate`, the one action that writes an agent
+  without opening the editor. The tiles that render them belong to the first-run
+  card ([`../chats/context.md`](../chats/context.md)); the records they produce
+  are ordinary agents this page then edits like any other.
 
 ## Out of scope
 
@@ -38,7 +49,8 @@ the name is an **identifier the models will type**, not a label.
 | The skills library itself: scanning, importing, reading a skill | [`skills`](../skills/context.md) (S3.1+S3.2 `[x]`). The agent form's **checklist** is here; the library and the `read_skill` tools are there |
 | Registering and probing MCP servers | `mcp` (S3.1 `[x]`). The agent form's **checklist** is here; the registry, the connections and the side-effects rule are there |
 | The memory files, the tools and the prompt section | [`memory`](../memory/context.md) (S3.3 `[x]`). The **toggle and the panel** are here; the store, the tools and the format are there |
-| The `executor` role and its working directory | Post-MVP (see "Future extension" in `PLAN.md`) |
+| Which chat an executor may join, and the chat's working directory | [`chats`](../chats/context.md) (S5.2). The role lives here; the "one executor per chat" rule and the folder live there, because both are properties of a chat |
+| The executor's file, shell and git tools, and the permission prompt before each change | S5.4 and S5.5 (`docs/features/executor/`) |
 | Searching or grouping the agent list | Not planned for the MVP |
 
 As of S3.3 the editor's right column is complete: all three blocks — Skills, MCP
@@ -72,7 +84,11 @@ resolves `@name` against the names created here.
 | Avatar colours are literal hex pairs in TypeScript, not CSS variables | Tokens in `index.css` | An avatar is *data*: the pair is copied into `agents.avatar` and stored in SQLite, where `var(--color-…)` resolves to nothing |
 | `InitialAvatar` gained an optional `textColor` | Derive the foreground from the background at render time | The palette pairs come from the artboard and are not computable from the background; making it optional keeps records written before S2.1 rendering on the neutral fallback |
 | The model control is a `<select>` when the provider lists models and a text field when it does not | Always free text; always a dropdown | A provider's model list can legitimately be empty (a custom endpoint, an Ollama that was down when it was added), and a dropdown-only form would make such a provider unusable |
-| The UI only creates `participant` agents | Offer the role as a field | `executor` is reserved for the post-MVP executor agent and nothing implements it. The handler accepts it so a future caller can write one |
+| The role is a segmented control with the explanation printed under it, not a tooltip | A select; a tooltip; a checkbox called "can write" | It is the one control on this form that changes what the agent may do to the user's disk. That is not a thing to discover by hovering, and two named roles read better than a negated capability |
+| The explanation is **one** sentence-long key per language | Three bullets; a link to the docs | It has to fit under a control in a 50%-width column, and a rule nobody reads is not a safeguard. The full reasoning is in `PLAN.md`; the screen carries the consequence |
+| The badge is drawn from `isExecutor` in `agent-display.ts` rather than from `role === 'executor'` in each component | A literal comparison in each of the four places | Four copies is four places to miss when the role set grows, and `hasExecutor` — the picker's rule — belongs next to it |
+| The form asks for **no** sampling parameters (S5.9) | Keep Temperature and Max tokens; hide them behind an "advanced" disclosure | Real users do not tune sampling: they pick a model and write a prompt, and current models' provider defaults are what everyone should run with. Two numeric fields with range messages under them were friction with nothing on the other side, and an "advanced" drawer is the same two fields plus a place to hide a bug. `Agent.params` keeps both fields, so an agent saved with a temperature still uses it and no migration is needed |
+| The reasoning toggle stays while the other two go | Remove all three | It changes what the model *produces* — a visible reasoning block in the transcript — rather than how it samples, so it is a product choice and not a knob |
 | `ensureDefaultAgent` stays | Delete it now that the user can create agents | It is the only thing that makes the *first* chat of a fresh install answerable, and `e2e/chat.spec.ts` depends on that path. It now fires only while the agents table is empty |
 
 ## Open questions
@@ -82,3 +98,13 @@ resolves `@name` against the names created here.
   for. Today it copies the provider too and the user changes it afterwards.
 - Whether the reasoning toggle should be hidden for models that do not support
   it. That needs per-model capability data, which no provider exposes uniformly.
+- Whether `params.temperature` / `params.maxTokens` should eventually leave the
+  schema too. S5.9 left them stored and honoured, so agents configured before it
+  keep behaving exactly as they did; dropping them means a migration and a
+  decision about those records.
+- Whether promoting an agent to `executor` should be refused while it is in a
+  chat that already has one. Today `agents.update` allows it; see the known gap
+  in [`../chats/backend.md`](../chats/backend.md).
+- Whether switching an agent back to `participant` should drop the
+  `sideEffects` servers already bound to it. Today the ids stay on the record
+  and the checklist greys them, which matches how a missing skill is handled.

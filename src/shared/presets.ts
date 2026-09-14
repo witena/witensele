@@ -17,7 +17,7 @@
  *
  * Nothing here may import electron, node built-ins or renderer code.
  */
-import type { ProviderType } from './types'
+import type { ProviderAuth, ProviderType } from './types'
 
 /**
  * One entry of the preset picker.
@@ -193,6 +193,62 @@ export function isLocalPreset(id: string | undefined): boolean {
 }
 
 /**
+ * How a provider authenticates, with the default applied.
+ *
+ * `Provider.auth` is nullable in the database and optional in the shared type —
+ * every row written before S5.3 has none — so "absent means `apiKey`" is a rule
+ * that would otherwise be spelled out at every call site. It lives here beside
+ * `providerRequiresApiKey` because that function is its first caller and the two
+ * answers have to agree.
+ */
+export function providerAuth(provider: { auth?: ProviderAuth | undefined }): ProviderAuth {
+  return provider.auth ?? 'apiKey'
+}
+
+/**
+ * How each vendor's CLI is installed on macOS, shown to a user who has none.
+ *
+ * Shared data rather than copy: both are typed verbatim into a terminal and are
+ * the same sentence in every language, so the sign-in panel renders them as
+ * monospace values the way the chat header renders a folder path.
+ */
+export const ANT_INSTALL_COMMAND = 'brew install anthropics/tap/ant'
+
+/** The Google Cloud SDK, which owns the application-default credentials (S5.13). */
+export const GCLOUD_INSTALL_COMMAND = 'brew install --cask google-cloud-sdk'
+
+/** The provider types that can be signed into rather than given a key. */
+export const OAUTH_PROVIDER_TYPES = ['anthropic', 'google'] as const satisfies readonly ProviderType[]
+
+/** A provider type Witena can actually sign in to: `anthropic` or `google`. */
+export type OAuthProviderType = (typeof OAUTH_PROVIDER_TYPES)[number]
+
+/**
+ * Whether this provider type has a sign-in flow Witena can actually run.
+ *
+ * OpenAI is shown the control and told it is not available yet rather than
+ * having it hidden, because "Witena cannot do this *yet*" is a different
+ * statement from "this provider has no such thing", and the editor says which.
+ * See "Provider authentication beyond Anthropic" in `docs/STEPS.md`.
+ */
+export function supportsOAuth(type: ProviderType): type is OAuthProviderType {
+  return (OAUTH_PROVIDER_TYPES as readonly ProviderType[]).includes(type)
+}
+
+/** The same question asked of an unknown value, for validating an IPC input. */
+export function isOAuthProviderType(value: unknown): value is OAuthProviderType {
+  return typeof value === 'string' && (OAUTH_PROVIDER_TYPES as readonly string[]).includes(value)
+}
+
+/**
+ * Which vendor's install command a sign-in panel prints. Total over the union,
+ * so a third vendor cannot be added without answering this.
+ */
+export function cliInstallCommand(type: OAuthProviderType): string {
+  return type === 'anthropic' ? ANT_INSTALL_COMMAND : GCLOUD_INSTALL_COMMAND
+}
+
+/**
  * Whether this provider must carry an API key.
  *
  * Shared rather than duplicated because both sides need the same answer for
@@ -200,15 +256,19 @@ export function isLocalPreset(id: string | undefined): boolean {
  * requires, and the renderer shows a "no key" pill on the card. Two copies of
  * this rule would disagree the first time a preset changed.
  *
- * The preset is the authority when there is one — that is what makes Ollama and
- * LM Studio saveable with an empty key field. Without a preset, the three
- * first-party adapters always need one, while a bare `openai-compatible` endpoint
- * might be another local server and so does not.
+ * A provider that signs in has no key at all, which is the point of S5.3, so
+ * that answer comes first. Otherwise the preset is the authority when there is
+ * one — that is what makes Ollama and LM Studio saveable with an empty key
+ * field. Without a preset, the three first-party adapters always need one, while
+ * a bare `openai-compatible` endpoint might be another local server and so does
+ * not.
  */
 export function providerRequiresApiKey(provider: {
   type: ProviderType
   presetId?: string | undefined
+  auth?: ProviderAuth | undefined
 }): boolean {
+  if (providerAuth(provider) === 'oauth') return false
   const preset = getPreset(provider.presetId)
   if (preset) return preset.requiresApiKey
   return provider.type !== 'openai-compatible'
