@@ -187,6 +187,44 @@ The MVP runs entirely locally, but is written under these constraints so that a 
 - API key access goes through a `SecretStore` interface: Electron `safeStorage` in the MVP, backend secret management in the server version.
 - Concurrency and messaging middleware: the MVP needs none. All agent concurrency lives inside the single main process (parallel turns are concurrent promises, the round barrier is `Promise.all`), SQLite has one writer, and events reach the renderer through an in-process bus. Business logic depends only on two injected interfaces, `EventBus` and `MessageRepository`. Redis Streams / pub-sub (or Postgres LISTEN/NOTIFY, NATS) become relevant only in the server version when there are multiple server instances or agent workers in separate processes; at that point they are alternative implementations of those two interfaces, not a change to ChatRunner.
 
+## Local release and online version
+
+Two ways to run Witena, one codebase, one renderer.
+
+### Local version
+
+A macOS app that installs and opens like any other: a dmg, a signed and
+notarized `Witena.app`, updates that arrive by themselves. Nothing about the
+product changes; what changes is that the user never sees a checkout, a
+Gatekeeper warning or a version number they have to fetch by hand.
+
+| Decision | Why |
+|---|---|
+| Developer ID signing + notarization, hardened runtime | The only way a downloaded app opens on a double-click. Requires an Apple Developer account; until it exists CI still builds the dmg, unsigned, and the README keeps the right-click → Open note |
+| `electron-updater` over GitHub Releases | The build already emits `latest-mac.yml`; Releases are where the dmg lives anyway. macOS requires a signed app for updates to install, so this waits on signing |
+| Build both `arm64` and `x64`, not a universal binary | Two dmgs are half the size each and the native module is compiled per arch already; a universal build doubles every download for the many who need one arch |
+| A release is a git tag | `v1.2.3` pushed → CI runs typecheck, tests, packages, uploads a **draft** Release; a human publishes it |
+
+### Online version
+
+The same renderer served from a URL, talking to a Node server that runs the
+main-process business logic unchanged. Accounts, agents, chats, messages,
+provider keys and settings live on the server; a user signs in from any browser
+and sees their chats, the way any chat product works. The desktop app gains a
+"sign in to Witena Cloud" mode that points its `BackendClient` at the server.
+
+| Layer | Choice | Why |
+|---|---|---|
+| Server | Node, one process serving the existing handler map over HTTP (`POST /api/<method>`) and the event bus over WebSocket | The handlers, `ChatRunner`, `AgentTurn`, `McpManager` and memory already receive storage, secrets and events by injection (rule 5); the server is a second host for them, not a rewrite |
+| Client transport | `HttpBackendClient` implementing `BackendClient` | Rule 6: page code does not change. A `system.capabilities` method tells the renderer which Electron-only features (folder picker, open in editor, stdio MCP, the executor's folder, `ant` sign-in) are absent |
+| Database | Postgres on RDS through drizzle; SQLite stays for the desktop | drizzle already owns the schema; the SQL in migrations must become dialect-neutral or be maintained twice — decided at S8.1 |
+| Accounts | Amazon Cognito (hosted UI, OIDC) issuing JWTs the server verifies; `userId` is the Cognito subject | Every table and query already carries `userId`; nothing has to be retrofitted. Cognito keeps passwords, MFA and social sign-in out of our code |
+| Secrets | `SecretStore` backed by AWS KMS envelope encryption | Provider keys are the most sensitive thing the server holds; the interface already exists |
+| Hosting | ECS Fargate behind an ALB (WebSocket-capable), the SPA on S3 + CloudFront, infrastructure as CDK in TypeScript, deployed by GitHub Actions on a tag | Managed, one language across app and infra, no servers to patch |
+| Executors online | Not in the first online release. The executor needs a folder; a per-user cloud workspace (a container) is its own phase | Everything else works without it: discussion, document goals written by an HTTP MCP server, materials uploaded to the chat |
+
+What online deliberately does **not** do at first: stdio MCP servers (a child process on a shared host is not safe), `ant` sign-in (the CLI is local), local folders. Each is either replaced (HTTP MCP, API keys, uploads) or waits for cloud workspaces.
+
 ## Test gate
 
 Nothing ships before its own tests pass; failing tests mean the feature is not done.
@@ -217,8 +255,10 @@ Language rule: everything committed to the repository (docs, code comments, comm
 2. **Multi-agent**: agent configuration page, member panel, ChatRunner with roundrobin and mention-only, sequential and parallel, @parsing, PASS, maxAutoRounds, stop, AgentSupervisor heartbeat and presence dots.
 3. **Capabilities**: MCP server settings and tool calls, skills loading and read_skill, memory tools and viewer.
 4. **Polish**: usage statistics, context truncation, automatic titles, electron-builder packaging for macOS.
-5. **Executors and external systems**: connector gallery, executor role and chat working directory, executor tools behind a permission prompt, diff and file references in the transcript, hand-to-executor with a review round, open in editor (STEPS.md Phase 5).
-6. **Later**: server and multi-user, and the VS Code extension over that backend (STEPS.md Phase 6).
+5. **Executors and external systems**: connector gallery, executor role and chat working directory, executor tools behind a permission prompt, diff and file references in the transcript, hand-to-executor with a review round, open in editor, chat goals and workspace materials (STEPS.md Phase 5).
+6. **Backlog**: decided work that is not yet scheduled (STEPS.md Phase 6).
+7. **Local release**: the brand mark, a signed and notarized dmg built by CI, auto-update, a first-run experience (STEPS.md Phase 7; see "Local release and online version").
+8. **Online version**: the same product served from AWS with accounts, the agents and chats stored on the server, and a web client — plus the desktop app able to sign in to it (STEPS.md Phase 8).
 
 ## Verification
 

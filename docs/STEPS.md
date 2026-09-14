@@ -2020,3 +2020,158 @@ adds a line here in the same commit.
   but show me the diff first" for `write_file` — the tool computes the patch
   only *after* the grant today, so the card previews the content it was given
   rather than the diff (`edit_file` already sends the patch in its input).
+
+## Phase 7: Local release (PLAN "Local release and online version")
+
+A double-click app. Steps S7.3 and S7.4 need an Apple Developer account; S7.1
+and S7.2 do not and come first.
+
+### S7.1 Brand mark and application icon `[ ]`
+What: replace the placeholder "W" tile with the chosen mark.
+- Pick one of the proposed marks (modern, minimal; see the proposal page
+  linked in the `Done:` paragraph) and commit it as `build/icon.svg`; render
+  `build/icon.png` (1024 px) and `build/icon.icns` with the documented
+  pipeline; use the same mark for the rail avatar in `ui-shell`, the README
+  header and the dmg background if one is added. Both themes must keep the
+  mark legible (S5.8).
+- Tests: the existing icon pipeline check; a unit test that the rail avatar
+  renders the mark component rather than a letter.
+Acceptance: `npm run dist:dir` produces an app whose Dock and Finder icon is
+the new mark at 16–1024 px; the rail shows it in both themes. Docs:
+`docs/features/packaging/` and `docs/features/ui-shell/` (all four each).
+
+### S7.2 Release workflow `[ ]`
+What: a tag builds the dmg.
+- `.github/workflows/ci.yml`: on every push and pull request — `npm ci`,
+  `npm run typecheck`, `npm test`, `npm run build`; e2e stays local (it needs
+  Ollama) and is documented as such.
+- `.github/workflows/release.yml`: on a `v*` tag — the same checks, then
+  `npm run dist` for `arm64` and `x64` on a macOS runner, and a **draft**
+  GitHub Release carrying both dmgs, `latest-mac.yml` and the blockmaps.
+  Signing and notarization run only when the secrets exist (S7.3), so the
+  workflow is complete now and gains signing later without changes.
+- `electron-builder.yml`: add `x64`; `publish: github` so `electron-updater`
+  has a feed (S7.4); the version comes from `package.json`, bumped by an
+  `npm version` step documented in the packaging docs.
+- Tests: the workflow files are validated with `actionlint` in CI; a unit
+  test checks `electron-builder.yml` lists both arches and the publish
+  provider.
+Acceptance: pushing a tag on a fork produces a draft Release with two dmgs;
+`ci.yml` is green on the PR. Docs: `docs/features/packaging/` (all four).
+
+### S7.3 Signing and notarization `[ ]` (needs an Apple Developer account)
+What: the dmg opens on a double-click on any Mac.
+- Developer ID Application certificate in CI secrets (`CSC_LINK`,
+  `CSC_KEY_PASSWORD`), `hardenedRuntime: true`, an entitlements file for the
+  native module (`allow-unsigned-executable-memory`,
+  `disable-library-validation` only if `better-sqlite3` needs it — verify),
+  `notarize` with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`;
+  `identity: null` removed; the README's Gatekeeper note deleted.
+- Verification in CI: `codesign --verify --deep --strict`, `spctl -a -vv`
+  reporting `Notarized Developer ID`, and `e2e/packaged.spec.ts` against the
+  signed app.
+Acceptance: a fresh Mac with default Gatekeeper opens the downloaded app
+with no dialog. Docs: `docs/features/packaging/` (all four).
+
+### S7.4 Auto-update `[ ]` (after S7.3)
+What: the app updates itself from GitHub Releases.
+- `electron-updater` in the main process behind an injected interface (rule
+  5: the updater is electron and lives in `src/main/ipc/` or `index.ts`),
+  checking on launch and every 6 hours; `system.updateStatus` /
+  `system.installUpdate` methods and a `update.available` /
+  `update.downloaded` event pair; Settings → About shows the version, the
+  channel and "Check for updates"; a notice bar offers "Restart to update".
+- Tests: the status state machine with a fake updater; e2e for the About
+  block with the updater stubbed absent.
+Acceptance: an older installed build sees a newer draft-published Release,
+downloads it and restarts into it. Docs: `docs/features/packaging/` and the
+settings owner (all four each).
+
+### S7.5 First run `[ ]`
+What: a new user reaches a working chat without reading the README.
+- When no provider exists, the chats page shows an onboarding card: pick a
+  preset, paste a key or sign in (S5.3), fetch models, create the first agent
+  from a template, start a chat — each step done in place, dismissable.
+- Settings → About: version, licenses of bundled dependencies, links.
+Acceptance: e2e from an empty `userData` to a streamed reply through the
+card alone. Docs: `docs/features/ui-shell/` and `docs/features/providers/`
+(all four each).
+
+## Phase 8: Online version (PLAN "Local release and online version")
+
+Ordered so that each step runs end to end on a laptop before AWS is involved.
+
+### S8.1 Server host and Postgres `[ ]`
+What: the business logic runs in a plain Node process.
+- `src/server/index.ts`: builds `AppContext` with injected storage, secrets
+  and event bus, mounts every `BACKEND_METHODS` entry as `POST /api/<method>`
+  (JSON in, JSON out, `BackendError` → HTTP status + body) and the event bus
+  as `GET /ws` (WebSocket, one connection per client, events as JSON). No
+  electron import anywhere under `src/server/` — enforced by a test.
+- drizzle with the `pg` driver next to `better-sqlite3`; the schema stays
+  one file; migrations generated per dialect or written dialect-neutral —
+  decide, record it in `docs/features/database/`. Local dev runs Postgres in
+  Docker (`docker-compose.yml`).
+- Tests: every handler test runs against both dialects through a shared
+  fixture; an HTTP contract test drives `chat.send` and watches the WebSocket.
+Acceptance: `npm run server` + the existing renderer over a
+`HttpBackendClient` (S8.3) streams a reply. Docs: new feature `server`
+(`docs/features/server/`), `docs/features/database/`, `backend-client`.
+
+### S8.2 Accounts `[ ]`
+What: sign in, and everything is yours only.
+- Cognito user pool (hosted UI, email + password, optional Google), JWT
+  verified by the server on every request and at WebSocket connect;
+  `userId` = `sub`; the `local` user disappears from the server path.
+- Renderer: a sign-in page, token storage (memory + refresh), sign-out,
+  and the `Authorization` header in `HttpBackendClient`.
+- Tests: an unauthenticated request is refused; two users cannot see each
+  other's chats (handler tests with two `userId`s); token refresh.
+Acceptance: two accounts on one server each see only their own data.
+Docs: `server`, `backend-client`, `ui-shell`.
+
+### S8.3 Web client and capabilities `[ ]`
+What: the renderer runs in a browser.
+- A Vite web build target for `src/renderer/` producing a static SPA;
+  `HttpBackendClient` + WebSocket subscription; `system.capabilities`
+  returned by every host (`{ pickFolder, openInEditor, stdioMcp, workdir,
+  antSignIn, nativeTheme }`) and used by the pages to hide what the host
+  lacks — no page imports anything Electron-specific (rule 6 holds).
+- Materials online: uploaded files stored per chat (S3), listed the way
+  folder materials are, so document goals still work without a folder.
+- Tests: the capabilities gate per control; a Playwright run of the SPA
+  against the local server.
+Acceptance: the same chat flows in Chrome against the local server as in
+the desktop app, minus the hidden features. Docs: `server`,
+`backend-client`, `chats`, `ui-shell`.
+
+### S8.4 Secrets, limits and observability `[ ]`
+What: what a hosted product must have before strangers use it.
+- `KmsSecretStore` (envelope encryption, one data key per user); per-user
+  spend and rate limits enforced in `ChatRunner` (the usage tables exist);
+  structured logs and a `/healthz`; an audit log of sign-ins and key changes.
+Acceptance: keys at rest are ciphertext; a user over their cap gets a
+translated notice, not a 500. Docs: `server`, `providers`, `usage`.
+
+### S8.5 AWS deployment `[ ]`
+What: it is on the internet.
+- `infra/` CDK app: VPC, RDS Postgres, ECS Fargate service (the server
+  image), ALB with WebSocket, S3 + CloudFront for the SPA, ACM, Route 53,
+  Cognito; GitHub Actions builds the image and deploys on a `cloud-v*` tag;
+  migrations run as a one-off task before the service flips.
+Acceptance: `https://<domain>` signs in, streams a reply, survives a redeploy
+without dropping a running chat's events for longer than the WebSocket
+reconnect. Docs: `server` and a new `infra` feature.
+
+### S8.6 Desktop app signs in to the cloud `[ ]`
+What: the promise in "Reserved server capability".
+- A "Witena Cloud" mode in the desktop app: sign in, and the app swaps its
+  `BackendClient` to the HTTP one; local-only features stay available when
+  in local mode; switching modes is explicit and never merges data.
+Acceptance: the same chat opened on the web and in the app shows the same
+messages live. Docs: `backend-client`, `ui-shell`.
+
+### S8.7 Cloud workspaces `[ ]` (later)
+The executor online: a per-user container with the folder, the same seven
+tools over a small agent inside it, the permission prompt unchanged.
+
