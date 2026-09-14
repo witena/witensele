@@ -143,7 +143,7 @@ describe('status', () => {
     await expect(cliWith(dir).status()).resolves.toEqual({
       state: 'signed-in',
       organizationName: 'Test Org',
-      accountEmail: 'person@example.com',
+      account: 'person@example.com',
       workspaceName: 'Default',
       // Unix seconds in, epoch milliseconds out: every timestamp in Witena is ms.
       expiresAt: 2_000_000_000_000
@@ -156,7 +156,7 @@ describe('status', () => {
 
     expect(JSON.stringify(status)).not.toContain('secret')
     expect(Object.keys(status).sort()).toEqual([
-      'accountEmail',
+      'account',
       'expiresAt',
       'organizationName',
       'state',
@@ -259,7 +259,7 @@ describe('login and logout', () => {
 
     await expect(cliWith(dir).login()).resolves.toMatchObject({
       state: 'signed-in',
-      accountEmail: 'person@example.com'
+      account: 'person@example.com'
     })
   })
 

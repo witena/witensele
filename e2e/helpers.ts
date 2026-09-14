@@ -39,9 +39,9 @@ export function removeUserDataDir(directory: string): void {
  *
  * Passing the same directory twice is how a spec restarts the app and asserts
  * that something was persisted. `env` adds to (or overrides) the inherited
- * environment: S5.3's sign-in spec launches with `WITENA_ANT_BIN` pointing at
- * nothing, which is the only way to get a run where the Anthropic CLI is
- * definitively absent on a machine that has it installed.
+ * environment: the sign-in spec launches with `WITENA_ANT_BIN` and
+ * `WITENA_GCLOUD_BIN` pointing at nothing, which is the only way to get a run
+ * where those CLIs are definitively absent on a machine that has them installed.
  */
 export async function launchWitena(
   userDataDir: string,

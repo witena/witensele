@@ -38,6 +38,7 @@ import { getPreset, providerAuth } from '@shared/presets'
 import type { Provider } from '@shared/types'
 import { validation } from '../errors'
 import type { AnthropicCli } from './anthropic-cli'
+import type { GoogleCli } from './google-cli'
 
 /**
  * A provider record plus the plaintext key, which is the only form this layer
@@ -68,10 +69,12 @@ export type FetchImpl = typeof globalThis.fetch
  */
 export const ANTHROPIC_OAUTH_BETA = 'oauth-2025-04-20'
 
-/** Header names, spelled once so the wrapper and its test cannot disagree. */
+/** Header names, spelled once so the wrappers and their tests cannot disagree. */
 const AUTHORIZATION_HEADER = 'authorization'
-const API_KEY_HEADER = 'x-api-key'
-const BETA_HEADER = 'anthropic-beta'
+const ANTHROPIC_API_KEY_HEADER = 'x-api-key'
+const ANTHROPIC_BETA_HEADER = 'anthropic-beta'
+const GOOGLE_API_KEY_HEADER = 'x-goog-api-key'
+const GOOGLE_USER_PROJECT_HEADER = 'x-goog-user-project'
 
 /** Adds `value` to a comma-separated header list unless it is already in it. */
 export function mergeBeta(existing: string | null, value: string): string {
@@ -84,34 +87,93 @@ export function mergeBeta(existing: string | null, value: string): string {
 }
 
 /**
+ * The edits one vendor's OAuth requests need, as data.
+ *
+ * Generalised in S5.13 from S5.3's Anthropic-only wrapper. The three operations
+ * are exactly what the two vendors between them require and no more: **remove**
+ * the API-key header (both APIs refuse a request carrying a key *and* a token),
+ * **set** the headers whose value comes from the credential, and **merge** into
+ * a comma-separated list one that the SDK also writes for its own reasons.
+ *
+ * Merge exists only for `anthropic-beta`, and it is the difference between a
+ * feature flag the SDK asked for surviving and being silently turned off.
+ */
+export interface OAuthRequestHeaders {
+  /** Bearer token for `Authorization`. Never logged, never stored. */
+  token: string
+  /** Header names deleted before the request leaves. */
+  remove?: readonly string[]
+  /** Headers assigned outright. */
+  set?: Record<string, string>
+  /** Headers added to an existing comma-separated list rather than replacing it. */
+  merge?: Record<string, string>
+}
+
+/** Produces the edits for one request. Asked **per request**, never captured. */
+export type OAuthRequestPreparer = () => Promise<OAuthRequestHeaders>
+
+/**
  * Wraps a `fetch` so every request authenticates with an account token instead
  * of an API key.
  *
- * Three edits, all of them required by the API and none of them optional:
- * `x-api-key` is **removed** (sending both is refused), `Authorization` becomes
- * `Bearer <token>`, and `oauth-2025-04-20` is merged into `anthropic-beta`
- * rather than assigned, because the AI SDK sets that header itself for features
- * like extended output and overwriting it would silently turn them off.
- *
- * The token is fetched per request through `getToken` rather than captured, so a
- * model instance built once and used for an hour keeps working: the CLI refreshes
- * the credential and `AnthropicCli` caches it until just before it expires.
+ * `prepare` is called per request rather than its result being captured, so a
+ * model instance built once and used for an hour keeps working: the vendor CLI
+ * refreshes the credential and its wrapper caches it until just before it
+ * expires.
  */
 export function oauthFetch(
-  getToken: () => Promise<string>,
+  prepare: OAuthRequestPreparer,
   baseFetch: FetchImpl = globalThis.fetch
 ): FetchImpl {
   return async (input, init) => {
-    const token = await getToken()
+    const edits = await prepare()
     // `init.headers` is what both callers use (the AI SDK and `discovery.ts`);
     // a `Request` object's own headers are merged in for completeness.
     const headers = new Headers(
       input instanceof Request && init?.headers === undefined ? input.headers : init?.headers
     )
-    headers.delete(API_KEY_HEADER)
-    headers.set(AUTHORIZATION_HEADER, `Bearer ${token}`)
-    headers.set(BETA_HEADER, mergeBeta(headers.get(BETA_HEADER), ANTHROPIC_OAUTH_BETA))
+    for (const name of edits.remove ?? []) headers.delete(name)
+    headers.set(AUTHORIZATION_HEADER, `Bearer ${edits.token}`)
+    for (const [name, value] of Object.entries(edits.set ?? {})) headers.set(name, value)
+    for (const [name, value] of Object.entries(edits.merge ?? {})) {
+      headers.set(name, mergeBeta(headers.get(name), value))
+    }
     return await baseFetch(input, { ...init, headers })
+  }
+}
+
+/**
+ * Anthropic's edits: drop `x-api-key`, carry the bearer token, and **merge**
+ * `oauth-2025-04-20` into `anthropic-beta` rather than assigning it, because the
+ * SDK sets that header itself for features like extended output.
+ */
+export function anthropicOAuthHeaders(cli: AnthropicCli): OAuthRequestPreparer {
+  return async () => ({
+    token: await cli.accessToken(),
+    remove: [ANTHROPIC_API_KEY_HEADER],
+    merge: { [ANTHROPIC_BETA_HEADER]: ANTHROPIC_OAUTH_BETA }
+  })
+}
+
+/**
+ * Google's edits: drop `x-goog-api-key`, carry the bearer token, and name the
+ * quota project in `x-goog-user-project`.
+ *
+ * The project is not optional. An end-user credential without it is refused with
+ * "Your application has authenticated using end user credentials from the Google
+ * Cloud SDK", so `cli.project()` rejects `gcloud_no_project` rather than sending
+ * a request that cannot succeed — and the sign-in panel is where that is fixed.
+ */
+export function googleOAuthHeaders(cli: GoogleCli): OAuthRequestPreparer {
+  return async () => {
+    // Sequential on purpose: with no project there is no point asking for a
+    // token, and `project()` is the cheaper rejection.
+    const project = await cli.project()
+    return {
+      token: await cli.accessToken(),
+      remove: [GOOGLE_API_KEY_HEADER],
+      set: { [GOOGLE_USER_PROJECT_HEADER]: project }
+    }
   }
 }
 
@@ -125,33 +187,51 @@ export function oauthFetch(
  */
 export interface ModelOptions {
   anthropicCli?: AnthropicCli | undefined
+  googleCli?: GoogleCli | undefined
   fetchImpl?: FetchImpl | undefined
 }
 
-function requireCli(options: ModelOptions): AnthropicCli {
+function requireAnthropicCli(options: ModelOptions): AnthropicCli {
   if (!options.anthropicCli) {
     throw validation('A provider that signs in needs the Anthropic CLI to be injected')
   }
   return options.anthropicCli
 }
 
+function requireGoogleCli(options: ModelOptions): GoogleCli {
+  if (!options.googleCli) {
+    throw validation('A provider that signs in needs the Google CLI to be injected')
+  }
+  return options.googleCli
+}
+
 /**
  * The `fetch` this provider's requests must go through.
  *
- * For everything except an Anthropic provider in sign-in mode this is simply the
- * injected implementation (or the platform's). It is exported because
+ * For everything except a provider in sign-in mode this is simply the injected
+ * implementation (or the platform's). It is exported because
  * `providers.fetchModels` speaks the REST endpoint by hand and has to pick up
  * the very same header rewriting the model client gets — one wrapper, both
- * paths, no second place for the beta flag to be forgotten.
+ * paths, no second place for a header to be forgotten.
  */
 export function createProviderFetch(
   provider: ResolvedProvider,
   options: ModelOptions = {}
 ): FetchImpl {
   const base = options.fetchImpl ?? globalThis.fetch
-  if (provider.type !== 'anthropic' || providerAuth(provider) !== 'oauth') return base
-  const cli = requireCli(options)
-  return oauthFetch(() => cli.accessToken(), base)
+  if (providerAuth(provider) !== 'oauth') return base
+
+  switch (provider.type) {
+    case 'anthropic':
+      return oauthFetch(anthropicOAuthHeaders(requireAnthropicCli(options)), base)
+    case 'google':
+      return oauthFetch(googleOAuthHeaders(requireGoogleCli(options)), base)
+    // A type with no sign-in flow cannot reach here through a saved provider —
+    // the handler refuses `oauth_unsupported_provider` — so an unvalidated draft
+    // is the only caller, and the plain `fetch` is the honest answer for it.
+    default:
+      return base
+  }
 }
 
 /** A non-empty stored key, or `undefined`. Treats `''` as "no key". */
@@ -222,6 +302,17 @@ export function createLanguageModel(
       }).languageModel(modelId)
 
     case 'google':
+      if (providerAuth(provider) === 'oauth') {
+        // `apiKey: ''` for the same reason as Anthropic above: omitting it makes
+        // the adapter hunt for `GOOGLE_GENERATIVE_AI_API_KEY` and throw. The
+        // empty `x-goog-api-key` it produces is deleted by the wrapper before
+        // the request leaves.
+        return createGoogleGenerativeAI({
+          apiKey: '',
+          fetch: createProviderFetch(provider, options),
+          ...(baseUrl ? { baseURL: baseUrl } : {})
+        }).languageModel(modelId)
+      }
       return createGoogleGenerativeAI({
         ...(apiKey ? { apiKey } : {}),
         ...(baseUrl ? { baseURL: baseUrl } : {})

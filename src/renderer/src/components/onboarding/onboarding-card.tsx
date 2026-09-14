@@ -35,6 +35,7 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { AGENT_TEMPLATES, suggestedModel, type AgentTemplate } from '@shared/agent-templates'
+import { supportsOAuth } from '@shared/presets'
 import { AGENT_AVATAR_COLORS, DEFAULT_AGENT_AVATAR, avatarInitial } from '../agents/agent-display'
 import { Avatar, Button, SectionTitle, Spinner } from '../ui'
 import { translateFailure } from '../../i18n/errors'
@@ -143,7 +144,12 @@ export function useOnboarding(): OnboardingState {
   )
   const providerCount = useProvidersStore((state) => state.providers.length)
   const draft = useProvidersStore((state) => state.draft)
-  const authStatus = useProvidersStore((state) => state.authStatus)
+  // The draft's *own* vendor login (S5.13): a Google draft is not made ready by
+  // being signed in to Anthropic. A draft whose type has no sign-in flow has no
+  // status to read, and `credentialReady` then falls through to the key rule.
+  const authStatus = useProvidersStore((state) =>
+    draft && supportsOAuth(draft.type) ? state.authStatus[draft.type] : null
+  )
   const agentCount = useAgentsStore((state) => state.agents.length)
   const hasChatWithMembers = useHasChatWithMembers()
 

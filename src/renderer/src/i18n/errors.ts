@@ -31,7 +31,11 @@
  * `oauth_custom_base_url`) are reasons, because they narrow the refusal of one
  * request — while `ant_missing` and `ant_not_logged_in` are codes, because they
  * describe the state of a tool on the user's machine and are raised while
- * building a model for a chat turn as well as while validating a form.
+ * building a model for a chat turn as well as while validating a form. S5.13
+ * added the Google three on the same side of that line: `gcloud_missing`,
+ * `gcloud_not_logged_in` and `gcloud_no_project` are all facts about the
+ * machine's Google Cloud SDK, and the third of them is raised by the fetch
+ * wrapper mid-request, which is nobody's form.
  */
 import type { BackendError, BackendErrorCode, ValidationReason } from '@shared/types'
 import { VALIDATION_REASONS } from '@shared/types'
@@ -60,6 +64,12 @@ export function errorMessage(t: TranslateFn, code: BackendErrorCode): string {
       return t('errors.ant_missing')
     case 'ant_not_logged_in':
       return t('errors.ant_not_logged_in')
+    case 'gcloud_missing':
+      return t('errors.gcloud_missing')
+    case 'gcloud_not_logged_in':
+      return t('errors.gcloud_not_logged_in')
+    case 'gcloud_no_project':
+      return t('errors.gcloud_no_project')
   }
 }
 

@@ -13,9 +13,10 @@
  * 2. **The `custom` preset**, entirely offline: a fake endpoint and a fake key,
  *    saved and reopened, to prove the write-only key contract — the key never
  *    comes back, and the form says one is stored instead of showing a fake value.
- * 3. **Sign-in mode with no `ant` installed** (S5.3), which relaunches the app
- *    with `WITENA_ANT_BIN` pointing at nothing. The browser flow itself is not
- *    driven; the panel, the install command and the refused Save are.
+ * 3. **Sign-in mode with neither vendor CLI installed** (S5.3, S5.13), which
+ *    relaunches the app with `WITENA_ANT_BIN` and `WITENA_GCLOUD_BIN` pointing
+ *    at nothing. Neither browser flow is driven; the panels, the two install
+ *    commands and the two refused Saves are.
  *
  * The UI is pinned to Chinese and the window to 1440×900, like `ui-shell.spec.ts`,
  * so `providers.png` is comparable with the settings artboard. Every assertion is
@@ -236,7 +237,8 @@ test('clearing a key puts the card back into the "no key" state', async () => {
 test('sign-in mode explains what to install when `ant` is absent', async () => {
   await app?.close()
   ;({ app, window } = await launchWitena(userDataDir, {
-    WITENA_ANT_BIN: join(userDataDir, 'no-such-ant')
+    WITENA_ANT_BIN: join(userDataDir, 'no-such-ant'),
+    WITENA_GCLOUD_BIN: join(userDataDir, 'no-such-gcloud')
   }))
   await prepare()
   await openProviderSettings(window)
@@ -254,7 +256,7 @@ test('sign-in mode explains what to install when `ant` is absent', async () => {
     'not-installed'
   )
   // The install command is data, printed verbatim in both languages.
-  await expect(window.getByTestId('provider-ant-install')).toHaveText(
+  await expect(window.getByTestId('provider-cli-install')).toHaveText(
     'brew install anthropics/tap/ant'
   )
 
@@ -272,4 +274,41 @@ test('sign-in mode explains what to install when `ant` is absent', async () => {
   await window.getByTestId('provider-auth-apiKey').click()
   await expect(window.getByTestId('provider-sign-in')).toHaveCount(0)
   await expect(window.getByTestId('provider-api-key-input')).toBeVisible()
+})
+
+/**
+ * S5.13: the same, for Google, on the run that already has no `gcloud`.
+ *
+ * The two vendors are separate logins and separate panels, so this is not a
+ * repetition of the case above — what it proves is that the control is *live*
+ * for Google at all (it was disabled with a hint until this step), that the
+ * panel it opens is the Google one (its own install command, its own error
+ * code), and that Save refuses with `gcloud_missing` rather than with the
+ * Anthropic code, which is what a single shared status would have produced.
+ */
+test('sign-in mode explains what to install when `gcloud` is absent', async () => {
+  const before = await window.getByTestId('provider-card').count()
+
+  await window.getByTestId('providers-add').click()
+  await window.getByTestId('preset-google').click()
+  // Live rather than disabled: clicking it has to actually change the mode.
+  await window.getByTestId('provider-auth-oauth').click()
+
+  await expect(window.getByTestId('provider-api-key-input')).toHaveCount(0)
+  const panel = window.getByTestId('provider-sign-in')
+  await expect(panel).toHaveAttribute('data-auth-type', 'google')
+  await expect(panel).toHaveAttribute('data-auth-state', 'not-installed')
+  await expect(window.getByTestId('provider-cli-install')).toHaveText(
+    'brew install --cask google-cloud-sdk'
+  )
+  // Nothing to name a project for yet: that control belongs to a signed-in panel.
+  await expect(window.getByTestId('provider-project-input')).toHaveCount(0)
+
+  await window.getByTestId('provider-save').click()
+
+  const error = window.getByTestId('provider-error')
+  await expect(error).toHaveAttribute('data-error-code', 'gcloud_missing')
+  await expect(error).toContainText(zhCN.errors['gcloud_missing'] as string)
+
+  await expect(window.getByTestId('provider-card')).toHaveCount(before)
 })

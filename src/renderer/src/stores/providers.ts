@@ -25,12 +25,12 @@
  */
 import { create } from 'zustand'
 import type { ProviderRef } from '@shared/backend'
-import { getPreset } from '@shared/presets'
+import { getPreset, OAUTH_PROVIDER_TYPES, type OAuthProviderType } from '@shared/presets'
 import type {
-  AnthropicAuthStatus,
   BackendErrorCode,
   ConnectionTestResult,
   Provider,
+  ProviderAuthStatus,
   ProviderInput
 } from '@shared/types'
 import { BackendClientError } from '../lib/backend'
@@ -43,6 +43,21 @@ export type EditorMode = 'idle' | 'create' | 'edit'
 
 /** Key the last probe result of an unsaved draft is remembered under. */
 export const DRAFT_TEST_KEY = 'draft'
+
+/**
+ * One login state per vendor, `null` before that vendor's CLI has been asked.
+ *
+ * A record rather than one status (S5.13) because `ant` and `gcloud` are two
+ * independent facts about the machine, and the sign-in panel renders whichever
+ * one its provider type names. It is still **not** per provider: two Anthropic
+ * providers share the one `ant` profile, which is why the key is the type.
+ */
+export type AuthStatuses = Record<OAuthProviderType, ProviderAuthStatus | null>
+
+/** Nothing asked yet, for either vendor. */
+export function emptyAuthStatuses(): AuthStatuses {
+  return Object.fromEntries(OAUTH_PROVIDER_TYPES.map((type) => [type, null])) as AuthStatuses
+}
 
 /** What a fresh "Add provider" form starts from: nothing but a shape. */
 export function emptyDraft(): ProviderInput {
@@ -129,14 +144,19 @@ export interface ProvidersState {
   fetchingModels: boolean
   saving: boolean
   /**
-   * What the Anthropic CLI reports, or `null` before it has been asked.
+   * What each vendor's CLI reports, or `null` before it has been asked.
    *
-   * One status for the whole app rather than one per provider: it is a fact
-   * about this machine — is `ant` installed, is a profile logged in — not about
-   * a row, and two providers in sign-in mode share the one login.
+   * One status per vendor for the whole app rather than one per provider: it is
+   * a fact about this machine — is the CLI installed, is a profile logged in —
+   * not about a row, and two providers of the same type share the one login.
    */
-  authStatus: AnthropicAuthStatus | null
-  /** True while `ant auth login` / `logout` is running, which needs a spinner. */
+  authStatus: AuthStatuses
+  /**
+   * True while a vendor login / logout is running, which needs a spinner.
+   *
+   * One flag rather than one per vendor: exactly one sign-in panel is on screen
+   * at a time, because it belongs to the one draft the editor is holding.
+   */
   authBusy: boolean
   /** Failure class of the last sign-in attempt, cleared when one succeeds. */
   authErrorCode?: BackendErrorCode | undefined
@@ -176,12 +196,18 @@ export interface ProvidersState {
   /** Creates or updates from the draft. Never rejects; sets `error` on failure. */
   saveDraft: () => Promise<Provider | null>
 
-  /** Reads the CLI's state. Never rejects: "not installed" is an answer. */
-  loadAuthStatus: () => Promise<AnthropicAuthStatus>
+  /** Reads one vendor CLI's state. Never rejects: "not installed" is an answer. */
+  loadAuthStatus: (type: OAuthProviderType) => Promise<ProviderAuthStatus>
   /** Runs the browser sign-in and stores the resulting status. Never rejects. */
-  signIn: () => Promise<void>
-  /** Removes the CLI's profile and stores the resulting status. Never rejects. */
-  signOut: () => Promise<void>
+  signIn: (type: OAuthProviderType) => Promise<void>
+  /** Signs the vendor's CLI out and stores the resulting status. Never rejects. */
+  signOut: (type: OAuthProviderType) => Promise<void>
+  /**
+   * Writes the Google quota project and stores the resulting status. Never
+   * rejects — a project id the CLI refused is a line under the field, and the
+   * panel stays open on it.
+   */
+  setQuotaProject: (project: string) => Promise<void>
 }
 
 /** Where a probe result belongs: the saved row it is about, or the draft. */
@@ -203,7 +229,7 @@ export const useProvidersStore = create<ProvidersState>()((set, get) => ({
   testing: false,
   fetchingModels: false,
   saving: false,
-  authStatus: null,
+  authStatus: emptyAuthStatuses(),
   authBusy: false,
   authErrorCode: undefined,
 
@@ -351,39 +377,59 @@ export const useProvidersStore = create<ProvidersState>()((set, get) => ({
     set({ draft: { ...draft, models: draft.models.filter((model) => model !== modelId) } })
   },
 
-  async loadAuthStatus() {
+  async loadAuthStatus(type) {
     try {
-      const authStatus = await getBackend().invoke('providers.authStatus')
-      set({ authStatus, authErrorCode: undefined })
-      return authStatus
+      const status = await getBackend().invoke('providers.authStatus', { type })
+      set((state) => ({
+        authStatus: { ...state.authStatus, [type]: status },
+        authErrorCode: undefined
+      }))
+      return status
     } catch (cause) {
       // The two states the panel exists for are answers, not rejections, so
       // reaching this line means the call itself failed. The panel still has to
       // render something, and "no CLI" is the safe thing to show.
-      const authStatus: AnthropicAuthStatus = { state: 'not-installed' }
-      set({ authStatus, authErrorCode: classify(cause) })
-      return authStatus
+      const status: ProviderAuthStatus = { state: 'not-installed' }
+      set((state) => ({
+        authStatus: { ...state.authStatus, [type]: status },
+        authErrorCode: classify(cause)
+      }))
+      return status
     }
   },
 
-  async signIn() {
+  async signIn(type) {
     set({ authBusy: true, authErrorCode: undefined })
     try {
-      set({ authStatus: await getBackend().invoke('providers.login') })
+      const status = await getBackend().invoke('providers.login', { type })
+      set((state) => ({ authStatus: { ...state.authStatus, [type]: status } }))
     } catch (cause) {
       // A flow the user closed in the browser lands here. That is not an app
       // failure: record the class, then ask the CLI what actually happened.
       set({ authErrorCode: classify(cause) })
-      await get().loadAuthStatus()
+      await get().loadAuthStatus(type)
     } finally {
       set({ authBusy: false })
     }
   },
 
-  async signOut() {
+  async signOut(type) {
     set({ authBusy: true, authErrorCode: undefined })
     try {
-      set({ authStatus: await getBackend().invoke('providers.logout') })
+      const status = await getBackend().invoke('providers.logout', { type })
+      set((state) => ({ authStatus: { ...state.authStatus, [type]: status } }))
+    } catch (cause) {
+      set({ authErrorCode: classify(cause) })
+    } finally {
+      set({ authBusy: false })
+    }
+  },
+
+  async setQuotaProject(project) {
+    set({ authBusy: true, authErrorCode: undefined })
+    try {
+      const status = await getBackend().invoke('providers.setQuotaProject', { project })
+      set((state) => ({ authStatus: { ...state.authStatus, google: status } }))
     } catch (cause) {
       set({ authErrorCode: classify(cause) })
     } finally {

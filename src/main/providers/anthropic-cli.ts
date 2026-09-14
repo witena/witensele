@@ -20,32 +20,40 @@
  * The consequence that matters for the rest of the app: **Witena stores no
  * token.** `SecretStore` is untouched, the database has no credential column,
  * and `ant auth logout` signs Witena out too, because there was never a second
- * copy. What crosses IPC is an `AnthropicAuthStatus`, which carries the account,
+ * copy. What crosses IPC is a `ProviderAuthStatus`, which carries the account,
  * organisation, workspace and expiry — and never `access_token` or
  * `refresh_token`, which do not leave this module except as an `Authorization`
  * header built in `registry.ts`.
  *
- * ## Finding the binary
+ * ## Finding the binary, and running it
  *
- * A packaged Electron app does not inherit the login shell's `PATH`: it is
- * launched by `launchd` with a minimal one, so `ant` installed by Homebrew is
- * invisible to `spawn('ant')`. The search therefore walks `PATH` and then the
- * three places the CLI is actually installed on macOS. `WITENA_ANT_BIN`
- * overrides the whole search with one absolute path, for an install somewhere
- * else — and for the end-to-end spec, which needs a run where `ant` is
- * definitively absent.
- *
- * Electron is not imported here (CLAUDE.md rule #5); `node:child_process` is,
- * which the rule says nothing about and which the main process already uses for
- * stdio MCP servers.
+ * Both live in `cli-process.ts` since S5.13, because `google-cli.ts` needs the
+ * same search and the same child-process handling. What stays here is what is
+ * specific to `ant`: its name, its install locations, its two error codes and
+ * the shape of what it prints. `WITENA_ANT_BIN` overrides the whole search with
+ * one absolute path, for an install somewhere else — and for the end-to-end
+ * spec, which needs a run where `ant` is definitively absent.
  */
-import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { join } from 'node:path'
 import { ANT_INSTALL_COMMAND } from '@shared/presets'
-import type { AnthropicAuthStatus } from '@shared/types'
+import type { ProviderAuthStatus } from '@shared/types'
 import { BackendFailure } from '../errors'
+import {
+  defaultSpawn,
+  detailOf,
+  optionalField,
+  resolveCliBinary,
+  runCliCommand,
+  TOKEN_EXPIRY_MARGIN_MS,
+  type CliProcess,
+  type CommandResult,
+  type SpawnFn
+} from './cli-process'
+
+/** Re-exported so a caller does not have to know the helper exists. */
+export { TOKEN_EXPIRY_MARGIN_MS } from './cli-process'
+export type { SpawnFn } from './cli-process'
 
 /** The executable's name on `PATH`. */
 export const ANT_BINARY = 'ant'
@@ -64,9 +72,6 @@ export const ANT_COMMAND_TIMEOUT_MS = 30_000
 /** Budget for `ant auth login`, which waits for a human in a browser. */
 export const ANT_LOGIN_TIMEOUT_MS = 5 * 60_000
 
-/** A token is treated as expired this long before it really is. */
-export const TOKEN_EXPIRY_MARGIN_MS = 60_000
-
 /** `ant` is not installed, or not where `WITENA_ANT_BIN` says it is. */
 export function antMissing(detail = 'The Anthropic CLI (ant) was not found'): BackendFailure {
   return new BackendFailure('ant_missing', detail, { install: ANT_INSTALL_COMMAND })
@@ -75,6 +80,19 @@ export function antMissing(detail = 'The Anthropic CLI (ant) was not found'): Ba
 /** `ant` is installed, but no profile is logged in. */
 export function antNotLoggedIn(detail = 'No Anthropic profile is logged in'): BackendFailure {
   return new BackendFailure('ant_not_logged_in', detail)
+}
+
+/**
+ * The absolute path of the `ant` binary, or a throw saying it is missing.
+ *
+ * A thin naming of the shared resolver, kept because it is what the test and the
+ * documentation call this step's binary search.
+ */
+export function resolveAntBinary(
+  env: Record<string, string | undefined>,
+  fallbackDirs: readonly string[]
+): string {
+  return resolveCliBinary(ANT_BINARY, ANT_BINARY_ENV, env, fallbackDirs, antMissing)
 }
 
 /**
@@ -87,11 +105,11 @@ export function antNotLoggedIn(detail = 'No Anthropic profile is logged in'): Ba
  */
 export interface AnthropicCli {
   /** Never rejects for "not installed" or "signed out": both are states. */
-  status(): Promise<AnthropicAuthStatus>
+  status(): Promise<ProviderAuthStatus>
   /** Runs the browser flow and resolves with the status it produced. */
-  login(): Promise<AnthropicAuthStatus>
+  login(): Promise<ProviderAuthStatus>
   /** Removes the active profile and resolves with the resulting status. */
-  logout(): Promise<AnthropicAuthStatus>
+  logout(): Promise<ProviderAuthStatus>
   /**
    * A usable access token, refreshed by the CLI when needed and cached in
    * memory until shortly before it expires. Rejects `ant_missing` /
@@ -99,13 +117,6 @@ export interface AnthropicCli {
    */
   accessToken(): Promise<string>
 }
-
-/** The `spawn` surface this module needs; injectable so a test can watch it. */
-export type SpawnFn = (
-  command: string,
-  args: readonly string[],
-  options: { stdio: ['ignore', 'pipe', 'pipe'] }
-) => ChildProcess
 
 export interface AnthropicCliOptions {
   /** Defaults to `node:child_process.spawn`. */
@@ -126,50 +137,8 @@ interface AntCredentials {
   /** Epoch milliseconds, converted from the CLI's unix seconds. */
   expiresAt?: number
   organizationName?: string
-  accountEmail?: string
+  account?: string
   workspaceName?: string
-}
-
-interface CommandResult {
-  code: number
-  stdout: string
-  stderr: string
-}
-
-function isExecutable(path: string): boolean {
-  try {
-    accessSync(path, constants.X_OK)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/**
- * The absolute path of the `ant` binary, or a rejection saying it is missing.
- *
- * `WITENA_ANT_BIN` wins outright and is returned **without** an existence check,
- * so a path that is set but wrong fails at `spawn` with the same `ant_missing`
- * code rather than in two different ways.
- */
-export function resolveAntBinary(
-  env: Record<string, string | undefined>,
-  fallbackDirs: readonly string[]
-): string {
-  const override = env[ANT_BINARY_ENV]?.trim()
-  if (override) return override
-
-  const fromPath = (env['PATH'] ?? '').split(delimiter).filter((entry) => entry.length > 0)
-  for (const dir of [...fromPath, ...fallbackDirs]) {
-    const candidate = join(dir, ANT_BINARY)
-    if (isExecutable(candidate)) return candidate
-  }
-  throw antMissing(`${ANT_BINARY} was not found on PATH or in ${fallbackDirs.join(', ')}`)
-}
-
-/** Trimmed and bounded, so a CLI that prints an essay cannot fill a log line. */
-function detailOf(stderr: string): string {
-  return stderr.trim().slice(0, 200)
 }
 
 function readCredentialFields(payload: unknown): AntCredentials {
@@ -191,14 +160,9 @@ function readCredentialFields(payload: unknown): AntCredentials {
     // The CLI prints unix **seconds**; every timestamp in Witena is milliseconds.
     ...(typeof expiresAt === 'number' ? { expiresAt: expiresAt * 1000 } : {}),
     ...optionalField('organizationName', text('organization_name')),
-    ...optionalField('accountEmail', text('account_email')),
+    ...optionalField('account', text('account_email')),
     ...optionalField('workspaceName', text('workspace_name'))
   }
-}
-
-/** `exactOptionalPropertyTypes` wants the key absent, not present and undefined. */
-function optionalField<K extends string>(key: K, value: string | undefined): { [P in K]?: string } {
-  return (value === undefined ? {} : { [key]: value }) as { [P in K]?: string }
 }
 
 /**
@@ -206,7 +170,7 @@ function optionalField<K extends string>(key: K, value: string | undefined): { [
  * access token and its expiry.
  */
 export function createAnthropicCli(options: AnthropicCliOptions = {}): AnthropicCli {
-  const spawnImpl = options.spawn ?? (nodeSpawn as unknown as SpawnFn)
+  const spawnImpl = options.spawn ?? defaultSpawn
   const env = options.env ?? (process.env as Record<string, string | undefined>)
   const fallbackDirs = options.fallbackDirs ?? defaultFallbackDirs()
   const clock = options.now ?? Date.now
@@ -216,58 +180,17 @@ export function createAnthropicCli(options: AnthropicCliOptions = {}): Anthropic
   /** The one piece of state: a token and when it stops being usable. */
   let cached: { token: string; expiresAt: number } | undefined
 
+  const cli: CliProcess = {
+    binary: ANT_BINARY,
+    binaryEnv: ANT_BINARY_ENV,
+    missing: antMissing,
+    env,
+    fallbackDirs,
+    spawn: spawnImpl
+  }
+
   async function run(args: readonly string[], timeoutMs: number): Promise<CommandResult> {
-    const binary = resolveAntBinary(env, fallbackDirs)
-
-    return await new Promise<CommandResult>((resolve, reject) => {
-      let child: ChildProcess
-      try {
-        child = spawnImpl(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-      } catch (error) {
-        reject(antMissing(`Could not run ${binary}: ${String(error)}`))
-        return
-      }
-
-      let stdout = ''
-      let stderr = ''
-      let settled = false
-
-      const timer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        child.kill()
-        reject(
-          new BackendFailure(
-            'internal',
-            `ant ${args.join(' ')} did not finish within ${timeoutMs} ms`
-          )
-        )
-      }, timeoutMs)
-
-      child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString()
-      })
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-
-      child.on('error', (error: NodeJS.ErrnoException) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        // ENOENT is the whole reason the search above exists: it also happens
-        // when `WITENA_ANT_BIN` points at nothing.
-        if (error.code === 'ENOENT') reject(antMissing(`${binary} could not be executed`))
-        else reject(new BackendFailure('internal', `Could not run ant: ${error.message}`))
-      })
-
-      child.on('close', (code) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        resolve({ code: code ?? 1, stdout, stderr })
-      })
-    })
+    return await runCliCommand(cli, args, timeoutMs)
   }
 
   /**
@@ -292,13 +215,13 @@ export function createAnthropicCli(options: AnthropicCliOptions = {}): Anthropic
     return readCredentialFields(payload)
   }
 
-  async function status(): Promise<AnthropicAuthStatus> {
+  async function status(): Promise<ProviderAuthStatus> {
     try {
       const credentials = await readCredentials()
       return {
         state: 'signed-in',
         ...optionalField('organizationName', credentials.organizationName),
-        ...optionalField('accountEmail', credentials.accountEmail),
+        ...optionalField('account', credentials.account),
         ...optionalField('workspaceName', credentials.workspaceName),
         ...(credentials.expiresAt === undefined ? {} : { expiresAt: credentials.expiresAt })
       }

@@ -45,6 +45,7 @@ const EXPECTED_METHODS = [
   'providers.authStatus',
   'providers.login',
   'providers.logout',
+  'providers.setQuotaProject',
   'agents.list',
   'agents.get',
   'agents.create',

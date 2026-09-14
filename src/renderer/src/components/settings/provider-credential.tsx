@@ -5,7 +5,7 @@
  * Extracted from `provider-editor.tsx` in S7.5 so the **first-run card can use
  * the same control rather than a copy of it**. Two key fields with two ideas
  * about what an empty string means would be the kind of bug nobody finds until
- * a user loses a stored key, and `AnthropicSignIn` is not something to have
+ * a user loses a stored key, and `ProviderSignIn` is not something to have
  * twice at all — it drives a CLI.
  *
  * It reads the draft from `stores/providers.ts` and writes back through
@@ -20,18 +20,18 @@
  *   input is empty even when one exists and a hint says so. Typing replaces the
  *   key; emptying a field that was typed into clears it.
  * - **The Authentication control is rendered for the three first-party types
- *   only**, disabled with a hint for the two that have no flow yet. An
- *   `openai-compatible` endpoint has no account to sign in to, so it gets no
- *   control rather than a dead one.
+ *   only**, disabled with a hint for OpenAI, which has no flow yet (S5.13 turned
+ *   Google's on). An `openai-compatible` endpoint has no account to sign in to,
+ *   so it gets no control rather than a dead one.
  * - **In sign-in mode the panel replaces the key field**, never sits beside it.
  */
 import { useTranslation } from 'react-i18next'
-import { getPreset, providerAuth } from '@shared/presets'
+import { getPreset, providerAuth, supportsOAuth } from '@shared/presets'
 import type { ProviderAuth } from '@shared/types'
 import { Field, Input, SegmentedControl } from '../ui'
 import { useProvidersStore } from '../../stores/providers'
-import { AnthropicSignIn } from './anthropic-sign-in'
 import { authControl } from './provider-display'
+import { ProviderSignIn } from './provider-sign-in'
 
 export function ProviderCredential(): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -72,7 +72,13 @@ export function ProviderCredential(): React.JSX.Element | null {
               },
               {
                 value: 'oauth',
-                label: t('settings.providers.authSignIn'),
+                // Named after the vendor rather than a generic "sign in": the
+                // user is about to hand an account to a specific company, and
+                // the button should say which.
+                label:
+                  draft.type === 'google'
+                    ? t('settings.providers.authSignInGoogle')
+                    : t('settings.providers.authSignInAnthropic'),
                 testId: 'provider-auth-oauth'
               }
             ]}
@@ -80,8 +86,8 @@ export function ProviderCredential(): React.JSX.Element | null {
         </Field>
       ) : null}
 
-      {auth === 'oauth' ? (
-        <AnthropicSignIn />
+      {auth === 'oauth' && supportsOAuth(draft.type) ? (
+        <ProviderSignIn type={draft.type} />
       ) : (
         <Field
           label={t('settings.providers.apiKey')}

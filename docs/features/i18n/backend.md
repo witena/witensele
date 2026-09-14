@@ -116,13 +116,16 @@ keeping: a `ValidationReason` narrows the refusal of one request and is only rea
 when the code is `validation`, so the two `oauth_*` refusals of the provider form
 are reasons — while "the Anthropic CLI is not installed" is also raised while
 building a model for a chat turn, which is nobody's form, so `ant_missing` and
-`ant_not_logged_in` are codes. The same rule applies to the next one: if only the
+`ant_not_logged_in` are codes — and so are S5.13's `gcloud_missing`,
+`gcloud_not_logged_in` and `gcloud_no_project`, the last of them most clearly of
+all: it is raised by the OAuth `fetch` wrapper in the middle of a request, where
+there is no request-shaped refusal to narrow. The same rule applies to the next one: if only the
 sender of this request can be wrong, it is a reason; if the *machine* is in that
 state, it is a code.
 
 One more thing the backend deliberately does not send: a **formatted date**. The
 sign-in panel's "valid until" line is built in the renderer from the epoch
-milliseconds in `AnthropicAuthStatus`, for the same reason as everything above —
+milliseconds in `ProviderAuthStatus`, for the same reason as everything above —
 the main process does not know the active language.
 
 ## Prompts are not UI copy — and are still bilingual (S1.7)

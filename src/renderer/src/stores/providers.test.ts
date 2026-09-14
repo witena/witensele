@@ -10,14 +10,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod, ProviderRef } from '@shared/backend'
 import type {
-  AnthropicAuthStatus,
+  ProviderAuthStatus,
   ConnectionTestResult,
   Provider,
   ProviderInput
 } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import { resetBackend, setBackend } from '../lib/backend-provider'
-import { DRAFT_TEST_KEY, useProvidersStore } from './providers'
+import { DRAFT_TEST_KEY, emptyAuthStatuses, useProvidersStore } from './providers'
 
 interface Call {
   method: BackendMethod
@@ -31,7 +31,7 @@ interface Fake {
   keys: () => Record<string, string>
   setModels: (models: string[]) => void
   setTestResult: (result: ConnectionTestResult) => void
-  setAuthStatus: (status: AnthropicAuthStatus) => void
+  setAuthStatus: (status: ProviderAuthStatus) => void
   fail: (error: Error | null) => void
 }
 
@@ -45,7 +45,7 @@ function fakeBackend(initial: Provider[] = []): Fake {
   )
   let models: string[] = []
   let testResult: ConnectionTestResult = { ok: true, latencyMs: 12, model: 'gpt-4o' }
-  let authStatus: AnthropicAuthStatus = { state: 'signed-out' }
+  let authStatus: ProviderAuthStatus = { state: 'signed-out' }
   let failure: Error | null = null
   let nextId = 1
 
@@ -102,11 +102,16 @@ function fakeBackend(initial: Provider[] = []): Fake {
       if (method === 'providers.testConnection') return testResult
       if (method === 'providers.authStatus') return authStatus
       if (method === 'providers.login') {
-        authStatus = { state: 'signed-in', accountEmail: 'person@example.com' }
+        authStatus = { state: 'signed-in', account: 'person@example.com' }
         return authStatus
       }
       if (method === 'providers.logout') {
         authStatus = { state: 'signed-out' }
+        return authStatus
+      }
+      if (method === 'providers.setQuotaProject') {
+        const { project } = input as { project: string }
+        authStatus = { state: 'signed-in', account: 'person@example.com', project }
         return authStatus
       }
 
@@ -165,7 +170,7 @@ beforeEach(() => {
     testing: false,
     fetchingModels: false,
     saving: false,
-    authStatus: null,
+    authStatus: emptyAuthStatuses(),
     authBusy: false,
     authErrorCode: undefined
   })
@@ -498,23 +503,36 @@ describe('testConnection', () => {
  * assuming.
  */
 describe('sign-in', () => {
-  it('reads the CLI status', async () => {
+  it('reads the CLI status, under the vendor that was asked', async () => {
     const backend = fakeBackend()
     backend.setAuthStatus({ state: 'not-installed' })
     setBackend(backend.client)
 
-    await expect(state().loadAuthStatus()).resolves.toEqual({ state: 'not-installed' })
-    expect(state().authStatus).toEqual({ state: 'not-installed' })
+    await expect(state().loadAuthStatus('anthropic')).resolves.toEqual({ state: 'not-installed' })
+    expect(state().authStatus.anthropic).toEqual({ state: 'not-installed' })
+    // The other vendor was never asked, and answering for it would be a guess.
+    expect(state().authStatus.google).toBeNull()
     expect(state().authErrorCode).toBeUndefined()
+  })
+
+  it('keeps the two vendors’ logins apart', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await state().signIn('google')
+
+    expect(state().authStatus.google).toMatchObject({ state: 'signed-in' })
+    expect(state().authStatus.anthropic).toBeNull()
+    expect(backend.calls.map((call) => call.input)).toEqual([{ type: 'google' }])
   })
 
   it('signs in and keeps the resulting status', async () => {
     const backend = fakeBackend()
     setBackend(backend.client)
 
-    await state().signIn()
+    await state().signIn('anthropic')
 
-    expect(state().authStatus).toMatchObject({ state: 'signed-in' })
+    expect(state().authStatus.anthropic).toMatchObject({ state: 'signed-in' })
     expect(state().authBusy).toBe(false)
     expect(backend.calls.map((call) => call.method)).toEqual(['providers.login'])
   })
@@ -522,11 +540,11 @@ describe('sign-in', () => {
   it('signs out and keeps the resulting status', async () => {
     const backend = fakeBackend()
     setBackend(backend.client)
-    await state().signIn()
+    await state().signIn('anthropic')
 
-    await state().signOut()
+    await state().signOut('anthropic')
 
-    expect(state().authStatus).toEqual({ state: 'signed-out' })
+    expect(state().authStatus.anthropic).toEqual({ state: 'signed-out' })
     expect(state().authBusy).toBe(false)
   })
 
@@ -536,7 +554,7 @@ describe('sign-in', () => {
     setBackend(backend.client)
     backend.fail(new Error('ant is missing'))
 
-    await state().signIn()
+    await state().signIn('anthropic')
 
     // Not a rejection: the panel keeps its shape and gains an error line.
     expect(state().authErrorCode).toBe('internal')
@@ -548,8 +566,29 @@ describe('sign-in', () => {
     setBackend(backend.client)
     backend.fail(new Error('bridge is down'))
 
-    await expect(state().loadAuthStatus()).resolves.toEqual({ state: 'not-installed' })
+    await expect(state().loadAuthStatus('google')).resolves.toEqual({ state: 'not-installed' })
     expect(state().authErrorCode).toBe('internal')
+  })
+
+  it('sets the Google quota project and stores the status that came back', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+
+    await state().setQuotaProject('witena-dev')
+
+    expect(state().authStatus.google).toMatchObject({ project: 'witena-dev' })
+    expect(state().authBusy).toBe(false)
+  })
+
+  it('records a refused project rather than rejecting', async () => {
+    const backend = fakeBackend()
+    setBackend(backend.client)
+    backend.fail(new Error('no permission on that project'))
+
+    await state().setQuotaProject('someone-elses-project')
+
+    expect(state().authErrorCode).toBe('internal')
+    expect(state().authBusy).toBe(false)
   })
 })
 

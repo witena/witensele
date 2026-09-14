@@ -10,7 +10,7 @@
 | `src/renderer/src/components/settings/provider-editor.tsx` | The add / edit form's layout and its Test / Save / Delete row. Since S7.5 the preset grid, the credential block and the model block are the three components below, not inline JSX |
 | `src/renderer/src/components/settings/provider-credential.tsx` | **S7.5**, extracted from the editor: the Authentication control (S5.3) and, under it, either the write-only key field or the sign-in panel. Takes no props — it reads and writes the one draft in the store — so the first-run card renders *this component*, not a copy |
 | `src/renderer/src/components/settings/provider-models.tsx` | **S7.5**, extracted likewise: "Fetch models", the chips and the inline "add a model" field, with the documented rule that a fetch *replaces* what the form held |
-| `src/renderer/src/components/settings/anthropic-sign-in.tsx` | **S5.3.** The sign-in panel: the three states, the install command, the Sign in / Sign out buttons |
+| `src/renderer/src/components/settings/provider-sign-in.tsx` | **S5.3**, generalised in **S5.13** (it was `anthropic-sign-in.tsx`). The sign-in panel for whichever vendor its `type` prop names: the three states, that vendor's install command, the Sign in / Sign out buttons, and — for a Google login with no quota project — the project field |
 | `src/renderer/src/components/settings/preset-grid.tsx` | The three-column preset picker, rendered straight from `PROVIDER_PRESETS` |
 | `src/renderer/src/components/settings/provider-logo.ts` | Monogram initials and the colour derived from the preset id |
 | `src/renderer/src/components/settings/provider-display.ts` | `providerHost`, `providerStatus`, `providerStatusTone`, and (S5.3) `authControl`, `signedInName`, `formatExpiry` — the editor's decisions as pure functions, because the suite has no DOM |
@@ -34,15 +34,15 @@
 | `draft` | `ProviderInput \| null` | The editor's working copy. **Never carries a loaded key** — see below |
 | `testResults` | `Record<string, ConnectionTestResult>` | Keyed by provider id, plus `'draft'` for an unsaved one. Runtime only, never persisted |
 | `testing` / `fetchingModels` / `saving` | `boolean` | Drive the three spinners |
-| `authStatus` | `AnthropicAuthStatus \| null` | What the `ant` CLI reports; `null` until the panel asks. One status for the app, not one per provider — it is a fact about the machine, and two Anthropic providers share the one login |
-| `authBusy` / `authErrorCode` | `boolean` / `BackendErrorCode?` | The sign-in spinner, and the class of the last attempt that was refused |
+| `authStatus` | `Record<OAuthProviderType, ProviderAuthStatus \| null>` | What each vendor CLI reports; `null` for one until its panel asks. One status **per vendor**, not one per provider — it is a fact about the machine, and two Anthropic providers share the one `ant` profile — but `ant` and `gcloud` are independent facts, which is why S5.13 made it a record |
+| `authBusy` / `authErrorCode` | `boolean` / `BackendErrorCode?` | The sign-in spinner, and the class of the last attempt that was refused. One flag, not one per vendor: exactly one panel is on screen at a time, because it belongs to the one draft the editor holds |
 
 Actions: `load`, `create`, `update`, `remove`, `fetchModels(ref)`,
 `testConnection(ref, modelId?)`, plus the editor set `startCreate`,
 `ensureDraft` (S7.5), `startEdit`, `closeEditor`, `patchDraft`, `applyPreset`,
-`addModel`, `removeModel`, `saveDraft`, and the S5.3 set `loadAuthStatus`,
-`signIn`, `signOut` — none of which rejects: a sign-in that failed is a line in
-the panel, not a thrown error.
+`addModel`, `removeModel`, `saveDraft`, and the S5.3 set `loadAuthStatus(type)`,
+`signIn(type)`, `signOut(type)` plus S5.13's `setQuotaProject(project)` — none of
+which rejects: a sign-in that failed is a line in the panel, not a thrown error.
 
 **Why `ensureDraft` exists beside `startCreate` (S7.5).** The first-run card on
 the chat page edits this same draft, but `startCreate` also sets `mode`, and a
@@ -77,8 +77,9 @@ the backend's own default).
 | `providers.delete` | the delete latch's second click | |
 | `providers.fetchModels` | the "Fetch from /models" link | Replaces `draft.models` with the endpoint's answer |
 | `providers.testConnection` | the "Test connection" button | Always with `{ draft }`, so a key typed a second ago is what gets tested |
-| `providers.authStatus` | `AnthropicSignIn` on mount, once | Only when the panel is actually shown: a user who never opens sign-in mode never spawns a process |
+| `providers.authStatus` | `ProviderSignIn` on mount, once per vendor | Only when the panel is actually shown: a user who never opens sign-in mode never spawns a process |
 | `providers.login` / `providers.logout` | the panel's two buttons | The CLI opens the browser itself; the call resolves when it exits |
+| `providers.setQuotaProject` | the Google panel's project field | **S5.13**, and only while a Google login names no project |
 
 No subscription: this feature emits no events.
 
@@ -95,10 +96,11 @@ No subscription: this feature emits no events.
 | empty | An `EmptyState` with its own "Add provider" button (the header's copy keeps the `data-testid`, so the locator stays unique) |
 | confirm delete | The Delete button relabels to "Click again to confirm" and disarms itself after 4 s |
 | sign-in mode | The key field is **replaced** by the panel, not hidden beside it. `data-auth-state` on the panel is the state the e2e spec asserts on |
-| signed in | Who (account email, falling back to workspace then organisation), the organisation and workspace as a dimmed mono line, when the credential expires, and a Sign out button |
-| signed out | One sentence saying Witena signs in through the CLI and keeps no token, and a Sign in button |
-| `ant` not installed | The same shape plus the install command in monospace. The Sign in button stays clickable on purpose: it doubles as "look again" for a user who installs the CLI in another window |
-| sign-in refused | A red line under the panel with the translated `ant_missing` / `ant_not_logged_in` sentence; Save then refuses too, and the editor's error line carries `data-error-code` |
+| signed in | Who (account email, falling back to workspace, then organisation, then the Google project), the second line — organisation and workspace for Anthropic, the quota project for Google — when the credential expires, and a Sign out button |
+| signed out | One sentence saying Witena signs in through that vendor's CLI and keeps no token (Google's adds what the account needs: a project with the Generative Language API enabled and billing attached), and a Sign in button |
+| CLI not installed | The same shape plus **that vendor's** install command in monospace. The Sign in button stays clickable on purpose: it doubles as "look again" for a user who installs the CLI in another window |
+| signed in to Google with no project | A warning line and a project-id field with its own button, which calls `providers.setQuotaProject`. It is not an error state — the login worked — but the Gemini API refuses an end-user credential that names no project, so the fix is offered where the gap is noticed (S5.13) |
+| sign-in refused | A red line under the panel with the translated `ant_*` / `gcloud_*` sentence; Save then refuses too, and the editor's error line carries `data-error-code` |
 | first run (S7.5) | The same three controls, on the chat page instead. `PresetGrid`, `ProviderCredential` and `ProviderModels` are rendered by `components/onboarding/onboarding-card.tsx` one step at a time, against the same draft, and the card's own Save calls `saveDraft`. Only one of the two screens is ever mounted — the shell renders a single page at a time — so every `data-testid` here stays unique |
 
 Card status is derived, never stored: `no-key` when a key is required and missing,
@@ -119,6 +121,16 @@ respect: the **install command is data, not copy** — `ANT_INSTALL_COMMAND` fro
 `@shared/presets`, rendered in a `<code>` exactly like a working directory path —
 and the expiry is formatted **in the renderer** with the active language, because
 the backend does not know which one that is.
+
+S5.13 split `authSignIn` into `authSignInAnthropic` / `authSignInGoogle` — the
+user is about to hand an account to a named company and the control should say
+which — and added `gcloudMissing`, `signedOutGoogle` and the five
+`quotaProject*` keys, plus `errors.gcloud_missing`,
+`errors.gcloud_not_logged_in` and `errors.gcloud_no_project`. The vendor branch
+is a ternary over **two literal `t()` calls**, never `t(KEYS[type])`, because
+`used-keys.test.ts` reads literals and a computed key would ship a typo.
+`GCLOUD_INSTALL_COMMAND` follows the same data-not-copy rule as its Anthropic
+counterpart, selected by `cliInstallCommand(type)`.
 
 All the S1.6 keys live under the same namespace (36 of them: `add`, `addTitle`,
 `editTitle`, `editorIdleTitle`, the two empty states, the two placeholders for the

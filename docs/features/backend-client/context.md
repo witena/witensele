@@ -32,7 +32,8 @@ only in the type system.
   The surface has grown three times since S1.1 declared it, and each addition
   follows the same three steps: the method on `BackendApi`, its name in
   `BACKEND_METHODS`, and a case in `contracts.test.ts` (S5.3
-  `providers.authStatus` / `login` / `logout`, S5.4 `permission.reply`, S5.6
+  `providers.authStatus` / `login` / `logout` and S5.13's
+  `providers.setQuotaProject`, S5.4 `permission.reply`, S5.6
   `chat.handoff`). The compile-time `Assert` below makes the first two
   inseparable.
 
@@ -113,10 +114,16 @@ through `BackendClient`.
 - `providers.fetchModels` / `providers.testConnection` accept either a saved id
   or an unsaved draft (`ProviderRef`). If the settings form ends up always
   saving first, the `draft` half can be dropped.
-- The three `providers.auth*` methods (S5.3) take no argument because `ant` has
-  one active profile and Witena stores no credential of its own. A build that
-  supported several logins, or a second vendor's CLI, would have to name which
-  one — most likely `{ provider: ProviderType }` — and the status would stop
+- The three `providers.auth*` methods take `{ type }` since S5.13, and took no
+  argument in S5.3 because `ant` was the only CLI. Adding Google could have meant
+  three more methods; it means one more argument instead, because the question is
+  the same question asked of a different machine fact. `providers.setQuotaProject`
+  is deliberately *not* `{ type }`-shaped: a quota project is a Google concept
+  with no Anthropic counterpart, and a method that is meaningless for half of its
+  own argument's values is worse than one named after what it does. Within one
+  vendor, the original limitation stands: each CLI has one active profile and
+  Witena stores no credential of its own. A build that supported several logins
+  *of the same vendor* would have to name which one, and the status would stop
   being a fact about the machine.
 - `InvokeResponse` is written twice: once in `src/main/ipc-protocol.ts` for main
   and preload, once in `src/preload/index.d.ts` for the renderer, because the

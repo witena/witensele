@@ -118,7 +118,8 @@ Things the guards will refuse: an English sentence in `zh-CN.json`, any CJK in
 locale file defines, and a literal in JSX.
 
 One thing they are *not* meant to refuse: a value that is genuinely the same in
-both languages. A shell command (S5.3's `brew install anthropics/tap/ant`) is
+both languages. A shell command (S5.3's `brew install anthropics/tap/ant`,
+S5.13's `brew install --cask google-cloud-sdk`) is
 data, so it is a constant in `@shared/presets` rendered inside `{…}` — braces are
 invisible to the JSX scan — rather than a key that would have to be duplicated
 identically in both files and then drift. The same rule already covers a working

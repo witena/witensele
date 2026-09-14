@@ -11,9 +11,9 @@
  */
 import { providerAuth, providerRequiresApiKey, supportsOAuth } from '@shared/presets'
 import type {
-  AnthropicAuthStatus,
   ConnectionTestResult,
   Provider,
+  ProviderAuthStatus,
   ProviderType
 } from '@shared/types'
 import type { StatusTone } from '../ui'
@@ -95,8 +95,9 @@ export function providerStatusTone(status: ProviderStatus): StatusTone {
  * Three outcomes rather than two, because "this provider will gain a sign-in
  * later" and "this provider has no account to sign in to" are different
  * statements: an `openai-compatible` endpoint is a URL somebody else operates,
- * so it gets no control at all, while OpenAI and Google get a disabled one with
- * a hint. Pure, so the rule is tested without rendering the editor.
+ * so it gets no control at all, while OpenAI — the one first-party type with no
+ * flow yet — gets a disabled one with a hint. Pure, so the rule is tested
+ * without rendering the editor.
  */
 export interface AuthControlState {
   shown: boolean
@@ -111,11 +112,14 @@ export function authControl(type: ProviderType): AuthControlState {
  * Who the user is signed in as, in one string.
  *
  * The account email is the identity a person recognises; a profile without one
- * falls back to the workspace and then the organisation, so the line never reads
+ * falls back to whatever label the answering CLI did give — the Anthropic
+ * workspace or organisation, the Google project — so the line never reads
  * "Signed in as ".
  */
-export function signedInName(status: AnthropicAuthStatus): string {
-  return status.accountEmail ?? status.workspaceName ?? status.organizationName ?? ''
+export function signedInName(status: ProviderAuthStatus): string {
+  return (
+    status.account ?? status.workspaceName ?? status.organizationName ?? status.project ?? ''
+  )
 }
 
 /**

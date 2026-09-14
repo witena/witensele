@@ -216,14 +216,14 @@ and sees their chats, the way any chat product works. The desktop app gains a
 | Layer | Choice | Why |
 |---|---|---|
 | Server | Node, one process serving the existing handler map over HTTP (`POST /api/<method>`) and the event bus over WebSocket | The handlers, `ChatRunner`, `AgentTurn`, `McpManager` and memory already receive storage, secrets and events by injection (rule 5); the server is a second host for them, not a rewrite |
-| Client transport | `HttpBackendClient` implementing `BackendClient` | Rule 6: page code does not change. A `system.capabilities` method tells the renderer which Electron-only features (folder picker, open in editor, stdio MCP, the executor's folder, `ant` sign-in) are absent |
+| Client transport | `HttpBackendClient` implementing `BackendClient` | Rule 6: page code does not change. A `system.capabilities` method tells the renderer which Electron-only features (folder picker, open in editor, stdio MCP, the executor's folder, the `ant` / `gcloud` sign-ins) are absent |
 | Database | Postgres on RDS through drizzle; SQLite stays for the desktop | drizzle already owns the schema; the SQL in migrations must become dialect-neutral or be maintained twice — decided at S8.1 |
 | Accounts | Amazon Cognito (hosted UI, OIDC) issuing JWTs the server verifies; `userId` is the Cognito subject | Every table and query already carries `userId`; nothing has to be retrofitted. Cognito keeps passwords, MFA and social sign-in out of our code |
 | Secrets | `SecretStore` backed by AWS KMS envelope encryption | Provider keys are the most sensitive thing the server holds; the interface already exists |
 | Hosting | ECS Fargate behind an ALB (WebSocket-capable), the SPA on S3 + CloudFront, infrastructure as CDK in TypeScript, deployed by GitHub Actions on a tag | Managed, one language across app and infra, no servers to patch |
 | Executors online | Not in the first online release. The executor needs a folder; a per-user cloud workspace (a container) is its own phase | Everything else works without it: discussion, document goals written by an HTTP MCP server, materials uploaded to the chat |
 
-What online deliberately does **not** do at first: stdio MCP servers (a child process on a shared host is not safe), `ant` sign-in (the CLI is local), local folders. Each is either replaced (HTTP MCP, API keys, uploads) or waits for cloud workspaces.
+What online deliberately does **not** do at first: stdio MCP servers (a child process on a shared host is not safe), CLI sign-in (both `ant` and `gcloud` are local), local folders. Each is either replaced (HTTP MCP, API keys, uploads) or waits for cloud workspaces.
 
 ## Test gate
 

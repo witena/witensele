@@ -15,12 +15,13 @@
  * - Rejections carry a `BackendError`; the renderer switches on `code`.
  */
 import type { BackendEvent, BackendEventType, EventOf } from './events'
+import type { OAuthProviderType } from './presets'
 import type { ChatUsageSummary } from './usage'
 import type {
   Agent,
   AgentInput,
   AgentPresence,
-  AnthropicAuthStatus,
+  ProviderAuthStatus,
   AppSettings,
   AppSettingsPatch,
   Chat,
@@ -189,21 +190,40 @@ export interface BackendApi {
     modelId?: string
   }) => Promise<ConnectionTestResult>
   /**
-   * Whether the Anthropic CLI is installed and logged in, and as whom (S5.3).
+   * Whether the vendor's CLI is installed and logged in, and as whom (S5.3,
+   * extended to Google in S5.13).
+   *
+   * `type` names which login is being asked about — the panel is rendered for
+   * one provider type at a time, and `ant` and `gcloud` are independent facts
+   * about the machine. It is an argument rather than three more methods per
+   * vendor for the obvious reason: the question is the same question.
    *
    * Never rejects for either of the two states the panel exists to show — "not
    * installed" and "signed out" are values, not failures — so the editor can
    * render them without an error path.
    */
-  'providers.authStatus': () => Promise<AnthropicAuthStatus>
+  'providers.authStatus': (input: { type: OAuthProviderType }) => Promise<ProviderAuthStatus>
   /**
-   * Runs `ant auth login`, which opens the system browser itself, and resolves
-   * with the resulting status when the CLI exits. Rejects `ant_missing` when
-   * there is no binary to run.
+   * Runs the vendor's login (`ant auth login`, `gcloud auth application-default
+   * login`), which opens the system browser itself, and resolves with the
+   * resulting status when the CLI exits. Rejects `ant_missing` / `gcloud_missing`
+   * when there is no binary to run.
    */
-  'providers.login': () => Promise<AnthropicAuthStatus>
-  /** Runs `ant auth logout` and resolves with the resulting status. */
-  'providers.logout': () => Promise<AnthropicAuthStatus>
+  'providers.login': (input: { type: OAuthProviderType }) => Promise<ProviderAuthStatus>
+  /** Signs the vendor's CLI out and resolves with the resulting status. */
+  'providers.logout': (input: { type: OAuthProviderType }) => Promise<ProviderAuthStatus>
+  /**
+   * Writes the Google Cloud quota project into the application-default
+   * credentials (`gcloud auth application-default set-quota-project`) and
+   * resolves with the new status (S5.13).
+   *
+   * Deliberately **not** `{ type }`-shaped like the three above: a quota project
+   * is a Google concept with no Anthropic counterpart, and a method that is
+   * meaningless for half of its own argument's values is worse than a method
+   * named after what it does. Rejects `gcloud_no_project` when the CLI refuses
+   * the id — usually because the ADC lacks `serviceusage.services.use` on it.
+   */
+  'providers.setQuotaProject': (input: { project: string }) => Promise<ProviderAuthStatus>
 
   /* -- agents ------------------------------------------------------------- */
 
@@ -442,6 +462,7 @@ export const BACKEND_METHODS = [
   'providers.authStatus',
   'providers.login',
   'providers.logout',
+  'providers.setQuotaProject',
   'agents.list',
   'agents.get',
   'agents.create',

@@ -206,28 +206,46 @@ export function providerAuth(provider: { auth?: ProviderAuth | undefined }): Pro
 }
 
 /**
- * How the Anthropic CLI is installed on macOS, shown to a user who has none.
+ * How each vendor's CLI is installed on macOS, shown to a user who has none.
  *
- * Shared data rather than copy: it is typed verbatim into a terminal and is the
- * same sentence in every language, so the sign-in panel renders it as a
- * monospace value the way the chat header renders a folder path.
+ * Shared data rather than copy: both are typed verbatim into a terminal and are
+ * the same sentence in every language, so the sign-in panel renders them as
+ * monospace values the way the chat header renders a folder path.
  */
 export const ANT_INSTALL_COMMAND = 'brew install anthropics/tap/ant'
 
-/** The provider types that can be signed into rather than given a key (S5.3). */
-export const OAUTH_PROVIDER_TYPES: readonly ProviderType[] = ['anthropic']
+/** The Google Cloud SDK, which owns the application-default credentials (S5.13). */
+export const GCLOUD_INSTALL_COMMAND = 'brew install --cask google-cloud-sdk'
+
+/** The provider types that can be signed into rather than given a key. */
+export const OAUTH_PROVIDER_TYPES = ['anthropic', 'google'] as const satisfies readonly ProviderType[]
+
+/** A provider type Witena can actually sign in to: `anthropic` or `google`. */
+export type OAuthProviderType = (typeof OAUTH_PROVIDER_TYPES)[number]
 
 /**
  * Whether this provider type has a sign-in flow Witena can actually run.
  *
- * OpenAI and Google are shown the control and told it is not available yet
- * rather than having it hidden, because "Witena cannot do this *yet*" is a
- * different statement from "this provider has no such thing", and the editor
- * says which. See "Provider authentication beyond Anthropic" in
- * `docs/STEPS.md`.
+ * OpenAI is shown the control and told it is not available yet rather than
+ * having it hidden, because "Witena cannot do this *yet*" is a different
+ * statement from "this provider has no such thing", and the editor says which.
+ * See "Provider authentication beyond Anthropic" in `docs/STEPS.md`.
  */
-export function supportsOAuth(type: ProviderType): boolean {
-  return OAUTH_PROVIDER_TYPES.includes(type)
+export function supportsOAuth(type: ProviderType): type is OAuthProviderType {
+  return (OAUTH_PROVIDER_TYPES as readonly ProviderType[]).includes(type)
+}
+
+/** The same question asked of an unknown value, for validating an IPC input. */
+export function isOAuthProviderType(value: unknown): value is OAuthProviderType {
+  return typeof value === 'string' && (OAUTH_PROVIDER_TYPES as readonly string[]).includes(value)
+}
+
+/**
+ * Which vendor's install command a sign-in panel prints. Total over the union,
+ * so a third vendor cannot be added without answering this.
+ */
+export function cliInstallCommand(type: OAuthProviderType): string {
+  return type === 'anthropic' ? ANT_INSTALL_COMMAND : GCLOUD_INSTALL_COMMAND
 }
 
 /**

@@ -10,8 +10,8 @@ import {
   EDITOR_KINDS,
   LOCAL_USER_ID,
   THEME_SETTINGS,
-  type AnthropicAuthState,
-  type AnthropicAuthStatus,
+  type ProviderAuthState,
+  type ProviderAuthStatus,
   type ProviderInput
 } from '@shared/types'
 import type { AppContext } from '../app-context'
@@ -419,9 +419,20 @@ describe('handlers/buildHandlers', () => {
       auth: 'oauth'
     }
 
-    /** A context whose CLI reports a logged-in profile, spawning nothing. */
-    function withCli(state: AnthropicAuthState): AppContext {
-      const status = (): Promise<AnthropicAuthStatus> => Promise.resolve({ state })
+    /** An Google provider that authenticates with the user's Google account. */
+    const googleSignInProvider: ProviderInput = {
+      type: 'google',
+      name: 'Gemini',
+      presetId: 'google',
+      models: ['gemini-2.5-pro'],
+      auth: 'oauth'
+    }
+
+    /** A context whose CLIs report a logged-in profile, spawning nothing. */
+    function withCli(state: ProviderAuthState, project = 'my-project'): AppContext {
+      const status = (): Promise<ProviderAuthStatus> => Promise.resolve({ state })
+      const googleStatus = (): Promise<ProviderAuthStatus> =>
+        Promise.resolve(state === 'signed-in' ? { state, project } : { state })
       return {
         ...ctx,
         anthropicCli: {
@@ -429,6 +440,14 @@ describe('handlers/buildHandlers', () => {
           login: status,
           logout: status,
           accessToken: () => Promise.resolve('oat-token')
+        },
+        googleCli: {
+          status: googleStatus,
+          login: googleStatus,
+          logout: googleStatus,
+          accessToken: () => Promise.resolve('ya29-token'),
+          project: () => Promise.resolve(project),
+          setQuotaProject: googleStatus
         }
       }
     }
@@ -543,24 +562,140 @@ describe('handlers/buildHandlers', () => {
     it('answers the three auth methods straight from the CLI', async () => {
       const signedIn = withCli('signed-in')
 
-      await expect(handlers['providers.authStatus'](signedIn)).resolves.toEqual({
+      await expect(
+        handlers['providers.authStatus'](signedIn, { type: 'anthropic' })
+      ).resolves.toEqual({ state: 'signed-in' })
+      await expect(handlers['providers.login'](signedIn, { type: 'anthropic' })).resolves.toEqual({
         state: 'signed-in'
       })
-      await expect(handlers['providers.login'](signedIn)).resolves.toEqual({ state: 'signed-in' })
-      await expect(handlers['providers.logout'](withCli('signed-out'))).resolves.toEqual({
-        state: 'signed-out'
+      await expect(
+        handlers['providers.logout'](withCli('signed-out'), { type: 'anthropic' })
+      ).resolves.toEqual({ state: 'signed-out' })
+    })
+
+    it('routes the three auth methods to the CLI the type names', async () => {
+      const signedIn = withCli('signed-in')
+
+      // The same three methods, a different machine fact behind them: `gcloud`
+      // answers with the quota project, which `ant` has no notion of.
+      await expect(handlers['providers.authStatus'](signedIn, { type: 'google' })).resolves.toEqual(
+        { state: 'signed-in', project: 'my-project' }
+      )
+      await expect(handlers['providers.login'](signedIn, { type: 'google' })).resolves.toEqual({
+        state: 'signed-in',
+        project: 'my-project'
       })
+    })
+
+    it('refuses a sign-in type that has no flow, rather than picking one', async () => {
+      // `openai` is a real provider type and not a sign-in one; the refusal names
+      // itself so the panel can say which rule was broken.
+      await expect(
+        handlers['providers.authStatus'](withCli('signed-in'), { type: 'openai' as never })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        details: { reason: 'oauth_unsupported_provider' }
+      })
+    })
+
+    it('saves a Google provider that signs in, with no key at all', async () => {
+      const created = await handlers['providers.create'](withCli('signed-in'), {
+        input: googleSignInProvider
+      })
+
+      expect(created).toMatchObject({ type: 'google', auth: 'oauth', hasApiKey: false })
+      expect(ctx.repos.providers.getApiKeyCiphertext(created.id, ctx.userId)).toBeNull()
+    })
+
+    it('refuses to save a Google sign-in provider when gcloud is missing or signed out', async () => {
+      await expect(
+        handlers['providers.create'](withCli('not-installed'), { input: googleSignInProvider })
+      ).rejects.toMatchObject({ code: 'gcloud_missing' })
+
+      await expect(
+        handlers['providers.create'](withCli('signed-out'), { input: googleSignInProvider })
+      ).rejects.toMatchObject({ code: 'gcloud_not_logged_in' })
+    })
+
+    it('saves a signed-in Google provider that has no quota project yet', async () => {
+      // A missing project is a gap the panel offers to fill, not a broken login:
+      // refusing the save here would tell the user the wrong thing.
+      const created = await handlers['providers.create'](withCli('signed-in', ''), {
+        input: googleSignInProvider
+      })
+
+      expect(created).toMatchObject({ auth: 'oauth' })
+    })
+
+    it('sets the quota project through gcloud and answers with the new status', async () => {
+      const seen: string[] = []
+      const context: AppContext = {
+        ...ctx,
+        googleCli: {
+          ...withCli('signed-in').googleCli,
+          setQuotaProject: (project: string) => {
+            seen.push(project)
+            return Promise.resolve({ state: 'signed-in' as const, project })
+          }
+        }
+      }
+
+      await expect(
+        handlers['providers.setQuotaProject'](context, { project: 'witena-dev' })
+      ).resolves.toEqual({ state: 'signed-in', project: 'witena-dev' })
+      expect(seen).toEqual(['witena-dev'])
+
+      await expect(
+        handlers['providers.setQuotaProject'](context, { project: '  ' })
+      ).rejects.toMatchObject({ code: 'validation' })
+    })
+
+    it('reads the Google model list with a bearer token and no key in the URL', async () => {
+      const seen: { url: string; headers: Record<string, string> }[] = []
+      const fetchImpl: FetchImpl = (input, init) => {
+        const headers: Record<string, string> = {}
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value
+        })
+        seen.push({ url: String(input), headers })
+        return Promise.resolve(
+          new Response(JSON.stringify({ models: [{ name: 'models/gemini-2.5-pro' }] }), {
+            status: 200
+          })
+        )
+      }
+
+      await expect(
+        handlers['providers.fetchModels'](
+          { ...withCli('signed-in'), fetchImpl },
+          { provider: { draft: googleSignInProvider } }
+        )
+      ).resolves.toEqual(['gemini-2.5-pro'])
+
+      expect(seen[0]?.headers['authorization']).toBe('Bearer ya29-token')
+      expect(seen[0]?.headers['x-goog-user-project']).toBe('my-project')
+      expect(seen[0]?.headers['x-goog-api-key']).toBeUndefined()
+      // An empty `?key=` alongside a bearer token is refused by the API.
+      expect(seen[0]?.url).not.toContain('key=')
     })
 
     it('answers "not installed" as a status, but refuses to run a sign-in', async () => {
       // The default test context has no CLI at all, which is the state of a
       // machine that never installed one. Asking *about* it is fine; asking it
       // to do something is the failure the panel's error line shows.
-      await expect(handlers['providers.authStatus'](ctx)).resolves.toEqual({
+      await expect(handlers['providers.authStatus'](ctx, { type: 'anthropic' })).resolves.toEqual({
         state: 'not-installed'
       })
-      await expect(handlers['providers.login'](ctx)).rejects.toMatchObject({
+      await expect(handlers['providers.login'](ctx, { type: 'anthropic' })).rejects.toMatchObject({
         code: 'ant_missing'
+      })
+
+      // The same for the Google half, with the Google codes.
+      await expect(handlers['providers.authStatus'](ctx, { type: 'google' })).resolves.toEqual({
+        state: 'not-installed'
+      })
+      await expect(handlers['providers.login'](ctx, { type: 'google' })).rejects.toMatchObject({
+        code: 'gcloud_missing'
       })
     })
 
@@ -709,10 +844,11 @@ describe('handlers/stubs', () => {
       // S4.1, S4.3
       'chats.search',
       'messages.usageSummary',
-      // S5.3
+      // S5.3, and S5.13's fourth
       'providers.authStatus',
       'providers.login',
       'providers.logout',
+      'providers.setQuotaProject',
       // S5.4
       'permission.reply',
       // S5.6

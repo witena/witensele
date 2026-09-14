@@ -9,15 +9,21 @@
 | `src/main/providers/resolve.ts` | `ProviderRef` → `ResolvedProvider`. The **only** place a stored key is decrypted |
 | `src/main/providers/registry.ts` | `ResolvedProvider` + model id → an AI SDK `LanguageModel` |
 | `src/main/providers/discovery.ts` | `fetchModels` (raw `/models`) and `testConnection` (`generateText`) |
-| `src/main/providers/anthropic-cli.ts` | **S5.3.** The `ant` wrapper: binary resolution, `status`, `login`, `logout`, `accessToken` and the token cache. The only module in the app that holds an access token |
-| `src/main/handlers/providers.ts` | The seven `providers.*` methods; validation lives here and nowhere else |
-| `src/main/app-context.ts` | Gained an optional `fetchImpl` so a test can inject HTTP, and (S5.3) `anthropicCli` plus the `modelOptions` / `providerFetch` readers |
+| `src/main/providers/cli-process.ts` | **S5.13.** Binary resolution (`PATH`, then the vendor's install locations, then the override variable) and one child process per command, shared by both CLI wrappers |
+| `src/main/providers/anthropic-cli.ts` | **S5.3.** The `ant` wrapper: `status`, `login`, `logout`, `accessToken` and the token cache |
+| `src/main/providers/google-cli.ts` | **S5.13.** The `gcloud` wrapper: the same four plus `project` and `setQuotaProject`, and the credential cache |
+| `src/main/handlers/providers.ts` | The eleven `providers.*` methods; validation lives here and nowhere else |
+| `src/main/app-context.ts` | Gained an optional `fetchImpl` so a test can inject HTTP, and (S5.3, S5.13) `anthropicCli` / `googleCli` plus the `modelOptions` / `providerFetch` / `authCli` readers |
+
+Those two wrappers are the only modules in the app that ever hold an access
+token, and each holds one for as long as its CLI says it is valid, minus sixty
+seconds.
 
 None of them imports electron (CLAUDE.md rule #5). `resolve.ts` takes an
 `AppContext` by type only; the secret store arrives through it as an interface.
-`anthropic-cli.ts` imports `node:child_process`, `node:fs`, `node:os` and
-`node:path`, which the rule says nothing about — it is about electron, and the
-main process already spawns stdio MCP servers.
+`cli-process.ts` imports `node:child_process`, `node:fs` and `node:path`, which
+the rule says nothing about — it is about electron, and the main process already
+spawns stdio MCP servers.
 
 **S7.5 added nothing here.** The first-run card is a second *renderer* of the
 same draft and the same seven methods: it calls `providers.fetchModels` and
@@ -41,7 +47,7 @@ S1.2 created the table; S5.3 added one column
 | `preset_id` | text null | Which `PROVIDER_PRESETS` entry it came from; drives the logo, the key requirement and the local-server placeholder |
 | `models` | json | `string[]`, preset seed or `/models` answer |
 | `api_key_encrypted` | text null | **Ciphertext only.** Mapped to `Provider.hasApiKey`, never to a value |
-| `auth` | text null | `apiKey \| oauth` (S5.3). Null means `apiKey`; read it through `providerAuth()`. An `oauth` row stores **no credential at all** |
+| `auth` | text null | `apiKey \| oauth` (S5.3). Null means `apiKey`; read it through `providerAuth()`. An `oauth` row stores **no credential at all**. S5.13 widened which types may hold `oauth` and needed **no migration**: the column already existed and its meaning did not change |
 | `created_at` / `updated_at` | integer | Epoch milliseconds |
 
 Key handling is split on purpose: `ProviderRepository` takes an injected
@@ -56,14 +62,15 @@ keeps the stored key, `''` clears it, any other string replaces it.
 |---|---|---|---|
 | `providers.list` | — | `Provider[]`, oldest first | — |
 | `providers.get` | `{ id }` | `Provider` | non-empty id; `not_found` otherwise |
-| `providers.create` | `{ input: ProviderInput }` | `Provider` | name non-empty; known `type`; `models` an array of strings; `openai-compatible` needs `baseUrl`; a key is required when `providerRequiresApiKey` says so; and (S5.3) `auth` must be one of the two modes, `oauth` only on `anthropic` (`oauth_unsupported_provider`) with no `baseUrl` (`oauth_custom_base_url`), with the CLI actually signed in (`ant_missing` / `ant_not_logged_in`) |
+| `providers.create` | `{ input: ProviderInput }` | `Provider` | name non-empty; known `type`; `models` an array of strings; `openai-compatible` needs `baseUrl`; a key is required when `providerRequiresApiKey` says so; and (S5.3) `auth` must be one of the two modes, `oauth` only on `anthropic` or `google` (`oauth_unsupported_provider`) with no `baseUrl` (`oauth_custom_base_url`), with **that type's** CLI actually signed in (`ant_missing` / `ant_not_logged_in`, `gcloud_missing` / `gcloud_not_logged_in`). A Google provider with no quota project is **accepted**: the user is signed in and the panel offers the field |
 | `providers.update` | `{ id, patch }` | `Provider` | the same checks, applied only to the fields present. The key requirement is **not** re-checked: clearing a key is a deliberate operation. The `auth` rules *are* checked against the **stored row merged with the patch**, because `{ auth: 'oauth' }` alone says nothing about the type it lands on |
 | `providers.delete` | `{ id }` | `void` | non-empty id |
 | `providers.fetchModels` | `{ provider: ProviderRef }` | `string[]` | the ref must be `{ id }` or `{ draft }`; rejects `provider_error` with `details.status` |
 | `providers.testConnection` | `{ provider: ProviderRef, modelId? }` | `ConnectionTestResult` | never rejects; a failed probe is a value |
-| `providers.authStatus` | — | `AnthropicAuthStatus` | never rejects: `not-installed` and `signed-out` are states |
-| `providers.login` | — | `AnthropicAuthStatus` | rejects `ant_missing` with no binary, `ant_not_logged_in` for a flow the user abandoned |
-| `providers.logout` | — | `AnthropicAuthStatus` | rejects `ant_missing` only; "there was nothing to log out of" is the state the caller asked for |
+| `providers.authStatus` | `{ type }` | `ProviderAuthStatus` | `type` must be `anthropic` or `google` (`oauth_unsupported_provider`); otherwise never rejects, because `not-installed` and `signed-out` are states |
+| `providers.login` | `{ type }` | `ProviderAuthStatus` | rejects `*_missing` with no binary, `*_not_logged_in` for a flow the user abandoned |
+| `providers.logout` | `{ type }` | `ProviderAuthStatus` | rejects `*_missing` only; "there was nothing to log out of" is the state the caller asked for |
+| `providers.setQuotaProject` | `{ project }` | `ProviderAuthStatus` | **S5.13**, Google only. Non-empty id; rejects `gcloud_no_project` when the CLI refuses it, usually for want of `serviceusage.services.use` on that project |
 
 No event is emitted. Provider changes are the answer to the call that made them,
 and the store updates from that answer; nothing else in the app is watching.
@@ -171,7 +178,7 @@ figure at all.
 |---|---|---|
 | `anthropic` | `GET {base}/v1/models`, headers `x-api-key` and `anthropic-version: 2023-06-01` | `data[].id` |
 | `openai`, `openai-compatible` | `GET {base}/models`, `Authorization: Bearer <key>` (omitted when there is no key) | `data[].id` |
-| `google` | `GET {base}/models?key=<key>` | `models[].name`, minus the `models/` prefix |
+| `google` | `GET {base}/models?key=<key>`, or `GET {base}/models` with no parameter when the provider signs in | `models[].name`, minus the `models/` prefix |
 
 Defaults when the record stores no `baseUrl`: `https://api.anthropic.com`,
 `https://api.openai.com/v1`,
@@ -192,7 +199,11 @@ Details that matter:
   without parsing prose.
 - Google authenticates the listing endpoint with a **query parameter**, which is
   its documented REST form. The key therefore appears in a URL string inside the
-  main process; it is never logged.
+  main process; it is never logged. A provider in sign-in mode has no key and the
+  parameter is **omitted entirely** (S5.13) rather than sent empty: its credential
+  arrives as the `Authorization` and `x-goog-user-project` headers that
+  `createProviderFetch` puts on the request, and an empty `key=` alongside them is
+  refused.
 
 ### The connection probe
 
@@ -209,7 +220,25 @@ provider rather than "something went wrong inside the app".
 inject a `MockLanguageModelV4` and let the **real** `generateText` run, so the
 option names above are proven by the suite rather than by review.
 
-### The Anthropic CLI (`ant`), S5.3
+### The two vendor CLIs
+
+Both are wrapped the same way and share `cli-process.ts`, which owns the search
+(`PATH`, then the vendor's macOS install locations, then the override variable)
+and the child process (one per command, a timeout, ENOENT told apart from a
+non-zero exit). What stays per vendor is the binary's name, its install
+locations, its error codes and the shape of what it prints.
+
+| | Anthropic (S5.3) | Google (S5.13) |
+|---|---|---|
+| Binary | `ant` | `gcloud` |
+| Override | `WITENA_ANT_BIN` | `WITENA_GCLOUD_BIN` |
+| Fallback dirs | `/opt/homebrew/bin`, `/usr/local/bin`, `$HOME/go/bin` | `/opt/homebrew/bin`, `/usr/local/bin`, `$HOME/google-cloud-sdk/bin` |
+| Read timeout | 30 s | 60 s — with no ADC, `gcloud` probes the Compute Engine metadata server three times first, ~10 s on a laptop |
+| Missing | `ant_missing` | `gcloud_missing` |
+| Signed out | `ant_not_logged_in` | `gcloud_not_logged_in` |
+| Third code | — | `gcloud_no_project` |
+
+#### The Anthropic CLI (`ant`), S5.3
 
 Verified against `ant` 1.32.0 on macOS. Install:
 `brew install anthropics/tap/ant`, then
@@ -226,7 +255,7 @@ Verified against `ant` 1.32.0 on macOS. Install:
 (`oauth_token`), `access_token`, `expires_at` (**unix seconds**),
 `refresh_token`, `scope`, `organization_uuid`, `organization_name`,
 `account_email`, `workspace_id`, `workspace_name`. Four of them plus a converted
-`expires_at` become `AnthropicAuthStatus`; the two token fields never leave the
+`expires_at` become a `ProviderAuthStatus`; the two token fields never leave the
 module.
 
 Things that will bite anyone changing this file:
@@ -260,6 +289,81 @@ with `--access-token`. This module uses the JSON form for both the status and th
 token, because it is the call that carries `expires_at` — which the cache rule
 needs — and using the bare flag as well would mean two child processes per cache
 miss for one fact. The bare flag is still what a human should use at a prompt.
+
+#### The Google Cloud SDK (`gcloud`), S5.13
+
+Verified against Google Cloud SDK 553.0.0 on macOS. Install:
+`brew install --cask google-cloud-sdk`.
+
+| Command | What it does |
+|---|---|
+| `gcloud auth application-default print-access-token --format=json` | The status *and* the token *and* the quota project, in one JSON **object**; refreshes the token when it is near expiry; exits 1 with no ADC |
+| `gcloud config list --format=json` | The fallback account and project, read only when the ADC carries neither |
+| `gcloud auth application-default login` | Opens the system browser itself |
+| `gcloud auth application-default revoke --quiet` | Deletes `~/.config/gcloud/application_default_credentials.json` |
+| `gcloud auth application-default set-quota-project <id>` | Writes `quota_project_id` into that same file |
+
+The `--format=json` object's keys, as printed on 553.0.0: `account`,
+`client_id`, `client_secret`, `default_scopes`, `expired`, `expiry`,
+`granted_scopes`, `id_token`, `id_tokenb64`, `quota_project_id`, `rapt_token`,
+`refresh_handler`, `refresh_token`, `requires_scopes`, `scopes`, `token`,
+`token_state`, `token_uri`, `universe_domain`, `valid`.
+
+Things that will bite anyone changing this file:
+
+- **The token field is `token`, not `access_token`.** This is the SDK's own
+  credential object, not an OAuth response body. Reading `access_token` gets
+  `undefined` and the module reports "credentials without an access token".
+- **`expiry.datetime` is a naive **UTC** timestamp** (`2026-09-14 05:14:51.579879`
+  while `date -u` read 04:14:51). `parseExpiry` appends the `Z`; letting the
+  platform apply the local zone would be wrong by the offset on every machine
+  outside UTC — and wrong in the *unsafe* direction east of it.
+- **`gcloud config get-value` is not parsed.** Its unset answer is the word
+  `(unset)` on **stderr** with an empty stdout and exit code **0**, which is
+  prose pretending to be a value. `config list --format=json` simply omits the
+  key, and answers both questions in one spawn.
+- **An ADC written by `application-default login` alone carries no account.**
+  `account` is `""` and `quota_project_id` is `null` until someone sets them, so
+  the labels fall back to `core.account` / `core.project` from `config list` —
+  and a machine that has neither is still `signed-in`, just without a name to
+  print.
+- **A missing quota project is not an error state.** It is `signed-in` with no
+  `project`; `gcloud_no_project` is raised by `cli.project()`, which the fetch
+  wrapper calls *before* asking for a token, so a request that could not succeed
+  is never sent.
+- **`stdout` is a credential** — an access token, a refresh token and an id
+  token. It is parsed and dropped; only `stderr` is ever quoted, trimmed to 200
+  characters. A test asserts that a command which prints one *and* fails leaks
+  nothing.
+- **`createGoogleGenerativeAI({ apiKey: '' })` is deliberate**, exactly as on the
+  Anthropic side: omitting `apiKey` makes the adapter look for
+  `GOOGLE_GENERATIVE_AI_API_KEY` and throw, and the empty `x-goog-api-key` it
+  produces is deleted by the wrapper before the request leaves.
+- **Token lifetime falls back to 55 minutes** when `gcloud` printed no expiry;
+  Google issues one-hour tokens, and the shared 60 s margin applies on top.
+
+**Not used, deliberately:** the Gemini CLI / Antigravity OAuth client and the
+`cloudcode-pa.googleapis.com` Code Assist endpoint. A first-party client id
+belonging to a vendor's own tools is not ours to reuse.
+
+### The shared OAuth `fetch` wrapper
+
+One `oauthFetch` for both vendors (S5.13, generalised from S5.3's
+Anthropic-only one), because the risk being managed is *forgetting an edit* and
+the way to manage that is to have one place that applies them. The vendor's
+edits arrive as data:
+
+| | `remove` | `Authorization` | `set` | `merge` |
+|---|---|---|---|---|
+| Anthropic | `x-api-key` | `Bearer <ant token>` | — | `anthropic-beta: oauth-2025-04-20` |
+| Google | `x-goog-api-key` | `Bearer <ADC token>` | `x-goog-user-project: <project>` | — |
+
+`merge` exists only for `anthropic-beta`: the SDK sets that header itself for
+features like extended output, so assigning it would silently turn them off.
+`remove` exists because both APIs refuse a request that carries a key *and* a
+token. The preparer is called **per request** rather than captured, so a model
+instance built once and used for an hour keeps working — each CLI refreshes its
+credential and caches it until just before it expires.
 
 ### `SecretStore`
 

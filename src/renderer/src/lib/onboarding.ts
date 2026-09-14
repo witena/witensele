@@ -38,7 +38,7 @@
  * stays hidden until then rather than flashing onto a screen that is about to
  * say it was skipped.
  */
-import type { AnthropicAuthStatus, ProviderInput } from '@shared/types'
+import type { ProviderAuthStatus, ProviderInput } from '@shared/types'
 import { providerAuth, providerRequiresApiKey } from '@shared/presets'
 
 /** The five steps, in the order the card lists them. */
@@ -53,8 +53,12 @@ export interface OnboardingInput {
   providerCount: number
   /** The providers store's editor draft, which the first three steps write to. */
   draft: ProviderInput | null
-  /** What the Anthropic CLI last reported, for a draft in sign-in mode. */
-  authStatus: AnthropicAuthStatus | null
+  /**
+   * What the draft's **own vendor CLI** last reported, for a draft in sign-in
+   * mode. The card reads it out of the store by the draft's type (S5.13); this
+   * module only asks whether that login is good.
+   */
+  authStatus: ProviderAuthStatus | null
   /** How many agents are stored. */
   agentCount: number
   /** True once any chat has at least one member. */
@@ -77,7 +81,7 @@ export interface OnboardingState {
  */
 export function credentialReady(
   draft: ProviderInput,
-  authStatus: AnthropicAuthStatus | null
+  authStatus: ProviderAuthStatus | null
 ): boolean {
   if (providerAuth(draft) === 'oauth') return authStatus?.state === 'signed-in'
   // Covers both "Ollama needs none" and "a bare endpoint might not": the rule

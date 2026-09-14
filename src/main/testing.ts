@@ -28,6 +28,8 @@ import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat
 import type { AgentSupervisor } from './presence/supervisor'
 import type { AnthropicCli } from './providers/anthropic-cli'
 import { antMissing } from './providers/anthropic-cli'
+import type { GoogleCli } from './providers/google-cli'
+import { gcloudMissing } from './providers/google-cli'
 import type { FetchImpl } from './providers/discovery'
 import { createInsecureSecretStore, type SecretStore } from './secrets'
 
@@ -61,6 +63,13 @@ export interface TestAppContextOptions {
    */
   anthropicCli?: AnthropicCli
   /**
+   * The Google CLI (S5.13). Defaults to `absentGoogleCli()`, for the same
+   * reason: a machine that has never installed the Google Cloud SDK is the
+   * honest baseline, and a suite whose result depended on the developer's own
+   * `gcloud auth application-default login` would be no test at all.
+   */
+  googleCli?: GoogleCli
+  /**
    * Request ids for the `PermissionGate` (S5.4).
    *
    * A suite that answers a prompt has to know its id; injecting a counter is
@@ -86,6 +95,21 @@ export function absentAnthropicCli(): AnthropicCli {
     login: missing,
     logout: missing,
     accessToken: missing
+  }
+}
+
+/**
+ * A Google CLI that is not there. The Google half of `absentAnthropicCli`.
+ */
+export function absentGoogleCli(): GoogleCli {
+  const missing = (): Promise<never> => Promise.reject(gcloudMissing())
+  return {
+    status: () => Promise.resolve({ state: 'not-installed' }),
+    login: missing,
+    logout: missing,
+    accessToken: missing,
+    project: missing,
+    setQuotaProject: missing
   }
 }
 
@@ -125,6 +149,7 @@ export function createTestAppContext(
       ...(options.newRequestId ? { newRequestId: options.newRequestId } : {})
     }),
     anthropicCli: options.anthropicCli ?? absentAnthropicCli(),
+    googleCli: options.googleCli ?? absentGoogleCli(),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close: () => {
       ctx.supervisor.stop()

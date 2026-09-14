@@ -10,23 +10,30 @@ Four layers, each of which knows less than the one above it.
 picker from it, the main process asks it whether a key is mandatory — and it is
 data rather than a method because it cannot change at runtime.
 
-**The provider services** (`src/main/providers/`) are four small, electron-free
+**The provider services** (`src/main/providers/`) are six small, electron-free
 modules:
 
 - `resolve.ts` turns a `ProviderRef` into a `ResolvedProvider` (the record plus a
   plaintext key). It is the only place a stored key is decrypted.
 - `registry.ts` turns a `ResolvedProvider` plus a model id into an AI SDK
   `LanguageModel`. One `switch` over `ProviderType`, one factory each — plus
-  (S5.3) `oauthFetch`, the `fetch` wrapper that swaps an API key header for an
-  account token, and `createProviderFetch`, which decides whether a given
-  provider needs it.
+  (S5.3, generalised in S5.13) `oauthFetch`, the `fetch` wrapper that swaps an
+  API key header for an account token; `anthropicOAuthHeaders` /
+  `googleOAuthHeaders`, the two vendors' edits *as data*; and
+  `createProviderFetch`, which decides whether a given provider needs any of it.
 - `discovery.ts` answers the two network questions: `fetchModels` speaks the raw
   `/models` endpoints, `testConnection` runs `generateText` through the registry.
+- `cli-process.ts` (S5.13) finds a vendor binary and runs one command against it.
+  Shared by both wrappers below, because sixty lines of `PATH` search and
+  ENOENT-versus-exit-code handling is exactly the kind of thing that gets fixed
+  in one copy and not the other.
 - `anthropic-cli.ts` (S5.3) wraps the `ant` binary: `status`, `login`, `logout`
   and `accessToken`, behind an `AnthropicCli` interface that everything else
-  takes by injection. It is the only module here that spawns a process, and the
-  only one that ever holds a token — which never leaves it except as an
-  `Authorization` header.
+  takes by injection.
+- `google-cli.ts` (S5.13) wraps `gcloud` the same way, plus `project` and
+  `setQuotaProject`, behind a `GoogleCli` interface. Those two and the Anthropic
+  one are the only modules here that spawn a process, and the only ones that ever
+  hold a token — which never leaves them except as an `Authorization` header.
 
 **The handlers** (`src/main/handlers/providers.ts`) validate and delegate. They
 hold no logic of their own beyond "is this input acceptable".
@@ -67,32 +74,52 @@ click "Save"                → providers.create { input: draft }
                               → the editor re-binds to the saved row (key field resets to "stored")
 ```
 
-Signing in instead of pasting a key (S5.3):
+Signing in instead of pasting a key (S5.3, and S5.13 for Google):
 
 ```
 open the Anthropic provider     → the editor shows the Authentication control
 click "Sign in with Anthropic"  → patchDraft({ auth: 'oauth' }); the key field is
                                   replaced by the panel, which asks once:
-                                  providers.authStatus → ant auth print-credentials
-                                  → { state, accountEmail, workspaceName, expiresAt }
-click "Sign in"                 → providers.login → ant auth login (opens the
-                                  system browser itself; resolves when it exits)
+                                  providers.authStatus { type: 'anthropic' }
+                                  → ant auth print-credentials
+                                  → { state, account, workspaceName, expiresAt }
+click "Sign in"                 → providers.login { type } → ant auth login (opens
+                                  the system browser itself; resolves when it exits)
                                   → the resulting status replaces the old one
 click "Save"                    → providers.create { input: { …, auth: 'oauth' } }
-                                  → validation: anthropic only, no baseUrl, no key
-                                    needed; and the CLI must actually be signed in
+                                  → validation: a sign-in type only, no baseUrl, no
+                                    key needed; and that type's CLI must be signed in
                                   → the row stores `auth = 'oauth'` and no key
 ```
 
-and then, whenever that provider is used:
+The Google path is the same three calls with `{ type: 'google' }` behind them,
+and one extra branch: a signed-in ADC that names no quota project.
 
 ```
-createLanguageModel(resolved, modelId, { anthropicCli })
-  → createAnthropic({ apiKey: '', fetch: oauthFetch(() => cli.accessToken()) })
-      per request: delete x-api-key
-                   set Authorization: Bearer <token>
-                   merge oauth-2025-04-20 into anthropic-beta
-  → the token comes from the CLI's in-memory cache until 60 s before it expires
+providers.authStatus { type: 'google' }
+  → gcloud auth application-default print-access-token --format=json
+  → { state: 'signed-in', account?, project?, expiresAt }
+  → no project? the panel shows a project-id field
+type an id, click the button    → providers.setQuotaProject { project }
+                                  → gcloud auth application-default
+                                    set-quota-project <id>
+                                  → the new status replaces the old one
+```
+
+and then, whenever such a provider is used:
+
+```
+createLanguageModel(resolved, modelId, { anthropicCli, googleCli })
+  anthropic → createAnthropic({ apiKey: '', fetch: oauthFetch(anthropicOAuthHeaders(cli)) })
+                per request: delete x-api-key
+                             set Authorization: Bearer <token>
+                             merge oauth-2025-04-20 into anthropic-beta
+  google    → createGoogleGenerativeAI({ apiKey: '', fetch: oauthFetch(googleOAuthHeaders(cli)) })
+                per request: delete x-goog-api-key
+                             set Authorization: Bearer <token>
+                             set x-goog-user-project: <quota project>
+                             (no project → gcloud_no_project, and nothing is sent)
+  → the token comes from that CLI's in-memory cache until 60 s before it expires
 ```
 
 Using one afterwards (S1.7 preview):
@@ -114,10 +141,12 @@ never in a `Provider`, never in an event, never in the renderer.
 |---|---|---|
 | `ProviderPreset`, `PROVIDER_PRESETS`, `getPreset`, `isLocalPreset`, `providerRequiresApiKey` | `@shared/presets` | The table, and the three questions asked of it |
 | `ResolvedProvider` | `src/main/providers/registry.ts` | `Provider & { apiKey?: string }` — the only form the model layer accepts |
-| `createLanguageModel(provider, modelId, options?)` | same | Throws `validation` for an empty model id, an `openai-compatible` provider with no base URL, or an `oauth` provider with no `AnthropicCli` in `options` |
-| `ModelOptions`, `createProviderFetch`, `oauthFetch`, `mergeBeta` | same | The S5.3 injection point: the CLI and the outbound `fetch`, and the wrapper that rewrites the three headers |
+| `createLanguageModel(provider, modelId, options?)` | same | Throws `validation` for an empty model id, an `openai-compatible` provider with no base URL, or an `oauth` provider whose vendor CLI is not in `options` |
+| `ModelOptions`, `createProviderFetch`, `oauthFetch`, `OAuthRequestHeaders`, `anthropicOAuthHeaders`, `googleOAuthHeaders`, `mergeBeta` | same | The injection point: the two CLIs and the outbound `fetch`, the one wrapper, and the two vendors' header edits as data |
 | `AnthropicCli`, `createAnthropicCli`, `resolveAntBinary`, `antMissing`, `antNotLoggedIn` | `src/main/providers/anthropic-cli.ts` | The CLI seam. `createAnthropicCli` takes `spawn`, `env`, `fallbackDirs` and `now` so the tests drive the real implementation against a fake `ant` |
-| `modelOptions(ctx)`, `providerFetch(ctx, provider)` | `src/main/app-context.ts` | Those capabilities read off the context, so no caller spells out "…unless it signs in" |
+| `GoogleCli`, `createGoogleCli`, `resolveGcloudBinary`, `parseExpiry`, `gcloudMissing`, `gcloudNotLoggedIn`, `gcloudNoProject` | `src/main/providers/google-cli.ts` | The same seam for `gcloud`, with the same four options |
+| `CliProcess`, `resolveCliBinary`, `runCliCommand`, `TOKEN_EXPIRY_MARGIN_MS` | `src/main/providers/cli-process.ts` | What the two wrappers share |
+| `modelOptions(ctx)`, `providerFetch(ctx, provider)`, `authCli(ctx, type)` | `src/main/app-context.ts` | Those capabilities read off the context, so no caller spells out "…unless it signs in", and `authCli` is total over `OAuthProviderType` |
 | `fetchModels(resolved, fetchImpl?)` | `src/main/providers/discovery.ts` | Rejects with `provider_error`; `details.status` carries the HTTP status |
 | `testConnection(resolved, options?)` | same | **Never throws.** `options` carries `modelId`, `timeoutMs` and the two test seams (`createModel`, `generate`) |
 | `resolveProvider(ctx, ref)` | `src/main/providers/resolve.ts` | The decryption seam |
@@ -127,7 +156,8 @@ never in a `Provider`, never in an event, never in the renderer.
 Shared-contract changes made by S5.3:
 
 - `ProviderAuth` (`'apiKey' | 'oauth'`) with `Provider.auth` / `ProviderInput.auth`
-  optional, and `AnthropicAuthStatus` — the token-free status the renderer sees.
+  optional, and the token-free status the renderer sees — named
+  `AnthropicAuthStatus` then, `ProviderAuthStatus` since S5.13.
 - `BackendErrorCode` gained `ant_missing` and `ant_not_logged_in`; they describe
   the state of a tool on the user's machine rather than a malformed request, and
   they are raised by the model layer as well as by a handler.
@@ -136,6 +166,28 @@ Shared-contract changes made by S5.3:
   codes for two refusals of one form.
 - `providers.authStatus`, `providers.login` and `providers.logout` were added to
   `BackendApi`, `BACKEND_METHODS` and `shared/contracts.test.ts`.
+
+Shared-contract changes made by S5.13:
+
+- `AnthropicAuthStatus` became `ProviderAuthStatus` (and `AnthropicAuthState`
+  `ProviderAuthState`), with `accountEmail` renamed `account` and `project`
+  added. One interface for both vendors rather than one each: every consumer
+  treats it as "the machine's login state plus a few labels", and which labels
+  are filled is a fact about the vendor, not about the shape.
+- `OAUTH_PROVIDER_TYPES` gained `google`, so `supportsOAuth` — which is also a
+  type guard now — answers true for it, `providerRequiresApiKey` answers false,
+  and the editor's Authentication control is live. **No migration**: the `auth`
+  column already existed and its meaning did not change.
+- The three auth methods take `{ type: OAuthProviderType }` instead of nothing,
+  and `providers.setQuotaProject` was added beside them. The three are
+  `{ type }`-shaped because they ask the same question of a different machine
+  fact; the fourth is not, because a quota project is a Google concept with no
+  Anthropic counterpart, and a method meaningless for half its own argument's
+  values is worse than one named after what it does.
+- `BackendErrorCode` gained `gcloud_missing`, `gcloud_not_logged_in` and
+  `gcloud_no_project`, all on the "state of a tool on the machine" side of the
+  code-versus-reason line — the third most clearly of all, since the fetch
+  wrapper raises it mid-request, which is nobody's form.
 
 Shared-contract changes made by S1.6:
 
@@ -154,18 +206,19 @@ Shared-contract changes made by S1.6:
 | File | Covers |
 |---|---|
 | `src/shared/pricing.test.ts` | The price table's shape (positive prices and windows), the specific-before-general match order, matching a vendor-prefixed id, `estimateCost` (linear, `null` for an unknown model, `0` for a local preset), `contextWindowFor`'s fallback, and both formatters |
-| `src/shared/presets.test.ts` | Unique ids; every OpenAI-compatible preset except `custom` has a base URL; local presets require no key, ship no models and point at localhost; hosted presets are https and seeded; `getPreset` / `isLocalPreset` edge cases |
-| `src/main/providers/registry.test.ts` | A model is constructed for all four types and reports the right `provider` / `modelId`; the compatible name comes from the preset id and falls back to a slug; an empty model id and a base-URL-less compatible provider are rejected; a keyless local provider still builds. S5.3: `mergeBeta`'s three cases; `oauthFetch` deleting `x-api-key`, setting the bearer token, merging the beta flag, keeping every other header and asking for a token **per request**; an `oauth` model whose first real `doGenerate` is inspected for those headers; the refusal to build one with no CLI; and every other provider keeping the plain `fetch` |
+| `src/shared/presets.test.ts` | Unique ids; every OpenAI-compatible preset except `custom` has a base URL; local presets require no key, ship no models and point at localhost; hosted presets are https and seeded; `getPreset` / `isLocalPreset` edge cases. S5.3, S5.13: `providerAuth`'s default, the two types `supportsOAuth` answers true for, `isOAuthProviderType` against an unknown value, and both install commands including which `cliInstallCommand` picks |
+| `src/main/providers/registry.test.ts` | A model is constructed for all four types and reports the right `provider` / `modelId`; the compatible name comes from the preset id and falls back to a slug; an empty model id and a base-URL-less compatible provider are rejected; a keyless local provider still builds. S5.3: `mergeBeta`'s three cases; `oauthFetch` deleting `x-api-key`, setting the bearer token, merging the beta flag, keeping every other header and asking for a token **per request**; an `oauth` model whose first real `doGenerate` is inspected for those headers; the refusal to build one with no CLI; and every other provider keeping the plain `fetch`. S5.13 adds the **Google header set** through the same wrapper — `x-goog-api-key` gone, the bearer token and `x-goog-user-project` set, no `anthropic-beta` anywhere near it — a Google `oauth` model whose `doGenerate` is inspected likewise, the refusal to build one with no `GoogleCli`, and the rule that a project-less credential makes **no request at all** |
+| `src/main/providers/google-cli.test.ts` | **S5.13**, the same discipline against a **fake `gcloud`**: binary resolution (`PATH`, the fallback directories, `WITENA_GCLOUD_BIN`, nothing at all); `parseExpiry` reading the naive timestamp as UTC; `status` for all three states plus signed-in-with-no-project; the `config list` fallback for an ADC that carries no account or project, and the proof that it is **not** spawned when the ADC does carry them; the status carrying no credential and only three keys; that every read asks for `--format=json`; the cache expiring 60 s early, the 55-minute assumption when no expiry was printed, and the cache being dropped on logout and on `set-quota-project`; `gcloud_no_project` from `project()`; `gcloud_not_logged_in` on a non-zero exit; `internal` on output that is not JSON; a failing command quoting `stderr` and **never** `stdout`; login, a cancelled login, a forgiving revoke, and a refused project id |
 | `src/main/providers/anthropic-cli.test.ts` | The real implementation against a **fake `ant`** — an executable script first on the given `PATH`. Binary resolution (`PATH`, the fallback directories, `WITENA_ANT_BIN`, nothing at all); `status` for all three states; the status carrying no token and exactly five fields; that `print-credentials` is what is called; the token cache expiring 60 s early, not caching a credential with no expiry, and being dropped on logout; `ant_not_logged_in` on a non-zero exit; `internal` on output that is not JSON; a failing command quoting `stderr` and **never** `stdout`; login, a cancelled login, and logout being forgiving of "nothing to log out of" but not of a missing binary |
 | `src/main/providers/discovery.test.ts` | `fetchModels` for all four families with a fake `fetch` (URL, headers, id extraction, sorting, `/v1` not doubled); HTTP 401 and 404 → `provider_error` with the status; a 10 s timeout; an unreachable host. `testConnection` through the **real** `generateText` with `MockLanguageModelV4`, plus the failure, timeout, no-model and "keep the deliberate error code" paths |
-| `src/main/handlers/handlers.test.ts` | The `providers.*` block against the temp database: create stores ciphertext and reports only `hasApiKey`; the five validation refusals; a local preset saves with no key; an absent `apiKey` keeps the stored one and `''` clears it; delete; user scoping; `fetchModels` for a draft *and* for a saved row (proving decryption) with an injected `fetchImpl`. S5.3: an `oauth` provider saves with no key at all; the two reasoned refusals; an unknown mode; Save refused with `ant_missing` / `ant_not_logged_in`; the **merged** check on update (a patch of `{ auth: 'oauth' }` refused on an OpenAI row, accepted on an Anthropic one); `fetchModels` sending a bearer token, no `x-api-key` and the beta flag; and the three auth methods answering straight from the CLI |
-| `src/renderer/src/stores/providers.test.ts` | Load, the draft lifecycle (preset application, the name the user typed surviving it, models add/remove/dedupe), save-create vs save-update, failures becoming state, remove, and both probes including the draft/record result key. S5.3: `loadAuthStatus` / `signIn` / `signOut` keeping the latest status and never leaving `authBusy` on, a refused sign-in being recorded and followed by a re-read, and the draft carrying `auth` both ways |
+| `src/main/handlers/handlers.test.ts` | The `providers.*` block against the temp database: create stores ciphertext and reports only `hasApiKey`; the five validation refusals; a local preset saves with no key; an absent `apiKey` keeps the stored one and `''` clears it; delete; user scoping; `fetchModels` for a draft *and* for a saved row (proving decryption) with an injected `fetchImpl`. S5.3: an `oauth` provider saves with no key at all; the two reasoned refusals; an unknown mode; Save refused with `ant_missing` / `ant_not_logged_in`; the **merged** check on update (a patch of `{ auth: 'oauth' }` refused on an OpenAI row, accepted on an Anthropic one); `fetchModels` sending a bearer token, no `x-api-key` and the beta flag; and the three auth methods answering straight from the CLI. S5.13: the same three routed to the CLI the `{ type }` names, a sign-in type with no flow refused by reason, a Google provider saving with no key, Save refused with the **Google** codes, a signed-in Google provider with no quota project saving anyway, `setQuotaProject` passing the id through and refusing an empty one, and `fetchModels` for Google carrying the bearer token and the project header with **no `key=` in the URL** |
+| `src/renderer/src/stores/providers.test.ts` | Load, the draft lifecycle (preset application, the name the user typed surviving it, models add/remove/dedupe), save-create vs save-update, failures becoming state, remove, and both probes including the draft/record result key. S5.3: `loadAuthStatus` / `signIn` / `signOut` keeping the latest status and never leaving `authBusy` on, a refused sign-in being recorded and followed by a re-read, and the draft carrying `auth` both ways. S5.13: each of those taking a vendor and filing the answer under it, the two vendors' logins staying apart, and `setQuotaProject` storing the status that came back or recording a refusal without rejecting |
 | `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` maps to distinct, real copy, and `translateError` never prints the developer message |
 | `src/renderer/src/components/settings/provider-logo.test.ts` | The initials rules and the stability of the derived colour |
-| `src/renderer/src/components/settings/provider-display.test.ts` | Host derivation including the unparseable case; the status rule, especially "a local provider is never `no-key`" and "untested is not connected". S5.3: `signed-in` replacing the key indicator and a probe outranking it; `authControl`'s three outcomes, which is how the editor's mode switch is tested without a DOM; `signedInName`'s fallbacks and `formatExpiry` |
+| `src/renderer/src/components/settings/provider-display.test.ts` | Host derivation including the unparseable case; the status rule, especially "a local provider is never `no-key`" and "untested is not connected". S5.3: `signed-in` replacing the key indicator and a probe outranking it; `authControl`'s three outcomes, which is how the editor's mode switch is tested without a DOM; `signedInName`'s fallbacks and `formatExpiry`. S5.13 moves Google from the disabled outcome to the live one and adds the project as `signedInName`'s last fallback |
 | `src/renderer/src/components/ui/status-pill.test.ts` | The tone → token mapping, and that the classes are literal rather than interpolated |
 | `e2e/onboarding.spec.ts` | S7.5: the same three controls driven from the **chat page** — the Ollama tile, the local preset satisfying the credential step on its own, the model typed into `provider-add-model-input`, and the card's Save producing a stored provider |
-| `e2e/providers.spec.ts` | The Ollama flow against a real local server (skipped assertions are annotated when it is not running), survival across a restart, the write-only key contract, clearing a key, and the `providers.png` screenshot. S5.3 adds a case that relaunches the app with `WITENA_ANT_BIN` pointing at nothing: the panel reports `not-installed`, the key field is gone, the install command is printed verbatim, Save is refused with a translated `ant_missing` and stores nothing, and switching back to the key field restores the form |
+| `e2e/providers.spec.ts` | The Ollama flow against a real local server (skipped assertions are annotated when it is not running), survival across a restart, the write-only key contract, clearing a key, and the `providers.png` screenshot. S5.3 adds a case that relaunches the app with `WITENA_ANT_BIN` pointing at nothing: the panel reports `not-installed`, the key field is gone, the install command is printed verbatim, Save is refused with a translated `ant_missing` and stores nothing, and switching back to the key field restores the form. S5.13 sets `WITENA_GCLOUD_BIN` on the same relaunch and adds the Google case on it: the Authentication control is **live** rather than disabled, the panel it opens is `data-auth-type="google"`, the install command is the cask one, no project field is offered to a signed-out panel, and Save is refused with `gcloud_missing` — the Google code, which is what a single shared status would have got wrong |
 
 `MockLanguageModelV4` is the right mock, not `MockLanguageModelV3`: the installed
 provider packages implement `LanguageModelV4`, whose `finishReason` and `usage`
@@ -196,10 +249,15 @@ are structured objects rather than a string and three numbers.
   deliberately did not build.
 - **The sign-in click is never driven by a test.** It opens a real browser and
   needs an account, so `providers.login` is exercised only against the fake `ant`
-  in the unit suite and by hand.
-- **A generation through an `oauth` provider is unverified end to end.** The
-  headers reach the real API and the model list comes back; the account used for
-  verification has no API credit, so `generateText` is refused for billing rather
-  than for authentication. See `context.md`.
+  / fake `gcloud` in the unit suite and by hand.
+- **A generation through an `oauth` Anthropic provider is unverified end to
+  end.** The headers reach the real API and the model list comes back; the
+  account used for verification has no API credit, so `generateText` is refused
+  for billing rather than for authentication. See `context.md`.
+- **The Google path is unverified against the real API, and may need a scope
+  S5.13 did not ask for.** `GoogleCli` itself was driven against the installed
+  `gcloud` 553.0.0 and works; the endpoint answers 403
+  `ACCESS_TOKEN_SCOPE_INSUFFICIENT` to a default ADC token. See `context.md` and
+  the Phase 6 backlog.
 - **`e2e/providers.spec.ts` leaves the app in Chinese**, like `ui-shell.spec.ts`,
   because both take screenshots meant to be compared with the artboards.

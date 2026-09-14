@@ -13,6 +13,7 @@
  * the per-agent memory folders — is derived from that one injected directory.
  */
 import { join } from 'node:path'
+import type { OAuthProviderType } from '@shared/presets'
 import type { AppTimeouts, UserId } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import type { DatabaseHandle } from './db/database'
@@ -32,6 +33,8 @@ import { AgentSupervisor } from './presence/supervisor'
 import type { AgentSupervisorOptions, PresenceTimeouts } from './presence/supervisor'
 import type { AnthropicCli } from './providers/anthropic-cli'
 import { createAnthropicCli } from './providers/anthropic-cli'
+import type { GoogleCli } from './providers/google-cli'
+import { createGoogleCli } from './providers/google-cli'
 import { fetchModels, type FetchImpl } from './providers/discovery'
 import { createProviderFetch } from './providers/registry'
 import type { ModelOptions, ResolvedProvider } from './providers/registry'
@@ -107,8 +110,22 @@ export function providerFetch(ctx: AppContext, provider: ResolvedProvider): Fetc
 export function modelOptions(ctx: AppContext): ModelOptions {
   return {
     anthropicCli: ctx.anthropicCli,
+    googleCli: ctx.googleCli,
     ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {})
   }
+}
+
+/**
+ * The vendor CLI behind one sign-in provider type (S5.13).
+ *
+ * Total over `OAuthProviderType`, so a third vendor cannot be added to
+ * `OAUTH_PROVIDER_TYPES` without the compiler asking which CLI answers for it.
+ * The two interfaces agree on the four methods every caller here uses; only the
+ * Google one has more, and `providers.setQuotaProject` reaches for `ctx.googleCli`
+ * directly rather than widening this return type to a union nobody can narrow.
+ */
+export function authCli(ctx: AppContext, type: OAuthProviderType): AnthropicCli {
+  return type === 'anthropic' ? ctx.anthropicCli : ctx.googleCli
 }
 
 /** Directory name of the skills library inside `userDataDir`. */
@@ -209,6 +226,14 @@ export interface AppContext {
    * spawns a process the user installed themselves.
    */
   anthropicCli: AnthropicCli
+  /**
+   * The Google Cloud SDK wrapper behind "Sign in with Google" (S5.13).
+   *
+   * On the context for exactly the reasons `anthropicCli` is: it owns an
+   * in-memory credential cache, and a test must be able to replace it with a
+   * stub rather than run whatever `gcloud` the developer happens to have.
+   */
+  googleCli: GoogleCli
   /** Releases the database. Safe to call more than once. */
   close(): void
 }
@@ -227,6 +252,8 @@ export interface AppContextOptions {
   fetchImpl?: FetchImpl
   /** Injectable Anthropic CLI; omitted, the real `ant`-spawning implementation. */
   anthropicCli?: AnthropicCli
+  /** Injectable Google CLI; omitted, the real `gcloud`-spawning implementation. */
+  googleCli?: GoogleCli
   /** Passed through to every `ChatRunner`; a test injects its own `createModel`. */
   runner?: ChatRunnerOptions
   /** Clock, intervals and provider probe of the `AgentSupervisor`. */
@@ -294,6 +321,7 @@ export function createAppContext(options: AppContextOptions): AppContext {
     memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
     permissions: createPermissionGate({ emit: (event) => events.emit(event) }),
     anthropicCli: options.anthropicCli ?? createAnthropicCli(),
+    googleCli: options.googleCli ?? createGoogleCli(),
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),

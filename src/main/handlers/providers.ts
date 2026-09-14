@@ -1,8 +1,8 @@
 /**
  * `providers.*` — CRUD over the `providers` table, the two questions that need
- * the network (`fetchModels`, `testConnection`) and, since S5.3, the three that
- * ask the Anthropic CLI about the user's login (`authStatus`, `login`,
- * `logout`).
+ * the network (`fetchModels`, `testConnection`) and, since S5.3, the ones that
+ * ask a vendor's CLI about the user's login (`authStatus`, `login`, `logout`,
+ * and S5.13's `setQuotaProject`).
  *
  * The handlers are thin on purpose. Persistence and the key ciphertext belong to
  * `db/repositories/providers.ts`, decryption to `providers/resolve.ts`, the
@@ -14,13 +14,20 @@
  * frozen data in `@shared/presets` and the renderer imports it directly rather
  * than paying a round trip for an array that cannot change at runtime.
  */
-import { providerAuth, providerRequiresApiKey, supportsOAuth } from '@shared/presets'
+import {
+  isOAuthProviderType,
+  providerAuth,
+  providerRequiresApiKey,
+  supportsOAuth,
+  type OAuthProviderType
+} from '@shared/presets'
 import { PROVIDER_AUTH_MODES } from '@shared/types'
 import type { Provider, ProviderAuth, ProviderInput, ProviderType } from '@shared/types'
-import { modelOptions, providerFetch, type AppContext } from '../app-context'
+import { authCli, modelOptions, providerFetch, type AppContext } from '../app-context'
 import { validation } from '../errors'
 import { antMissing, antNotLoggedIn } from '../providers/anthropic-cli'
 import { fetchModels, testConnection } from '../providers/discovery'
+import { gcloudMissing, gcloudNotLoggedIn } from '../providers/google-cli'
 import { createLanguageModel } from '../providers/registry'
 import { resolveProvider } from '../providers/resolve'
 import type { HandlerModule } from './types'
@@ -69,12 +76,23 @@ function assertAuthRules(candidate: {
     })
   }
   if (candidate.baseUrl?.trim()) {
-    // The account token is issued for Anthropic's own API. Pointing the same
+    // The account token is issued for the vendor's own API. Pointing the same
     // credential at a proxy would send it somewhere the user never authorised.
     throw validation('A provider that signs in cannot have a custom base URL', {
       reason: 'oauth_custom_base_url'
     })
   }
+}
+
+/** The `{ type }` argument the three auth methods take, checked. */
+function assertOAuthType(input: unknown): OAuthProviderType {
+  const type = (input as { type?: unknown })?.type
+  if (!isOAuthProviderType(type)) {
+    throw validation(`Signing in is not available for provider type ${String(type)}`, {
+      reason: 'oauth_unsupported_provider'
+    })
+  }
+  return type
 }
 
 /**
@@ -83,13 +101,19 @@ function assertAuthRules(candidate: {
  * A saved provider is a promise that an agent can speak through it, so the check
  * happens where the user can still do something about it — the editor is open,
  * the panel is right there — rather than three screens later in the middle of a
- * chat. The `ant_missing` / `ant_not_logged_in` codes are what the panel is
- * already showing; Save simply refuses to disagree with it.
+ * chat. The four `ant_*` / `gcloud_*` codes are what the panel is already
+ * showing; Save simply refuses to disagree with it. A missing Google **quota
+ * project** is deliberately not refused here: the user is signed in, the panel
+ * offers the field, and refusing the save would make a fixable gap look like a
+ * broken login.
  */
-async function assertSignedIn(ctx: AppContext): Promise<void> {
-  const status = await ctx.anthropicCli.status()
-  if (status.state === 'not-installed') throw antMissing()
-  if (status.state === 'signed-out') throw antNotLoggedIn()
+async function assertSignedIn(ctx: AppContext, type: ProviderType): Promise<void> {
+  if (!supportsOAuth(type)) return
+  const status = await authCli(ctx, type).status()
+  if (status.state === 'signed-in') return
+  const missing = type === 'anthropic' ? antMissing : gcloudMissing
+  const signedOut = type === 'anthropic' ? antNotLoggedIn : gcloudNotLoggedIn
+  throw status.state === 'not-installed' ? missing() : signedOut()
 }
 
 function assertModels(models: unknown): asserts models is string[] {
@@ -187,7 +211,7 @@ export const providerHandlers: HandlerModule = {
 
   'providers.create': async (ctx, input) => {
     assertProviderInput(input?.input)
-    if (providerAuth(input.input) === 'oauth') await assertSignedIn(ctx)
+    if (providerAuth(input.input) === 'oauth') await assertSignedIn(ctx, input.input.type)
     return ctx.repos.providers.create(input.input, ctx.userId)
   },
 
@@ -196,7 +220,7 @@ export const providerHandlers: HandlerModule = {
     assertProviderPatch(input.patch)
     const merged = mergedAuthFields(ctx.repos.providers.get(input.id, ctx.userId), input.patch)
     assertAuthRules(merged)
-    if (providerAuth(merged) === 'oauth') await assertSignedIn(ctx)
+    if (providerAuth(merged) === 'oauth') await assertSignedIn(ctx, merged.type)
     return ctx.repos.providers.update(input.id, input.patch, ctx.userId)
   },
 
@@ -223,9 +247,17 @@ export const providerHandlers: HandlerModule = {
     })
   },
 
-  'providers.authStatus': async (ctx) => ctx.anthropicCli.status(),
+  'providers.authStatus': async (ctx, input) => authCli(ctx, assertOAuthType(input)).status(),
 
-  'providers.login': async (ctx) => ctx.anthropicCli.login(),
+  'providers.login': async (ctx, input) => authCli(ctx, assertOAuthType(input)).login(),
 
-  'providers.logout': async (ctx) => ctx.anthropicCli.logout()
+  'providers.logout': async (ctx, input) => authCli(ctx, assertOAuthType(input)).logout(),
+
+  'providers.setQuotaProject': async (ctx, input) => {
+    const project = (input as { project?: unknown })?.project
+    if (typeof project !== 'string' || project.trim().length === 0) {
+      throw validation('A Google Cloud project id is required')
+    }
+    return ctx.googleCli.setQuotaProject(project)
+  }
 }

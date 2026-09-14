@@ -28,7 +28,10 @@ const CODES: BackendErrorCode[] = [
   'unauthorized',
   'internal',
   'ant_missing',
-  'ant_not_logged_in'
+  'ant_not_logged_in',
+  'gcloud_missing',
+  'gcloud_not_logged_in',
+  'gcloud_no_project'
 ]
 
 /** Resolves a key against the English tree, the way i18next would. */

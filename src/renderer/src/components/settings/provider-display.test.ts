@@ -134,13 +134,14 @@ describe('providerStatusTone', () => {
  * distinguishable in a test.
  */
 describe('authControl', () => {
-  it('offers a live control for the provider that can be signed into', () => {
+  it('offers a live control for the providers that can be signed into', () => {
     expect(authControl('anthropic')).toEqual({ shown: true, available: true })
+    // S5.13 turned Google's on; OpenAI's is still the "not yet" case below.
+    expect(authControl('google')).toEqual({ shown: true, available: true })
   })
 
-  it('shows a disabled one for the providers whose sign-in is not built yet', () => {
+  it('shows a disabled one for the provider whose sign-in is not built yet', () => {
     expect(authControl('openai')).toEqual({ shown: true, available: false })
-    expect(authControl('google')).toEqual({ shown: true, available: false })
   })
 
   it('shows none at all for an endpoint that has no account behind it', () => {
@@ -153,7 +154,7 @@ describe('signedInName', () => {
     expect(
       signedInName({
         state: 'signed-in',
-        accountEmail: 'person@example.com',
+        account: 'person@example.com',
         workspaceName: 'Default',
         organizationName: 'Org'
       })
@@ -163,6 +164,9 @@ describe('signedInName', () => {
   it('falls back rather than rendering "signed in as nobody"', () => {
     expect(signedInName({ state: 'signed-in', workspaceName: 'Default' })).toBe('Default')
     expect(signedInName({ state: 'signed-in', organizationName: 'Org' })).toBe('Org')
+    // A `gcloud` ADC carries no account of its own; the project is the only
+    // label it has, and it beats an empty line.
+    expect(signedInName({ state: 'signed-in', project: 'witena-dev' })).toBe('witena-dev')
     expect(signedInName({ state: 'signed-in' })).toBe('')
   })
 })

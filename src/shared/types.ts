@@ -55,10 +55,10 @@ export type ProviderType = 'anthropic' | 'openai' | 'google' | 'openai-compatibl
  * signed in to", which Witena delegates entirely to the vendor's own CLI — it
  * stores **no token of its own**, so signing out of the CLI signs Witena out too.
  *
- * Only `anthropic` implements `oauth` today. The field is shared rather than
- * derived from the type because OpenAI and Google are expected to gain their own
- * sign-in later (see "Phase 6: Backlog" in `docs/STEPS.md`), and an Anthropic
- * provider may legitimately stay on a key.
+ * `anthropic` (S5.3) and `google` (S5.13) implement `oauth`; OpenAI does not
+ * yet — "Sign in with ChatGPT" is a gated program (see "Phase 6: Backlog" in
+ * `docs/STEPS.md`). The field is shared rather than derived from the type
+ * because a provider of either kind may legitimately stay on a key.
  */
 export type ProviderAuth = 'apiKey' | 'oauth'
 
@@ -102,31 +102,52 @@ export interface ProviderInput {
   presetId?: string
   models: string[]
   apiKey?: string
-  /** Absent means `apiKey`. `oauth` is accepted only for `type: 'anthropic'`. */
+  /** Absent means `apiKey`. `oauth` is accepted for `anthropic` and `google`. */
   auth?: ProviderAuth
 }
 
 /**
- * What the renderer is told about the Anthropic CLI's login state.
- *
- * Deliberately **no token**: `access_token` and `refresh_token` never leave the
- * main process, so nothing that crosses IPC — or lands in a renderer heap
- * snapshot — can carry a credential. What is left is what the sign-in panel has
- * to say: which account and workspace the user is signed in as, and when the
- * current credential expires.
+ * What the renderer is told about a vendor CLI's login state.
  *
  * `not-installed` is a first-class answer rather than an error, because "the
- * `ant` binary is not on this machine" is the ordinary state of a machine that
- * has never used it, and the panel's job is to say so and print the install
+ * binary is not on this machine" is the ordinary state of a machine that has
+ * never used it, and the sign-in panel's job is to say so and print the install
  * command.
  */
-export type AnthropicAuthState = 'signed-in' | 'signed-out' | 'not-installed'
+export type ProviderAuthState = 'signed-in' | 'signed-out' | 'not-installed'
 
-export interface AnthropicAuthStatus {
-  state: AnthropicAuthState
+/**
+ * The login state of the CLI behind one `auth: 'oauth'` provider type.
+ *
+ * Deliberately **no token**: an access token and a refresh token never leave the
+ * main process, so nothing that crosses IPC — or lands in a renderer heap
+ * snapshot — can carry a credential. What is left is what the panel has to
+ * print: who the user is signed in as, the one label that gives that identity
+ * context, and when the current credential expires.
+ *
+ * One interface for both vendors (S5.13) rather than one per vendor, because
+ * every consumer — the store, the panel, the card badge — treats it as "the
+ * machine's login state plus a few labels". *Which* labels are filled is a fact
+ * about the vendor rather than about the shape: `ant` reports an organisation
+ * and a workspace, `gcloud` reports a quota project, and a field the answering
+ * CLI has no notion of is simply absent — the same case every consumer already
+ * handles for a profile that carried none.
+ */
+export interface ProviderAuthStatus {
+  state: ProviderAuthState
+  /** The signed-in identity. An account email for both CLIs today. */
+  account?: string
+  /** Anthropic: the organisation the profile belongs to. */
   organizationName?: string
-  accountEmail?: string
+  /** Anthropic: the workspace the profile is scoped to. */
   workspaceName?: string
+  /**
+   * Google: the quota project `x-goog-user-project` names, which is the project
+   * billed for the request. Absent means the user signed in but never chose one,
+   * which the panel offers to fix — the Gemini API refuses an end-user
+   * credential that names no project.
+   */
+  project?: string
   /** Epoch **milliseconds** when the current credential expires. */
   expiresAt?: number
 }
@@ -754,10 +775,10 @@ export function isPermissionDecision(value: unknown): value is PermissionDecisio
  * i18n key; `message` is for logs and developer-facing detail, not UI copy.
  * `unauthorized` is reserved for the server version and unused locally.
  *
- * The two `ant_*` codes are classes rather than `ValidationReason`s on purpose:
- * they describe the state of a **tool on the user's machine**, not a malformed
- * request, and they are raised by the provider layer (a model being built for a
- * chat turn) as well as by a handler validating a form.
+ * The `ant_*` and `gcloud_*` codes are classes rather than `ValidationReason`s
+ * on purpose: they describe the state of a **tool on the user's machine**, not a
+ * malformed request, and they are raised by the provider layer (a model being
+ * built for a chat turn) as well as by a handler validating a form.
  */
 export type BackendErrorCode =
   | 'not_found'
@@ -771,6 +792,16 @@ export type BackendErrorCode =
   | 'ant_missing'
   /** `ant` is installed but no profile is logged in (`ant auth login`). */
   | 'ant_not_logged_in'
+  /** The Google Cloud SDK (`gcloud`) is not installed, or not where it was expected. */
+  | 'gcloud_missing'
+  /** `gcloud` is installed but has no application-default credentials (S5.13). */
+  | 'gcloud_not_logged_in'
+  /**
+   * `gcloud` is signed in but names no quota project, so a request would have no
+   * `x-goog-user-project` header — which the Gemini API refuses for an end-user
+   * credential. The sign-in panel offers a field that sets one.
+   */
+  | 'gcloud_no_project'
 
 /** Serializable error shape: an `Error` cannot survive the transport intact. */
 export interface BackendError {

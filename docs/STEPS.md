@@ -1753,7 +1753,7 @@ to fail three times out of three on `3688233` under the same conditions. Docs:
 `docs/features/{orchestration,executor,chats}/` (all four each) plus
 `docs/features/{agent-turn,backend-client,editor,i18n}/`.
 
-### S5.13 Google sign-in `[ ]`
+### S5.13 Google sign-in `[x]` (2026-09-13)
 What: the Google provider gains the same authentication choice the Anthropic
 one has (S5.3): paste a Gemini API key, or sign in with a Google account. The
 mechanism mirrors S5.3 exactly — delegate to the official CLI, store no token
@@ -1824,6 +1824,86 @@ Acceptance: with ADC present and a project set, a Google provider in sign-in
 mode passes Test connection, lists models and completes a chat turn with no
 key stored; without `gcloud` the panel explains what to install; the tests
 above pass. Docs: `docs/features/providers/` (all four).
+Done: three things were **generalised** rather than duplicated, and each of them
+is the reason the other two were cheap. `oauthFetch` now takes the vendor's edits
+as data — `remove` the API-key header, `set` the headers whose value comes from
+the credential, `merge` into a comma-separated list one the SDK also writes —
+because the risk it exists to manage is *forgetting an edit*, and one place that
+applies them is the only way that cannot happen twice. `cli-process.ts` holds the
+`PATH` search and the child process, because sixty lines of ENOENT-versus-exit-code
+handling gets fixed in one copy and not the other. And `anthropic-sign-in.tsx`
+became `provider-sign-in.tsx` with a `type` prop rather than gaining a Google
+sibling: the three states, the busy flag, the error line, the two buttons and the
+"Sign in doubles as look again" rule *are* the component, and what differs is
+three strings, an install command and one extra control. `AnthropicAuthStatus`
+became `ProviderAuthStatus` for the same reason — every consumer treats it as
+"the machine's login state plus a few labels", and which labels a vendor fills is
+a fact about the vendor, not about the shape.
+
+The `{ type }` argument went on the three existing methods, as the step asked. A
+fourth method was still needed — `providers.setQuotaProject` — and it is
+deliberately *not* `{ type }`-shaped: a quota project is a Google concept with no
+Anthropic counterpart, and a method that is meaningless for half of its own
+argument's values is worse than one named after what it does.
+
+**Everything parsed was checked first.** `gcloud auth application-default
+print-access-token --format=json` prints one **object** whose token field is
+`token`, not `access_token`; its `expiry.datetime` is a **naive UTC** timestamp
+(05:14:51 while `date -u` read 04:14:51), so the `Z` is appended rather than
+letting the platform apply the local zone — which would be wrong by the offset
+everywhere outside UTC, and wrong in the unsafe direction east of it. `gcloud
+config get-value account` is **not** parsed: its unset answer is the word
+`(unset)` on stderr with an empty stdout and exit code 0, which is prose
+pretending to be a value; `config list --format=json` omits the key instead and
+answers account and project in one spawn. With no ADC, `print-access-token` exits
+**1** after about ten seconds — it probes the Compute Engine metadata server three
+times first — which is why the read timeout is 60 s rather than S5.3's 30 s.
+
+A **missing quota project is not a fourth state**: the user is signed in, the
+panel says so and offers a field, and `gcloud_no_project` is raised only where a
+request actually has to be made (the fetch wrapper, which asks `project()` before
+it asks for a token, so nothing is sent). Save accepts a project-less Google
+provider on purpose — refusing it would make a one-field gap look like a broken
+login.
+
+**The real-API check could not be completed, and the reason is new information.**
+ADC appeared on the development machine during the run (the developer signed in),
+so the wrapper was driven against the real `gcloud` 553.0.0: from a
+`launchd`-shaped `PATH` of `/usr/bin:/bin` it found the binary in
+`/opt/homebrew/bin`, reported `signed-in`, parsed the expiry (one hour out),
+returned a live `ya29.` token and rejected `gcloud_no_project`, there being no
+quota project. But a bare `curl` of `GET
+https://generativelanguage.googleapis.com/v1beta/models` with `Authorization:
+Bearer <ADC token>` answers **HTTP 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`**, with
+and without `x-goog-user-project`. The token carries the ADC defaults (`openid`,
+`userinfo.email`, `email`, `cloud-platform`, `sqlservice.login`), so the endpoint
+wants a scope `cloud-platform` does not imply — probably
+`https://www.googleapis.com/auth/generative-language.retriever`, which `gcloud
+auth application-default login --scopes=…` can request. That flag was **not**
+added speculatively: it turns a login known to complete into one that might be
+refused at the consent screen, and proving otherwise needs a browser and the
+user's own account, which this step is explicitly not allowed to drive. So the
+acceptance sentence is **unverified end to end**, and both halves of that — the
+missing quota project and the scope — are in the Phase 6 backlog.
+
+Tests: `google-cli.test.ts` drives the **real** implementation against a fake
+`gcloud` (33 cases), mirroring `anthropic-cli.test.ts` — resolution, all three
+states, signed-in-with-no-project, the `config list` fallback *and* the proof it
+is not spawned when the ADC carries both labels, the cache and its 55-minute
+assumption, `stdout` never reaching a message, and a refused project id.
+`registry.test.ts` pins both header sets through the one wrapper and proves a
+project-less Google credential makes no request at all. `handlers.test.ts` covers
+the `{ type }` routing, the Google refusals of Save, a project-less provider
+saving anyway, `setQuotaProject`, and `fetchModels` carrying the two headers with
+**no `key=` in the URL** — an empty `?key=` beside a bearer token is refused, so
+`discovery.ts` now omits the parameter rather than sending it blank.
+`e2e/providers.spec.ts` relaunches with `WITENA_GCLOUD_BIN` pointing at nothing
+alongside `WITENA_ANT_BIN` and adds the Google case on that run: the control is
+live rather than disabled, the panel is `data-auth-type="google"`, the install
+command is the cask one, and Save is refused with `gcloud_missing` — the Google
+code, which is exactly what a single shared status would have got wrong. Docs:
+`docs/features/providers/` (all four) plus `backend-client` and `i18n`, which the
+changed signatures and the three new codes made out of date.
 
 ## Phase 6: Backlog (decided, not yet scheduled)
 
@@ -1840,11 +1920,27 @@ adds a line here in the same commit.
   reuse. S5.3 ships the `auth` field and a disabled control for OpenAI; enable
   it once program access exists, using the same `auth: 'oauth'` shape and a
   provider-specific fetch wrapper. Verify the policy at implementation time.
-- **Google sign-in.** Standard OAuth 2.0 with PKCE and a loopback redirect is
-  technically straightforward, but billing decides the design: the Gemini API
-  bills the project that owns the OAuth client (the developer's), while
-  Vertex AI bills the user's own project through `x-goog-user-project`. Decide
-  which before building; the user needs a GCP project with billing either way.
+- **A Gemini request through a signed-in Google provider, on an account whose ADC
+  has the scope the API wants.** S5.13 ships the whole path and proves every part
+  of it that can be proved offline, but `GET /v1beta/models` with a default ADC
+  token answers 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` — the token carries
+  `cloud-platform`, which that endpoint apparently does not accept. The likely fix
+  is `gcloud auth application-default login
+  --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/generative-language.retriever`,
+  which needs verifying at a real consent screen before `google-cli.ts` starts
+  passing `--scopes` — a scope the screen refuses would leave users unable to sign
+  in at all. Verify, then decide whether Witena requests the scope itself or the
+  panel tells the user which command to run.
+- **A Google provider with a quota project, end to end.** The development machine
+  has ADC but no project, so "Test connection lists models and a chat turn
+  completes" is unverified for Google as well. Needs a GCP project with the
+  Generative Language API enabled and billing attached; `providers.setQuotaProject`
+  is the control that names it.
+- **Vertex AI instead of the public Gemini API.** S5.13 bills the user's own
+  project through `x-goog-user-project` on `generativelanguage.googleapis.com`.
+  Vertex is the other shape of the same idea — a different endpoint, per-region
+  model ids and `@ai-sdk/google-vertex` — and belongs with the cloud-platform
+  providers below rather than beside this.
 - **A chat turn through a signed-in provider, on an account with API credit.**
   S5.3 proved the headers as far as the API accepts them — `/v1/models` answers
   200 through the OAuth wrapper — but the account used for verification has no
@@ -1852,10 +1948,11 @@ adds a line here in the same commit.
   balance is too low") for a bare `curl` as well as through the app. Run the
   acceptance sentence again on a funded account before treating the generation
   path as proven.
-- **Several logins, or a second vendor's CLI.** `providers.authStatus` takes no
-  argument because `ant` has one active profile, so the status is a fact about
-  the machine. Supporting profiles, or OpenAI's and Google's own CLIs, means
-  naming which login a provider uses and a picker to choose it.
+- **Several logins of one vendor.** S5.13 added the second vendor's CLI, so
+  `providers.authStatus` names which one with `{ type }` — but *within* a vendor
+  each CLI still has one active profile, so the status stays a fact about the
+  machine. Supporting two `ant` profiles, or two Google accounts, means naming
+  which login a provider uses and a picker to choose it.
 - **Cloud-platform providers.** Claude on Vertex AI and Amazon Bedrock, GPT on
   Azure, authenticated with the platform's own credentials or SSO rather than
   a vendor key (`@ai-sdk/google-vertex`, `@ai-sdk/amazon-bedrock`,
