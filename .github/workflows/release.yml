@@ -1,0 +1,101 @@
+# A tag is a release (PLAN.md, "Local release and online version").
+#
+# `v1.2.3` pushed -> this workflow runs the same checks CI runs, packages both
+# macOS architectures, and uploads them to a **draft** GitHub Release that a
+# human reads and publishes. Nothing reaches a user without that click.
+#
+# The upload is done by electron-builder itself (`--publish always` plus the
+# `publish:` block in `electron-builder.yml`), not by a separate upload action:
+# electron-builder is what writes `latest-mac.yml` and the `.blockmap` files,
+# and it writes them *knowing* which release they describe. A generic upload
+# step would have to reproduce that feed by hand, and S7.4's `electron-updater`
+# reads exactly it. See docs/features/packaging/backend.md, "Publishing".
+#
+# Signing and notarization (S7.3) are already wired: the steps below read the
+# `CSC_*` / `APPLE_*` secrets and a gate step decides whether they exist. Adding
+# the secrets and flipping `identity` / `hardenedRuntime` / `notarize` in
+# `electron-builder.yml` is all S7.3 has to do here — this file does not change.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# electron-builder creates the draft Release and uploads the artifacts with
+# GITHUB_TOKEN, which needs write access to the repository's contents.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      # `secrets` is not one of the contexts available to an `if:` expression,
+      # at job level or at step level. The supported way to branch on a secret
+      # is to read it into `env` in a step that can see it and publish the
+      # answer — never the secret — as a step output.
+      - name: Decide whether this build can be signed
+        id: signing
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CSC_LINK:-}" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+            echo 'Developer ID certificate found: signing and notarizing.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'No CSC_LINK secret: building unsigned (S7.3 adds the certificate).' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # `npm run dist` is `npm run build && electron-builder --mac`; npm appends
+      # the arguments after `--` to the end of that string, so `--publish
+      # always` lands on electron-builder. Both architectures come from
+      # `mac.target[0].arch` in electron-builder.yml and are built in **one**
+      # invocation on purpose: two jobs would each write a `latest-mac.yml`
+      # describing only their own dmg, and the second upload would win.
+      #
+      # CSC_IDENTITY_AUTO_DISCOVERY is the unsigned build's safety catch: with
+      # it false, electron-builder cannot quietly sign with whatever identity a
+      # runner's keychain happens to hold.
+      - name: Package both architectures and upload them to a draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.enabled }}
+        run: npm run dist -- --publish always
+
+      # Only meaningful once a certificate exists; an unsigned bundle keeps the
+      # ad-hoc, linker-signed signature the Electron binary already carries and
+      # `spctl` rejects it by design (packaging/backend.md, "The unsigned
+      # caveat").
+      - name: Verify the signature and the notarization ticket
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          for app in dist/mac*/Witena.app; do
+            echo "== $app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute -vv "$app"
+          done
+
+      - name: Show what the draft Release received
+        run: ls -lh dist/*.dmg dist/*.blockmap dist/latest-mac.yml

@@ -2003,6 +2003,36 @@ adds a line here in the same commit.
 - **VS Code extension** embedding the chat panel over that server backend
   (PLAN "Future extension", point 3, step two). Depends on the item above.
 
+### Release workflow (S7.2)
+
+- **Neither workflow has executed.** `ci.yml` and `release.yml` are validated by
+  `actionlint` and by reading only; GitHub has never run them. The first push
+  and the first `v*` tag are the first executions, and three things are most
+  likely to need a second commit: whether `npm ci`'s `postinstall` Electron
+  rebuild fits the runner's patience, whether electron-builder infers
+  `owner`/`repo` from the checkout's git remote as expected, and whether the
+  draft Release created by the first artifact upload is reused by the rest.
+  Until a tag has been pushed, "a tag produces a draft Release" is a design, not
+  an observation.
+- **The x64 dmg has never been opened on an Intel Mac.** It packages correctly
+  (an x86_64 `Witena.app` carrying `prebuilds/darwin-x64.node`), but running it
+  needs hardware this project does not have. `e2e/packaged.spec.ts` is only ever
+  run against the arm64 bundle.
+- **`actionlint` is pinned to 1.7.12 with a hand-copied SHA-256**, and nothing
+  updates either. A dependency bot or a scheduled check would notice a release;
+  today a human does or nobody does.
+- **Every bundle ships all eight `better-sqlite3` prebuilds** — 16 MB, of which
+  the 14 MB for Windows, Linux and the other macOS architecture is dead weight
+  in each dmg. A `files` exclusion could drop it, and would need the packaged
+  spec run afterwards to prove `node-gyp-build` still resolves the one that is
+  left.
+- **Release notes are written by hand** into the draft. Nothing derives them
+  from the commits between two tags.
+- **`npm run e2e` is not in CI** (it needs Ollama) and `npm run e2e:packaged` is
+  not either (it needs a built dmg). Both remain a human's pre-release step, so
+  a release whose author skips them is packaged and uploaded exactly as one
+  whose author does not.
+
 ### Open questions carried from the feature documents
 
 - `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
@@ -2040,7 +2070,7 @@ Acceptance: `npm run dist:dir` produces an app whose Dock and Finder icon is
 the new mark at 16–1024 px; the rail shows it in both themes. Docs:
 `docs/features/packaging/` and `docs/features/ui-shell/` (all four each).
 
-### S7.2 Release workflow `[ ]`
+### S7.2 Release workflow `[x] (2026-09-13)`
 What: a tag builds the dmg.
 - `.github/workflows/ci.yml`: on every push and pull request — `npm ci`,
   `npm run typecheck`, `npm test`, `npm run build`; e2e stays local (it needs
@@ -2058,6 +2088,62 @@ What: a tag builds the dmg.
   provider.
 Acceptance: pushing a tag on a fork produces a draft Release with two dmgs;
 `ci.yml` is green on the PR. Docs: `docs/features/packaging/` (all four).
+Done: `.github/workflows/ci.yml` runs `npm ci`, `npm run typecheck`, `npm test`
+and `npm run build` on `macos-latest` for every push and pull request — macOS
+because `postinstall` rebuilds `better-sqlite3` against the Electron ABI and the
+artifact is a macOS bundle — plus a second job on `ubuntu-latest` that lints
+both workflow files with **actionlint 1.7.12, pinned by version and SHA-256** of
+the release tarball rather than by an npm dependency or a third-party action
+tag. `npm run e2e` is deliberately absent: the specs that prove anything need a
+local Ollama, and a suite that skips its own assertions is worse than one that
+is honestly local; it stays step 1 of the release procedure.
+
+`.github/workflows/release.yml` runs on `v*`: the same checks, then
+`npm run dist -- --publish always` — one electron-builder invocation for **both
+architectures**, because `latest-mac.yml` describes a release rather than an
+architecture and two parallel jobs would each upload a feed naming only their
+own dmg. The upload is electron-builder's own GitHub publisher (`GH_TOKEN`,
+`permissions: contents: write`) rather than `softprops/action-gh-release`: the
+blockmaps and the update feed are computed while it packages, and S7.4's
+`electron-updater` reads exactly that feed. `publish: {provider: github,
+releaseType: draft}` in `electron-builder.yml` makes the Release a **draft**;
+`owner`/`repo` are left out so they come from the checkout's git remote and a
+tag on a fork publishes to the fork.
+
+The signing seam is wired and gated. **`secrets` is not an available context in
+an `if:` expression at either job or step level**, so the gate is a step that
+reads `CSC_LINK` into `env` and writes `enabled=true|false` to `$GITHUB_OUTPUT`;
+`steps.signing.outputs.enabled` then guards the `codesign --verify --deep
+--strict` / `spctl --assess` verification and supplies
+`CSC_IDENTITY_AUTO_DISCOVERY`, which keeps an unsigned CI build from picking up
+a runner keychain identity. All `CSC_*` / `APPLE_*` secrets are passed through
+unconditionally and are ignored while empty, so S7.3 adds secrets and edits
+`electron-builder.yml` (`identity`, `hardenedRuntime`, `notarize`) without
+touching the workflow. `mac.target[0].arch` is now `[arm64, x64]`; `identity:
+null` and `hardenedRuntime: false` stay until S7.3.
+
+A release is now `npm version <patch|minor|major>` → `git push --follow-tags` →
+publish the draft. `preversion` reruns typecheck and the tests, and the `version`
+lifecycle script (`scripts/sync-version.mjs`) rewrites `APP_VERSION` in
+`src/shared/version.ts` from the manifest and stages it, so the tagged commit
+carries one version number in two files rather than two numbers.
+`src/main/packaging.test.ts` parses `electron-builder.yml` — with
+**gray-matter**, already a dependency for `SKILL.md` frontmatter, rather than a
+new YAML devDependency — and asserts both arches, `${arch}` in `artifactName`,
+the draft publish provider, the still-`null` identity and that `APP_VERSION`
+equals `package.json`'s version.
+
+Verified locally: `npm run typecheck`, `npm test` (`Test Files 86 passed`,
+`Tests 1379 passed`), `npm run build`, `npm run dist:dir`, and — because `--dir`
+replaces the configured target and builds only the host architecture —
+`npx electron-builder --mac --dir --x64`, which produced an x86_64
+`Witena.app`. Cross-architecture packaging costs nothing because
+`better-sqlite3` 13 ships **N-API** prebuilds, ABI-stable across Node and
+Electron, so `@electron/rebuild` has nothing to compile. Both workflow files
+pass `actionlint` 1.7.12 locally. **Neither workflow has ever run** — GitHub has
+not executed them — and the x64 dmg has never been opened on an Intel Mac; both
+are in the Phase 6 backlog. Docs: `docs/features/packaging/` (all four) and the
+README's build section.
 
 ### S7.3 Signing and notarization `[ ]` (needs an Apple Developer account)
 What: the dmg opens on a double-click on any Mac.

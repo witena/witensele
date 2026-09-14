@@ -13,6 +13,10 @@
 | `playwright.packaged.config.ts` | Runs `e2e/packaged.spec.ts` and nothing else |
 | `e2e/packaged.spec.ts` | The acceptance test against the shipped bundle |
 | `playwright.demo.config.ts`, `e2e/demo.record.ts` | The tour recording that produces `docs/assets/` |
+| `.github/workflows/ci.yml` | The gate on every push and pull request, plus the `actionlint` job that lints both workflow files |
+| `.github/workflows/release.yml` | A `v*` tag → checks → both dmgs → a draft GitHub Release |
+| `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
+| `src/main/packaging.test.ts` | The unit test over `electron-builder.yml` and the two copies of the version number |
 
 `package.json` carries no `build` key: electron-builder finds
 `electron-builder.yml` on its own, and one configuration in two places is the
@@ -29,12 +33,14 @@ kind of thing that goes stale.
 | `files` | `out/**`, `package.json`, minus `*.map` and `.DS_Store` | Everything electron-vite produced, plus the manifest that carries `main` and the dependency list. **`node_modules` is deliberately absent**: electron-builder appends the production dependency tree itself, and a second hand-written copy of that fact would drift |
 | `asarUnpack` | `**/node_modules/better-sqlite3/**` | `dlopen` takes a filesystem path. A `.node` binary inside an asar archive is not at one, and the app would fail to open its database on the first launch |
 | `extraResources` | `resources` → `resources` | Ships `resources/skills/`. See the path note below |
-| `mac.target` | `dmg`, `arch: [arm64]` | One artifact. The zip target exists for auto-update, which the MVP does not have |
+| `mac.target` | `dmg`, `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The zip target exists for auto-update, which does not exist yet (S7.4) |
 | `mac.category` | `public.app-category.developer-tools` | `LSApplicationCategoryType` in the Info.plist |
 | `mac.icon` | `build/icon.icns` | Copied to `Contents/Resources/icon.icns` |
 | `mac.hardenedRuntime` | `false` | The hardened runtime is a notarization requirement; without a signature it only adds restrictions for nothing |
 | `mac.identity` | `null` | No Developer ID signing. Explicit rather than omitted: without it electron-builder picks up whatever identity is in the building machine's keychain, which makes the artifact depend on who built it. See "The unsigned caveat" |
-| `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` — the name `e2e/packaged.spec.ts`'s instructions and the release notes both use |
+| `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` and `Witena-0.1.0-x64.dmg` — `${arch}` is what keeps two builds of one version from overwriting each other in `dist/` and in the Release |
+| `publish.provider` | `github` | electron-builder uploads the artifacts itself and writes the `latest-mac.yml` feed S7.4 will read. `owner` / `repo` are deliberately absent: they are inferred from the checkout's git remote, so a tag pushed on a fork publishes to that fork |
+| `publish.releaseType` | `draft` | The review step. CI packages; a human reads the artifacts and presses Publish |
 
 ## The resources path
 
@@ -143,13 +149,105 @@ icon drawn edge to edge looks oversized next to every other one in the Dock —
 and the 76 px stroke on the "W" is what keeps the mark legible at the 16 px
 variant.
 
-## How to release
+## Continuous integration
 
-See [`implement.md`](./implement.md), "Making a release". In short: run the
-existing gate (`npm run typecheck && npm test && npm run e2e`), `npm run dist`,
-mount the dmg, copy `Witena.app` off it, detach, and run `npm run e2e:packaged`
-against the copy. Then `hdiutil info` to confirm no volume of ours is still
-mounted.
+`.github/workflows/ci.yml`, on every push and every pull request:
+
+| Job | Runner | Steps |
+|---|---|---|
+| `check` | `macos-latest` | `npm ci`, `npm run typecheck`, `npm test`, `npm run build` |
+| `actionlint` | `ubuntu-latest` | Downloads `actionlint` 1.7.12, checks its SHA-256, lints `.github/workflows/` |
+
+macOS for the `check` job is not a preference: `postinstall` rebuilds
+`better-sqlite3` against the Electron ABI and the artifact this repository
+produces is a macOS bundle. A Linux runner would prove something about a
+platform Witena is not shipped on.
+
+`npm run e2e` is **not** part of CI — it needs a local Ollama. See
+[`implement.md`](./implement.md), "What CI does not run".
+
+`actionlint` is pinned by version *and* checksum and downloaded in a `run:`
+step. An npm devDependency would put a workflow linter in the product's
+dependency tree; a third-party action pinned by tag would trust a pointer
+someone else can move.
+
+## Publishing
+
+`.github/workflows/release.yml`, on a `v*` tag: the same checks, then
+
+```sh
+npm run dist -- --publish always
+```
+
+`npm run dist` is `npm run build && electron-builder --mac`, and npm appends
+what follows `--` to the end of that string, so the flag reaches
+electron-builder. Both architectures come from `mac.target[0].arch` and are
+built in **one** invocation deliberately: `latest-mac.yml` describes a release,
+not an architecture, so two parallel jobs would each write a feed naming only
+their own dmg and the second upload would win.
+
+What lands in the draft Release: `Witena-<version>-arm64.dmg`,
+`Witena-<version>-x64.dmg`, a `.blockmap` beside each, and `latest-mac.yml`.
+The upload is electron-builder's own GitHub publisher rather than a separate
+upload action, because the feed and the blockmaps are things the builder
+computes while it packages; regenerating them in a later step would be a second
+implementation of a fact it already knows, and S7.4's `electron-updater` reads
+exactly that feed.
+
+Authentication is `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` plus
+`permissions: contents: write` on the job. No personal token is involved.
+
+### The signing gate (S7.3 adds secrets, not workflow steps)
+
+The `secrets` context is **not** available to an `if:` expression — not at job
+level and not at step level — so `if: ${{ secrets.CSC_LINK != '' }}` is not a
+condition that can work. The workflow reads the secret into `env` in a step
+that is allowed to see it and publishes the *answer* as a step output:
+
+```yaml
+- name: Decide whether this build can be signed
+  id: signing
+  env:
+    CSC_LINK: ${{ secrets.CSC_LINK }}
+  run: |
+    if [ -n "${CSC_LINK:-}" ]; then
+      echo 'enabled=true' >> "$GITHUB_OUTPUT"
+    else
+      echo 'enabled=false' >> "$GITHUB_OUTPUT"
+    fi
+```
+
+`steps.signing.outputs.enabled` then gates the `codesign --verify --deep
+--strict` / `spctl --assess` verification, and it is also what
+`CSC_IDENTITY_AUTO_DISCOVERY` is set to — false on an unsigned build, so
+electron-builder cannot quietly sign with whatever identity a runner's keychain
+happens to hold. The `CSC_*` and `APPLE_*` secrets are passed to the packaging
+step unconditionally; absent, they arrive as empty strings and are ignored.
+
+What S7.3 still has to change is `electron-builder.yml` — `identity`,
+`hardenedRuntime: true`, an entitlements file and a `notarize` block — and the
+README's Gatekeeper note. Not this workflow.
+
+## Cutting a release
+
+`npm version <patch|minor|major>` bumps `package.json`, commits and tags.
+Two npm lifecycle scripts hang off it:
+
+| Script | When | What |
+|---|---|---|
+| `preversion` | Before the bump | `npm run typecheck && npm test` — a tag is not worth creating if the suite is red |
+| `version` | After the bump, before npm's commit | `node scripts/sync-version.mjs && git add src/shared/version.ts` |
+
+`APP_VERSION` in `src/shared/version.ts` is a second copy of the version number
+(`src/shared/` is imported by main, preload and renderer, so reading
+`package.json` there would pull the manifest into every bundle), and
+`src/main/mcp/manager.ts` sends it to every MCP server in the client handshake.
+The `version` script rewrites it and stages it so the tagged commit carries both
+copies; `src/main/packaging.test.ts` fails if they ever disagree.
+
+Then `git push --follow-tags`, wait for the draft, publish it. The full
+procedure, including verifying the uploaded dmg with `npm run e2e:packaged`, is
+in [`implement.md`](./implement.md), "Making a release".
 
 ## External dependencies
 
@@ -159,4 +257,6 @@ mounted.
 | `dmgbuild` (vendored by electron-builder) | The disk image | Downloaded on the first `--mac` run, so the first build is several minutes slower than the rest and needs the network |
 | `sips`, `iconutil` (macOS) | PNG scaling and the icns | `sips -z H W` takes **height first**. `iconutil` refuses an iconset that is missing any of the ten expected names, and the names are exact: `icon_16x16@2x.png`, not `icon_32x32.png` under a different name |
 | `ffmpeg` | The demo GIF | `palettegen` / `paletteuse` must be two passes over the *same* filtered frames, or the palette describes footage that is not what gets encoded. This build of ffmpeg has no `drawtext` filter, so frame-timestamp overlays are not available while inspecting a recording — use `tile` contact sheets and arithmetic instead |
+| GitHub Actions (`actions/checkout@v4`, `actions/setup-node@v4`) | CI and release | Pinned to major tags. `setup-node`'s `cache: npm` needs `package-lock.json`, which is committed. `npm ci` runs the `postinstall` electron-rebuild, which downloads the Electron binary — the slow step of every job |
+| `actionlint` 1.7.12 | Linting the workflows | Pinned by version and SHA-256 of the release tarball. On a runner with `shellcheck` installed — the Ubuntu images have it — it also lints every `run:` block, so findings can appear in CI that a local run without shellcheck does not report |
 | Playwright `_electron.launch` | Both extra specs | `executablePath` plus an empty `args` is how a *packaged* app is launched; the `args: ['.']` every other spec uses points electron at a project directory and is wrong for a bundle. `recordVideo` on the launch options records the window, and `page.video().path()` only resolves after the context has closed |

@@ -1,0 +1,79 @@
+# Every push and every pull request runs the gate a local delivery runs:
+# `npm ci`, `npm run typecheck`, `npm test`, `npm run build` (CLAUDE.md rule 3).
+#
+# macOS only, deliberately. `postinstall` rebuilds `better-sqlite3` — the one
+# native module — against the Electron ABI, and the artifact this repository
+# ships is a macOS bundle (`electron-builder.yml`). A Linux runner would compile
+# a different binary and prove something about a platform Witena is not shipped
+# on; it would also not catch the thing that actually breaks, which is the
+# native module.
+#
+# `npm run e2e` is **not** run here. The Playwright specs drive the real
+# Electron binary and the ones that matter talk to a local Ollama
+# (`qwen2.5:1.5b`, `qwen2.5:3b`), which a hosted runner does not have; a suite
+# that silently skips its own assertions is worse than one that is honestly
+# local. e2e stays a pre-delivery step on the developer's machine — see
+# docs/features/packaging/implement.md, "What CI does not run".
+name: CI
+
+on:
+  # Branches only. A bare `push:` also fires on tags, and a `v*` tag would then
+  # run this whole macOS gate a second time alongside release.yml, which runs
+  # the same checks itself.
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+# Nothing in this workflow writes to the repository.
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 is what the README asks a contributor to install.
+          node-version: '24'
+          cache: npm
+
+      # `npm ci` runs the `postinstall` electron-rebuild, which downloads the
+      # Electron binary for this platform. That is the slow step of the job and
+      # the reason `cache: npm` is on.
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+  # actionlint validates both workflow files, including this one. It is a
+  # pinned release binary rather than an npm dependency or a third-party
+  # action: nothing in the product needs it, and a checksum is a stronger pin
+  # than a tag somebody else can move.
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the workflow files
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output actionlint.tar.gz "$url"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -color

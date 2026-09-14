@@ -1,9 +1,18 @@
 # packaging — Frontend
 
 **This feature has no renderer code.** S4.4 added no page, no component, no
-store field, no `BackendClient` call and no translation key. A packaged build
-renders exactly what `npm run dev` renders; nothing in the UI branches on
-`app.isPackaged`.
+store field, no `BackendClient` call and no translation key, and S7.2 — the CI
+and release workflows — added none either. A packaged build renders exactly what
+`npm run dev` renders; nothing in the UI branches on `app.isPackaged`, and
+nothing in it branches on how the bundle was built.
+
+The version number is the one thing a release changes that the renderer could
+one day show. It does not today: `APP_VERSION` (`src/shared/version.ts`, kept in
+step with `package.json` by `scripts/sync-version.mjs`) is read only by
+`src/main/mcp/manager.ts`, for the MCP client handshake. Settings → About, where
+a user would read it, arrives with S7.4/S7.5 — and when it does, the string it
+renders must still go through `t()` with the number interpolated, not a
+hardcoded "Witena 0.2.0" (CLAUDE.md rule 4).
 
 The three renderer-visible facts it does produce, and where they belong:
 

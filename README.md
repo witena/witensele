@@ -63,16 +63,24 @@ connection test that says how long the endpoint took to answer.
 
 ## Getting started
 
-Requirements: macOS (Apple silicon), Node 24, and — optionally —
-[Ollama](https://ollama.com) if you want to run models locally.
+Requirements: macOS, Node 24, and — optionally —
+[Ollama](https://ollama.com) if you want to run models locally. Apple silicon is
+what the app is developed and tested on; an Intel dmg is built from the same
+source but has not been run on Intel hardware.
 
 ```sh
 npm install          # rebuilds better-sqlite3 for Electron via postinstall
 npm run dev          # Vite dev server + Electron with HMR
 npm test             # vitest
-npm run e2e          # Playwright driving the real Electron build
-npm run dist         # → dist/Witena-<version>-arm64.dmg
+npm run e2e          # Playwright driving the real Electron build (needs Ollama)
+npm run dist         # → dist/Witena-<version>-{arm64,x64}.dmg
 ```
+
+Every push and pull request runs typecheck, the unit tests and a build on a
+macOS runner; `npm run e2e` is not part of that, because it needs a local
+Ollama. A `v*` tag builds both dmgs and uploads them to a draft GitHub Release
+for a human to publish — see
+[`docs/features/packaging/implement.md`](docs/features/packaging/implement.md).
 
 The dmg is **unsigned and not notarized** — there is no Apple Developer
 certificate behind this repository. macOS will refuse the first double-click.
