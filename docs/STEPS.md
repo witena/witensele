@@ -2608,6 +2608,54 @@ backlog rather than patched from inside this step. Docs:
 `docs/features/{ui-shell,providers,chats,agents,i18n,packaging}/` (all four
 each) and the `docs/README.md` index.
 
+### S7.6 API keys that survive an unsigned update `[ ]`
+What: provider keys must not become unreadable when the app is rebuilt.
+Today they are encrypted with Electron `safeStorage`, whose key lives in the
+macOS Keychain item "Witena Safe Storage"; the Keychain grants access per
+application identity, and an **unsigned** build has a new identity every
+time it is packaged. After the S7.1 dmg replaced the S4.4 one, the stored
+DeepSeek and Moonshot ciphertexts (`v10…`, real `safeStorage` output) could
+no longer be decrypted, `resolve.ts` threw, and the UI showed "no key" and a
+failed probe. The data was never lost; the key to it was.
+- **A file-held key, wrapped by `safeStorage` only when that can be trusted.**
+  New `FileKeySecretStore` in `src/main/secrets.ts` (Electron-free: `node:crypto`,
+  `node:fs`): a random 32-byte key in `userData/secrets.key` (mode `0600`,
+  created on first use), AES-256-GCM with a random 12-byte IV per value, a
+  versioned prefix (`fk1:` + base64(iv‖tag‖ciphertext)). The main process uses
+  it for every provider key. The `safeStorage` implementation in
+  `src/main/ipc/secret-store.ts` is kept and becomes the **wrapper** for the
+  file key on signed builds (S7.3): when `process.env.WITENA_SIGNED_BUILD` (set
+  by the release workflow once signing exists) is present, `secrets.key` is
+  stored wrapped; otherwise it is stored plain with `0600`. Document the trade
+  in `docs/features/providers/context.md`: on an unsigned build an attacker
+  who can read the user's files can read the key file — exactly what they
+  could already do to the Keychain item of an unsigned app after one prompt —
+  and the file survives updates, which the Keychain item does not.
+- **Migration of existing rows, once, at startup**: for every provider whose
+  `api_key_encrypted` is `safeStorage` ciphertext (base64 of `v10…`), try
+  `safeStorage.decryptString`; on success re-encrypt with the file key and
+  write the row back; on failure leave the row untouched and mark the provider
+  `keyState: 'unreadable'` (a runtime field on `Provider`, not a column) so the
+  UI can explain. Never overwrite a ciphertext that could not be read.
+- **The UI says what happened.** A provider whose key is unreadable shows a
+  translated line under its card and in the editor — "This key was saved by a
+  previous version of the app and cannot be read after the update. Paste it
+  again." — with the key field focused; probing and model fetching for such a
+  provider return a `key_unreadable` error code rather than a generic failure.
+  `resolve.ts` maps a decrypt failure to that code instead of throwing raw.
+- Unit tests: round-trip and tamper detection for `FileKeySecretStore`; the
+  key file's mode; the `fk1:` / `v10` / `plain:` discrimination; the migration
+  with a fake `safeStorage` that succeeds, fails, or is absent; `resolve.ts`
+  surfacing `key_unreadable`; the store and editor showing the notice.
+- e2e: `e2e/providers.spec.ts` — save a key, restart the app, the key is
+  still there and the probe passes (the file key survives a relaunch); a
+  seeded `v10…` row the build cannot read shows the "paste it again" line.
+Acceptance: a key saved in one unsigned build is readable by the next unsigned
+build from the same `userData`; an unreadable legacy key is explained, not
+reported as a failed probe. Docs: `docs/features/providers/` and
+`docs/features/database/` (all four each), `docs/features/packaging/backend.md`
+(the security posture and the S7.3 hand-off).
+
 ## Phase 8: Online version (PLAN "Local release and online version")
 
 Ordered so that each step runs end to end on a laptop before AWS is involved.
