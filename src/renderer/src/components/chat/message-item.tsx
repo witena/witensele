@@ -85,7 +85,7 @@ import { useAgentPresence } from '../../stores/presence'
 import { useProvidersStore } from '../../stores/providers'
 import { useIsRunning, useRunStore } from '../../stores/run'
 import { Avatar, Badge } from '../ui'
-import { isExecutor } from '../agents/agent-display'
+import { avatarStyle, isExecutor } from '../agents/agent-display'
 import { ConclusionCard } from './conclusion-card'
 import { DiffBlock } from './diff-block'
 import { FileRefChip } from './file-ref-chip'
@@ -128,10 +128,13 @@ function formatTime(timestamp: number, language: string): string {
 }
 
 /**
- * The human's avatar colours, from the mockup's green tile. Referenced as CSS
- * variables rather than hex because `Avatar` takes a colour *string* — the agent
- * records supply their own — and a literal here would be the one colour in the
- * shell that is not a token.
+ * The human's avatar colours, from the mockup's green tile.
+ *
+ * A pair of tokens rather than a pair of hexes, for the reason every tile is one
+ * since S5.17: an avatar has to follow the appearance, and the user's is the one
+ * tile with no record to hold a palette index. Agents' tiles come from
+ * `avatarStyle`, which resolves their index (or their stored legacy colour) to
+ * the same kind of `var(--color-avatar-…)` reference.
  */
 const USER_AVATAR_COLOR = 'var(--color-avatar-user)'
 const USER_AVATAR_TEXT_COLOR = 'var(--color-avatar-user-fg)'
@@ -310,14 +313,19 @@ export function MessageItem({
       // the round and the author without depending on the active language.
       data-round={message.round}
       data-author={name}
-      className={clsx('flex gap-3', dimmed && 'opacity-50')}
+      // `opacity-70`, not the `opacity-50` S2.x shipped: at half strength a
+      // passed row's name measured 3.26:1 in the light theme and its model line
+      // 2.17:1 — under the floor for *any* meaningful pixel, in both themes
+      // (S5.17). Dimming is still unmistakable at 70% because a normal row is
+      // 13:1 or better; it just no longer crosses into unreadable.
+      className={clsx('flex gap-3', dimmed && 'opacity-70')}
     >
       <Avatar
         text={avatarText}
         {...(isUser
           ? { color: USER_AVATAR_COLOR, textColor: USER_AVATAR_TEXT_COLOR }
           : agent
-            ? { color: agent.avatar.color }
+            ? avatarStyle(agent.avatar)
             : {})}
         size="md"
         // `self-start`: the row is a flex container, so without it the avatar
@@ -501,7 +509,7 @@ export function MessageItem({
         {/* The operator-facing detail behind a failure. Not translated: it is the
             provider's own words, and a translated HTTP error helps nobody. */}
         {message.status === 'error' && !wasStopped(message) && message.error ? (
-          <p data-testid="message-error-detail" className="text-[11px] text-danger/80">
+          <p data-testid="message-error-detail" className="text-[11px] text-danger">
             {message.error}
           </p>
         ) : null}

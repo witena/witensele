@@ -50,6 +50,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { MENTION_ALL_KEYWORDS, parseMentions, type MentionMember } from '@shared/mentions'
 import type { Agent } from '@shared/types'
+import { avatarStyle } from '../agents/agent-display'
 import { Avatar, Badge, Button, IconButton, TextArea } from '../ui'
 import {
   appendMention,
@@ -269,8 +270,7 @@ export function Composer({
                   {member ? (
                     <Avatar
                       text={member.avatar.text}
-                      color={member.avatar.color}
-                      {...(member.avatar.textColor ? { textColor: member.avatar.textColor } : {})}
+                      {...avatarStyle(member.avatar)}
                       size="md"
                     />
                   ) : (

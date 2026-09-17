@@ -83,7 +83,13 @@ import {
   TextArea,
   Toggle
 } from '../ui'
-import { AGENT_AVATAR_COLORS, avatarInitial } from './agent-display'
+import {
+  AGENT_AVATAR_COLORS,
+  avatarInitial,
+  avatarPalette,
+  avatarPaletteStyle,
+  avatarStyle
+} from './agent-display'
 import { McpChecklist } from './mcp-checklist'
 import { MemoryPanel } from './memory-panel'
 import { SkillChecklist } from './skill-checklist'
@@ -211,8 +217,7 @@ export function AgentEditor({
         <div className="flex min-w-0 items-center gap-2.5">
           <Avatar
             text={initial}
-            color={draft.avatar.color}
-            textColor={draft.avatar.textColor}
+            {...avatarStyle(draft.avatar)}
             size="lg"
           />
           <h1 data-testid="agent-editor-name" className="truncate text-sm font-semibold text-fg">
@@ -275,27 +280,33 @@ export function AgentEditor({
                 <div className="flex items-center gap-1.5">
                   <Avatar
                     text={initial}
-                    color={draft.avatar.color}
-                    textColor={draft.avatar.textColor}
+                    {...avatarStyle(draft.avatar)}
                     size="sm"
                   />
-                  {AGENT_AVATAR_COLORS.map((palette, index) => (
-                    <button
-                      key={palette.color}
-                      type="button"
-                      data-testid="agent-avatar-swatch"
-                      aria-label={t('agents.avatarColor', { index: index + 1 })}
-                      title={t('agents.avatarColor', { index: index + 1 })}
-                      aria-pressed={palette.color === draft.avatar.color}
-                      style={{ backgroundColor: palette.color }}
-                      onClick={() => store().pickAvatarColor(index)}
-                      className={
-                        palette.color === draft.avatar.color
-                          ? 'h-4 w-4 rounded-full ring-1 ring-accent'
-                          : 'h-4 w-4 rounded-full ring-1 ring-border-strong'
-                      }
-                    />
-                  ))}
+                  {AGENT_AVATAR_COLORS.map((entry, index) => {
+                    // The swatch is compared by *index*, not by colour: since
+                    // S5.17 the tile is painted from a token, and two themes
+                    // give the same index two different hexes.
+                    const picked = entry.palette === avatarPalette(draft.avatar)
+                    return (
+                      <button
+                        key={entry.palette}
+                        type="button"
+                        data-testid="agent-avatar-swatch"
+                        data-palette={entry.palette}
+                        aria-label={t('agents.avatarColor', { index: index + 1 })}
+                        title={t('agents.avatarColor', { index: index + 1 })}
+                        aria-pressed={picked}
+                        style={{ backgroundColor: avatarPaletteStyle(entry.palette).color }}
+                        onClick={() => store().pickAvatarColor(index)}
+                        className={
+                          picked
+                            ? 'h-4 w-4 rounded-full ring-1 ring-accent'
+                            : 'h-4 w-4 rounded-full ring-1 ring-border-strong'
+                        }
+                      />
+                    )
+                  })}
                 </div>
               </Field>
             </div>

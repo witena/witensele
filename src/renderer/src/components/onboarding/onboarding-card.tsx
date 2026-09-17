@@ -36,7 +36,12 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { AGENT_TEMPLATES, suggestedModel, type AgentTemplate } from '@shared/agent-templates'
 import { supportsOAuth } from '@shared/presets'
-import { AGENT_AVATAR_COLORS, DEFAULT_AGENT_AVATAR, avatarInitial } from '../agents/agent-display'
+import {
+  AGENT_AVATAR_COLORS,
+  DEFAULT_AGENT_AVATAR,
+  avatarInitial,
+  avatarPaletteStyle
+} from '../agents/agent-display'
 import { Avatar, Button, SectionTitle, Spinner } from '../ui'
 import { translateFailure } from '../../i18n/errors'
 import {
@@ -113,8 +118,7 @@ function TemplateTile({
         <Avatar
           size="sm"
           text={avatarInitial(template.name)}
-          color={palette.color}
-          textColor={palette.textColor}
+          {...avatarPaletteStyle(palette.palette)}
         />
         {/* The name is stored data, not copy: it is what `@mentions` resolve
             against, so it is printed rather than translated. */}

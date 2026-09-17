@@ -8,37 +8,37 @@
  * initials taken from the name mean a custom endpoint gets a sensible mark
  * without asking the user to choose one.
  *
- * The palette is *data*, like `AgentAvatar.color`, which is why literal colours
- * are allowed here and nowhere else: Tailwind cannot see a value that only exists
- * at runtime, so these reach the DOM as an inline style.
+ * Until S5.17 the palette was eight literal hexes of its own — the same
+ * amber-era family the agent avatars used — so a provider tile was a dark chip
+ * on a near-white page in the light theme. It is the **same eight tokens as the
+ * agent palette** now (`avatarPaletteStyle`), for the same reason and with the
+ * one extra benefit that the app has one set of monogram colours instead of two
+ * lists that drifted. The assignment rule is unchanged — a preset still lands on
+ * the slot its id hashes to — but slots 5 and 6 held a red and a green in the
+ * provider list and a green and a rose in the agent one, so a preset that hashes
+ * to either of those two changes hue once, at this step. That is the price of
+ * having one list; every other preset keeps the colour it had.
+ *
+ * Witena's own mark is not one of these; `--color-brand-point` is an identity
+ * and keeps its colour in both appearances (S7.1).
  */
-
-/** One monogram: a tinted surface and the foreground that stays readable on it. */
-export interface ProviderLogo {
-  text: string
-  color: string
-  textColor: string
-}
+import type { AvatarPaletteIndex } from '@shared/types'
+import {
+  AGENT_AVATAR_COLORS,
+  NEUTRAL_AVATAR_STYLE,
+  avatarPaletteStyle,
+  type AvatarStyle
+} from '../agents/agent-display'
 
 /**
- * Surface / foreground pairs from the artboard, in the order they are assigned.
- *
- * Chosen so that adjacent cards in the preset grid differ: the point of the
- * colour is to make a provider findable at a glance, not to mean anything.
+ * One monogram: the two CSS values the tile is painted with, plus the slot they
+ * came from so a test (and a reader) can say *which* swatch was picked without
+ * matching on a colour. `palette` is absent for the neutral, presetless tile.
  */
-const PALETTE: readonly { color: string; textColor: string }[] = [
-  { color: '#4a3a2f', textColor: '#e8b98a' },
-  { color: '#2f3d4a', textColor: '#8ac0e8' },
-  { color: '#3a2f4a', textColor: '#c0a0e8' },
-  { color: '#2f4a47', textColor: '#8ae0d8' },
-  { color: '#4a2f2f', textColor: '#e8a0a0' },
-  { color: '#2f4a3e', textColor: '#9fd8b8' },
-  { color: '#4a452f', textColor: '#e0d88a' },
-  { color: '#3a3a3a', textColor: '#b0aca4' }
-]
-
-/** Neutral pair for a provider with no preset — the "unbranded" look. */
-const NEUTRAL = { color: '#262421', textColor: '#8a857b' } as const
+export interface ProviderLogo extends AvatarStyle {
+  text: string
+  palette?: AvatarPaletteIndex
+}
 
 /**
  * A small, stable string hash.
@@ -97,7 +97,8 @@ export function providerInitials(name: string): string {
  */
 export function providerLogo(name: string, presetId?: string | undefined): ProviderLogo {
   const text = providerInitials(name)
-  if (!presetId) return { text, ...NEUTRAL }
-  const swatch = PALETTE[hash(presetId) % PALETTE.length] ?? NEUTRAL
-  return { text, ...swatch }
+  if (!presetId) return { text, ...NEUTRAL_AVATAR_STYLE }
+  const entry = AGENT_AVATAR_COLORS[hash(presetId) % AGENT_AVATAR_COLORS.length]
+  if (!entry) return { text, ...NEUTRAL_AVATAR_STYLE }
+  return { text, palette: entry.palette, ...avatarPaletteStyle(entry.palette) }
 }

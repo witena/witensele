@@ -6,9 +6,12 @@ Three layers, bottom up.
 
 **Tokens.** `src/renderer/src/index.css` declares every colour, the two font
 stacks and (new in S1.5) the `drag-region` / `no-drag` utilities inside
-`@theme static` / `@utility`. No component contains a literal colour; the one
-exception is *data* — an agent's `avatar.color` — which arrives as an inline
-style because Tailwind cannot see a value that only exists at runtime.
+`@theme static` / `@utility`. No component contains a literal colour. Something
+chosen at runtime — an avatar's tile, a provider's monogram — still arrives as an
+inline style, because Tailwind cannot see a class it never scans; since S5.17
+that inline style is a `var(--color-avatar-N-bg)` **reference** rather than a
+hex, which is what makes the last two coloured things in the app follow the
+appearance. `lib/hex-literals.test.ts` is the guard.
 
 Since S5.8 that block is the **dark** palette and `:root[data-theme='light']`
 overrides every `--color-*` token in it, with `color-scheme` set on both roots
@@ -18,6 +21,45 @@ re-renders, no component reads the theme, and a screen written in a later step
 is themed the day it is written. The rule this creates: **a token added to
 `@theme static` must be added to the light block as well**, and
 `lib/theme.test.ts` fails when it is not.
+
+S5.17 added two blocks after it, `@media (prefers-contrast: more)` and
+`@media (prefers-reduced-transparency: reduce)`, each stating its overrides
+**twice** — once for `:root` and once for `:root[data-theme='light']`. That
+repetition is load-bearing rather than sloppy: the light block's selector is
+specificity (0,2,0) and outranks a bare `:root` however late the media query
+appears, so one unqualified block would strengthen the dark theme and silently do
+nothing in the light one. The test asserts both halves name the same tokens.
+
+### The review harness (S5.17)
+
+`e2e/theme-review.spec.ts` is the only way this feature's acceptance criterion —
+"every screen is readable in both appearances" — can be checked, because it is
+not a thing Playwright can assert. It seeds a plausible installation and writes
+forty-two full-window screenshots for a human to open.
+
+Three seams, in order of how far each reaches around the app:
+
+1. **Records go through the backend client.** `providers.create`,
+   `agents.create`, `chats.create` — the same calls the UI makes.
+2. **The transcript is written into `witena.db` with `node:sqlite`, with the app
+   closed.** There is no `messages.append` method and there should not be one:
+   nothing but a run may write a message. A review harness reaches around the
+   app rather than the app growing a seam for it. `node:sqlite` rather than
+   `better-sqlite3` because `postinstall` rebuilds that one for Electron's ABI,
+   and the Playwright runner is plain Node.
+3. **The pending permission card is a real event on the real channel.** A prompt
+   is not a row, it is a suspended tool call, so the spec sends
+   `permission.requested` from the main process down `witena:event` —
+   `PermissionGate`'s own path through preload, `event-bridge` and the store —
+   and `permission.resolved` afterwards, because a card that stays open appears
+   in every screenshot taken after it.
+
+Two things the first pass taught, both now in the file: the walk **reloads the
+renderer** before each appearance (the first pass photographed a provider editor
+the previous pass had left open), and every shot waits 350ms for
+`transition-colors` to finish (several landed mid-transition, with the header
+naming one settings section and the highlight still on the previous one — which
+reads as a bug in a review).
 
 S7.1 changed the accent and added one token. The accent is now the brand
 terracotta — `#d97757` in the dark palette, `#a13917` in the light one — so the
@@ -176,11 +218,14 @@ S5.8 added one `BackendClient` method, `system.applyTheme` — see
 |---|---|
 | `src/renderer/src/stores/ui.test.ts` | Defaults, both setters over every value, and that the two fields are independent — leaving Settings must not reset the section |
 | `src/renderer/src/components/ui/presence-dot.test.ts` | `presenceColorClass`: the four mappings, that they are distinct, and that each is a literal token utility rather than an interpolated class |
-| `src/renderer/src/lib/theme.test.ts` | `resolveTheme` over all six combinations; `applyTheme` / `activateTheme` against a faked `document` and `matchMedia` (including that leaving `'system'` unsubscribes); and the palette itself — every `--color-*` token overridden, every override a different value **except the `CONSTANT_TOKENS` set**, which must instead be repeated verbatim, `color-scheme` on both roots, and `--color-bg-base` equal to `WINDOW_BACKGROUND` |
+| `src/renderer/src/lib/theme.test.ts` | `resolveTheme` over all six combinations; `applyTheme` / `activateTheme` against a faked `document` and `matchMedia` (including that leaving `'system'` unsubscribes); and the palette itself — every `--color-*` token overridden, every override a different value **except the `CONSTANT_TOKENS` set**, which must instead be repeated verbatim, `color-scheme` on both roots, `--color-bg-base` equal to `WINDOW_BACKGROUND`, all eight avatar slots defined both ways in both blocks, and (S5.17) the whole contrast contract: every body-copy step AA-normal and every small-print step ≥ 3:1 on all six surfaces, every monogram AA on its own tile, every status pill on its own surface, every presence dot ≥ 3:1 on `bg-panel`, the light foreground steps no quieter than the dark ones, both accessibility media queries naming the same tokens in both appearances and actually *raising* contrast, and `--color-bg-subtle` being the only token with an alpha channel |
+| `src/renderer/src/lib/contrast.test.ts` | The instrument itself (S5.17): both hex lengths, a throw rather than a `NaN` on anything else (a `NaN` ratio makes every assertion above pass for the wrong reason), the 1–21 range, symmetry, WCAG's own worked example (`#777` on white is 4.48:1) and the RGB distance the avatar mapping is built on |
+| `src/renderer/src/lib/hex-literals.test.ts` | Guard #3 (S5.17): no colour literal anywhere in the renderer outside the three named files, with comments blanked out and test files unscanned. It also asserts the exemption list still names files that exist, and that the pattern really does find the sixteen hexes in the legacy table — a guard that matches nothing passes by accident |
 | `src/renderer/src/components/ui/brand-mark.test.ts` | The mark in the rail and the mark the application icon is cut from are the same drawing: hexagon path, six blade endpoints, point, stroke weight and the `geometricPrecision` hint all compared against `build/icon.svg` and `build/icon-dark.svg`. Plus the S7.1 acceptance criterion — `nav-rail.tsx` renders `<BrandMark`, no longer renders the `W` tile, sizes it `h-7 w-7` and colours it `text-fg` |
 | `src/renderer/src/lib/highlighter.test.ts` | That `highlightCode` emits `--shiki-light` and `--shiki-dark` and no literal `color:` — the contract the two `.shiki` rules in `index.css` depend on |
 | `src/renderer/src/stores/settings.test.ts` | `setTheme`: the patch, the optimistic repaint, `system.applyTheme`, and that `'system'` is stored unresolved |
 | `e2e/theme.spec.ts` | The three-segment control, `prefers-color-scheme` through `page.emulateMedia`, the choice surviving a restart including `BrowserWindow.getBackgroundColor()`, and five light screenshots |
+| `e2e/theme-review.spec.ts` | **An instrument, not a test** (S5.17). Seeds two providers, five agents (four with a palette index, one with a legacy hex only), a chat with a working directory and a document goal, and a transcript holding every part kind; then photographs twenty-one screens in each appearance into `test-results/theme-review/`. It asserts only that the screen it photographed was on screen. See "The review harness" above |
 | `src/renderer/src/i18n/locales.test.ts` | Updated: `EXPECTED_NAMESPACES` no longer lists `smoke`. Still guards the key trees, CJK, placeholders |
 | `src/renderer/src/i18n/used-keys.test.ts` | Unchanged, and it did its job twice during S1.5 — once on a runtime-assembled key, once on a `switch` returning adjacent JSX |
 | `src/main/licenses.test.ts` | `scripts/generate-licenses.mjs` driven as an executable against a fixture `node_modules`: the production closure and nothing else, transitive edges and a cycle, both licence spellings, `UNKNOWN`, a normalised git URL, the warning for a package that is not installed — plus that the generated file the renderer imports actually exists, which is also the check that the `pretest` hook is still wired up (S7.5) |
@@ -215,9 +260,23 @@ Screenshots land in `$WITENA_SHOTS_DIR` (default: `test-results/shots`, gitignor
   rather than a letter" is asserted against `nav-rail.tsx`'s source text, the same
   technique `used-keys.test.ts` uses on every component.
 - **Two tokens were added in S1.7**: `--color-avatar-user` and
-  `--color-avatar-user-fg`, the human's monogram tile from the mockup. Agent
-  avatar colours are *data* (each record stores its own), but the user has no
-  record, so its pair is a token like every other literal colour.
+  `--color-avatar-user-fg`, the human's monogram tile from the mockup. S5.17
+  joined them with the eight indexed slots and a neutral pair, and retuned all
+  three groups; the user's tile is now kept a step deeper than slot 5's green so
+  "you" and "an agent" do not read as the same person.
+- **The contrast matrix is computed from *tokens*, not from pixels.** It is exact
+  for text on a plain surface and blind to anything composited on top — which is
+  how a passed row drawn at `opacity-50` stayed 3.26:1 in the light theme from
+  S2.x until someone looked at a screenshot in S5.17. The two remaining
+  composites (`opacity-70` on a dimmed row, `opacity-45` on a disabled control)
+  were checked by hand; measuring them would need a real browser and a sampler.
+- **The nearest-hex avatar mapping is RGB distance, and that is all it claims.**
+  The eight legacy values round-trip exactly, which is the case that matters. For
+  a colour the picker could never have produced it answers *some* slot, always
+  the same one — the table it measures against is eight dark slabs, so a bright
+  orange lands on the olive slot rather than the terracotta one. Documented in
+  `agent-display.test.ts` rather than fixed, because a perceptual space would be
+  more colour science than a fallback for impossible data deserves.
 - **`Avatar` has no image or emoji variant.** `AgentAvatar` is a union with one
   member today; the component takes text and colours directly rather than the
   whole record, which is the change to make when a second variant appears.

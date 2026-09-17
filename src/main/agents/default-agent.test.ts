@@ -49,7 +49,12 @@ describe('ensureDefaultAgent', () => {
       modelId: 'deepseek-chat',
       memoryEnabled: false
     })
-    expect(agent.avatar).toEqual({ kind: 'initial', text: 'A', color: expect.stringMatching(/^#/) })
+    expect(agent.avatar).toEqual({
+      kind: 'initial',
+      text: 'A',
+      palette: 1,
+      color: expect.stringMatching(/^#/)
+    })
     expect(ctx.repos.agents.list(ctx.userId)).toHaveLength(1)
   })
 

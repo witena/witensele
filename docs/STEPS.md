@@ -2153,6 +2153,136 @@ because **no backend method creates an agent message** (the only writer is
 past thirty later messages, and the chat-list preview. Docs: all four documents
 of `orchestration`, `chats`, `agent-turn`, `database` and `i18n`.
 
+### S5.17 Light-theme review and a theme-aware avatar palette `[x] (2026-09-17)`
+What: S5.8 proved the light theme on a handful of mostly empty screens. This step
+looks at every surface with content on it, in both themes, fixes what it finds,
+and makes the two things that ignored the theme — agent avatars and provider logo
+tiles — follow it.
+- **A review harness**: `e2e/theme-review.spec.ts` seeds a realistic installation
+  through the backend client (no model needed): providers, three agents with
+  different avatars and one executor, a chat with a working directory and a
+  document goal, and a transcript that contains every part kind the app renders —
+  markdown with a table, a fenced code block, a reasoning block, tool-call /
+  tool-result cards (one errored), a diff block, file-ref chips, system notices, a
+  conclusion-style closing message if that part exists on `main` when you run, a
+  pending permission card (emit the event through whatever test seam exists; if
+  none, render the card's component state through the store). It captures
+  full-window screenshots of chats, agents (list and editor), every settings
+  section (providers with a sign-in panel, MCP with the gallery open, skills,
+  timeouts, appearance, developer, about) and the onboarding card, in **both
+  themes**, into `test-results/theme-review/`. It asserts nothing visual; it is
+  the instrument. **Look at every screenshot** and list what you fixed.
+- **Fix through tokens only.** No hex colour outside `index.css` (a unit test
+  greps the renderer for hex literals outside `index.css`, the brand mark and the
+  stored-data migration table, and fails on a new one). Every new token gets a
+  light override; the S5.8 test keeps passing.
+- **Avatars follow the theme.** Replace the eight hard-coded
+  `{ color, textColor }` pairs with a palette index: tokens `--color-avatar-1-bg`
+  / `-fg` … `--color-avatar-8-bg` / `-fg`, tuned for each theme and no longer
+  derived from the old amber. `Agent.avatar` gains `palette?: 1..8`; new agents
+  store the index. Stored agents that carry a legacy hex are mapped to the nearest
+  palette index **at render time** by a pure, tested function (no database write,
+  no migration). The user avatar tokens are reviewed the same way. Provider logo
+  tiles get the same treatment (a background token per theme; brand marks keep
+  their own colours).
+- **Accessibility preferences**: under `@media (prefers-contrast: more)`
+  strengthen borders and the muted/faint foreground steps in both themes; under
+  `prefers-reduced-transparency` remove the translucent surfaces if any exist.
+  Record the AA contrast ratios of the foreground steps on every background token,
+  per theme, in `docs/features/ui-shell/frontend.md`, computed by a small test
+  helper rather than by hand.
+- Unit tests: the hex-literal guard; the legacy-hex → palette mapping (each of the
+  eight old pairs, and an unknown hex); the contrast helper asserting AA for the
+  text steps that carry body copy; the token-override test extended to the new
+  tokens. e2e: run `e2e/theme-review.spec.ts`, `e2e/theme.spec.ts`,
+  `e2e/ui-shell.spec.ts` and `e2e/agents.spec.ts` only (do not run the whole
+  suite; other agents share this machine's Ollama).
+Acceptance: every screenshot in `test-results/theme-review/` is readable in both
+themes and the write-up says what was wrong and what changed; avatars and provider
+tiles change with the theme; the tests above pass. Docs: `docs/features/ui-shell/`
+and `docs/features/agents/` (all four each), `docs/features/providers/frontend.md`.
+Done: the review found **nine** things, eight of them defects in the app and one
+of them the harness lying about the app. Per screen:
+
+| Screen | What was wrong | What changed |
+|---|---|---|
+| Chat transcript, light | Every avatar in the **message list** was still a dark slab with a pale monogram, while the member panel beside it had already gone pale — the two columns disagreed about the same five agents on one screen | `message-item.tsx` was the last component reading `agent.avatar.color`; it asks `avatarStyle` now. It was missed by the first sweep because its call site spells the props differently from the other six |
+| Chat transcript, both | A **passed / skipped** row was drawn at `opacity-50`: its name measured 3.26:1 in light and 4.33:1 in dark, and its `modelId · provider` line 2.17:1 and 2.37:1 — under the floor for any meaningful pixel, in *both* appearances. It had been that way since S2.x | `opacity-70`. A normal row is 13:1 or better, so the row still reads as superseded at a glance; it just no longer crosses into unreadable |
+| Every row with a hover state | `fg-dim` and `fg-faint` were 4.00:1 and **2.74:1** on `bg-hover` in dark, 4.41:1 and 3.39:1 in light. Hovering a chat row, an agent row or a settings section took that row's own timestamps and hints below their bar | `fg-dim` → `#969189` / `#665f55`, `fg-faint` → `#7c776e` / `#756f63`. `--color-status-idle` moved with `fg-dim` (it was 4.22:1 on its own surface) and `--color-presence-offline` with `fg-faint` |
+| Provider list, preset grid, onboarding tiles | The eight provider monograms were a fixed dark chip in both themes. On the near-white settings page they read as stickers applied to the cards rather than as part of them | `providerLogo` returns a slot from the shared eight-token palette. Two of the eight slots change hue (the two lists had drifted); the hash is untouched, so a preset keeps its slot number |
+| Agent editor | The avatar swatch marked as *pressed* was matched by **colour**, which cannot work once one slot is two different hexes | Matched by index, with `data-palette` on each swatch |
+| Hovered rows in six components | `hover:bg-bg-hover/50` and `/60` written into six files: the app's only translucent surface was also the one no stylesheet could answer for | One `--color-bg-subtle` token, which is what `prefers-reduced-transparency` now replaces |
+| Message error detail, permission card, input focus ring | `text-danger/80` (4.27:1 in light) and two `border-*/60` borders at 2.8–2.9:1 | Solid tokens. The permission card's full-strength accent border is also the better reading for a card demanding a decision |
+| Light theme, hovered danger | `--color-danger` was 4.47:1 on `bg-hover` — a hovered row's Delete button just under AA | `#a93636` (4.90:1) |
+| The harness itself | Several settings shots caught the 150ms `transition-colors` mid-flight, so the header named one section and the highlight was still on the previous one; and the light pass photographed a provider editor and a permission card the dark pass had left open | The walk reloads the renderer before each appearance, settles 350 ms before each shot, and sends `permission.resolved` after photographing the card |
+
+**The avatar palette is an index, not a migration.** `InitialAvatar.palette` is
+`1..8` and the stylesheet holds twenty tokens (eight pairs, a neutral pair, the
+human's own). That shape was chosen over the two obvious alternatives for one
+reason: the *choice* is data and a small integer stores it exactly, while the
+colour has to differ between the appearances — slot 3 is a deep violet in dark and
+a pale one in light, and no single stored hex can be both. Rewriting
+`agents.avatar` would have made the appearance a **database** concern, with a
+migration to write, a downgrade to think about and a half-converted table if the
+app were killed during it; instead `nearestAvatarPalette` resolves an old record
+to its slot **as it is drawn**, which costs one pure function and cannot fail.
+The eight amber-era hexes stay in `agent-display.ts` as the table that mapping
+measures against — and as the compatibility shadow a *new* record still writes
+into `avatar.color`, so an older build, an export or the future server always has
+a colour. They are also why that file is one of three the hex guard exempts, the
+others being `index.css` and the brand mark. Provider tiles were folded into the
+same eight slots rather than given a second theme-aware list, because the two
+lists were already copies that had drifted in two places.
+
+**The contrast is arithmetic now, not a claim.** `lib/contrast.ts` is twenty
+lines of WCAG relative luminance; `theme.test.ts` reads both palette blocks as
+text and asserts the body-copy steps are AA-normal on all six surfaces, the small
+print at least 3:1, every monogram AA on its own tile, every status pill on its
+own surface, every presence dot 3:1 on `bg-panel`, and the light foreground steps
+no quieter than the dark ones. The full matrix is printed in
+`docs/features/ui-shell/frontend.md`, generated from the same function rather than
+typed. `contrast.test.ts` pins the instrument against WCAG's own worked example
+and makes an unparseable colour **throw** — a silent `NaN` would have made every
+one of those assertions pass for the wrong reason.
+
+**The two media queries are each written twice**, once for `:root` and once for
+`:root[data-theme='light']`. That is not duplication to tidy up: the light
+selector is specificity (0,2,0) and outranks a bare `:root` however late the query
+appears, so a single unqualified block would have strengthened the dark theme and
+silently done nothing in light — exactly the class of bug this whole step exists
+to find. `prefers-contrast: more` moves only the three quiet foreground steps and
+the two borders (`fg-faint` 3.30 → 5.32 dark, 3.80 → 6.69 light); the hues that
+carry meaning are left alone, because shifting green to gain contrast it does not
+need would only make the two appearances disagree about what green means.
+`prefers-reduced-transparency` has exactly one surface to answer for, and
+`theme.test.ts` asserts `--color-bg-subtle` is the only token with an alpha
+channel so a second one cannot appear without the query growing to match.
+
+`e2e/theme-review.spec.ts` reaches around the app in exactly one place and says
+so: there is no `messages.append` method and there should not be one, so the
+transcript is written into `witena.db` with `node:sqlite` while the app is closed
+(`node:sqlite` and not `better-sqlite3`, because `postinstall` rebuilds that one
+for Electron's ABI and the Playwright runner is plain Node). Everything else is
+honest: records go through `providers.create` / `agents.create` / `chats.create`,
+and the pending permission card is a real `permission.requested` sent down
+`witena:event` from the main process — `PermissionGate`'s own path through
+preload, `event-bridge` and the store. Forty-two screenshots, twenty-one screens
+per appearance, all of them looked at; they are gitignored with the rest of
+`test-results/`. One note for whoever runs it: the provider sign-in panel shows
+the **machine's real** `ant` login state, so a shot of that screen has the
+developer's own account in it.
+
+Not done, and why: `about-section.tsx` keeps a `border-border/60` divider on its
+licence rows — S7.4's branch owns that file this batch and a one-class change was
+not worth the conflict. Nothing measures a *rendered* pixel, so the two remaining
+composites (`opacity-70` on a dimmed row, `opacity-45` on a disabled control) were
+checked by hand; a guard would need a real browser and a colour sampler. A
+streaming cursor and a live presence sweep are still only visible with a model
+attached, which is `e2e/presence.spec.ts`'s job. Docs in
+`docs/features/{ui-shell,agents}/` (all four each) and
+`docs/features/providers/frontend.md`.
+
+
 ## Phase 6: Backlog (decided, not yet scheduled)
 
 Everything below is agreed work that is deliberately **not** in Phase 5. Each
@@ -2461,44 +2591,60 @@ adds a line here in the same commit.
 
 ### Appearance
 
-- **The light theme has not been reviewed on a full transcript.** S5.8 looked at
-  the chat, settings, agents, providers and agent-editor screens, and at one real
-  reply with a highlighted code block, but the screens that only exist while
-  something is running — a streaming message, a tool card, an error message, the
-  four presence dots side by side, S5.5's permission card and diff block — were
-  read from their tokens rather than seen. They use no colour of their own, so
-  the risk is a *step* that is too subtle rather than an unreadable screen.
-- **Avatar and provider-logo colours stay dark in both themes.** They are data,
-  not tokens: an agent's `avatar.color` is stored in its record and
-  `provider-logo.ts` picks from a fixed palette, so a dark tile with a light
-  monogram is what both themes show. It reads as a brand chip on white and was
-  left alone deliberately — theming it means either rewriting stored rows or a
-  second palette keyed by theme, which is a step of its own.
-- **`prefers-contrast` and `prefers-reduced-transparency` are not honoured**, and
-  there is no high-contrast variant of either palette.
-- **The new accent has not been seen on every accent surface (S7.1).** The rail,
-  the settings screens, the agents screens and both themes' chat screens were
-  looked at, and every accent pair was computed against all six surface tokens
-  (worst case 4.71:1 dark, 5.14:1 light — both AA). What was *not* seen is the
-  accent on the surfaces that only exist mid-run: the streaming cursor, S5.5's
-  permission card, the "Jump to latest" pill and the `@mention` chips in a live
-  transcript. They take the token like everything else, so the risk is a hue that
-  reads warm next to `presence-working` rather than an unreadable control — the
-  two are 1.15:1 apart, which is fine for a dot beside text and would be wrong if
-  they ever had to be told apart on their own.
+- ~~**The light theme has not been reviewed on a full transcript.**~~ **Done in
+  S5.17.** `e2e/theme-review.spec.ts` seeds a transcript holding every part kind
+  and photographs twenty-one screens per appearance. It found four defects in the
+  app — the message list's avatars, a dimmed row at 3.26:1, `fg-dim` / `fg-faint`
+  under their bar on `bg-hover`, and five components carrying alpha utilities —
+  all listed and fixed in that step's `Done:` paragraph.
+- ~~**Avatar and provider-logo colours stay dark in both themes.**~~ **Done in
+  S5.17**, and the premise turned out to be the mistake: what a record stores is
+  the *choice*, which is a palette index, and the colour belongs in `index.css`
+  where it can differ between the appearances. No rows were rewritten — a legacy
+  hex is mapped to its slot at render time.
+- ~~**`prefers-contrast` and `prefers-reduced-transparency` are not honoured.**~~
+  **Done in S5.17**, for the three quiet foreground steps, both borders and the
+  one translucent token. There is still no *separate* high-contrast palette: the
+  media query nudges the existing one rather than replacing it, which is enough
+  for `more` and would not be enough for a genuine forced-colours mode
+  (`forced-colors: active`, the Windows High Contrast path). Nothing in the app
+  is Windows-facing yet, so that stays open.
+- ~~**The new accent has not been seen on every accent surface (S7.1).**~~ **Done
+  in S5.17** for the permission card, the `@mention` chips and the "Jump to
+  latest" pill, all of which the review photographs in both appearances. The
+  **streaming cursor** is the one accent surface still unseen: it only exists
+  while a model is producing tokens, so it needs Ollama and belongs to
+  `e2e/presence.spec.ts` rather than to a seeded transcript. The note about the
+  accent reading warm next to `presence-working` stands — the two are 1.15:1
+  apart, fine for a dot beside text and wrong if they ever had to be told apart
+  on their own.
+- **Nothing measures a rendered pixel.** The contrast matrix in
+  `docs/features/ui-shell/frontend.md` is computed from token values, so it is
+  exact for text on a plain surface and blind to anything composited over it —
+  which is how a passed row at `opacity-50` stayed sub-AA from S2.x to S5.17. The
+  two remaining composites were checked by hand; a guard would need a real
+  browser and a colour sampler.
+- **`about-section.tsx` still carries one `border-border/60` divider.** The only
+  alpha utility left in the renderer after S5.17, skipped because another branch
+  owned that file in the same batch. One class to change.
 - **The mark is only drawn at 28 px and up inside the app (S7.1).** Below roughly
   20 px the six blades merge into a ring; the application icon's 16 px variant is
   re-rendered with a thickened stroke for exactly that reason, and no in-app
   surface renders it smaller than the rail's 28 px today. A favicon, a menu-bar
   item or a notification icon would be the first thing that does, and would need
   the same treatment or a simplified mark.
-- **The agent avatar palette was left on the amber-era hues (S7.1).** The eight
-  pairs in `agent-display.ts` are **data** — they are copied into `agents.avatar`
-  and stored in SQLite — so changing them would restyle new agents while every
-  existing one kept its old pair, which is worse than leaving all of them alone.
-  None of them was derived from the old accent (they are the mockup's five agents
-  plus three in the same family) and none clashes with terracotta. Re-picking them
-  is a step of its own, with a migration, if it is ever wanted.
+- ~~**The agent avatar palette was left on the amber-era hues (S7.1).**~~ **Done
+  in S5.17**, and without the migration this entry assumed was the price: the
+  eight pairs became twenty tokens, a record stores the slot number, and the old
+  hexes stayed in `agent-display.ts` as the table an existing agent is resolved
+  through. Nothing was restyled behind the user's back and nothing was written to
+  SQLite.
+- **The nearest-hex mapping is plain RGB distance.** The eight legacy values
+  round-trip exactly, which is the case that matters. A colour the picker could
+  never have produced gets a stable but not especially pretty answer — the table
+  it measures against is eight dark slabs, so a bright orange lands on the olive
+  slot. A perceptual space would fix it and is more colour science than a
+  fallback for impossible data deserves.
 - **The dmg has no custom background.** S7.1's brief allowed for one; nothing was
   added, because `dmg.background` also fixes the window size and the icon
   positions, and the default Finder layout electron-builder produces is correct

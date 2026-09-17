@@ -22,6 +22,9 @@ main-process fact it depends on.
 | `src/renderer/src/pages/settings/appearance-section.tsx` | The appearance `SegmentedControl` (System / Light / Dark, S5.8) and the language `Select` |
 | `src/renderer/src/pages/settings/theme.ts` | `applyThemeSetting` — the appearance control's counterpart to `language.ts` |
 | `src/renderer/src/lib/theme.ts` | `applyTheme` / `activateTheme`: `data-theme` on `<html>`, plus the `matchMedia` subscription `'system'` needs |
+| `src/renderer/src/lib/contrast.ts` | `parseHex`, `relativeLuminance`, `contrastRatio` and `rgbDistanceSquared` (S5.17). Pure WCAG arithmetic. `theme.test.ts` judges the palette with it and the matrix below is printed from it; only `agent-display.ts` imports it at runtime |
+| `src/renderer/src/lib/hex-literals.test.ts` | Guard #3 (S5.17): no colour literal in the renderer outside `index.css`, the brand mark and the legacy avatar table |
+| `src/renderer/src/components/agents/agent-display.ts` | `avatarStyle` / `avatarPalette` / `nearestAvatarPalette`: which of the eight monogram slots a record means, and the two `var(--color-avatar-…)` strings it is painted with. See [`../agents/frontend.md`](../agents/frontend.md) |
 | `src/renderer/src/pages/settings/developer-section.tsx` | The transport smoke widgets, moved here from `App.tsx`, plus S5.7's Editor block ([`editor`](../editor/frontend.md)) — the one piece of real product settings on this screen, here because its custom mode is a shell command |
 | `src/renderer/src/pages/settings/editor.ts` | `applyEditorSetting` — the Editor block's counterpart to `theme.ts` and `language.ts` (S5.7) |
 | `src/renderer/src/pages/settings/language.ts` | `applyLanguageSetting` — the single handler both language controls call |
@@ -108,6 +111,139 @@ was the `W` of the placeholder app mark, which survived only because a single
 letter is below the guard's three-letter threshold. `BrandMark` is a drawing
 rather than a glyph, so there is nothing left to exempt and `ALLOWED_JSX_TEXT` is
 still empty, as intended.
+
+## The palette
+
+### Colour is a token, and only a token
+
+Every colour in the app is a `--color-*` in `index.css`, and the light theme is
+that file's second block. Three files are allowed a literal and no others; a
+fourth is a test failure, not a review comment:
+
+| File | Why it may hold a hex |
+|---|---|
+| `src/renderer/src/index.css` | It *is* the palette |
+| `components/ui/brand-mark.tsx` | `--color-brand-point` is an identity and `build/icon.svg` repeats it, because an SVG on disk cannot read a CSS variable (S7.1) |
+| `components/agents/agent-display.ts` | `LEGACY_AVATAR_COLORS`: the eight amber-era hexes every pre-S5.17 agent record carries, kept as the table a stored colour is resolved through (S5.17) |
+
+`lib/hex-literals.test.ts` greps the renderer for `#rgb`, `#rrggbb` and
+`#rrggbbaa` outside those files, with comments blanked out so a colour *named in
+prose* (`highlighter.ts` explains its shiki theme by quoting that theme's
+background) is not a violation. Test files are not scanned: a fixture is allowed
+to name the colour a record used to hold.
+
+### The monogram palette (S5.17)
+
+Eight background / foreground pairs, `--color-avatar-1-bg` / `-fg` through
+`-8-`, plus `--color-avatar-neutral-*` and the human's own
+`--color-avatar-user` / `-fg`. Both palettes define all twenty.
+
+A tile names a **slot**, never a colour. `InitialAvatar.palette` is the small
+integer an agent stores; `avatarStyle` in `components/agents/agent-display.ts`
+turns it into the two `var(--color-avatar-N-…)` strings the `Avatar` primitive
+puts in an inline style, and a record written before the index existed is
+resolved through `nearestAvatarPalette` **as it is drawn** — no migration, no
+write on read, nothing half-converted if the app is killed mid-upgrade.
+`providerLogo` returns the same shape, so a provider tile and an agent tile are
+the same eight colours.
+
+### Contrast
+
+Computed by `lib/contrast.ts` from the token values, and asserted by
+`lib/theme.test.ts`: the body-copy steps (`fg`, `fg-secondary`, `fg-muted`) plus
+`accent` and `danger` are AA-normal (4.5:1) on **every** surface token, and the
+small print (`fg-dim`, `fg-faint`) is at least 3:1 on every one. Regenerate this
+table from `index.css` rather than editing a number in it.
+
+#### Dark
+
+| | `bg-base` | `bg-panel` | `bg-rail` | `bg-elevated` | `bg-hover` | `bg-muted` |
+|---|---|---|---|---|---|---|
+| `fg` | 14.00 | 13.60 | 14.60 | 13.33 | 11.38 | 11.98 |
+| `fg-secondary` | 11.89 | 11.56 | 12.41 | 11.33 | 9.67 | 10.18 |
+| `fg-muted` | 8.76 | 8.51 | 9.14 | 8.34 | 7.12 | 7.50 |
+| `fg-dim` | 5.78 | 5.61 | 6.03 | 5.50 | 4.70 | 4.94 |
+| `fg-faint` | 4.07 | 3.95 | 4.24 | 3.87 | 3.30 | 3.48 |
+| `accent` | 5.79 | 5.63 | 6.04 | 5.52 | 4.71 | 4.96 |
+| `accent-hover` | 7.45 | 7.24 | 7.77 | 7.10 | 6.06 | 6.38 |
+| `danger` | 7.04 | 6.84 | 7.34 | 6.70 | 5.72 | 6.02 |
+
+#### Light
+
+| | `bg-base` | `bg-panel` | `bg-rail` | `bg-elevated` | `bg-hover` | `bg-muted` |
+|---|---|---|---|---|---|---|
+| `fg` | 15.33 | 16.56 | 14.03 | 16.81 | 12.82 | 13.79 |
+| `fg-secondary` | 12.11 | 13.08 | 11.09 | 13.28 | 10.13 | 10.89 |
+| `fg-muted` | 8.27 | 8.94 | 7.57 | 9.07 | 6.92 | 7.44 |
+| `fg-dim` | 5.74 | 6.21 | 5.26 | 6.30 | 4.80 | 5.17 |
+| `fg-faint` | 4.55 | 4.91 | 4.16 | 4.99 | 3.80 | 4.09 |
+| `accent` | 6.15 | 6.64 | 5.63 | 6.75 | 5.14 | 5.53 |
+| `accent-hover` | 8.20 | 8.87 | 7.51 | 9.00 | 6.86 | 7.38 |
+| `danger` | 5.86 | 6.33 | 5.36 | 6.43 | 4.90 | 5.27 |
+
+S5.17 moved four of these values. `fg-dim` and `fg-faint` were `#8a857b` /
+`#6f6a62` in dark and `#6b655a` / `#7d776b` in light: on `bg-hover` they measured
+4.00:1 and **2.74:1** (dark) and 4.41:1 and 3.39:1 (light), so hovering a row
+took its own timestamps and hints below the floor. `--color-status-idle` moved
+with `fg-dim` (4.22:1 on its own surface), and the light `--color-danger` went
+from `#b23b3b` to `#a93636` because 4.47:1 on `bg-hover` was a hovered row's
+delete button sitting just under AA.
+
+#### Monogram on its own tile
+
+| | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | neutral | user |
+|---|---|---|---|---|---|---|---|---|---|---|
+| dark | 6.63 | 6.62 | 6.27 | 6.77 | 6.54 | 6.36 | 6.63 | 6.25 | 7.34 | 6.48 |
+| light | 5.35 | 6.58 | 7.19 | 6.19 | 6.49 | 5.75 | 5.73 | 7.18 | 6.72 | 6.59 |
+
+A monogram is bold but 10–13px, so it is held to AA-normal rather than AA-large.
+
+#### Everything else
+
+| | Status pills, on their own surface | Presence dots, on `bg-panel` | `border` / `border-strong` on `bg-base` |
+|---|---|---|---|
+| dark | ok 6.95, warn 6.06, idle 4.94 | available 7.71, working 4.90, away 7.76, offline 3.95 | 1.17 / 1.30 |
+| light | ok 5.06, warn 4.90, idle 5.30 | available 3.31, working 4.53, away 3.79, offline 3.61 | 1.24 / 1.49 |
+
+A presence dot is not text; 3:1 is the non-text floor and the right bar for it. A
+border is a hairline between two surfaces of the same family and is deliberately
+quiet — which is what `prefers-contrast` is for.
+
+### Accessibility preferences (S5.17)
+
+Two media queries at the bottom of `index.css`, each written **twice** — once for
+`:root` and once for `:root[data-theme='light']`, because the light selector
+outranks a bare `:root` however late it appears.
+
+`prefers-contrast: more` raises only the steps that are allowed to be quiet, and
+only as far as they need:
+
+| | `fg-muted` | `fg-dim` | `fg-faint` | `border` | `border-strong` |
+|---|---|---|---|---|---|
+| dark | 7.12 → 9.00 | 4.70 → 6.65 | 3.30 → 5.32 | 1.00 → 1.59 | 1.05 → 2.14 |
+| light | 6.92 → 9.85 | 4.80 → 7.82 | 3.80 → 6.69 | 1.04 → 1.71 | 1.25 → 2.44 |
+
+(worst case across the six surfaces). `fg`, `fg-secondary` and every hue that
+carries *meaning* — the accent, the presence states, the status tones, the eight
+avatar slots — are deliberately untouched: they are already 4.5:1 or better
+everywhere, and shifting a hue to gain contrast it does not need would only make
+the two appearances disagree about what green means.
+
+`prefers-reduced-transparency: reduce` has exactly one surface to answer for.
+`--color-bg-subtle` is `bg-hover` at 60% — the tint a pointer leaves on a row
+whose *selected* state is the full `bg-hover` — and the query replaces it with
+the colour that alpha composites to over `bg-panel`. It used to be six copies of
+`hover:bg-bg-hover/50` and `/60` written into six components, which is why no
+stylesheet could answer for it before. `theme.test.ts` asserts it is the **only**
+token with an alpha channel, so a second one cannot appear without the query
+growing to match.
+
+Element `opacity` is not touched. A disabled control and a superseded message are
+*states*; the preference is about see-through materials, not about the interface
+hiding what it means. The one place that composites text is a passed or skipped
+message row, and S5.17 raised it from `opacity-50` to `opacity-70`: at half
+strength its name measured 3.26:1 in light and its model line 2.17:1, under the
+floor in both appearances.
 
 ## Accessibility and keyboard
 

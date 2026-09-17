@@ -193,11 +193,42 @@ export interface ProviderAuthStatus {
  */
 export type AgentRole = 'participant' | 'executor'
 
-/** A monogram avatar: one or two letters on a solid colour. */
+/**
+ * The eight entries of the monogram palette, as stored.
+ *
+ * An index rather than a colour, because the colour depends on the appearance
+ * (S5.17): `--color-avatar-3-bg` is a deep violet in the dark theme and a pale
+ * one in the light theme, and a record cannot hold both. One small integer holds
+ * the *choice* and lets the stylesheet hold the consequences.
+ */
+export type AvatarPaletteIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
+
+/** The eight indexes, in the order the avatar picker offers them. */
+export const AVATAR_PALETTE_INDEXES: readonly AvatarPaletteIndex[] = [1, 2, 3, 4, 5, 6, 7, 8]
+
+/** A monogram avatar: one or two letters on one of the eight palette entries. */
 export interface InitialAvatar {
   kind: 'initial'
   text: string
-  /** CSS colour, e.g. `#c2653a`. */
+  /**
+   * Which palette entry the tile is painted with (S5.17). The authority at
+   * render time whenever it is present.
+   *
+   * Optional because every agent written before S5.17 has only the two colour
+   * fields below. Those records are **not** migrated: the renderer maps the
+   * stored hex to the nearest entry as it draws, which costs nothing, cannot
+   * half-fail, and leaves a downgrade to the previous build working.
+   */
+  palette?: AvatarPaletteIndex
+  /**
+   * CSS colour, e.g. `#c2653a`.
+   *
+   * Since S5.17 this is a *compatibility shadow* on a record the current build
+   * wrote — the amber-era hex of whatever `palette` names — rather than the
+   * thing that gets painted. It is still required, so that a consumer that has
+   * never heard of `palette` (an older build, an export, a future server) always
+   * has a colour to fall back to.
+   */
   color: string
   /**
    * Foreground CSS colour paired with `color`. Optional so records written before
