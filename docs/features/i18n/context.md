@@ -22,7 +22,11 @@ S1.4 delivers the whole mechanism, not just the two files:
 - `translateNotice` — the renderer half of the "the backend sends keys, not
   sentences" contract for `SystemNoticePart`, and `i18n/errors.ts` — the same
   contract for a rejected call, by `BackendErrorCode` and, since S5.2, by the
-  finer `ValidationReason`.
+  finer `ValidationReason`. S5.15 added a third shape of the same contract that
+  is neither: a reason **code on an event** (`CommandRiskReason`, on
+  `permission.requested`), rendered by `components/chat/command-risk.ts`.
+  Nothing is stored and nothing failed — the backend simply knows the fact and
+  the renderer knows the language.
 - Two guard tests that keep the rule true as the UI grows: the key trees must
   match, and no hard-coded string may reach JSX.
 - The full key tree for the screens S1.5–S2.5 will build, written ahead of the

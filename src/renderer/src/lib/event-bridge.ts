@@ -73,6 +73,14 @@ export function applyBackendEvent(event: BackendEvent): void {
       break
     case 'permission.resolved':
       usePermissionsStore.getState().applyResolved(event.requestId)
+      // An `allowAlways` wrote a `permission_grants` row (S5.15), and the
+      // "Always allowed" list in Group settings has to show it without the user
+      // reopening the chat. Refreshed from the backend rather than appended
+      // locally: the row carries a `createdAt` this side did not choose, and a
+      // repeat grant keeps its original one.
+      if (event.decision === 'allowAlways') {
+        void usePermissionsStore.getState().loadGrants(event.chatId)
+      }
       break
     // `system.test` belongs to the Developer section, which subscribes itself.
     default:

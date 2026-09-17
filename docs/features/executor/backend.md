@@ -10,10 +10,13 @@ None of these imports electron; `node:fs`, `node:path`, `node:child_process` and
 | `src/main/executor/paths.ts` | `resolveInWorkdir`, `realWorkdir`, `realPathOf`, `isInside`. The only place a path is turned into something the tools may touch. Plus `deliverablePath(goal, workdir)` (S5.12): the one spelling of "where a `document` goal's file is", shared with `chats.goalStatus` |
 | `src/main/executor/tools.ts` | `buildExecutorTools` (the seven AI SDK tools), `buildExecutorSection({ workdir, handoff, goal, branch })` (the prompt), `HANDOFF_BRIEFING` and `DELIVER_BRIEFING` with `handoffBriefing(intent)` picking between them (S5.6, S5.12), `goalHandoffLine(goal, branch)` (the sentence S5.10 adds to that paragraph, naming the deliverable or the change, and since S5.12 the branch), `runCommand` (the captured, killable child process), the caps, `GATED_EXECUTOR_TOOLS`, `PermissionDeniedError`, `unifiedDiff`, `cap` |
 | `src/main/executor/workspace.ts` | `buildWorkspaceSection` (the `Workspace` prompt section), `walkTree` / `formatTree` (the bounded listing), `parseGitignore` / `loadIgnoreRules` / `isIgnored` (the hand-written ignore rules), `gitInfo` (`spawnSync` git, `null` outside a repository), and the caps `MAX_TREE_ENTRIES`, `MAX_TREE_DEPTH`, `MAX_TREE_FILE_BYTES`, `MAX_STATUS_LINES`, `SKIPPED_TREE_DIRS` (S5.11) |
-| `src/main/executor/permissions.ts` | `createPermissionGate`: `ask` / `reply` / `pending` / `abortAll`, the `allowAlways` set |
-| `src/main/handlers/permissions.ts` | The `permission.reply` handler: two validations, then `ctx.permissions.reply` |
-| `src/main/app-context.ts` | `AppContext.permissions`, built with `emit: ctx.events.emit`; `close()` calls `abortAll()` after `runners.stopAll()` |
-| `src/main/testing.ts` | The same gate for unit tests, with an injectable `newRequestId` so a suite can answer `request-1` |
+| `src/main/executor/command-policy.ts` | S5.15. `tokenizeCommand` (quotes, operators, redirections, `$(…)`, backticks), `classifyCommand(line, { workdir, home })` → `CommandRisk`, `resolvePathWord`, `programName`, `blockedCommandMessage` (the model-facing English for a refusal). Pure: no `node:fs`, no context |
+| `src/main/executor/sandbox.ts` | S5.15. `buildSandboxProfile`, `sandboxCommand`, `sandboxAvailable`, `systemTempDirs`, `SANDBOX_EXEC`, `WRITABLE_DEVICES` |
+| `src/main/executor/permissions.ts` | `createPermissionGate`: `ask` / `reply` / `pending` / `abortAll`. Since S5.15 it takes a `GrantStore` and a `timeoutMs` accessor, and `createMemoryGrantStore` is the fallback a unit test gets |
+| `src/main/handlers/permissions.ts` | `permission.reply`, plus S5.15's `permissions.grants.list` and `permissions.grants.revoke` — both a validation and a repository call |
+| `src/main/db/repositories/permissionGrants.ts` | S5.15. `list` / `has` / `grant` / `revoke` over `permission_grants` |
+| `src/main/app-context.ts` | `AppContext.permissions`, built with `emit: ctx.events.emit`, the repository as its `GrantStore`, and a `timeoutMs` that re-reads the setting per prompt; `close()` calls `abortAll()` after `runners.stopAll()` |
+| `src/main/testing.ts` | The same gate for unit tests, with an injectable `newRequestId` so a suite can answer `request-1`, the real grants repository, and `permissionTimeoutMs` off by default |
 | `src/main/agents/agent-turn.ts` | `executorWorkdir` (the attachment rule) and `workspaceWorkdir` (S5.11's: any member of a chat with a folder), the executor branch of `collectAgentTools`, the permission wrapper around a `sideEffects` MCP call, the executor section in `buildSystemPrompt` — extended by `AgentTurnOptions.handoff` (S5.6, now a `HandoffIntent`) — `diffPartsFrom`, which turns the stored tool results into one `DiffPart` per written file (S5.5), and `deliveredRef`, which adds a `FileRefPart` when the turn brought the deliverable into existence (S5.12) |
 | `src/main/orchestration/chat-runner.ts` | Not this feature's file, but the only caller that ever sets `handoff`: `ChatRunner.handoff` schedules the executor's round and passes the intent for that one turn, and sets `reviewing` for every speaker of the round after it ([`orchestration`](../orchestration/backend.md)) |
 
@@ -32,9 +35,13 @@ the ones a second implementation would get wrong.
 
 ## Database
 
-None. This feature reads two columns other features own and writes nothing. The
+One table of its own since S5.15, plus the columns other features own. The
 `user` message a hand-off stores is written by `ChatRunner`
 ([`orchestration`](../orchestration/backend.md)), not here.
+
+| Table | Columns | Notes |
+|---|---|---|
+| `permission_grants` | `chat_id` → `chats.id` (cascade), `tool_name`, `created_at`; primary key on the pair | S5.15's migration `0004`. A pure join table like `chat_members`: no id, no `user_id` (the chat carries the user, and a cascade cannot check a second column), and `onConflictDoNothing` so a repeat grant keeps the timestamp the user's decision had |
 
 | Table | Column | Type | Notes |
 |---|---|---|---|
@@ -42,14 +49,68 @@ None. This feature reads two columns other features own and writes nothing. The
 | `agents` | `role` | `text` | `'executor'` is half the attachment rule; since S5.11 it decides *which* tools rather than *whether* any |
 | `chats` | `goal` | `text` nullable (JSON) | `goal.materials` is what `agents/materials.ts` reads; `goal.kind === 'codebase'` is what adds the git half of the workspace briefing |
 | `mcp_servers` | `sideEffects` | `integer` (boolean) | Now decides **confirmation** as well as attachment |
-
-No migration. `allowAlways` is deliberately in memory only.
+| `settings` | `data.executor.sandbox` | JSON | S5.15. `'workdir-write'` (default) or `'off'`, read once per turn when the tools are built |
+| `settings` | `data.timeouts.permissionTimeoutMs` | JSON | S5.15. Read once per prompt, so changing it applies to the next card rather than the next launch |
 
 ## IPC handlers
 
 | Channel | Input | Output | Errors |
 |---|---|---|---|
-| `permission.reply` | `{ requestId: string, decision: 'allow' \| 'deny' \| 'allowAlways' }` | `void` | `validation` — blank `requestId`, or a `decision` outside the union (refused rather than read as `deny`: silently denying a call the user allowed is the worse wrong answer, and the call stays pending). `not_found` — nothing is waiting on that id, because it was answered already or a stop closed it |
+| `permission.reply` | `{ requestId: string, decision: 'allow' \| 'deny' \| 'allowAlways' }` | `void` | `validation` — blank `requestId`, or a `decision` outside the union (refused rather than read as `deny`: silently denying a call the user allowed is the worse wrong answer, and the call stays pending). `not_found` — nothing is waiting on that id, because it was answered already or a stop or a timeout closed it |
+| `permissions.grants.list` | `{ chatId }` | `PermissionGrant[]`, newest first | `validation` — a blank `chatId`. A chat that does not exist answers `[]`: this is a question about grants, not a way to probe for chat ids |
+| `permissions.grants.revoke` | `{ chatId, toolName }` | The **remaining** grants | `validation` — either field blank. Idempotent otherwise; revoking what was never granted succeeds, because the only thing asked for is that it not be there afterwards |
+
+## The command policy (S5.15)
+
+`classifyCommand(line, { workdir, home })` runs before the prompt, in
+`run_command`'s `execute`. Its verdict decides three things: whether the tool
+throws at once, whether the gate may answer from a grant, and what the card
+warns about.
+
+| Verdict | Rules | What happens |
+|---|---|---|
+| `blocked` | `sudo` / `su` / `doas` / `pkexec`; `mkfs*`, `dd of=/dev/…`, `diskutil erase…`, `hdiutil`, `fdisk`; `shutdown` / `reboot` / `halt`; a fork bomb; a recursive `rm`, or a recursive `chmod` / `chown`, whose target resolves to `/`, `~`, `$HOME` or outside the folder | `CommandBlockedError`, carrying `blockedCommandMessage(reason)`. No prompt, no shell |
+| `dangerous` | Any other recursive delete; `push`, `reset --hard`, `clean`, `rebase`, `filter-branch`, `commit --amend`, `branch -D`; `npm`/`cargo`/`gem`/`twine`/`docker` publish; a download piped into a shell; `$(…)` or backticks anywhere; a path argument — or a redirection target — that resolves outside the folder; a trailing `&`, `nohup`, `disown` | Always prompts, ignores every grant, and the card shows the reason and hides "Always allow" |
+| `normal` | Everything else | Exactly what S5.4 did |
+
+Four properties worth knowing before changing it:
+
+- **The verdict of a line is the worst of its segments.** `npm test && git push`
+  is a push, and the reason names the rule that decided rather than the last one
+  that matched.
+- **Paths are resolved lexically**, against `workdir` and `home`, with no
+  filesystem access at all. A symlink is `paths.ts`'s problem, and a classifier
+  that hit the disk could not answer for a folder that has been unmounted.
+- **A bare word with no separator is a path relative to the folder**, so
+  `rm file.txt` is `normal` and `rm ../file.txt` is not. A word containing an
+  unexpandable `$` is "unknown" rather than "outside": guessing either way would
+  be a lie.
+- **Command substitution is recorded, not parsed.** `$(…)` runs a whole second
+  command line, and a classifier that got that nesting subtly wrong would be
+  worse than one that says "a command that computes part of itself is worth
+  asking about".
+
+## The write sandbox (S5.15)
+
+```
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write* (subpath "<workdir>") (subpath "<temp dirs>") …)
+(allow file-write* (literal "/dev/null") …)
+(allow file-write* (regex #"^/dev/(tty|fd|ptmx|pty)"))
+```
+
+Passed inline with `sandbox-exec -p`, wrapping `/bin/sh -c <line>` so that
+everything the line spawns inherits it.
+
+| Detail | Why |
+|---|---|
+| `(allow default)` first, then `(deny file-write*)`, then the allowances | SBPL takes the **last** matching rule. The reverse order produces a profile that looks right and confines nothing, which is why the test shells out rather than only asserting on the string |
+| Every writable path is listed twice, as given and realpathed | The sandbox matches the real path, and `/tmp` is a symlink to `/private/tmp` on macOS — as is everything `mkdtemp` returns. A profile naming only `/tmp` denies every write to it |
+| Reads and the network are untouched | A build that cannot fetch its dependencies is not a build; reads are the permission prompt's business |
+| `/dev/null` and friends are allowed by literal, `/dev/tty*` by regex | A pseudo-terminal is allocated per device node and cannot be named in advance |
+| A missing `sandbox-exec` runs the command plainly and raises `notices.sandboxUnavailable` **once per turn** | The alternative — refusing to run anything — turns one deprecated binary into a broken product |
 
 ## Diff parts
 
@@ -97,8 +158,8 @@ chat wrote from one that was already lying in the folder).
 
 | Event | Payload | Emitted when |
 |---|---|---|
-| `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | `PermissionGate.ask` suspends a gated call. Not emitted when a remembered `allowAlways` answers it, nor when the signal was already aborted |
-| `permission.resolved` | `{ requestId, chatId, decision }`, `decision` being the reply or `'aborted'` | The prompt ends, exactly once per `requested`, on every path including `abortAll()` |
+| `permission.requested` | `{ requestId, chatId, agentId, toolName, input, risk? }` | `PermissionGate.ask` suspends a gated call. Not emitted when a remembered `allowAlways` answers it, nor when the signal was already aborted. `risk` is present only for `run_command` (S5.15), and is what a `dangerous` card warns about — it is sent rather than recomputed because classifying a line needs the folder and the home directory |
+| `permission.resolved` | `{ requestId, chatId, decision }`, `decision` being the reply, `'aborted'` or `'timeout'` | The prompt ends, exactly once per `requested`, on every path including `abortAll()` and S5.15's own timeout |
 
 ## Filesystem
 
@@ -138,7 +199,8 @@ it is describing a folder rather than searching it:
 | Dependency | Used for | Pitfalls |
 |---|---|---|
 | `diff` (9.x) | `createPatch(fileName, before, after, undefined, undefined, { context: 3 })` → the unified diff `write_file` and `edit_file` return | The package is dual-published; the ESM entry is what `externalizeDepsPlugin` leaves as a runtime import, so it must stay in `dependencies`, not `devDependencies`. `createPatch`'s 4th and 5th parameters are the old and new file *headers*; the options object (`{ context }`) is the 6th, so both have to be passed as `undefined` to reach it |
-| `node:child_process` | `spawn('/bin/sh', ['-c', command], { cwd, detached: true, stdio: ['ignore','pipe','pipe'] })` | `detached: true` plus `process.kill(-pid)` is what actually kills a command's **children**; `child.kill()` alone leaves a `sleep` behind that nothing can see. `SIGTERM` first, `SIGKILL` after 2 s. Both the timeout and the abort timers are `unref`ed so a pending one cannot keep vitest alive. Output is capped as it arrives, not at the end, so a command that prints a gigabyte does not put a gigabyte in the heap on its way to being truncated |
+| `/usr/bin/sandbox-exec` | S5.15's write sandbox, `-p <profile> /bin/sh -c <line>` | Deprecated by Apple and still the only thing of its kind on macOS. SBPL's last-rule-wins ordering is the trap; the realpath of every allowed subpath is the second one. A missing binary is a notice, never a refusal to run |
+| `node:child_process` | `spawn('/bin/sh', ['-c', command], { cwd, detached: true, stdio: ['ignore','pipe','pipe'] })`, or the `sandbox-exec` wrapper around it | `detached: true` plus `process.kill(-pid)` is what actually kills a command's **children**; `child.kill()` alone leaves a `sleep` behind that nothing can see. `SIGTERM` first, `SIGKILL` after 2 s. Both the timeout and the abort timers are `unref`ed so a pending one cannot keep vitest alive. Output is capped as it arrives, not at the end, so a command that prints a gigabyte does not put a gigabyte in the heap on its way to being truncated |
 | `node:fs` | `realpathSync`, `existsSync`, `statSync`, `readFileSync`, `writeFileSync`, `readdirSync({ withFileTypes: true })` | `realpathSync` of a path that does not exist **throws**, which is why `realPathOf` climbs to the deepest existing ancestor: the write case has nothing to realpath yet, and checking only the target is the hole a symlinked directory walks through. `readdirSync`'s return type is a union until `withFileTypes` is narrowed — annotate `Dirent[]` |
 | `ai` | `tool({ description, inputSchema: jsonSchema(...), execute })`, the same shape as `skills/tools.ts` and `memory/tools.ts` | A thrown `execute` becomes a `tool-error` part, which is how a denial and a refused path reach the model. `execute`'s second argument is `ToolExecutionOptions` and requires `context` in ai 7.x — a test that calls `execute` directly must pass it |
 | `node:crypto` | `randomUUID()` for `requestId` | Injectable (`newRequestId`) so a test can assert on `request-1` |
@@ -170,3 +232,18 @@ it is describing a folder rather than searching it:
 - **`resolveInWorkdir` returns the path as the caller spelled it**, not its
   realpath, so a symlink that stays inside the folder is reported as `lib/x.ts`
   rather than `src/x.ts`. The diff header should name the path the model used.
+- **The sandbox profile has to name the realpath** (S5.15). The first version of
+  the test bound the chat to a `mkdtemp` directory and asserted that a write
+  *inside* the folder succeeded; it failed, because macOS hands back
+  `/var/folders/…` and the sandbox matches `/private/var/folders/…`. Both
+  spellings are listed now, and `buildSandboxProfile` realpaths for itself
+  rather than trusting the caller to have done it.
+- **`2>&1` must tokenize as one redirection.** Matching `>` and then `&`
+  separately made every stderr-merging command look like a background process,
+  which is a `dangerous` verdict on `npm test 2>&1`. The tokenizer consumes
+  redirection operators whole, including a leading file descriptor.
+- **The temp allowance makes a temp working directory unconfined against temp.**
+  The suite's own working directories are `mkdtemp`s, so "a write outside the
+  folder fails" has to be asserted against somewhere that is *not* a temp
+  directory — the home directory, in both `sandbox.test.ts` and `tools.test.ts`.
+  A sibling folder under `/tmp` proves nothing.

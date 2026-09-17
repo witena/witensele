@@ -10,6 +10,9 @@ const EXPECTED_TABLES = [
   'chats',
   'mcp_servers',
   'messages',
+  // S5.15: "always allow in this chat", persisted so the user can see and
+  // revoke it in Group settings.
+  'permission_grants',
   'providers',
   'settings'
 ]

@@ -12,6 +12,10 @@ import { createAgentRepository, type AgentRepository } from './agents'
 import { createMcpServerRepository, type McpServerRepository } from './mcpServers'
 import { createChatRepository, type ChatRepository } from './chats'
 import { createMessageRepository, type MessageRepository } from './messages'
+import {
+  createPermissionGrantRepository,
+  type PermissionGrantRepository
+} from './permissionGrants'
 import { createSettingsRepository, type SettingsRepository } from './settings'
 
 export interface Repositories {
@@ -20,6 +24,8 @@ export interface Repositories {
   mcpServers: McpServerRepository
   chats: ChatRepository
   messages: MessageRepository
+  /** "Always allow in this chat", persisted and revocable since S5.15. */
+  permissionGrants: PermissionGrantRepository
   settings: SettingsRepository
 }
 
@@ -39,6 +45,7 @@ export function createRepositories(db: DrizzleDb, options: RepositoryOptions): R
     mcpServers: createMcpServerRepository(db),
     chats: createChatRepository(db),
     messages: createMessageRepository(db),
+    permissionGrants: createPermissionGrantRepository(db),
     settings: createSettingsRepository(db)
   }
 }
@@ -55,4 +62,5 @@ export type {
   MessageListQuery
 } from './messages'
 export { DEFAULT_MESSAGE_PAGE_SIZE } from './messages'
+export type { PermissionGrantRepository } from './permissionGrants'
 export type { SettingsRepository } from './settings'

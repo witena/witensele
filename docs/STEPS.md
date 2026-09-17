@@ -2027,6 +2027,141 @@ it — the file's header records the three ways it failed first. Docs: all four
 documents of `orchestration`, `agent-turn`, `agents` and `chats`, plus
 `i18n/backend.md` for the two new notice keys.
 
+### S5.15 Executor command safety and visible grants `[x]` (2026-09-17)
+What: `run_command` stops being "anything the user clicks Allow on", and "always
+allow" stops being invisible.
+- **A command policy**, pure and unit-tested (`src/main/executor/command-policy.ts`):
+  tokenize the command line (quotes, `;`, `&&`, `||`, `|`, redirections, `$(…)`
+  and backticks) and classify it as `blocked`, `dangerous` or `normal`, with a
+  machine-readable reason. `blocked` never runs and never prompts — the tool
+  returns an error the model reads: privilege escalation (`sudo`, `su`, `doas`),
+  disk and device writes (`mkfs`, `dd of=/dev/…`, `diskutil erase…`),
+  shutdown/reboot, fork bombs, and a recursive delete or chmod/chown whose target
+  resolves to `/`, `~`, `$HOME` or outside the working directory. `dangerous`
+  always prompts, ignores any "always allow" grant, and the card shows a warning
+  with the reason: any other recursive delete, `git push`, `git reset --hard`,
+  `git clean`, history rewriting, package publishing, a download piped into a
+  shell, command substitution, a path argument that resolves outside the working
+  directory, background processes (`&`, `nohup`). Everything else is `normal` and
+  behaves as today. The policy is a guard rail, not a sandbox — say so in the docs.
+- **A write sandbox on macOS**: `run_command` runs under `/usr/bin/sandbox-exec`
+  with a generated profile that allows reads everywhere the user can read, and
+  allows writes only under the working directory, the system temp directories and
+  `/dev/null`-style devices; network stays allowed.
+  `AppSettings.executor.sandbox: 'workdir-write' | 'off'` (default
+  `'workdir-write'`), surfaced in Settings → Developer with an explanation; when
+  `sandbox-exec` is missing the tool runs unsandboxed and says so once through a
+  `notices.*` line. Test against the real `sandbox-exec` on this machine: a
+  command that writes outside the folder fails, one that writes inside succeeds.
+- **Grants are stored and visible**: a `permission_grants` table (additive
+  migration: `chat_id`, `tool_name`, `created_at`, unique on the pair) replaces
+  the in-memory set; `permissions.grants.list({ chatId })` and
+  `permissions.grants.revoke({ chatId, toolName })` added to `BackendApi`,
+  `BACKEND_METHODS` and `contracts.test.ts`; deleting a chat deletes its grants.
+  The chat's Group settings gain an "Always allowed" list with a revoke button
+  per row (test ids `grants-list`, `grant-row`, `grant-revoke`); empty state when
+  there are none.
+- **A prompt times out**: a pending `permission.requested` is auto-denied after
+  `AppSettings.timeouts.permissionTimeoutMs` (default 5 minutes, configurable
+  next to the other timeouts), resolving with reason `timeout` in
+  `permission.resolved`; the model reads "the user did not answer in time".
+- The permission card shows the policy verdict for `run_command`: nothing for
+  `normal`, a warning line with the translated reason for `dangerous` (and no
+  "Always allow" button). All strings through `t()` in both locale files; reasons
+  are codes translated in the renderer.
+- Unit tests: the policy table (each blocked and dangerous rule once, plus
+  look-alikes that must stay `normal`, e.g. `rm file.txt`, `git status`,
+  `echo "sudo"`), the sandbox profile generation and the two real `sandbox-exec`
+  runs, grants persisted / listed / revoked / cascade on chat delete, the timeout,
+  `dangerous` ignoring a grant, the card's rendering inputs. e2e: extend
+  `e2e/executor.spec.ts` offline — a grant written through the backend shows in
+  the panel and disappears on revoke.
+Acceptance: the tests above; a blocked command never reaches the shell; a write
+outside the folder fails under the sandbox; grants survive a restart and can be
+revoked. Docs: `docs/features/executor/`, `docs/features/chats/`,
+`docs/features/database/`, `docs/features/backend-client/` (all four each).
+Done: the step is four independent guards around one tool, and the reason they
+belong in one step is that each of them is unsafe without the others. A durable
+grant is a standing permission unless it is listed and revocable; a listed grant
+is a false promise unless a `git push` ignores it; a policy that refuses `sudo`
+buys nothing while an approved `npm install` can still write to the home
+directory; and a sandbox that confines writes is no help to a user who walked
+away from an open prompt.
+
+**The policy is a guard rail and the docs say so in three places** — the module
+header, `executor/context.md` and the Settings copy. `classifyCommand` is pure:
+it takes the line, the working directory and the home directory, resolves paths
+*lexically* and touches no filesystem, so the whole table is a unit test and a
+folder that has been unmounted cannot make it throw. Its own tokenizer, not a
+shell parser: quoting, operators and redirections are the three things that make
+"which word is the program" wrong, and everything else is noise. Command
+substitution is **recorded rather than parsed** — `$(…)` is a second command line
+whose nesting a half-parser would get subtly wrong, so it is simply always worth
+asking about. The look-alike half of the test table is the half that keeps the
+feature usable: `rm file.txt`, `git status`, `echo "sudo"` and `npm test 2>&1`
+must stay `normal`, and the last of those cost a rewrite of the tokenizer — a
+naive scan read `>` then `&` as "redirect, then background" and flagged every
+stderr-merging command in existence.
+
+**A `blocked` command never becomes a card**, which is the decision the rest of
+the prompt design depends on: a prompt whose only right answer is Deny teaches
+the user that prompts are noise. The model gets `CommandBlockedError` with a
+sentence naming the rule and telling it not to work around the limit — English,
+like `PermissionDeniedError`, because it is prompt content rather than UI copy.
+
+**The sandbox is `sandbox-exec -p` wrapping `/bin/sh`**, not wrapping the first
+program: anything else would confine `sh` and nothing a `&&` chain spawned. The
+profile is `(allow default)`, then `(deny file-write*)`, then the allowances —
+SBPL takes the *last* matching rule, and the reverse order yields a profile that
+looks right and confines nothing, which is exactly why the test shells out to the
+real binary instead of asserting on the string. Two things were found that way:
+every writable path has to be listed as given **and** realpathed (`/tmp` is
+`/private/tmp`, and so is everything `mkdtemp` returns), and the system temp
+directories have to be writable or a compiler fails in a way nobody can debug
+from a transcript. That last allowance has a consequence stated in the docs
+rather than hidden: a chat bound to a folder inside `/tmp` is not usefully
+confined against the rest of `/tmp`, which is also why both "a write outside
+fails" assertions target the home directory. Reads and the network are
+deliberately untouched, so the prompt is still the boundary for what a command
+reads or sends — half of S5.4's gap, closed, and the half that is irreversible.
+
+**Persisting the grants reverses S5.4 on purpose.** S5.4 refused, on the grounds
+that a grant surviving a restart is a permission the user cannot see; the grounds
+were right and the conclusion was half the fix. `permission_grants` is a pure
+join table like `chat_members` — the pair is the key, `onConflictDoNothing` keeps
+a repeat grant's original timestamp, and `ON DELETE CASCADE` is the whole of
+"deleting a chat deletes its grants", asserted straight against the table because
+`list` would answer `[]` either way. The gate reaches it through an injected
+`GrantStore` (CLAUDE.md rule #5), so its suite still runs against a three-line
+array. Two methods rather than one namespace entry: `permission.reply` answers
+*a* prompt, `permissions.grants.*` manages a chat's standing grants, and
+`permission.grants.revoke` would have read as an operation on the pending
+request. `revoke` returns the **remaining** list, because a row that vanished
+from the screen while the grant stayed in the database is the precise failure
+this step removes.
+
+**`'timeout'` is its own decision**, not a second spelling of `deny`: one of them
+means the user looked at the call and said no. The budget is read per prompt
+rather than captured at startup, so changing it applies to the next card; `0`
+disables it, which is what every suite that answers its own prompts wants.
+
+The card **hides** "Always allow" for a dangerous call rather than disabling it —
+the gate ignores a grant for exactly those lines, so the button would be a
+promise the product does not keep, and a disabled button invites the user to work
+out why. What to draw is decided in `describePermissionCard` and rendered in the
+component, the split `goal.ts` and `handoff.ts` already use, so both rules are
+unit-tested with no DOM. The sixteen reason codes are translated by a `switch` of
+literal `t()` calls rather than a computed key, so `used-keys.test.ts` sees every
+one.
+
+`npm test`: 97 files, 1724 tests, all passing; `npm run typecheck` clean.
+`e2e/executor.spec.ts` alone: 12 passed, 4 skipped — the four behind the
+`qwen2.5:3b` guard, because Ollama was not running on this machine. The new
+offline case writes two grants into the closed database with `sqlite3` (the
+technique `providers.spec.ts` uses), relaunches, and asserts the list, the
+ordering, one revoke and the empty state, against `permissions.grants.list` as
+well as against the screen.
+
 ### S5.16 The conclusion as a first-class message `[x] (2026-09-17)`
 What: when a discussion closes, the user should see *the answer*, set apart from
 the talk that produced it, and be able to take it somewhere.
@@ -2340,22 +2475,36 @@ adds a line here in the same commit.
 
 ### Executor safety and reach
 
-- **The shell is not sandboxed.** S5.4's `run_command` runs `/bin/sh -c` as the
-  user, with the user's environment and `PATH`; only `cwd` is confined, so
-  `cat ../../secret` *inside a command* is not stopped by `executor/paths.ts`.
-  The permission prompt is the entire boundary, which is why S5.5 must show the
-  command line verbatim and never summarised. A real sandbox — a container, a
-  restricted `PATH`, a seccomp profile, or delegating to a coding agent that has
-  one — is a step of its own, and it is the one item here that should be picked
-  up before the executor is recommended for an unfamiliar folder.
-- **No prompt timeout of its own.** A pending `permission.requested` is ended
-  only by a reply, by Stop, or by the turn's hard timeout, which then records the
-  turn as `skipped` rather than as "nobody answered". A prompt-specific timeout
-  with its own notice would read better.
-- **`allowAlways` is not visible or revocable.** It lives in a `Set` for the life
-  of the process, so a user who granted it cannot see what they granted or take
-  it back without quitting. A chat-settings row listing the grants, with a
-  "forget" button, is the obvious shape.
+- **The sandbox confines writes, not reads.** S5.15 closed half of S5.4's gap:
+  an approved command runs under `sandbox-exec` and can no longer write outside
+  the working directory, the temp directories and the null-ish devices. It can
+  still read anything the user can read and send it anywhere, so the permission
+  prompt is still the whole boundary for that half and the command line is still
+  shown verbatim. Confining reads needs a policy for what a build legitimately
+  reads (`~/.npmrc`, `~/.cargo`, the toolchain) and is a step of its own; a
+  container, or delegating to a coding agent that has one, is the other route.
+- **The temp directories are writable, so a working directory inside `/tmp` is
+  not usefully confined against the rest of `/tmp`** (S5.15). The allowance is
+  deliberate — a compiler that cannot write a temp file fails unreadably — but a
+  chat bound to a scratch folder under `/tmp` gets less than the setting's name
+  suggests.
+- **`sandbox-exec` is deprecated by Apple** (S5.15) and macOS-only, while
+  remaining the only thing of its kind on the platform. When it is absent the
+  command runs unconfined behind one `notices.sandboxUnavailable` line; a macOS
+  that removes it turns the setting into a no-op, and the replacement (an App
+  Sandbox entitlement, or a container) is its own step.
+- **The command policy can be defeated by a variable or a script** (S5.15). An
+  assignment and an expansion is one way round it, and a `./deploy.sh` is not
+  read at all. It is a guard rail against the common accident, not a boundary;
+  the docs, the module header and the Settings copy all say so, and that has to
+  stay true of any rule added to it.
+- **Nothing tells the user the policy exists until it fires.** There is no list
+  of what is blocked or always asked about, in Settings or anywhere else — the
+  first a user learns of it is a refused command or a warning row.
+- **A revoked grant does not un-answer a call already in flight** (S5.15). A
+  tool released by a grant a millisecond before the revoke landed still runs.
+  Holding every gated call until a revoke could not arrive would slow the common
+  case down to protect a case that is a race by definition.
 - **`search_files` is a substring scan**, with a hard-coded prune list and no
   regular expression or glob. Once `run_command` exists the executor can reach
   for `rg` itself, so the question is whether the built-in should grow or go.

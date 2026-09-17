@@ -894,8 +894,10 @@ describe('handlers/stubs', () => {
       'providers.login',
       'providers.logout',
       'providers.setQuotaProject',
-      // S5.4
+      // S5.4, and S5.15's two grant methods
       'permission.reply',
+      'permissions.grants.list',
+      'permissions.grants.revoke',
       // S5.6
       'chat.handoff',
       // S5.7 — see the comment above: half of it is implemented here.

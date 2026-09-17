@@ -20,7 +20,7 @@
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
 | `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
-| `src/main/handlers/permissions.ts` | `permission.reply` — two validations over `ctx.permissions` (S5.4) |
+| `src/main/handlers/permissions.ts` | `permission.reply` — two validations over `ctx.permissions` (S5.4) — plus `permissions.grants.list` and `permissions.grants.revoke` over `ctx.repos.permissionGrants` (S5.15) |
 | `src/main/ipc-protocol.ts` | `IPC_INVOKE`, `IPC_EVENT`, `InvokeResponse`, `toBackendError`. Shared with preload, imports no electron |
 | `src/main/ipc/register.ts` | `registerIpc(ipcMain, ctx, handlers)` and `forwardEvents(events, getWindows)` |
 | `src/main/ipc/secret-store.ts` | `createElectronSecretStore()` over `safeStorage` |
@@ -153,6 +153,8 @@ Two channels carry everything:
 | `settings.get` | none | `AppSettings` | — |
 | `settings.update` | `{ patch: AppSettingsPatch }` | `AppSettings` | `validation` when the patch is not an object or carries a key other than `language`, `theme`, `timeouts` |
 | `permission.reply` | `{ requestId, decision }` | `void` | `validation` for a blank id or a decision outside `PERMISSION_DECISIONS`; `not_found` when nothing is waiting on that id (S5.4 — see [`executor`](../executor/backend.md)) |
+| `permissions.grants.list` | `{ chatId }` | `PermissionGrant[]` | `validation` for a blank id. A chat that does not exist answers `[]` rather than `not_found`: a question about grants must not double as a probe for chat ids (S5.15) |
+| `permissions.grants.revoke` | `{ chatId, toolName }` | The remaining `PermissionGrant[]` | `validation` for either field blank; idempotent otherwise. It answers the remaining list rather than `void` so the settings panel redraws from the backend instead of from an optimistic splice (S5.15) |
 | `chat.handoff` | `{ chatId, intent? }` | `Message` | `validation` for a blank id or an unknown `intent`, and `validation` carrying a `ValidationReason` (`handoff_no_workdir`, `handoff_no_executor`, `handoff_no_deliverable`, `handoff_run_active`) from the runner; `not_found` for an unknown chat (S5.6, S5.12 — see [`orchestration`](../orchestration/backend.md)) |
 | every other `BACKEND_METHODS` entry | see `implement.md` | see `implement.md` | `internal`: `Not implemented yet: <method> (see docs/STEPS.md)` |
 

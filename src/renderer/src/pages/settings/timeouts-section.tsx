@@ -163,6 +163,18 @@ export function TimeoutsSection(): React.JSX.Element {
         onCommit={(toolTimeoutMs) => commit({ toolTimeoutMs })}
       />
 
+      {/* The fourth budget (S5.15), and the odd one out: the other three wait
+          for a machine, this one waits for a person. It is here anyway, because
+          "where do I change how long something waits" has to have one answer. */}
+      <SecondsField
+        id="settings-permission-timeout"
+        testId="settings-permission-timeout"
+        label={t('settings.timeouts.permission')}
+        hint={t('settings.timeouts.permissionHint')}
+        valueMs={timeouts.permissionTimeoutMs}
+        onCommit={(permissionTimeoutMs) => commit({ permissionTimeoutMs })}
+      />
+
       <p className="text-[11px] leading-relaxed text-fg-faint">{t('settings.timeouts.perChat')}</p>
 
       <div className="flex flex-col gap-2 rounded-lg border border-border-strong p-3">

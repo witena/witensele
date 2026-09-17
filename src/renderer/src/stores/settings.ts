@@ -15,7 +15,13 @@
  *   "not loaded yet" and "load failed" need different UI.
  */
 import { create } from 'zustand'
-import type { AppSettings, AppTimeouts, EditorSettings, ThemeSetting } from '@shared/types'
+import type {
+  AppSettings,
+  AppTimeouts,
+  EditorSettings,
+  ExecutorSettings,
+  ThemeSetting
+} from '@shared/types'
 import { getNavigatorLanguage, i18n, resolveLanguage } from '../i18n'
 import { getBackend } from '../lib/backend-provider'
 import { activateTheme } from '../lib/theme'
@@ -61,6 +67,14 @@ export interface SettingsState {
    * stale copy of the whole object.
    */
   setTimeouts: (patch: Partial<AppTimeouts>) => Promise<void>
+  /**
+   * Persists how `run_command` is confined (S5.15).
+   *
+   * A partial for the same reason the two above are, even though the group has
+   * one field today: the merge rule is the group's, not the field's, and a
+   * second setting added beside it must not have to change this signature.
+   */
+  setExecutor: (patch: Partial<ExecutorSettings>) => Promise<void>
   /**
    * Hides the first-run card for this installation (S7.5).
    *
@@ -127,6 +141,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
   async setTimeouts(patch) {
     const settings = await getBackend().invoke('settings.update', { patch: { timeouts: patch } })
+    set({ settings, status: 'ready', error: undefined })
+  },
+
+  async setExecutor(patch) {
+    const settings = await getBackend().invoke('settings.update', { patch: { executor: patch } })
     set({ settings, status: 'ready', error: undefined })
   },
 

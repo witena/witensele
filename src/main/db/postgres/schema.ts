@@ -135,6 +135,22 @@ export const chatMembers = pgTable(
   (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
 )
 
+/**
+ * "Always allow in this chat" grants (S5.15). One row per chat and tool; the
+ * chat's deletion removes them. Mirrors `permissionGrants` in `../schema.ts`.
+ */
+export const permissionGrants = pgTable(
+  'permission_grants',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    toolName: text('tool_name').notNull(),
+    createdAt: epochMs('created_at').notNull()
+  },
+  (table) => [primaryKey({ columns: [table.chatId, table.toolName] })]
+)
+
 /* -------------------------------------------------------------------------- */
 /* Messages                                                                    */
 /* -------------------------------------------------------------------------- */

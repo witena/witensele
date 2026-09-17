@@ -32,13 +32,19 @@ changed to make it work.
 - `src/shared/index.ts` — one import point for all of the above.
 - `src/shared/contracts.test.ts` — runtime and type-level tests over the contract.
 
-  The surface has grown three times since S1.1 declared it, and each addition
+  The surface has grown several times since S1.1 declared it, and each addition
   follows the same three steps: the method on `BackendApi`, its name in
   `BACKEND_METHODS`, and a case in `contracts.test.ts` (S5.3
   `providers.authStatus` / `login` / `logout` and S5.13's
-  `providers.setQuotaProject`, S5.4 `permission.reply`, S5.6
-  `chat.handoff`). The compile-time `Assert` below makes the first two
-  inseparable.
+  `providers.setQuotaProject`, S5.4 `permission.reply`, S5.6 `chat.handoff`,
+  S5.15 `permissions.grants.list` / `permissions.grants.revoke`). The
+  compile-time `Assert` below makes the first two inseparable.
+
+  S5.15 also gave one feature a **second** namespace, which is worth stating
+  because it reads like a mistake: `permission.reply` answers *a* prompt, and
+  `permissions.grants.*` manages the standing grants of a chat. Folding the
+  second into the first would have made `permission.grants.revoke` read as an
+  operation on the pending request.
 
 **The transport (S1.3)**
 

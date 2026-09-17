@@ -19,7 +19,7 @@ handlers (S1.3 onwards), `ChatRunner` and `AgentTurn`.
 
 ## Scope
 
-- `src/main/db/schema.ts` — the drizzle definition of all seven tables. Columns
+- `src/main/db/schema.ts` — the drizzle definition of all eight tables. Columns
   are added by later steps (S2.3's `messages.in_reply_to`, S5.3's
   `providers.auth`), always through a generated migration, never by editing one
   that has shipped.
@@ -30,7 +30,9 @@ handlers (S1.3 onwards), `ChatRunner` and `AgentTurn`.
 - `src/main/db/database.ts` — `openDatabase(filePath)`: pragmas, drizzle wrapper,
   migrations, `close()`.
 - `src/main/db/repositories/` — one repository per domain, all returning the
-  shared types from `src/shared/types.ts`.
+  shared types from `src/shared/types.ts`. Since S5.15 that includes
+  `permissionGrants`, the smallest of them: a pair of strings and a timestamp,
+  scoped to a chat, with the pair as its primary key.
 - `src/main/errors.ts` — `BackendFailure`, the `BackendError`-shaped error the
   repositories throw (`not_found`, `validation`).
 - The wiring in `src/main/index.ts` that opens the file at
@@ -87,7 +89,9 @@ messages) and `../mcp/`.
 | A chat's goal is **one JSON column**, replaced whole (S5.10) | Four columns (`goal_kind`, `goal_description`, `goal_deliverable`, `goal_materials`); a `goals` table | The four fields are only ever read and written together, and a `deliverable` means nothing without its `kind` — so four columns would be four chances to store a combination no reader can make sense of. It is replaced rather than merged because `materials` is a list the user removes from, and a merge can never delete its last entry |
 | **A JSON column's shape may grow, and `null` in a patch means "clear this field"** (S5.16) | Add a column for a new setting; treat `undefined` as a clear | `chats.settings` and `messages.parts` both took S5.16 without a migration: one gained an optional `closingAgentId`, the other a new member of the `MessagePart` union. The cost is that a *clear* needs a word of its own, because JSON drops an `undefined` key and a dropped key already means "leave this alone" in a merge — so `null` is that word, and `mergeChatSettings` is the single place it is turned back into an absent field |
 | Settings are one JSON blob per user | A column per setting; a key/value table | Adding a setting then needs no migration, and reads merge over `DEFAULT_APP_SETTINGS` so an old row is still complete |
-| Cascading foreign keys for `chat_members` and `messages` | Delete by hand in the repository | One statement cannot forget a table. It does require `PRAGMA foreign_keys = ON`, which `openDatabase` sets and a test asserts |
+| Cascading foreign keys for `chat_members`, `messages` and (S5.15) `permission_grants` | Delete by hand in the repository | One statement cannot forget a table. It does require `PRAGMA foreign_keys = ON`, which `openDatabase` sets and a test asserts. S5.15's test asserts the cascade **straight against the table** rather than through `list`, which would answer `[]` for a deleted chat whether the cascade worked or not |
+| **S5.15: a permission grant is a row, after S5.4 decided it must not be** | Keep the `Set`; a JSON column on `chats` | The objection to persisting a grant was that the user cannot see it, not that it is durable — so S5.15 makes it visible and revocable instead. A join table rather than a column because the pair *is* the record: `onConflictDoNothing` makes a repeat grant a no-op, and the cascade needs no code at all |
+| **S5.15: two settings added with no migration** (`executor.sandbox`, `timeouts.permissionTimeoutMs`) | Columns; a migration that fills every row | This is the JSON-blob decision above paying off exactly as intended: reads merge each nested group over its own default, so a row written by an older build reads back complete |
 | `''` means "clear this column" in patches | A separate `{ clear: [...] }` field; `null` in the patch | `exactOptionalPropertyTypes` and JSON transport both blur absent versus `undefined`, and the `apiKey` contract in `shared/backend.ts` already uses `''` for "clear". The same rule now applies to `baseUrl`, `presetId`, `command`, `url` and `error` |
 | A new column is nullable with no default, and the *meaning* of `NULL` lives in the shared types (S5.3's `providers.auth`, S5.10's `chats.goal`) | `NOT NULL DEFAULT 'apiKey'`; a data migration that fills every row | SQLite adds a nullable column in place, so the upgrade is instant and a row written by an older build stays readable. Putting the default in the column as well as in `providerAuth()` would be two statements of the same fact, and the one in SQL cannot be changed later without another migration |
 | **S7.6: re-encrypting the stored keys is a startup pass, not a SQL migration** | A `0004_…sql` that rewrites `api_key_encrypted`; a new column for the format | SQL cannot decrypt anything. The work needs the `safeStorage` store *and* the file key in the same process, it can legitimately fail per row, and what it produces for a row it could not read is a fact in memory rather than a value to store. `migrateProviderSecrets` is therefore ordinary code that runs after the context exists, is idempotent, and is skipped row by row on every launch after the first |

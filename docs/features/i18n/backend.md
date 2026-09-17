@@ -99,6 +99,7 @@ Keys reserved for the features that will emit them:
 | `notices.handoffDeliver` | `agent`, `path` | `orchestration` (S5.12), the same for the "Write the deliverable" action. A key of its own rather than a parameter on `handoff`, because the sentence the user reads is a different sentence; `path` is the goal's **relative** path, never the absolute one |
 | `notices.consensus` | — | `orchestration` (S5.14), when every participant of a round wrote `[AGREED]`. Deliberately **parameterless**: it is stored before the closing speaker is picked, and every member being offline would leave it naming an agent that never wrote anything |
 | `notices.voteClosed` | — | `orchestration` (S5.14), when a chain that carried its own `rounds` cap has run them. A key of its own rather than `maxRoundsReached` with a different `max`: that sentence says "this chat hit its automatic limit, send a message to continue", and this run ended exactly where the user asked it to |
+| `notices.sandboxUnavailable` | — | `executor` (S5.15), once per turn, when `/usr/bin/sandbox-exec` is missing and `run_command` therefore ran unconfined. The first notice raised from **inside a tool call** rather than by the runner: the tools are handed a `notice` callback that appends to the turn's own message, so the line lands beside the command that caused it |
 
 The same principle covers failures: `BackendError.code` is the machine-readable
 class the renderer maps to an `errors.<code>` key, and `BackendError.message` is
@@ -127,6 +128,15 @@ machine's data, and it is raised while resolving a provider for a chat turn as
 much as while probing one from a form. The same rule applies to the next one: if only the
 sender of this request can be wrong, it is a reason; if the *machine* is in that
 state, it is a code.
+
+S5.15 added a third shape beside the notice key and the error code, and it is
+worth naming because it is neither: a **reason code carried on an event**. The
+command policy classifies a `run_command` line in the main process and sends
+`{ verdict, reason }` with `permission.requested`; the renderer turns the reason
+into a sentence through `chat.commandRisk.*`. It is not a notice — nothing is
+stored, and the card is gone the moment the prompt is answered — and it is not
+an error, because nothing failed. The rule it follows is the same one: the
+backend knows the fact, the renderer knows the language.
 
 One more thing the backend deliberately does not send: a **formatted date**. The
 sign-in panel's "valid until" line is built in the renderer from the epoch

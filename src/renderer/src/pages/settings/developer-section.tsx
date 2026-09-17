@@ -11,7 +11,7 @@
  * Each `data-testid` wraps a **value**, never its translated label, so the
  * Playwright assertions do not depend on the active UI language.
  *
- * ## The Editor block (S5.7)
+ * ## The Editor and Sandbox blocks (S5.7, S5.15)
  *
  * It lives here rather than in Appearance & language because of who it is for:
  * `code -g {path}:{line}` is a command line, the setting only matters to someone
@@ -20,10 +20,14 @@
  * should be comparable at a glance, and the command field appears only for
  * `custom` — the template is meaningless for the two URL schemes and showing it
  * greyed out would just invite someone to edit it.
+ *
+ * The Sandbox block (S5.15) sits beside it for the same reason: both settings
+ * only matter to someone who runs commands out of a chat, and both are a choice
+ * made once rather than a knob to turn.
  */
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { DEFAULT_APP_SETTINGS, type EditorKind } from '@shared/types'
+import { DEFAULT_APP_SETTINGS, type EditorKind, type ExecutorSandboxMode } from '@shared/types'
 import { getBackend } from '../../lib/backend-provider'
 import { useSettingsStore } from '../../stores/settings'
 import { Button, Field, Input, SectionTitle, SegmentedControl } from '../../components/ui'
@@ -103,6 +107,59 @@ function EditorBlock(): React.JSX.Element {
   )
 }
 
+/**
+ * How `run_command` is confined (S5.15).
+ *
+ * Beside the Editor block, and in Developer for the same reason it is: the two
+ * settings on this page are the ones that only matter to somebody who runs
+ * commands out of a chat. The explanation is part of the block rather than a
+ * tooltip, because "workdir write" means nothing on its own and the choice is
+ * one a user makes once — they need to know that reads are **not** confined and
+ * that the network is open, or they will read the sandbox as more than it is.
+ */
+function SandboxBlock(): React.JSX.Element {
+  const { t } = useTranslation()
+  const sandbox = useSettingsStore(
+    (state) => state.settings?.executor.sandbox ?? DEFAULT_APP_SETTINGS.executor.sandbox
+  )
+
+  // Literal `t()` calls rather than a key table, the rule this file already
+  // follows for the editor kinds, so `used-keys.test.ts` can see both labels.
+  const modes: { value: ExecutorSandboxMode; label: string; testId: string }[] = [
+    {
+      value: 'workdir-write',
+      label: t('settings.developer.sandboxOn'),
+      testId: 'sandbox-workdir-write'
+    },
+    { value: 'off', label: t('settings.developer.sandboxOff'), testId: 'sandbox-off' }
+  ]
+
+  return (
+    <div className="flex w-full flex-col gap-3" data-testid="settings-sandbox">
+      <SectionTitle level={3}>{t('settings.developer.sandbox')}</SectionTitle>
+
+      <SegmentedControl
+        value={sandbox}
+        onChange={(mode) => {
+          void useSettingsStore
+            .getState()
+            .setExecutor({ sandbox: mode })
+            .catch((cause: unknown) => {
+              useSettingsStore.setState({
+                error: cause instanceof Error ? cause.message : String(cause)
+              })
+            })
+        }}
+        options={modes}
+        className="w-full"
+      />
+      <p className="text-[11px] leading-relaxed text-fg-faint">
+        {t('settings.developer.sandboxHint')}
+      </p>
+    </div>
+  )
+}
+
 export function DeveloperSection(): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const [ping, setPing] = useState<string | null>(null)
@@ -170,6 +227,8 @@ export function DeveloperSection(): React.JSX.Element {
       </Button>
 
       <EditorBlock />
+
+      <SandboxBlock />
 
       {failure ? (
         <p className="text-danger" data-testid="error">
