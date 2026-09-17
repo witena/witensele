@@ -23,8 +23,16 @@ export const DEFAULT_AGENT_NAME = 'Assistant'
 export const DEFAULT_AGENT_DESCRIPTION = 'General assistant'
 
 /**
- * Avatar colour, taken from the mockup's warm monogram tile rather than invented,
- * so the first message looks like the design instead of like a placeholder.
+ * The palette entry the bootstrap agent's tile is painted from (S5.17). Slot 1
+ * is the terracotta family, which is also what the "New agent" form starts on,
+ * so the first agent looks like a deliberate choice rather than a placeholder.
+ */
+export const DEFAULT_AGENT_AVATAR_PALETTE = 1
+
+/**
+ * The colour that slot used to be, kept as the record's compatibility shadow —
+ * see `InitialAvatar.color`. The renderer paints from the index above, so this
+ * value is never what appears on screen.
  */
 export const DEFAULT_AGENT_AVATAR_COLOR = '#4a3a2f'
 
@@ -45,7 +53,12 @@ function firstUsableProvider(providers: Provider[]): Provider | undefined {
 export function defaultAgentInput(provider: Provider): AgentInput {
   return {
     name: DEFAULT_AGENT_NAME,
-    avatar: { kind: 'initial', text: 'A', color: DEFAULT_AGENT_AVATAR_COLOR },
+    avatar: {
+      kind: 'initial',
+      text: 'A',
+      palette: DEFAULT_AGENT_AVATAR_PALETTE,
+      color: DEFAULT_AGENT_AVATAR_COLOR
+    },
     description: DEFAULT_AGENT_DESCRIPTION,
     systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
     providerId: provider.id,

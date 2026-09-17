@@ -90,6 +90,44 @@ a select / the segmented control changes
   → store applies the returned chat; the header badge re-renders from it
 ```
 
+### Choosing who closes a discussion (S5.16)
+
+```
+the Closing speaker select changes
+  → patchSettings({ closingAgentId: agentId })          // or null for the default
+  → chats.update { patch: { settings: { closingAgentId } } }
+  → mergeChatSettings drops a null, so "first in speaking order" is an ABSENT field
+  → the select re-renders from the stored chat, falling back to the default row
+    whenever the stored id is not a member of this chat any more
+```
+
+The select offers the chat's own members plus one default row whose value is the
+empty string; the empty string is what the handler turns into `null`. A stale id
+therefore shows as the default *and behaves* as the default, because
+`closingSpeaker` in the runner applies the same fallback.
+
+### Drawing a conclusion (S5.16)
+
+```
+message.updated arrives with parts [{ type: 'conclusion' }, { type: 'text', … }]
+  → messages store replaces the row
+  → buildTranscriptRows marks that row `conclusion: true`   (transcript-rows.ts)
+  → MessageItem draws its body inside <ConclusionCard>
+        Copy   → navigator.clipboard.writeText(messageText(message))
+        Write  → run.handoff(chatId, 'deliver')   // deliverableBlocker decides
+  → the page's latestConclusion(messages) puts the "Conclusion" chip in the header
+        click → setScrollTo({ messageId, nonce: Date.now() })
+              → MessageList scrolls that index into view, centred
+  → conclusionPreview(messages) per loaded chat → the chat list's subtitle
+```
+
+Three things worth keeping in mind here. The card **wraps** the existing body
+rather than replacing it, so `message-text` and everything written against it are
+untouched. The header chip carries a **nonce** because clicking it twice has to
+scroll twice. And the previews are computed from the messages store, so they
+cover the chats whose transcripts have been loaded — the rest keep the member
+count they always had.
+
 ### Binding the working directory (S5.2)
 
 ```
@@ -116,6 +154,24 @@ validated write that a future HTTP client can make on its own.
 The chip prints `folderName(workdir)` with the whole path in `title`
 (`lib/workdir.ts`) — the interesting half of a path is its last segment, and the
 rest does not fit beside a title or in a 288px panel.
+
+### Listing and revoking a grant (S5.15)
+
+```
+the Always allowed block (components/chat/grants-list.tsx)
+  chat selected              -> invoke('permissions.grants.list', { chatId })
+  permission.resolved
+    with decision allowAlways -> the same call again, from lib/event-bridge.ts
+  revoke clicked             -> invoke('permissions.grants.revoke', { chatId, toolName })
+                             -> the block redraws from the **returned** list
+  chat.deleted               -> the cached rows are dropped; the table's own
+                                went with the chat, through the cascade
+```
+
+Nothing here is optimistic and nothing is derived: a row that vanished from the
+screen while the grant stayed in the database is exactly the failure S5.15
+exists to remove, so the only thing the block ever draws is an answer the
+backend gave it.
 
 ### Setting the chat goal (S5.10)
 
@@ -444,11 +500,15 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `e2e/onboarding.spec.ts` | S7.5's acceptance sentence: an empty `userData` reaching a streamed reply **through the card alone** — preset, model typed in, provider saved, template agent, first chat, one reply — plus the card staying gone after a restart, Skip hiding it on its own installation across a restart, and Settings → About. Gated on a local Ollama like `chat.spec.ts` |
 | `e2e/members.spec.ts` | Offline: an empty chat refusing a send, adding both agents, dragging one above the other and surviving a restart, removing one, persisting the group settings and the header badge, and a deleted agent leaving the chat |
 | `e2e/editor.spec.ts` | S5.7, offline and always run: a path in a message body becomes a chip in a chat bound to a folder and nothing outside it does, the chat's folder is what decides, and the Editor setting round-trips through a restart. Owned by [`editor`](../editor/implement.md) |
-| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client. S5.5 adds the acceptance sentence: a chat with no executor shows no card (offline, always runs) and — behind the same `qwen2.5:3b` guard `mcp.spec.ts` uses — an executor asked for a file raises the card, nothing is on disk while it waits, Allow writes the file, the card disappears and the diff block appears and opens onto a `diff` code block. S5.6 adds two more: offline, the hand-off button is enabled with a folder and an executor and carries `data-blocked` naming the rule when either is missing (with the backend refusing on the same rule); behind the guard, two participants and an executor hold a short discussion, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again with nothing typed |
+| `e2e/executor.spec.ts` | Offline (S5.2): the role control writing `executor`, the badge in the agent list and the member panel, the picker greying a second executor and the backend refusing the same list, the folder chip appearing after `chats.update({ workdir })` and going away on Clear, the three invalid paths each refused with their own reason, and all of it surviving a restart. The native picker is not driven; the binding is written through the backend client. S5.5 adds the acceptance sentence: a chat with no executor shows no card (offline, always runs) and — behind the same `qwen2.5:3b` guard `mcp.spec.ts` uses — an executor asked for a file raises the card, nothing is on disk while it waits, Allow writes the file, the card disappears and the diff block appears and opens onto a `diff` code block. S5.6 adds two more: offline, the hand-off button is enabled with a folder and an executor and carries `data-blocked` naming the rule when either is missing (with the backend refusing on the same rule); behind the guard, two participants and an executor hold a short discussion, "Hand to executor" is clicked, the prompt is allowed, a file appears in the folder and a participant speaks again with nothing typed. S5.15 adds one more offline case, and it is this feature's panel rather than the executor's card: the **Always allowed** block starts empty, two grants written straight into the closed database are listed newest first after a relaunch, the revoke button removes one row and leaves the other, and revoking the last brings the empty state back |
 | `src/renderer/src/components/chat/tool-call.test.ts` | `previewToolArgs`, `countToolResults` over the shapes a tool actually returns, `describeToolCall`'s three states, and `collectToolCalls` pairing by id rather than by position |
 | `src/renderer/src/components/chat/file-refs.test.ts` | S5.7's detector, owned by [`editor`](../editor/implement.md): what resolves inside the folder, what is refused (a URL, `1.2:3`, a Windows path, prose with a slash), and the punctuation stripping |
-| `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp), `buildTranscriptRows`' interleaving and key stability, and (S5.5) `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines` ignoring the `+++` / `---` headers and counting a concatenation of two patches, and `formatFileRef` with and without a line |
-| `src/renderer/src/stores/permissions.test.ts` | The permission store (S5.5): a request drawing a card, several ordered oldest first and split per chat, `reply` calling `permission.reply` without removing anything optimistically, `permission.resolved` dismissing the card for all four decisions including `aborted`, a stop clearing every open prompt, a `not_found` rejection dropping the stale card, a second answer while the first is in flight being ignored, and a deleted chat forgetting only its own |
+| `src/renderer/src/components/chat/transcript-rows.test.ts` | `dayBucket` on every calendar boundary (23:50, a future stamp), `buildTranscriptRows`' interleaving and key stability, (S5.5) `collectDiffs` / `collectFileRefs` over a mixed part list, `countDiffLines` ignoring the `+++` / `---` headers and counting a concatenation of two patches, `formatFileRef` with and without a line, and (S5.16) the row model marking a conclusion row and only that one, plus `isConclusion` |
+| `src/renderer/src/components/chat/conclusion.test.ts` | S5.16's three pure rules: `latestConclusion` (none, the newest of several, never a non-agent message), `conclusionPreview` (the first non-empty line, a leading heading marker skipped, the cap, `null` for a flag with no text) and `deliverableBlocker` (the enabled case and the four refusals in the backend's order, including a `codebase` goal) |
+| `src/main/handlers/chats.test.ts` (S5.16) | `closingAgentId` stored, cleared with `null` back to an absent field, and refused when it is not a non-empty string |
+| `src/main/db/chats.test.ts` (S5.16) | `mergeChatSettings`: a cleared closing speaker is absent in the row and still absent after the JSON round trip |
+| `e2e/closure.spec.ts` (S5.16 block, no model) | A seeded conclusion drawn as a card with its label and speaker, Copy putting the **markdown source** on the real clipboard, the header chip scrolling the card back into view past thirty later messages, and the chat list showing the conclusion's first line behind its translated label |
+| `src/renderer/src/stores/permissions.test.ts` | The permission store (S5.5): a request drawing a card, several ordered oldest first and split per chat, `reply` calling `permission.reply` without removing anything optimistically, `permission.resolved` dismissing the card for all four decisions including `aborted`, a stop clearing every open prompt, a `not_found` rejection dropping the stale card, a second answer while the first is in flight being ignored, and a deleted chat forgetting only its own — plus S5.15's grants, which the Always allowed block reads: loaded on demand, reloaded after an `allowAlways` and not after a plain allow, a revoke redrawn from what the backend answers, a failed load answering `[]`, and a deleted chat forgetting them |
 | `src/renderer/src/components/chat/permission-input.test.ts` | `describePermissionInput` (S5.5): a command line kept **verbatim** however long or oddly spaced, a write's path plus its capped content preview, an empty file still reading as a write, an edit's patch, and the fallback to raw JSON for an MCP tool and for arguments that are not the shape the schema promises |
 | `src/renderer/src/components/chat/mention-query.test.ts` | `extractMentionQuery`'s boundary rules, `filterMentionCandidates`' longest-first order, and both insertion helpers' spacing |
 | `src/renderer/src/components/chat/code-language.test.ts` | Every id, every alias, the first-word rule, and `null` for an unknown language |
@@ -463,6 +523,17 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
   the stall override is honoured by the backend but has no UI of its own.
 - **Reordering is mouse-only.** The per-member token count is real since S4.1
   and prints an em dash only for a member that has not spoken in this chat yet.
+- **The chat-list conclusion preview needs the transcript.** It is computed from
+  the messages store, so it appears for chats that have been opened in this
+  session and not for the rest, which keep the member count. A preview for every
+  chat would need a backend query.
+- **Copy silently does nothing if the clipboard is refused.** The button simply
+  does not switch to "Copied"; there is no error line, because nothing was lost
+  and the text is selectable in the card.
+- **The closing-speaker select is not checked against membership.** Removing the
+  chosen member leaves the id stored; the select shows the default and the runner
+  falls back to it, so the only visible effect is that re-adding that member
+  restores the preference.
 - **Cost is an estimate from a checked-in table** (`src/shared/pricing.ts`): a
   model the table does not know reports tokens and no price at all, and a local
   provider reports tokens and a cost of zero, which the UI omits. Editing the

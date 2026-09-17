@@ -34,7 +34,8 @@ describe('db/repositories/settings', () => {
     expect(updated.timeouts).toEqual({
       stallTimeoutMs: 5_000,
       hardTimeoutMs: DEFAULT_APP_SETTINGS.timeouts.hardTimeoutMs,
-      toolTimeoutMs: 90_000
+      toolTimeoutMs: 90_000,
+      permissionTimeoutMs: DEFAULT_APP_SETTINGS.timeouts.permissionTimeoutMs
     })
   })
 

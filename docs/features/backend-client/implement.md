@@ -23,10 +23,12 @@ Electron exists.
 | `src/main/ipc/secret-store.ts` | `safeStorage` behind `SecretStore` |
 | `src/preload/index.ts` | The `window.witena` bridge |
 | `src/renderer/src/lib/backend.ts` | `createElectronBackendClient` and the `backend` singleton |
+| `src/server/http.ts` | **S8.1**: the second transport — `POST /api/<method>` and `GET /ws`, over `node:http` + `ws` |
 
 The abstraction is deliberately two-shaped. `invoke` is request/response;
 `subscribe` is push. Anything a page needs must be expressible as one of the two,
-which is what keeps an HTTP + WebSocket implementation possible.
+which is what keeps an HTTP + WebSocket implementation possible — and, since
+S8.1, what makes it actual.
 
 ### Domain types
 
@@ -126,6 +128,41 @@ stub that rejects with
 The transport therefore never checks whether a method exists, and a renderer
 written against the finished contract gets an explicit message instead of
 `undefined is not a function`.
+
+### The second transport (S8.1)
+
+`src/server/http.ts` mounts the same two channels over a socket. The mapping is
+one-to-one and nothing below the transport can tell which host it is running
+under:
+
+| Electron | Server |
+|---|---|
+| `ipcMain.handle('witena:invoke', (method, input))` | `POST /api/<method>`, the body is `input` |
+| `webContents.send('witena:event', event)` | one `JSON.stringify(event)` frame on `GET /ws` |
+| — | `GET /healthz`, which touches nothing |
+
+Three things are shared verbatim rather than reimplemented, and that is the
+point of the arrangement:
+
+- **`InvokeResponse`.** The HTTP body is the same `{ ok, value }` / `{ ok, error }`
+  envelope, so S8.3's `HttpBackendClient` reuses `lib/backend.ts`'s decode.
+- **`toBackendError`.** Both transports funnel every throw through it, so an
+  unexpected failure becomes `internal` in exactly one place.
+- **`isBackendMethod`.** Both validate the name before dispatching, so neither
+  can reach anything outside `BACKEND_METHODS`.
+
+What the HTTP side adds is a **status**, derived from `BackendError.code` by a
+table that is total over the union (`ERROR_STATUS` in `src/server/http.ts`):
+`validation` 400, `unauthorized` 401, `not_found` 404, the "the host is not in a
+state to do that" family 409, `provider_error` / `mcp_error` 502, `internal` 500.
+The body remains the authority, because IPC has no status and the two transports
+may not disagree about what happened.
+
+The electron-only methods are mounted like every other one and answer with the
+rejection `handlers/system.ts` already gives them — `registerIpc`'s
+`dialogHandlers` / `themeHandlers` / `editorHandlers` overlay is the *only* thing
+the two transports do differently, which is exactly as intended: those three
+files are the Electron-specific surface and the server has none.
 
 ## Data flow
 
@@ -264,8 +301,8 @@ editor settings; see [`backend.md`](./backend.md).
 | `run.started` | `{ chatId, round }` | A user message starts a run |
 | `run.round` | `{ chatId, round, speakers }` | A round begins, with its speaker ids in order |
 | `run.finished` | `{ chatId, reason }` | The run ends: `completed` / `stopped` / `max-rounds` / `error` |
-| `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | A gated executor or `sideEffects` MCP tool is about to run and the turn is suspended (S5.4) |
-| `permission.resolved` | `{ requestId, chatId, decision }` — a `PermissionDecision` or `'aborted'` | That prompt ended, however it ended. Exactly one per `permission.requested`, so a card can be dismissed without knowing why (S5.4) |
+| `permission.requested` | `{ requestId, chatId, agentId, toolName, input, risk? }` | A gated executor or `sideEffects` MCP tool is about to run and the turn is suspended (S5.4). `risk` is S5.15's command-policy verdict, present only for a `run_command` the policy called `dangerous` |
+| `permission.resolved` | `{ requestId, chatId, decision }` — a `PermissionDecision`, `'aborted'` or `'timeout'` | That prompt ended, however it ended. Exactly one per `permission.requested`, so a card can be dismissed without knowing why (S5.4). `'timeout'` is S5.15's: nobody answered within `AppTimeouts.permissionTimeoutMs`, which is a different fact about the user than a denial |
 | `system.test` | `{ payload }` | `system.emitTestEvent` was called — the only event emitted as of S1.3 |
 
 ## Tests
@@ -273,6 +310,7 @@ editor settings; see [`backend.md`](./backend.md).
 | File | Covers |
 |---|---|
 | `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus` to it; S7.4 the three `system.update*`), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
+| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus`; S5.15 added `permissions.grants.list` / `permissions.grants.revoke` and the `permissions` namespace beside `permission`), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
 | `src/main/events/bus.test.ts` | Delivery order, payload identity, unsubscribe (twice is harmless), a throwing listener being logged without stopping the others, a listener added during delivery not receiving the in-flight event |
 | `src/main/secrets.test.ts` | Insecure store round trip including empty, long and non-ASCII values; the `plain:` marker; `isAvailable()` false; exactly one warning |
 | `src/main/app-context.test.ts` | The context opens a real temporary database, defaults to `LOCAL_USER_ID`, binds the repositories to the injected secret store, and `close()` is idempotent. From S3.2 it is also given `userDataDir`, from which `skillsDir()` / `memoryDir()` and `ctx.memory` are derived |
@@ -285,6 +323,8 @@ editor settings; see [`backend.md`](./backend.md).
 | `src/renderer/src/stores/updates.test.ts` | **S7.4**: the mirror, a backend with no updater at all not breaking the screen, the busy flag, the two events through `applyBackendEvent`, an `available` event never undoing a finished download, and the dismissal rule — closed for this version, open again for the next |
 | `e2e/updates.spec.ts` | **S7.4**: on an ordinary launch (a checkout, so the updater is genuinely absent) Settings → About says why and disables the button; with `WITENA_UPDATE_FEED` pointed at a feed the spec is holding, the request really arrives and the offered version travels feed → `electron-updater` → `UpdateService` → `update.available` → the store → the sentence on screen. The feed **holds** its answer until the test asks for it, because the launch check starts before the renderer has mounted |
 | `e2e/smoke.spec.ts` | The real Electron app: `system.ping` renders `pong`, `settings.get` renders `system`, clicking the button round-trips a `system.test` event into `last-event`, and the database is created inside the `WITENA_USER_DATA` directory. Since S1.5 it navigates to Settings -> Developer first, via `openDeveloperSettings` |
+| `src/server/http.test.ts` | **S8.1**: the contract over the second transport, on a real ephemeral port — `/healthz`, an argument-free method, a `not_found` serialised into a 404 *and* the IPC envelope, an unknown method, a `GET` on a method route, the electron-only rejections, a body that is not JSON, two WebSocket clients each receiving the same event as one frame, an upgrade refused on any other path, and a whole `chat.send` run against a `MockLanguageModelV4` whose `message.created` / `message.delta` / `run.finished` frames arrive over the socket and reassemble into the model's own text |
+| `src/server/no-electron.test.ts` | **S8.1**: nothing the second transport reaches imports electron, followed transitively through every relative and `@shared` import |
 
 The expected method list in `contracts.test.ts` is written by hand on purpose: a
 list derived from `BackendApi` would follow a rename instead of failing on it.
@@ -313,9 +353,21 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   re-emitted, which it is not: the events fire on a transition of the one
   `UpdateService`, and a window opened afterwards catches up by calling
   `system.updateStatus`, which is exactly what `main.tsx` does at bootstrap.
+  else moves across untouched. **S8.1 settled the server half of that
+  sentence**: the Node host mounts all five like any other method and lets them
+  reject; `openInEditor` with a `custom` command genuinely works there, because
+  that branch is `node:child_process`. An upload dialog in place of
+  `pickFolder` is S8.3's.
 - **No backpressure or replay.** Events are fire-and-forget and go to every open
-  window. A renderer that was not listening during a run recovers by calling
-  `messages.list`, not by replaying events.
+  window — and, since S8.1, to every open WebSocket. A renderer that was not
+  listening during a run recovers by calling `messages.list`, not by replaying
+  events. That recovery has never mattered much with one always-present window;
+  a browser tab that slept makes it matter, and S8.3 has to confirm the store
+  converges.
+- **The HTTP transport has no client yet** (S8.1). It is verified with `fetch`
+  and a `ws` client, not with the renderer. `HttpBackendClient` is S8.3, and so
+  is deciding what `Access-Control-Allow-Origin` should say — today the server
+  sets no CORS header and binds loopback.
 - **`InvokeResponse` is declared twice** — in `src/main/ipc-protocol.ts` for main
   and preload, and in `src/preload/index.d.ts` for the renderer, whose TypeScript
   project may not include files from `src/main/`. The two must be edited

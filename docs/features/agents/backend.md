@@ -25,6 +25,22 @@ No migration was needed for S2.1. `InitialAvatar.textColor` is a new **optional*
 field inside a column that is already JSON, so old rows deserialize unchanged and
 render on the neutral fallback foreground.
 
+**No migration was needed for S5.17 either, and that is the design rather than
+luck.** `InitialAvatar.palette` (1–8) is another optional field in the same JSON
+column: an agent written today stores it, an agent written before it does not,
+and the renderer resolves the older record to a slot as it draws by mapping the
+hex in `avatar.color` to the nearest of the eight the picker used to offer. So
+the table is untouched, there is nothing to half-apply, and a build without the
+field still renders every record — which is the *whole* reason the appearance was
+not allowed to become a database concern. `defaultAgentInput` in
+`src/main/agents/default-agent.ts` writes `palette: DEFAULT_AGENT_AVATAR_PALETTE`
+alongside the colour it already wrote.
+
+`handlers/agents.ts` validates that `avatar` is an object and nothing more, and
+the repository stores it verbatim. That deliberate shallowness is what let
+`palette` appear at all; a handler that enumerated the avatar's fields would have
+rejected every record the new renderer writes. Leave it shallow.
+
 `chat_members.agent_id` references `agents.id` with `ON DELETE CASCADE`, which is
 what makes `agents.delete` remove memberships. That requires
 `PRAGMA foreign_keys = ON`, which `openDatabase` sets.

@@ -81,7 +81,10 @@
  * field inside a tool result nobody expands. `deliveredRef` adds one more part
  * after them when the turn is the one that brought a `document` goal's
  * deliverable into existence (S5.12): a `FileRefPart` the user can click to open
- * the file the chat was for.
+ * the file the chat was for. And a `closing` turn that finished `done` gets one
+ * more, **first** in its parts: the `ConclusionPart` that marks the message as
+ * the group's answer (S5.16, `markConclusion`) — a flag with no content, which
+ * the history transform never shows a model.
  *
  * ## Skills and memory (S3.2, S3.3)
  *
@@ -453,6 +456,31 @@ export function deliveredRef(
 }
 
 /**
+ * The flag that marks the closing turn's message as **the conclusion** (S5.16).
+ *
+ * Three decisions, and each one is visible in the two lines below.
+ *
+ * - **First in `parts`.** A flag part carries no text, so its position is free;
+ *   putting it first means every reader that cares about it finds it without
+ *   walking to the end of a long answer, and `parts[0]` is a stable place for a
+ *   future second flag to live beside it.
+ * - **At the end of the turn, not before the stream.** Seeding it into `parts`
+ *   at creation would make the card appear a beat earlier, and would cost two
+ *   real things: the tool-free retry is gated on `parts.length === 0`, which a
+ *   seeded flag would silence, and a closing turn that then failed would be
+ *   labelled as an answer it never produced.
+ * - **Only a `done` turn.** A conclusion that was stopped, timed out or errored
+ *   is not one. The message is still in the transcript with its status and its
+ *   half-written text; what it does not get is the card that says "this is what
+ *   the group decided".
+ */
+export function markConclusion(parts: MessagePart[], isConclusion: boolean): MessagePart[] {
+  if (!isConclusion) return parts
+  if (parts.some((part) => part.type === 'conclusion')) return parts
+  return [{ type: 'conclusion' }, ...parts]
+}
+
+/**
  * Appends to the last part of `kind`, or starts a new one — the exact rule
  * `MessageDelta` in `src/shared/events.ts` documents for the renderer, applied
  * here so the in-memory copy and the renderer's copy can never diverge.
@@ -728,6 +756,15 @@ export interface CollectToolsOptions {
   signal: AbortSignal
   toolTimeoutMs: number
   /**
+   * Appends a `notices.*` line to the turn's own message (S5.15).
+   *
+   * Passed down to `buildExecutorTools`, which uses it for the one thing the
+   * user has to be told and the model does not: `sandbox-exec` is missing, so
+   * `run_command` ran unconfined. Optional, because the two suites that call
+   * `collectAgentTools` directly have no message to append to.
+   */
+  notice?: (key: string, params?: Record<string, string | number>) => void
+  /**
    * Everyone in the chat, in `position` order.
    *
    * Needed only to pick the chat's executor deterministically when the member
@@ -873,7 +910,11 @@ export async function collectAgentTools(
       agentId: agent.id,
       signal: options.signal,
       timeoutMs: options.toolTimeoutMs,
-      permissions: ctx.permissions
+      permissions: ctx.permissions,
+      // Read here rather than inside the tool, so one turn's commands cannot
+      // half-run under a setting the user changed mid-round (S5.15).
+      sandbox: ctx.repos.settings.get(ctx.userId).executor.sandbox,
+      ...(options.notice ? { notice: options.notice } : {})
     })
     if (executing) {
       Object.assign(tools, built)
@@ -1170,7 +1211,12 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const attached = await collectAgentTools(ctx, chat, agent, {
       signal: turnSignal,
       toolTimeoutMs,
-      members
+      members,
+      // The executor's tools reach the transcript through the same channel a
+      // tool call does, so a notice they raise lands in the message that caused
+      // it rather than in some later system row (S5.15).
+      notice: (key, params) =>
+        onPart({ type: 'system-notice', key, ...(params ? { params } : {}) })
     })
     const hasTools = Object.keys(attached.tools).length > 0
 
@@ -1213,6 +1259,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   // only the reason tells them apart, and they end in different statuses.
   const timedOut = isTimeoutAbort(turnSignal.reason)
 
+  // S5.16: the flag that says this message is the group's answer. See
+  // `markConclusion` for why it is added here, at the end, rather than seeded
+  // into `parts` before the stream.
+  const conclusion = options.closing === true
+
   const text = textOf(parts).trim()
   const status: MessageStatus = timedOut
     ? 'skipped'
@@ -1244,7 +1295,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const message = ctx.repos.messages.update(
       created.id,
       {
-        parts: structuredClone(parts),
+        parts: markConclusion(structuredClone(parts), conclusion && status === 'done'),
         status,
         mentions,
         ...(usage ? { usage } : {}),

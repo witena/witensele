@@ -143,6 +143,9 @@ function renderNotice(part: SystemNoticePart): string | null {
  * the group heard, and feeding it back inflates every later prompt. A
  * `tool-call` is left out too: its *result* is the fact worth replaying, and
  * repeating the arguments doubles the cost of every tool the chat ever used.
+ * A `conclusion` (S5.16) is left out because it is a **flag**: the model reads
+ * the conclusion's text like any other message and must never be shown the mark
+ * the UI puts on it, or it learns to write one.
  *
  * Two rules applied while rendering:
  *

@@ -22,8 +22,10 @@ now a fact the turn reported rather than a guess made from its prose.
 | File | Responsibility |
 |---|---|
 | `src/renderer/src/stores/permissions.ts` | The open prompts, keyed by `requestId`: `applyRequested` / `applyResolved` from the two events, `reply(requestId, decision)` through `permission.reply`, `clear(chatId)` for a deleted chat, and the `pendingForChat` / `usePendingPermissions` / `useIsReplying` selectors |
-| `src/renderer/src/components/chat/permission-card.tsx` | One card per pending request: the agent and the tool, the rendered input, and Allow / Always allow in this chat / Deny. Owns the two keyboard shortcuts |
-| `src/renderer/src/components/chat/permission-input.ts` | `describePermissionInput(toolName, input)`: the command line **verbatim**, a write's path plus a capped content preview, an edit's patch, or raw JSON. Pure and unit-tested |
+| `src/renderer/src/components/chat/permission-card.tsx` | One card per pending request: the agent and the tool, the rendered input, S5.15's warning row, and Allow / Always allow in this chat / Deny. Owns the two keyboard shortcuts, and renders rather than decides |
+| `src/renderer/src/components/chat/permission-input.ts` | `describePermissionInput(toolName, input)`: the command line **verbatim**, a write's path plus a capped content preview, an edit's patch, or raw JSON. `describePermissionCard(request)` adds S5.15's two decisions — whether to warn, and whether to offer a grant. Pure and unit-tested |
+| `src/renderer/src/components/chat/command-risk.ts` | S5.15. `commandRiskLabel(t, reason)`: the reason **code** the backend sent, as a sentence, through sixteen literal `t()` calls so the used-keys guard can see every one |
+| `src/renderer/src/components/chat/grants-list.tsx` | S5.15. The "Always allowed" block of the group settings: one row per grant with a revoke button, or an empty state |
 | `src/renderer/src/components/chat/diff-block.tsx` | One `DiffPart`: a collapsed header with the path and `+n -n`, opening onto `CodeBlock` in the `diff` language |
 | `src/renderer/src/components/chat/file-ref-chip.tsx` | One `FileRefPart` as a `path:line` chip; since S5.7 clicking it opens the file ([`editor`](../editor/frontend.md)). Since S5.12 one of the parts it draws is written by the backend — the deliverable of a `document` goal, on the turn that delivered it — and needs no change here: the component was already a renderer of the part |
 | `src/renderer/src/components/chat/transcript-rows.ts` | `collectDiffs`, `collectFileRefs`, `countDiffLines`, `formatFileRef` — the pure part-level transforms both components read |
@@ -45,10 +47,19 @@ nothing and copied the reference in S5.5, and now opens the file. All three are
 | `permissions` | `pending` | `Record<string, PendingPermission>` | Backend-owned. One entry per open prompt: `requestId`, `chatId`, `agentId`, `toolName`, the raw `input`, and `seq` |
 | `permissions` | `replyingById` | `Record<string, boolean>` | Local; true while that card's `permission.reply` is in flight, which disables its three buttons |
 | `permissions` | `seq` | `number` | A monotonic arrival counter. Two prompts raised in the same millisecond still have to draw in the order they arrived |
+| `permissions` | `grantsByChat` | `Record<string, PermissionGrant[]>` | Backend-owned (S5.15). Loaded per chat when its panel is drawn, refreshed whenever an `allowAlways` resolves, dropped when the chat is deleted |
 
-Nothing here is persisted and nothing is optimistic: a card is added by
-`permission.requested` and removed by `permission.resolved` (or by a rejected
-reply), never by the click that answered it.
+A `PendingPermission` also carries `risk` since S5.15, present only for a
+`run_command` the policy called `dangerous`. Absent rather than
+`{ verdict: 'normal' }`, so the card decides what to draw by asking whether
+there is a verdict at all.
+
+Nothing here is optimistic: a card is added by `permission.requested` and
+removed by `permission.resolved` (or by a rejected reply), never by the click
+that answered it — and a grant row is removed by the list the backend answers a
+revoke with, never by splicing it out locally. A row that vanished from the
+screen while the grant stayed in the database is the exact failure S5.15 exists
+to remove.
 
 ## Backend calls
 
@@ -57,14 +68,18 @@ reply), never by the click that answered it.
 | `invoke('permission.reply')` | The card's three buttons and its two shortcuts, through `permissions.reply` | Releases the suspended tool call with `allow`, `deny` or `allowAlways` |
 | `subscribe` → `permission.requested` | `lib/event-bridge.ts` | Adds a card. `input` is the only description of what is about to happen |
 | `subscribe` → `permission.resolved` | `lib/event-bridge.ts` | Removes it, for every `decision` including `aborted` |
-| `subscribe` → `chat.deleted` | `lib/event-bridge.ts` | Drops that chat's cards; the gate has already aborted the prompts |
+| `subscribe` → `chat.deleted` | `lib/event-bridge.ts` | Drops that chat's cards **and** its cached grants; the gate has already aborted the prompts and the rows went with the chat |
+| `invoke('permissions.grants.list')` | `GrantsList`'s effect, and `event-bridge.ts` on an `allowAlways` resolution | Fills the "Always allowed" block |
+| `invoke('permissions.grants.revoke')` | The revoke button | Forgets one grant and answers with what is left, which is what the block redraws from |
 
 What the backend imposes, and the renderer honours:
 
 | From the backend | The renderer must |
 |---|---|
 | `permission.requested` | Draw one card per `requestId`, oldest first. Several may be open at once — a parallel round, or two chats |
-| `input` on that event | Render it readably, and for `run_command` **verbatim**: the shell is not sandboxed, so the prompt is the whole security boundary |
+| `input` on that event | Render it readably, and for `run_command` **verbatim**. The sandbox stops writes and says nothing about what a command reads or sends, so the printed line is still the boundary |
+| `risk` on that event, when the verdict is `dangerous` | Draw the warning row from the translated reason code, and **hide** "Always allow": the gate ignores a grant for exactly these calls |
+| `permission.resolved` with `'timeout'` | Dismiss the card like any other resolution. Nobody answered it, and it is gone |
 | `permission.resolved` | Dismiss the card, whatever the `decision` says. `aborted` is a stop closing a prompt nobody answered |
 | `permission.reply` rejecting `not_found` | Treat the card as stale and drop it. It never means the executor is stuck |
 | A turn suspended in a prompt | Keep showing the agent as `working`: it is, and its hard timeout is still counting |
@@ -78,6 +93,11 @@ What the backend imposes, and the renderer honours:
 | idle | No card. The composer is where it always is |
 | prompt open | A card between the transcript and the composer: `Ada wants to run write_file`, the path, the content preview (or the patch, or the command line in mono), and three buttons. The oldest card is focused, so Enter and Escape work without a click |
 | several prompts | One card per request, stacked oldest first. Only the oldest takes focus |
+| a risky command | The same card with a red row naming the rule — "This command publishes commits to a remote." — and only two buttons: Allow and Deny |
+| a blocked command | **No card at all.** The tool refused it before asking; the transcript shows the failed tool call and the sentence the model read |
+| nobody answers | After `permissionTimeoutMs` (five minutes by default) the card disappears on its own and the tool fails with "the user did not answer in time" |
+| grants, none | The "Always allowed" block shows one line: nothing yet, and how a row gets there |
+| grants, some | One monospace row per tool, newest first, each revealing a revoke button on hover. Revoking removes the row and the tool asks again from its next call |
 | answering | The three buttons are disabled while the reply is in flight; the card is still there, because the call it belongs to has not returned yet |
 | answered, or the run stopped | The card disappears on `permission.resolved`. A denial leaves an errored tool card in the transcript, not a system notice |
 | stale card | A reply the backend refuses (`not_found`) removes the card silently. There is nothing the user could do about it and nothing is broken |
@@ -97,6 +117,11 @@ New keys, all under `chat.*`:
 | `chat.permissionKeyHint` | The `Enter allows, Esc denies` line |
 | `chat.permissionTruncated` | Shown when the previewed content is shorter than what will be written |
 | `chat.permissionCommandHint` | The one line of context a command gets: it runs in this chat's folder, as the user, with their environment |
+| `chat.commandRisk.*` | Sixteen lines, one per `CommandRiskReason`, for the warning row (S5.15) |
+| `chat.grantsTitle`, `chat.grantsEmpty`, `chat.grantsHint`, `chat.grantRevoke` | The "Always allowed" block (S5.15) |
+| `settings.developer.sandbox*` | The sandbox control in Settings → Developer (S5.15) |
+| `settings.timeouts.permission`, `settings.timeouts.permissionHint` | The prompt timeout (S5.15) |
+| `notices.sandboxUnavailable` | The one notice this feature raises: `sandbox-exec` is missing, so the command ran unconfined (S5.15) |
 | `chat.diffExpand`, `chat.diffCollapse` | The diff block's toggle |
 | `chat.fileRefTitle` | The chip's tooltip |
 
@@ -131,8 +156,11 @@ reason — they are data, not copy:
 - Test hooks, so the end-to-end specs stay language-independent:
   `permission-stack`, `permission-card` (`data-request-id`, `data-tool`,
   `data-agent-id`), `permission-card-title`, `permission-card-path`,
-  `permission-card-body` (`data-kind`), `permission-allow`,
-  `permission-allow-always`, `permission-deny`, `diff-block` (`data-path`),
+  `permission-card-body` (`data-kind`),
+  `permission-card-risk` (`data-reason`), `permission-allow`,
+  `permission-allow-always`, `permission-deny`, `grants-list` (`data-count`),
+  `grants-empty`, `grant-row` (`data-tool`), `grant-revoke`,
+  `settings-sandbox`, `settings-permission-timeout`, `diff-block` (`data-path`),
   `diff-block-toggle`, `diff-block-path`, `diff-block-stat`, `file-ref`
   (`data-path`, `data-line`), `message-file-refs`.
 

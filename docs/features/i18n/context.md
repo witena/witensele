@@ -22,7 +22,11 @@ S1.4 delivers the whole mechanism, not just the two files:
 - `translateNotice` — the renderer half of the "the backend sends keys, not
   sentences" contract for `SystemNoticePart`, and `i18n/errors.ts` — the same
   contract for a rejected call, by `BackendErrorCode` and, since S5.2, by the
-  finer `ValidationReason`.
+  finer `ValidationReason`. S5.15 added a third shape of the same contract that
+  is neither: a reason **code on an event** (`CommandRiskReason`, on
+  `permission.requested`), rendered by `components/chat/command-risk.ts`.
+  Nothing is stored and nothing failed — the backend simply knows the fact and
+  the renderer knows the language.
 - Two guard tests that keep the rule true as the UI grows: the key trees must
   match, and no hard-coded string may reach JSX.
 - The full key tree for the screens S1.5–S2.5 will build, written ahead of the
@@ -68,6 +72,7 @@ their copy to the two locale files rather than to their components, and
 | Hard-coded strings are caught by a **text-scanning guard test** | ESLint with `react/jsx-no-literals`, or trusting review | The project has no ESLint yet, and the guard also checks that every key actually resolves — something a lint rule does not do. It is a heuristic and says so in its own header. |
 | A `validation` refusal may carry a `ValidationReason` identifier, translated as `errors.<reason>` (S5.2) | A new `BackendErrorCode` per case; a sentence in `BackendError.message` | The code list is a failure taxonomy and one entry per refusal would dilute it; a sentence from the backend would be frozen in the wrong language. A reason is the same "keys, not sentences" contract at a finer grain, and `i18n/errors.ts` switches over the union so the compiler proves the mapping is total. |
 | A new `BackendErrorCode` is still right when the failure is about the **machine**, not the request (S5.3's `ant_missing`, `ant_not_logged_in`; S5.13's three `gcloud_*`; S7.6's `key_unreadable`) | Two more `ValidationReason`s | A reason narrows a refusal of *this request*, and it only ever reaches the screen through `code === 'validation'`. "The Anthropic CLI is not installed" is raised while building a model for a chat turn as well as while validating a form, so it has to travel as a class of its own. Both spellings were used in S5.3: the two `oauth_*` refusals are reasons, the two `ant_*` conditions are codes. S5.13 reused the same split for Google, and `gcloud_no_project` is the clearest case of all — the OAuth `fetch` wrapper raises it mid-request, where there is no request-shaped refusal to narrow. |
+| A backend fact may also travel as a **part with no text at all** (S5.16) | A `system-notice` saying "the conclusion follows"; a stored label on the message | `ConclusionPart` is the same argument as a notice key, taken one step further: the message says *what it is*, and every word around it — the label, the speaker line, the two buttons — is chosen by the renderer in the language that is on screen now. A stored label would be frozen in the language the discussion closed in, and a notice would be a second row saying what the row under it already is. |
 | The backend emits keys, the renderer translates | Backend renders sentences in the user's language | A message is stored forever and the language can change afterwards; a stored sentence would be frozen in the language that was active when it was written. It also keeps `src/main` free of UI copy. |
 | Both language names are written in **English** inside `en.json` (`Chinese (Simplified)`) | The usual endonym convention, which would put the Chinese endonym in both files | CLAUDE.md rule #1: `zh-CN.json` is the only file that may contain Chinese, and `locales.test.ts` enforces it. `zh-CN.json` itself does use the endonyms. |
 

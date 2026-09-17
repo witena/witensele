@@ -22,7 +22,19 @@
  * Nothing here is translated: a path, a command and a diff are **data**, the same
  * rule the working-directory chip follows. The labels around them are the card's,
  * and they are `t()` keys.
+ *
+ * ## The two decisions the card makes (S5.15)
+ *
+ * `describePermissionCard` adds them, so that the card component is rendering
+ * rather than deciding — the same split `goal.ts` and `handoff.ts` use, and the
+ * reason those rules are unit-testable with no DOM at all:
+ *
+ * | Decision | Rule |
+ * |---|---|
+ * | Draw a warning row | The verdict is `dangerous`. `normal` is not sent, and `blocked` never became a card |
+ * | Offer "Always allow" | Anything *except* a `dangerous` call. The gate ignores a grant for those, so the button would be a promise the product does not keep |
  */
+import type { CommandRisk, CommandRiskReason } from '@shared/types'
 
 /** How much of a `write_file` body the card previews, in characters. */
 export const CONTENT_PREVIEW_CHARS = 1_200
@@ -93,4 +105,43 @@ export function describePermissionInput(toolName: string, input: unknown): Permi
   }
 
   return { kind: 'json', body: safeJson(input), truncated: false }
+}
+
+/** Everything the card draws, including the two S5.15 decisions. */
+export interface PermissionCardView extends PermissionInputView {
+  /**
+   * The rule that makes this call worth a second look, or `null`.
+   *
+   * A code, translated by `commandRiskLabel`: the backend does not know the UI
+   * language (CLAUDE.md rule #4).
+   */
+  warn: CommandRiskReason | null
+  /** False for a `dangerous` call, where a grant would never be consulted. */
+  offersAlwaysAllow: boolean
+}
+
+/** One pending prompt, in the shape this module reads it. */
+export interface PermissionCardInput {
+  toolName: string
+  input: unknown
+  risk?: CommandRisk | undefined
+}
+
+/**
+ * The whole of what the permission card shows, as data.
+ *
+ * A `blocked` verdict is deliberately treated like a `dangerous` one rather than
+ * given its own branch: the tool throws before it asks, so a blocked card cannot
+ * exist — and if one ever did, warning about it and withholding the grant button
+ * is the behaviour that fails safe.
+ */
+export function describePermissionCard(request: PermissionCardInput): PermissionCardView {
+  const view = describePermissionInput(request.toolName, request.input)
+  const verdict = request.risk?.verdict
+  const risky = verdict === 'dangerous' || verdict === 'blocked'
+  return {
+    ...view,
+    warn: risky ? (request.risk?.reason ?? null) : null,
+    offersAlwaysAllow: !risky
+  }
 }

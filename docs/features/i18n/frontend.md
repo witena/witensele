@@ -121,6 +121,13 @@ Things the guards will refuse: an English sentence in `zh-CN.json`, any CJK in
 `en.json`, an empty value, a key that exists in one file only, a key that no
 locale file defines, and a literal in JSX.
 
+One more thing the JSX guard refuses, discovered again in S5.16: a **generic
+argument in a `.tsx` file**. `conclusionPreviews?: Record<string, string>` in a
+props interface reads to the heuristic as a tag followed by a text node, so the
+prop takes a named alias (`ConclusionPreviews`, declared in a `.ts` module)
+instead. The guard's header documents the trade-off; the alias costs a line and
+the workaround would have cost an allowlist entry.
+
 One thing they are *not* meant to refuse: a value that is genuinely the same in
 both languages. A shell command (S5.3's `brew install anthropics/tap/ant`,
 S5.13's `brew install --cask google-cloud-sdk`) is
@@ -131,6 +138,13 @@ directory path and a model id, and S7.5 added three more: the version string and
 the repository URL in Settings → About, every `name@version · licence` row of
 its generated licence list, and an agent template's **name**, which is stored in
 `agents.name` and resolved against by `@mentions`.
+
+A **flag part** needs no copy at all, which is S5.16's contribution to this
+feature's rules: `ConclusionPart` says "this message is the answer" and the
+renderer chooses every word around it (`chat.conclusion*`, ten keys). A backend
+that had instead stored the label would have frozen it in the language that was
+active when the discussion closed — the same argument that makes every
+`SystemNoticePart` a key.
 
 Two runtime keys now exist, and both are checked in `locales.test.ts` rather
 than by the usage guard, which cannot see a key that is assembled:
@@ -144,6 +158,14 @@ so the usage guard sees all eight and the compiler proves the switch is total.
 What `lib/updates.test.ts` adds is the other direction — it walks `UPDATE_STATES`,
 calls the function and asserts the key it lands on resolves in `en.json` — which
 is the same guarantee a runtime key needs, bought without a runtime key.
+S5.15's `chat.commandRisk.*` is a third family of the same shape and takes the
+*other* route on purpose. The sixteen `CommandRiskReason` codes could have been
+resolved as `chat.commandRisk.${reason}` and checked the same way; instead
+`components/chat/command-risk.ts` is a `switch` of sixteen **literal** `t()`
+calls, so the ordinary usage guard sees every one of them and a renamed key
+fails at the usual place. Its own test then asserts both directions over the two
+locale files as well, which is what a computed key would have needed anyway —
+the difference is that the literals cost nothing to check twice.
 
 ## Accessibility and keyboard
 

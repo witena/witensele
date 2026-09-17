@@ -94,6 +94,11 @@ export interface TestAppContextOptions {
    * no timer or socket is ever opened.
    */
   updates?: UpdateServiceInjection
+  /**
+   * How long a prompt waits before denying itself (S5.15). `0`, the default,
+   * means never — which is what a suite that answers its own prompts wants.
+   */
+  permissionTimeoutMs?: number
 }
 
 /**
@@ -187,6 +192,18 @@ export function createTestAppContext(
     memory: createMemoryStore(join(database.dir, MEMORY_DIR)),
     permissions: createPermissionGate({
       emit: (event) => bus.emit(event),
+      // The same table the app uses (S5.15), reached lazily through `ctx` so it
+      // can be named before the object literal that declares it is finished. A
+      // test that asserted on grants against an in-memory stand-in would prove
+      // nothing about the cascade or about surviving a reopen.
+      grants: {
+        has: (chatId, toolName) => ctx.repos.permissionGrants.has(chatId, toolName),
+        grant: (chatId, toolName) => ctx.repos.permissionGrants.grant(chatId, toolName)
+      },
+      // Off unless a test asks: a five-minute timer in a suite that answers its
+      // own prompts is a timer nobody wants, and the cases that do want one
+      // build their own gate in `executor/permissions.test.ts`.
+      timeoutMs: () => options.permissionTimeoutMs ?? 0,
       ...(options.newRequestId ? { newRequestId: options.newRequestId } : {})
     }),
     anthropicCli: options.anthropicCli ?? absentAnthropicCli(),

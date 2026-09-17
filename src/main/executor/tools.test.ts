@@ -11,11 +11,11 @@
  * child behind), and the commands here are `echo` and `sleep`.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolSet } from 'ai'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { ChatGoal } from '@shared/types'
+import type { ChatGoal, ExecutorSandboxMode } from '@shared/types'
 import type { PermissionGate, PermissionRequest } from './permissions'
 import {
   EDIT_FILE_TOOL,
@@ -40,6 +40,8 @@ let outside: string
 let controller: AbortController
 /** Every `ask` the tools made, in order. */
 let asked: PermissionRequest[]
+/** Every `notices.*` line the tools raised (S5.15). */
+let notices: { key: string; params?: Record<string, string | number> }[]
 
 /** A gate that answers without a user. `ask` records what it was asked. */
 function stubGate(answer: 'allow' | 'deny' | 'aborted'): PermissionGate {
@@ -55,14 +57,23 @@ function stubGate(answer: 'allow' | 'deny' | 'aborted'): PermissionGate {
   }
 }
 
-function tools(answer: 'allow' | 'deny' | 'aborted' = 'allow', timeoutMs = 10_000): ToolSet {
+function tools(
+  answer: 'allow' | 'deny' | 'aborted' = 'allow',
+  timeoutMs = 10_000,
+  options: { sandbox?: ExecutorSandboxMode } = {}
+): ToolSet {
   return buildExecutorTools({
     workdir,
     chatId: 'chat-1',
     agentId: 'agent-1',
     signal: controller.signal,
     timeoutMs,
-    permissions: stubGate(answer)
+    permissions: stubGate(answer),
+    // S5.15: the sandbox is on by default, so the existing cases exercise the
+    // path the product actually takes. The temporary working directory is
+    // writable under the generated profile, which is the point of it.
+    ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+    notice: (key, params) => notices.push({ key, ...(params ? { params } : {}) })
   })
 }
 
@@ -94,6 +105,7 @@ beforeEach(() => {
   writeFileSync(join(workdir, 'src', 'index.ts'), "export const answer = 42\n", 'utf8')
   controller = new AbortController()
   asked = []
+  notices = []
 })
 
 afterEach(() => {
@@ -353,6 +365,78 @@ describe('run_command', () => {
     })
     expect(result.stdout.length).toBeGreaterThan(MAX_OUTPUT_CHARS)
     expect(result.stdout).toContain(TRUNCATION_MARKER)
+  })
+})
+
+describe('run_command safety (S5.15)', () => {
+  it('never asks and never runs a blocked command', async () => {
+    const marker = join(workdir, 'blocked.txt')
+    await expect(
+      call(tools(), RUN_COMMAND_TOOL, { command: `sudo touch ${marker}` })
+    ).rejects.toThrow(/refused before it ran/)
+
+    // The two halves of "blocked": no card, and no shell.
+    expect(asked).toEqual([])
+    expect(() => readFileSync(marker)).toThrow()
+  })
+
+  it('tells the model it is a hard limit rather than a refusal it can discuss', async () => {
+    await expect(call(tools(), RUN_COMMAND_TOOL, { command: 'rm -rf /' })).rejects.toThrow(
+      /do not try to work around it/
+    )
+  })
+
+  it('carries the verdict to the prompt for a dangerous command', async () => {
+    await call(tools(), RUN_COMMAND_TOOL, { command: 'git push origin main' })
+    expect(asked).toHaveLength(1)
+    expect(asked[0]?.risk).toEqual({ verdict: 'dangerous', reason: 'git-push' })
+  })
+
+  it('sends a normal verdict with no reason, so the card draws no warning', async () => {
+    await call(tools(), RUN_COMMAND_TOOL, { command: 'echo hello' })
+    expect(asked[0]?.risk).toEqual({ verdict: 'normal', reason: null })
+  })
+
+  it('runs an approved command under the sandbox and says so', async () => {
+    const result = await call<{ sandbox: string }>(tools(), RUN_COMMAND_TOOL, {
+      command: 'echo inside > inside.txt'
+    })
+    expect(result.sandbox).toBe('workdir-write')
+    expect(readFileSync(join(workdir, 'inside.txt'), 'utf8').trim()).toBe('inside')
+  })
+
+  it('fails a write outside the folder, with the folder untouched', async () => {
+    // The home directory rather than `outside`: the working directory of this
+    // suite is a `mkdtemp` under the system temp directory, and the profile
+    // allows the temp directories on purpose (a compiler that cannot write a
+    // temp file fails in a way nobody can debug from a transcript). So the only
+    // honest "outside" for this assertion is somewhere that is not temp. This
+    // is the sandbox and not `paths.ts`: the path never goes through
+    // `resolveInWorkdir` at all.
+    const target = join(homedir(), 'witena-tools-sandbox-probe-should-not-exist.txt')
+    const result = await call<{ exitCode: number; stderr: string }>(tools(), RUN_COMMAND_TOOL, {
+      command: `echo leaked > ${JSON.stringify(target)}`
+    })
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toMatch(/not permitted/i)
+    expect(() => readFileSync(target)).toThrow()
+  })
+
+  it('lets the same write through when the sandbox is off', async () => {
+    // The setting has to actually do something, and this is the whole of what
+    // it does. It exists for the command the profile is too tight for.
+    const target = join(outside, 'allowed.txt')
+    // `outside` is a sibling of the working directory, so this proves the
+    // command ran rather than proving anything about the profile.
+    const result = await call<{ exitCode: number; sandbox: string }>(
+      tools('allow', 10_000, { sandbox: 'off' }),
+      RUN_COMMAND_TOOL,
+      { command: `echo fine > ${JSON.stringify(target)}` }
+    )
+    expect(result.exitCode).toBe(0)
+    expect(result.sandbox).toBe('off')
+    expect(readFileSync(target, 'utf8').trim()).toBe('fine')
+    expect(notices).toEqual([])
   })
 })
 

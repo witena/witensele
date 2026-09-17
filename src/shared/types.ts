@@ -193,11 +193,42 @@ export interface ProviderAuthStatus {
  */
 export type AgentRole = 'participant' | 'executor'
 
-/** A monogram avatar: one or two letters on a solid colour. */
+/**
+ * The eight entries of the monogram palette, as stored.
+ *
+ * An index rather than a colour, because the colour depends on the appearance
+ * (S5.17): `--color-avatar-3-bg` is a deep violet in the dark theme and a pale
+ * one in the light theme, and a record cannot hold both. One small integer holds
+ * the *choice* and lets the stylesheet hold the consequences.
+ */
+export type AvatarPaletteIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
+
+/** The eight indexes, in the order the avatar picker offers them. */
+export const AVATAR_PALETTE_INDEXES: readonly AvatarPaletteIndex[] = [1, 2, 3, 4, 5, 6, 7, 8]
+
+/** A monogram avatar: one or two letters on one of the eight palette entries. */
 export interface InitialAvatar {
   kind: 'initial'
   text: string
-  /** CSS colour, e.g. `#c2653a`. */
+  /**
+   * Which palette entry the tile is painted with (S5.17). The authority at
+   * render time whenever it is present.
+   *
+   * Optional because every agent written before S5.17 has only the two colour
+   * fields below. Those records are **not** migrated: the renderer maps the
+   * stored hex to the nearest entry as it draws, which costs nothing, cannot
+   * half-fail, and leaves a downgrade to the previous build working.
+   */
+  palette?: AvatarPaletteIndex
+  /**
+   * CSS colour, e.g. `#c2653a`.
+   *
+   * Since S5.17 this is a *compatibility shadow* on a record the current build
+   * wrote — the amber-era hex of whatever `palette` names — rather than the
+   * thing that gets painted. It is still required, so that a consumer that has
+   * never heard of `palette` (an older build, an export, a future server) always
+   * has a colour to fall back to.
+   */
   color: string
   /**
    * Foreground CSS colour paired with `color`. Optional so records written before
@@ -305,10 +336,41 @@ export interface ChatSettings {
   speaking: SpeakingMode
   /** How many rounds may run without the user before control returns to them. */
   maxAutoRounds: number
+  /**
+   * The member that writes the conclusion when a discussion closes (S5.16).
+   *
+   * Absent — the default — means "the first eligible member in speaking order",
+   * which is what S5.14 always did. When it names a member of this chat that is
+   * available and is not an executor, that member writes the conclusion instead;
+   * anything else (a member since removed, one the supervisor has taken offline,
+   * an executor) falls back to the same first-in-order rule rather than skipping
+   * the conclusion, because a chat that agreed must still hand back an answer.
+   *
+   * An agent id rather than a position, because the speaking order is dragged
+   * around by the user and "the second member" would silently become somebody
+   * else.
+   */
+  closingAgentId?: string
   /** Per-chat override in milliseconds; absent means use the global setting. */
   stallTimeoutMs?: number
   /** Per-chat override in milliseconds; absent means use the global setting. */
   hardTimeoutMs?: number
+}
+
+/**
+ * A patch of `ChatSettings`, in which `closingAgentId` may be `null` (S5.16).
+ *
+ * Every other field is only ever *set*, so `Partial<ChatSettings>` says all
+ * there is to say about them. `closingAgentId` is the first setting that can be
+ * **unset** — picking "First in speaking order" again — and `undefined` cannot
+ * carry that across a transport: JSON drops the key, and a dropped key is
+ * exactly what "leave this field alone" means in a merge. So the wire word for
+ * "clear it" is `null`, and `chats.update` turns it back into an absent field
+ * before the row is written, which is why the stored type has no `null` in it.
+ */
+export interface ChatSettingsPatch extends Partial<Omit<ChatSettings, 'closingAgentId'>> {
+  /** The member that closes, or `null` for "the first eligible one". */
+  closingAgentId?: string | null
 }
 
 /** Settings a new chat starts with: everyone speaks, in order, for up to 3 rounds. */
@@ -428,10 +490,12 @@ export type ChatInput = Omit<Chat, keyof EntityBase>
  * `settings` is a **partial of a partial**: the backend merges it field by field,
  * so a single control (the speaking toggle, the round count) can be persisted on
  * its own without the caller having to resend the rest and risk overwriting a
- * field another control changed a moment earlier.
+ * field another control changed a moment earlier. Since S5.16 it is a
+ * `ChatSettingsPatch`, which is that partial plus the one field a control can
+ * clear.
  */
 export interface ChatPatch extends Partial<Omit<ChatInput, 'settings'>> {
-  settings?: Partial<ChatSettings>
+  settings?: ChatSettingsPatch
 }
 
 /**
@@ -544,6 +608,25 @@ export interface SystemNoticePart {
   params?: Record<string, string | number>
 }
 
+/**
+ * The mark on the one message that is the group's answer (S5.16).
+ *
+ * A **flag**: it carries no content of its own, it is stored **first** in
+ * `parts`, and it says one thing — this message is the conclusion S5.14's
+ * closing turn was run to produce. A part rather than a column or a
+ * `MessageKind`, because `parts` is already the open, migration-free place
+ * where a message says what it is made of: a new member of this union costs no
+ * schema change and a row written before S5.16 simply has none.
+ *
+ * Everything that reads a message treats it as invisible unless it is looking
+ * for it: `partsToText` (the history transform) skips it, so the model never
+ * sees a flag; `messageText` in the renderer skips it, so it is never drawn as
+ * text. Only the transcript row model and the chip that finds it read it.
+ */
+export interface ConclusionPart {
+  type: 'conclusion'
+}
+
 /** Everything a message can be made of, discriminated on `type`. */
 export type MessagePart =
   | TextPart
@@ -552,6 +635,7 @@ export type MessagePart =
   | ToolResultPart
   | DiffPart
   | FileRefPart
+  | ConclusionPart
   | SystemNoticePart
 
 /** Token accounting for one message, as reported by the provider. */
@@ -617,6 +701,121 @@ export interface AppTimeouts {
   hardTimeoutMs: number
   /** Budget for a single MCP tool call. */
   toolTimeoutMs: number
+  /**
+   * How long a permission prompt waits for an answer before it denies itself
+   * (S5.15).
+   *
+   * Minutes rather than seconds, and much longer than the other three, because
+   * the thing being waited for is a **person** reading a diff — not a model
+   * answering or a process exiting. Until S5.15 a prompt nobody answered was
+   * ended only by Stop or by `hardTimeoutMs`, which recorded the turn as
+   * `skipped`: true, and not the reason.
+   */
+  permissionTimeoutMs: number
+}
+
+/* -------------------------------------------------------------------------- */
+/* Executor safety (S5.15)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How `run_command` is confined (S5.15).
+ *
+ * `'workdir-write'` runs the command under `/usr/bin/sandbox-exec` with a
+ * generated profile that lets it read anything the user can read and write only
+ * inside the chat's folder, the system temp directories and the null-ish
+ * devices; the network stays open, because a build that cannot fetch its
+ * dependencies is not a build. `'off'` is S5.4's behaviour and is kept for the
+ * cases the profile is too tight for — a tool that insists on writing its cache
+ * into the home directory, or a machine where `sandbox-exec` has been removed.
+ */
+export type ExecutorSandboxMode = 'workdir-write' | 'off'
+
+/** Every value `ExecutorSettings.sandbox` accepts, in the order the control shows them. */
+export const EXECUTOR_SANDBOX_MODES = [
+  'workdir-write',
+  'off'
+] as const satisfies readonly ExecutorSandboxMode[]
+
+export interface ExecutorSettings {
+  sandbox: ExecutorSandboxMode
+}
+
+/**
+ * How dangerous a `run_command` line is (S5.15).
+ *
+ * `blocked` never runs and never prompts; `dangerous` always prompts and
+ * ignores an `allowAlways` grant; `normal` behaves as it did before S5.15. The
+ * classifier is `src/main/executor/command-policy.ts`, and its header explains
+ * why a `normal` verdict is not a claim that the command is safe.
+ */
+export type CommandVerdict = 'blocked' | 'dangerous' | 'normal'
+
+/**
+ * Why a command got the verdict it got.
+ *
+ * A **code**, never a sentence: the backend does not know the UI language, so
+ * the card translates it under `chat.commandRisk.*` (CLAUDE.md rule #4), and the
+ * model reads a separate English sentence from `blockedCommandMessage`.
+ */
+export type CommandRiskReason =
+  | 'privilege-escalation'
+  | 'disk-write'
+  | 'shutdown'
+  | 'fork-bomb'
+  | 'destructive-delete'
+  | 'destructive-permissions'
+  | 'recursive-delete'
+  | 'git-push'
+  | 'git-reset-hard'
+  | 'git-clean'
+  | 'history-rewrite'
+  | 'package-publish'
+  | 'download-to-shell'
+  | 'command-substitution'
+  | 'outside-workdir'
+  | 'background-process'
+
+/** Every reason code, for the locale guard and the policy's own tests. */
+export const COMMAND_RISK_REASONS = [
+  'privilege-escalation',
+  'disk-write',
+  'shutdown',
+  'fork-bomb',
+  'destructive-delete',
+  'destructive-permissions',
+  'recursive-delete',
+  'git-push',
+  'git-reset-hard',
+  'git-clean',
+  'history-rewrite',
+  'package-publish',
+  'download-to-shell',
+  'command-substitution',
+  'outside-workdir',
+  'background-process'
+] as const satisfies readonly CommandRiskReason[]
+
+/** One verdict with the rule that produced it; `reason` is null only for `normal`. */
+export interface CommandRisk {
+  verdict: CommandVerdict
+  reason: CommandRiskReason | null
+}
+
+/**
+ * One remembered "always allow in this chat" (S5.15).
+ *
+ * Persisted since S5.15, which is a reversal of S5.4's decision that a grant
+ * must die with the process. The reason it is safe to reverse is the rest of
+ * this step: a grant is now **listed and revocable** in the chat's Group
+ * settings, and a `dangerous` command ignores it entirely. An invisible grant
+ * was the problem, not a durable one.
+ */
+export interface PermissionGrant {
+  chatId: string
+  /** The tool the grant is about: `run_command`, or an MCP tool's own name. */
+  toolName: string
+  createdAt: number
 }
 
 /**
@@ -670,6 +869,8 @@ export interface AppSettings {
   theme: ThemeSetting
   /** Where a `path:line` chip, a diff header or a file tool card opens (S5.7). */
   editor: EditorSettings
+  /** How `run_command` is confined (S5.15). */
+  executor: ExecutorSettings
   timeouts: AppTimeouts
   /**
    * True once the user pressed Skip on the first-run card (S7.5).
@@ -692,10 +893,14 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     kind: 'vscode',
     command: DEFAULT_EDITOR_COMMAND
   },
+  executor: {
+    sandbox: 'workdir-write'
+  },
   timeouts: {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,
-    toolTimeoutMs: 60_000
+    toolTimeoutMs: 60_000,
+    permissionTimeoutMs: 300_000
   },
   onboardingDismissed: false
 }
@@ -712,6 +917,7 @@ export interface AppSettingsPatch {
   language?: AppSettings['language']
   theme?: AppSettings['theme']
   editor?: Partial<EditorSettings>
+  executor?: Partial<ExecutorSettings>
   timeouts?: Partial<AppTimeouts>
   onboardingDismissed?: boolean
 }
@@ -791,9 +997,14 @@ export interface MemorySearchHit {
  * remembers the **chat + tool** pair, so every later call of that tool in that
  * chat runs without asking again. It is deliberately not remembered per input —
  * a user who has decided that this executor may run `write_file` in this chat
- * has decided about the tool, not about one path — and deliberately not
- * persisted: the memory lives for the life of the process, so closing the app is
- * always a way back to being asked.
+ * has decided about the tool, not about one path.
+ *
+ * Since S5.15 the grant is **persisted** (`permission_grants`), which S5.4
+ * refused to do on the grounds that a grant surviving a restart is a permission
+ * the user cannot see. The grounds were right and the conclusion was the wrong
+ * half: S5.15 makes the grant visible and revocable in the chat's Group settings
+ * instead, and a `dangerous` command ignores every grant, so quitting the app is
+ * no longer the only way back to being asked.
  */
 export const PERMISSION_DECISIONS = ['allow', 'deny', 'allowAlways'] as const
 

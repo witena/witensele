@@ -58,7 +58,7 @@ function NavButton({ page, active, onSelect, label }: NavButtonProps): React.JSX
       className={clsx(
         'flex h-10 w-10 items-center justify-center rounded-[10px] transition-colors',
         'focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none',
-        active ? 'bg-bg-hover text-fg' : 'text-fg-dim hover:bg-bg-hover/60 hover:text-fg-secondary',
+        active ? 'bg-bg-hover text-fg' : 'text-fg-dim hover:bg-bg-subtle hover:text-fg-secondary',
         NO_DRAG
       )}
     >

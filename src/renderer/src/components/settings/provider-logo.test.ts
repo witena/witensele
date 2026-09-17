@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { PROVIDER_PRESETS } from '@shared/presets'
+import { NEUTRAL_AVATAR_STYLE } from '../agents/agent-display'
 import { providerInitials, providerLogo } from './provider-logo'
 
 describe('providerInitials', () => {
@@ -55,15 +56,31 @@ describe('providerLogo', () => {
     const logo = providerLogo('My Lab Box')
 
     expect(logo.text).toBe('ML')
-    expect(logo.color).toBe('#262421')
+    expect(logo.palette).toBeUndefined()
+    expect(logo).toMatchObject(NEUTRAL_AVATAR_STYLE)
   })
 
-  it('always produces a usable colour pair', () => {
+  /**
+   * The S5.17 rule: a tile is a *slot*, never a colour.
+   *
+   * Before it, this test asserted the opposite — that every logo was a literal
+   * `#rrggbb` — which is exactly how eight dark chips ended up surviving onto
+   * the light theme's near-white settings page. The assertion is inverted on
+   * purpose, so a future change back to literals fails here rather than being
+   * discovered by someone in light mode.
+   */
+  it('always produces a palette slot, named as tokens', () => {
     for (const preset of PROVIDER_PRESETS) {
       const logo = providerLogo(preset.name, preset.id)
-      expect(logo.color, preset.id).toMatch(/^#[0-9a-f]{6}$/)
-      expect(logo.textColor, preset.id).toMatch(/^#[0-9a-f]{6}$/)
-      expect(logo.color).not.toBe(logo.textColor)
+      expect(logo.palette, preset.id).toBeGreaterThanOrEqual(1)
+      expect(logo.palette, preset.id).toBeLessThanOrEqual(8)
+      expect(logo.color, preset.id).toBe(`var(--color-avatar-${logo.palette}-bg)`)
+      expect(logo.textColor, preset.id).toBe(`var(--color-avatar-${logo.palette}-fg)`)
     }
+  })
+
+  it('spreads its presets across the palette rather than crowding one slot', () => {
+    const slots = new Set(PROVIDER_PRESETS.map((preset) => providerLogo(preset.name, preset.id).palette))
+    expect(slots.size).toBeGreaterThan(3)
   })
 })

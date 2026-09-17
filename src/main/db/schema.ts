@@ -143,6 +143,33 @@ export const chatMembers = sqliteTable(
   (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
 )
 
+/**
+ * "Always allow in this chat", made durable and visible (S5.15).
+ *
+ * S5.4 kept these in a `Set` for the life of the process on the grounds that a
+ * grant which survives a restart is a permission the user cannot see. S5.15
+ * keeps the grounds and drops the conclusion: the grants are listed with a
+ * revoke button in the chat's Group settings, and a command the policy calls
+ * `dangerous` ignores them, so persistence no longer hides anything.
+ *
+ * A pure join table like `chat_members` — the pair *is* the row, so there is no
+ * id to collide and `onConflictDoNothing` makes a second grant of the same tool
+ * a no-op. `chat_id` cascades, which is the whole of "deleting a chat deletes
+ * its grants": a grant belongs to the conversation it was given in.
+ */
+export const permissionGrants = sqliteTable(
+  'permission_grants',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    /** The tool's own name: `run_command`, or an MCP tool without its prefix. */
+    toolName: text('tool_name').notNull(),
+    createdAt: integer('created_at').notNull()
+  },
+  (table) => [primaryKey({ columns: [table.chatId, table.toolName] })]
+)
+
 /* -------------------------------------------------------------------------- */
 /* Messages                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -213,5 +240,6 @@ export type AgentRow = typeof agents.$inferSelect
 export type McpServerRow = typeof mcpServers.$inferSelect
 export type ChatRow = typeof chats.$inferSelect
 export type ChatMemberRow = typeof chatMembers.$inferSelect
+export type PermissionGrantRow = typeof permissionGrants.$inferSelect
 export type MessageRow = typeof messages.$inferSelect
 export type SettingsRow = typeof settings.$inferSelect

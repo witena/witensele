@@ -17,15 +17,20 @@ import {
   type UpdateStatus
 } from '@shared/updates'
 import {
+  COMMAND_RISK_REASONS,
   DEFAULT_APP_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
   DEFAULT_EDITOR_COMMAND,
   EDITOR_KINDS,
   LOCAL_USER_ID,
+  type CommandRisk,
+  type CommandRiskReason,
+  type CommandVerdict,
   type HandoffIntent,
   type Message,
   type MessagePart,
   type PermissionDecision,
+  type PermissionGrant,
   type Provider
 } from '@shared/types'
 
@@ -93,6 +98,8 @@ const EXPECTED_METHODS = [
   'messages.list',
   'messages.usageSummary',
   'permission.reply',
+  'permissions.grants.list',
+  'permissions.grants.revoke',
   'chat.send',
   'chat.stop',
   'chat.handoff'
@@ -122,7 +129,12 @@ describe('BACKEND_METHODS', () => {
       'mcp',
       'memory',
       'messages',
+      // Two namespaces rather than one, and deliberately: `permission.reply`
+      // answers **a** prompt and `permissions.grants.*` manages the standing
+      // grants of a chat. Folding the second into the first would have made
+      // `permission.grants.revoke` read as an operation on the pending request.
       'permission',
+      'permissions',
       'presence',
       'providers',
       'settings',
@@ -173,10 +185,19 @@ describe('defaults', () => {
         kind: 'vscode',
         command: 'code -g {path}:{line}'
       },
+      // S5.15: `run_command` is confined by `sandbox-exec` unless the user turns
+      // it off. The safe value is the default, because the setting exists for
+      // the command the profile is too tight for, not the other way round.
+      executor: {
+        sandbox: 'workdir-write'
+      },
       timeouts: {
         stallTimeoutMs: 30000,
         hardTimeoutMs: 120000,
-        toolTimeoutMs: 60000
+        toolTimeoutMs: 60000,
+        // S5.15: five minutes, much longer than the other three, because what is
+        // being waited for is a person reading a diff.
+        permissionTimeoutMs: 300000
       },
       // S7.5: the first-run card has not been skipped on an installation that
       // has never been opened, which is the only way it can ever be shown.
@@ -239,13 +260,40 @@ describe('type contracts', () => {
   it('carries the executor permission prompt and its resolution (S5.4)', () => {
     expectTypeOf<EventOf<'permission.requested'>['requestId']>().toBeString()
     expectTypeOf<EventOf<'permission.requested'>['toolName']>().toBeString()
+    // S5.15 added `'timeout'`: a prompt nobody answered is a different fact
+    // about the user than one they looked at and declined.
     expectTypeOf<EventOf<'permission.resolved'>['decision']>().toEqualTypeOf<
-      PermissionDecision | 'aborted'
+      PermissionDecision | 'aborted' | 'timeout'
     >()
     expectTypeOf<Parameters<BackendApi['permission.reply']>[0]>().toEqualTypeOf<{
       requestId: string
       decision: PermissionDecision
     }>()
+  })
+
+  it('carries the command policy verdict on a run_command prompt (S5.15)', () => {
+    // Optional, because only `run_command` has a verdict and a `normal` one is
+    // not sent at all: a card with nothing to warn about must draw no warning.
+    expectTypeOf<EventOf<'permission.requested'>['risk']>().toEqualTypeOf<CommandRisk | undefined>()
+    expectTypeOf<CommandRisk['verdict']>().toEqualTypeOf<CommandVerdict>()
+    expectTypeOf<CommandRisk['reason']>().toEqualTypeOf<CommandRiskReason | null>()
+    expect(COMMAND_RISK_REASONS).toContain('privilege-escalation')
+  })
+
+  it('lists and revokes the standing grants of one chat (S5.15)', () => {
+    expectTypeOf<Parameters<BackendApi['permissions.grants.list']>[0]>().toEqualTypeOf<{
+      chatId: string
+    }>()
+    expectTypeOf<Parameters<BackendApi['permissions.grants.revoke']>[0]>().toEqualTypeOf<{
+      chatId: string
+      toolName: string
+    }>()
+    // Revoke answers with what is left rather than `void`: the settings list is
+    // redrawn from the backend's answer, never from an optimistic removal.
+    expectTypeOf<ReturnType<BackendApi['permissions.grants.revoke']>>().toEqualTypeOf<
+      Promise<PermissionGrant[]>
+    >()
+    expectTypeOf<PermissionGrant>().toHaveProperty('createdAt')
   })
 
   it('hands a chat to its executor with the chat id and an optional intent (S5.6, S5.12)', () => {

@@ -6,7 +6,14 @@
  * a new event type costs one union member rather than a new channel on three
  * layers. Every payload is JSON serializable, timestamps are epoch milliseconds.
  */
-import type { AgentPresence, Chat, Message, MessagePart, PermissionDecision } from './types'
+import type {
+  AgentPresence,
+  Chat,
+  CommandRisk,
+  Message,
+  MessagePart,
+  PermissionDecision
+} from './types'
 
 /**
  * One increment of a streaming message.
@@ -106,6 +113,19 @@ export interface PermissionRequestedEvent {
    */
   toolName: string
   input: unknown
+  /**
+   * The command policy's verdict, for a `run_command` prompt only (S5.15).
+   *
+   * Sent with the request rather than recomputed in the renderer, because
+   * classifying a line needs the chat's working directory and the user's home —
+   * neither of which the card has, and both of which decide whether a path
+   * argument is "outside". A `dangerous` verdict is why this prompt appeared at
+   * all despite a grant, so the card shows the reason and hides "Always allow".
+   *
+   * Absent for every other tool, and for a `run_command` the policy called
+   * `normal`: a card with nothing to warn about must not draw a warning row.
+   */
+  risk?: CommandRisk
 }
 
 /**
@@ -113,14 +133,20 @@ export interface PermissionRequestedEvent {
  *
  * Always emitted exactly once per `permission.requested`, which is what lets the
  * renderer dismiss a card without knowing why it went away: `allow`, `deny` and
- * `allowAlways` are the user's own answers, and `aborted` is the run being
- * stopped (or the process shutting down) while the prompt was still open.
+ * `allowAlways` are the user's own answers, `aborted` is the run being stopped
+ * (or the process shutting down) while the prompt was still open, and `timeout`
+ * is `AppTimeouts.permissionTimeoutMs` elapsing with nobody having answered
+ * (S5.15).
+ *
+ * `timeout` is its own value rather than a second spelling of `deny` because the
+ * two are different facts about the user: one of them looked at the call and
+ * said no, and the other never saw it. The model is told which.
  */
 export interface PermissionResolvedEvent {
   type: 'permission.resolved'
   requestId: string
   chatId: string
-  decision: PermissionDecision | 'aborted'
+  decision: PermissionDecision | 'aborted' | 'timeout'
 }
 
 /**

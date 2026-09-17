@@ -19,7 +19,7 @@ import type {
   Chat,
   ChatGoal,
   ChatGoalStatus,
-  ChatSettings,
+  ChatSettingsPatch,
   ValidationReason
 } from '@shared/types'
 import { BackendClientError } from '../lib/backend'
@@ -188,8 +188,15 @@ export interface ChatsState {
    * new one would be three chances to write a stale one.
    */
   setMembers: (chatId: string, agentIds: string[]) => Promise<void>
-  /** Merges a patch into a chat's orchestration settings. Persists immediately. */
-  updateSettings: (chatId: string, patch: Partial<ChatSettings>) => Promise<void>
+  /**
+   * Merges a patch into a chat's orchestration settings. Persists immediately.
+   *
+   * A `ChatSettingsPatch` rather than a `Partial<ChatSettings>` since S5.16:
+   * `closingAgentId: null` is how the "Closing speaker" select goes back to
+   * "first in speaking order", and a field that can be cleared needs a word for
+   * it that survives the wire.
+   */
+  updateSettings: (chatId: string, patch: ChatSettingsPatch) => Promise<void>
   /**
    * Binds the chat to a local folder, or unbinds it with `null`.
    *
@@ -546,6 +553,22 @@ export function useChatMemberIds(chatId: string | null): string[] {
 export function useChatWorkdir(chatId: string | null): string | null {
   return useChatsStore(
     (state) => (chatId ? (state.chats.find((chat) => chat.id === chatId)?.workdir ?? null) : null)
+  )
+}
+
+/**
+ * The goal of one chat, or `null`.
+ *
+ * The sibling of `useChatWorkdir`, added for the same reason and read by the
+ * same component: the conclusion card (S5.16) offers "Write to the deliverable"
+ * under the hand-off rules, which need the goal, and a message row deep inside a
+ * virtualized list is the wrong place to receive it as a prop. The stored goal
+ * is one object that is replaced wholesale when it changes, so the identity
+ * check re-renders a row only when it really did.
+ */
+export function useChatGoal(chatId: string | null): ChatGoal | null {
+  return useChatsStore(
+    (state) => (chatId ? (state.chats.find((chat) => chat.id === chatId)?.goal ?? null) : null)
   )
 }
 

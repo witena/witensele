@@ -26,7 +26,9 @@ can hold a real conversation and still holds it after a restart.
 - The renderer stores behind all of it (`chats`, `messages`, `run`, `presence`,
   `agents`, `providers`) and the single event subscription that feeds them.
 - The right column (S2.2): the member picker, removing a member, drag-to-reorder
-  the speaking order, and the group-settings block bound to `ChatSettings`.
+  the speaking order, and the group-settings block bound to `ChatSettings`. Since
+  S5.15 that block ends with **Always allowed**, the list of standing permission
+  grants this chat has been given, one revoke button per row.
 - The message row's labels fed by the run (S2.3): `Round n`,
   `Replying to @x` from `Message.inReplyTo`, and `@Name` highlighted in the body.
 - `ensureDefaultAgent`: the bootstrap agent a chat is given **only** while the
@@ -56,6 +58,12 @@ can hold a real conversation and still holds it after a restart.
   [`orchestration`](../orchestration/context.md)'s; this feature owns the place
   it sits and the chat facts it reads (`workdir`, the member list, whether a run
   is going).
+- **The conclusion** (S5.16): the card a message carrying a `ConclusionPart` is
+  drawn as — the label, the accent edge, the speaker underneath, **Copy** and
+  **Write to the deliverable** — plus the header's "Conclusion" chip, the
+  chat-list preview line and the "Closing speaker" select in the group settings.
+  What *produces* a conclusion is [`orchestration`](../orchestration/context.md)'s
+  closing turn; this feature owns everything the user does with one.
 - The three renderer surfaces the executor needs (S5.5): the **permission card**
   above the composer (`stores/permissions.ts` plus `permission-card.tsx`), the
   **diff block** a `DiffPart` renders as, and the `path:line` chip a
@@ -74,6 +82,7 @@ can hold a real conversation and still holds it after a restart.
 | Generating the title itself | [`orchestration`](../orchestration/context.md) — `ChatRunner` writes it after the first run (S4.3); this feature owns the field, the rename and the list row |
 | The `executor` **role** itself — the control, the badge's copy, what the role means | [`agents`](../agents/context.md). This feature owns the *membership* rule and the surfaces that draw the badge |
 | The executor's file, shell and git tools, the permission **gate** and the `DiffPart`s the backend appends | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md). This feature owns the folder they are confined to and the three surfaces that draw their results — not what they may do |
+| The command policy, the write sandbox, the prompt timeout, and what a grant *means* | [`executor`](../executor/context.md), S5.15. This feature hosts the **Always allowed** list in the group settings, exactly as it hosts the Goal block: the panel is this feature's, the rules behind the rows are not |
 | The wording of the goal in a system prompt, in either language, and the hand-off line that names the deliverable | [`agent-turn`](../agent-turn/context.md) and [`executor`](../executor/context.md), S5.10. This feature owns the goal as **data** and as a **control**; they own what a model is told about it |
 | Placing a goal's `materials` in every member's context, the workspace briefing, and the read-only tools every member now gets | [`agent-turn`](../agent-turn/context.md) and [`executor`](../executor/context.md), S5.11 `[x]`. This feature records the materials, validates that they exist inside `workdir`, and lists them in the panel; what a model is shown of them, and in what order, is theirs |
 | Appending a `FileRefPart` when an executor turn produces the deliverable, and what the executor is told to write | [`executor`](../executor/context.md) and [`agent-turn`](../agent-turn/context.md), S5.12. This feature owns the query the chip reads and the moments the renderer asks it |
@@ -116,6 +125,7 @@ the next round boundary rather than mid-turn.
 | `chat.send` rejects with `validation('chat has no members')`, and the composer stays enabled | Disable the composer; run with nobody and finish silently | A disabled composer does not say *why*. The rejection prints one line under the box and the member panel prints the fix |
 | `ChatPatch.settings` is a partial that the backend merges | Send the whole `ChatSettings` from every control | Two controls changed quickly would otherwise overwrite each other, and the caller would have to hold a copy of the stored object |
 | The goal is **one JSON field replaced whole**, not four patchable ones (S5.10) | A field patch per control, like `ChatSettings` | `materials` is a list the user removes from, and a merge has no spelling for "this list is now empty". The cost is that the Goal block has to hold a draft and send the whole object, which it does |
+| **Always allowed** goes in the group settings, last (S5.15) | A Settings page section; a row on the permission card; its own dialog | A grant is per **chat**, so the place it belongs is the panel that already holds everything else that is per chat. Last in the block because it is the only row there that is a *record of something the user did* rather than a setting they are making, and because a chat that has granted nothing should not push the folder and the goal down the column |
 | A goal's paths are **relative to `workdir`**; the folder itself is absolute (S5.10) | Store absolute paths, as the dialogs return them | The folder is a machine-local binding; the goal describes the project and has to survive the folder being moved, cloned or restored. That makes the conversion — and the "you picked something outside this folder" refusal — the **renderer's** job, because no native dialog can be confined to a directory |
 | "Delivered" is a **query** (`chats.goalStatus`), not a column on `Chat` (S5.10) | A boolean the backend writes when it notices; a field filled in on `chats.get` / `chats.list` | It is a fact about the filesystem, so a stored value is wrong the moment anything creates, moves or deletes the file — including something that is not this app. A derived field on the domain type is the same mistake this table already refused for the member count. The renderer asks when a chat is opened and whenever that chat changes |
 | A goal **is** its description: blank means no goal (S5.10) | Allow an empty description; add a "Clear goal" button | A kind on its own says nothing a model can act on, so an empty description is not a goal that is merely unfinished — it is no goal. That gives the block its way back out for free, through the same box that created it, instead of a second control that exists only to undo the first |
@@ -137,11 +147,23 @@ the next round boundary rather than mid-turn.
 | The action prompts are locale keys, not English constants | One English sentence for both languages | An agent answers in the language it is addressed in; a Chinese UI asking in English gets an English summary |
 | The autocomplete's query may contain spaces, bounded at 40 characters | Stop the query at the first space | A member can be called `Ann Lee`, and a completion that stopped at the space could never reach her. The bound plus "closes when nothing matches" keeps a stray `@` from leaving a popover open behind a paragraph |
 | The autocomplete writes the textarea's value and caret **synchronously** | Restore the caret in `requestAnimationFrame` | The deferred version looks right by hand and races anything that reads or replaces the box in between — which is how it first showed up, as a flaky end-to-end assertion |
+| **The conclusion is a card around the message, not a panel above the chat** (S5.16) | Pin a copy of the conclusion to the top of the transcript; a side panel listing every conclusion | The transcript is the record, in the order things happened; a floating duplicate is a second thing to keep in step with it and pushes the conversation down the screen for ever. The header chip is how it is found from the top of a long chat, and it *scrolls to* the card rather than repeating it |
+| **Copy goes through the browser clipboard, not through `BackendClient`** (S5.16) | A `system.copyToClipboard` method beside `system.openInEditor` | Rule #6 is that the renderer reaches the **backend** only through that client; the clipboard is not the backend, it belongs to the window the user is in. A method would also put a desktop capability into a contract the server build has to implement |
+| **"Write to the deliverable" is hidden when the goal is not a document, and disabled otherwise** (S5.16) | Always show it; never show it outside a document chat | A permanently dead control on a card in a discussion chat explains a feature that chat is not using. The other three refusals — no folder, no executor, a run in flight — are states the user can act on, so there the button stays with its reason, exactly like the hand-off button |
+| **Who closes is a chat setting, not a per-run choice** (S5.16) | Ask at the moment the group agrees; derive it from the discussion | The run has already ended by then and a modal in the middle of the answer is worse than a default. `closingAgentId` is one field of the settings column, the select offers the chat's own members, and a stale value costs the preference and never the conclusion |
+| **The chat-list preview replaces the member count rather than joining it** (S5.16) | A second line under the title; show both separated by a dot | The row is one line high and the count is on screen the moment the chat is opened. What a discussion concluded is the better answer to "which one was this" |
 
 ## Open questions
 
 - Reordering is mouse-only. `ChatRunner` reads `position` every round, so the
   order matters more since S2.3 and a keyboard path for it is still missing.
+- Whether a conclusion should be **exportable** beyond the clipboard — a file, a
+  share sheet, an entry in a "decisions" list across chats. S5.16 deliberately
+  shipped the two destinations that need no new concept: the clipboard, and the
+  deliverable this chat already names.
+- Whether the chat-list preview should cover chats whose transcript has never
+  been loaded, which would need a backend query of its own rather than the
+  messages store.
 - Whether the member count belongs on `Chat` after all: membership is now
   mutable and the left column re-reads `chats.members.list` per chat to follow it.
 - Upward paging: the transcript is virtualized but still loads one page of 100,

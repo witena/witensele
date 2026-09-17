@@ -14,6 +14,11 @@
  *
  * The menu opens from the row's kebab button *or* from a right-click on the row,
  * because a right-click is what people try first in a list like this.
+ *
+ * Since S5.16 the subtitle is the chat's **conclusion** when it has one — the
+ * first line of it, behind the translated label — and the member count only
+ * otherwise. What a discussion decided is what a user scans this column for; the
+ * number of agents in it is a fact they already know.
  */
 import clsx from 'clsx'
 import { MoreHorizontal } from 'lucide-react'
@@ -22,6 +27,7 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type { Chat } from '@shared/types'
 import { groupChats, type ChatGroupId } from '../../stores/chats'
+import type { ConclusionPreviews } from './conclusion'
 import { Button, IconButton, Input } from '../ui'
 
 /** Literal `t()` calls so the used-keys guard can see all three headings. */
@@ -41,6 +47,16 @@ export interface ChatListProps {
   selectedId: string | null
   /** Member count per chat id; absent means "not loaded", which renders as 0. */
   memberCounts: Record<string, number>
+  /**
+   * The first line of a chat's conclusion, per chat id (S5.16).
+   *
+   * Absent — every chat, until its transcript has been read — leaves the row
+   * showing the member count. The preview replaces that count rather than
+   * joining it, because the row is one line: what a chat concluded is a better
+   * answer to "which one was this" than how many agents are in it, and the count
+   * is on the screen anyway the moment the chat is opened.
+   */
+  conclusionPreviews?: ConclusionPreviews
   onSelect: (chatId: string) => void
   onRename: (chatId: string, title: string) => void
   onDelete: (chatId: string) => void
@@ -76,6 +92,7 @@ export function ChatList(props: ChatListProps): React.JSX.Element {
           {group.chats.map((chat) => {
             const selected = chat.id === props.selectedId
             const renaming = renamingId === chat.id
+            const preview = props.conclusionPreviews?.[chat.id]
 
             if (renaming) {
               return (
@@ -109,15 +126,28 @@ export function ChatList(props: ChatListProps): React.JSX.Element {
                   }}
                   className={clsx(
                     'group flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left',
-                    selected ? 'bg-bg-hover text-fg' : 'text-fg-muted hover:bg-bg-hover/60'
+                    selected ? 'bg-bg-hover text-fg' : 'text-fg-muted hover:bg-bg-subtle'
                   )}
                 >
                   <span data-testid="chat-item-title" className="w-full truncate text-[13px]">
                     {chat.title}
                   </span>
-                  <span className="text-[11px] text-fg-faint">
-                    {t('chat.memberCount', { members: props.memberCounts[chat.id] ?? 0 })}
-                  </span>
+                  {preview === undefined ? (
+                    <span className="text-[11px] text-fg-faint">
+                      {t('chat.memberCount', { members: props.memberCounts[chat.id] ?? 0 })}
+                    </span>
+                  ) : (
+                    // The label is translated, the sentence is the group's own
+                    // words: `chat.conclusionPreview` interpolates it rather than
+                    // concatenating two nodes, so a language that puts the label
+                    // last can (S5.16).
+                    <span
+                      data-testid="chat-item-conclusion"
+                      className="w-full truncate text-[11px] text-fg-faint"
+                    >
+                      {t('chat.conclusionPreview', { text: preview })}
+                    </span>
+                  )}
                 </button>
 
                 <IconButton

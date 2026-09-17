@@ -9,7 +9,7 @@
 import clsx from 'clsx'
 import type { Agent, Provider } from '@shared/types'
 import { Avatar, Badge } from '../ui'
-import { agentModelLabel, isExecutor } from './agent-display'
+import { agentModelLabel, avatarStyle, isExecutor } from './agent-display'
 
 export interface AgentListProps {
   agents: readonly Agent[]
@@ -52,8 +52,7 @@ export function AgentList({
         >
           <Avatar
             text={agent.avatar.text}
-            color={agent.avatar.color}
-            textColor={agent.avatar.textColor}
+            {...avatarStyle(agent.avatar)}
             size="lg"
           />
           <span className="flex min-w-0 flex-col gap-px">

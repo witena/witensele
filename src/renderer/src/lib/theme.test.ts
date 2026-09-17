@@ -10,7 +10,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveTheme, WINDOW_BACKGROUND } from '@shared/theme'
-import { THEME_SETTINGS } from '@shared/types'
+import { AVATAR_PALETTE_INDEXES, THEME_SETTINGS } from '@shared/types'
+import { AA_LARGE, AA_NORMAL, contrastRatio, formatRatio } from './contrast'
 import { activateTheme, applyTheme, THEME_ATTRIBUTE } from './theme'
 
 describe('resolveTheme', () => {
@@ -176,6 +177,34 @@ function lightBlock(): string {
   return css.slice(start, end)
 }
 
+/**
+ * One `@media (…) { … }` block, by the condition it opens with.
+ *
+ * Counts braces rather than looking for `\n}`, because unlike the two palette
+ * blocks a media query *contains* rules — the first `\n}` inside one is the end
+ * of its `:root` selector, not of the query.
+ */
+function mediaBlock(condition: string): string {
+  const start = css.indexOf(`@media (${condition})`)
+  expect(start, condition).toBeGreaterThan(-1)
+  let depth = 0
+  for (let index = css.indexOf('{', start); index < css.length; index += 1) {
+    if (css[index] === '{') depth += 1
+    else if (css[index] === '}') {
+      depth -= 1
+      if (depth === 0) return css.slice(start, index + 1)
+    }
+  }
+  throw new Error(`Unclosed @media (${condition})`)
+}
+
+/** The two selectors an appearance-aware block has to state separately. */
+function blocksInside(media: string): { dark: string; light: string } {
+  const lightStart = media.indexOf(":root[data-theme='light']")
+  expect(lightStart).toBeGreaterThan(-1)
+  return { dark: media.slice(0, lightStart), light: media.slice(lightStart) }
+}
+
 function tokensIn(block: string): string[] {
   return [...block.matchAll(/(--color-[a-z0-9-]+)\s*:/g)].map((match) => match[1] as string)
 }
@@ -247,5 +276,180 @@ describe('the light palette', () => {
     // colour before the first frame — the one bug a running app cannot correct.
     expect(valueOf(themeBlock(), '--color-bg-base')).toBe(WINDOW_BACKGROUND.dark)
     expect(valueOf(lightBlock(), '--color-bg-base')).toBe(WINDOW_BACKGROUND.light)
+  })
+
+  it('defines all eight avatar slots, both ways, in both palettes', () => {
+    // A tile painted from `var(--color-avatar-6-fg)` that no block defines is an
+    // invisible monogram, and only on whichever agent happened to pick slot 6.
+    for (const block of [themeBlock(), lightBlock()]) {
+      for (const index of AVATAR_PALETTE_INDEXES) {
+        expect(valueOf(block, `--color-avatar-${index}-bg`), `${index}-bg`).toMatch(/^#/)
+        expect(valueOf(block, `--color-avatar-${index}-fg`), `${index}-fg`).toMatch(/^#/)
+      }
+    }
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Contrast (S5.17)                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** The six surfaces anything in the app can be drawn on. */
+const SURFACES = ['base', 'panel', 'rail', 'elevated', 'hover', 'muted'].map(
+  (name) => `--color-bg-${name}`
+)
+
+/**
+ * The foreground steps that carry running text, and the bar each is held to.
+ *
+ * `fg`, `fg-secondary` and `fg-muted` are body copy — names, message bodies,
+ * descriptions, every label on every form — so they are AA-normal on **every**
+ * surface, not just on the one the designer had in mind. The accent joins them
+ * because it is the colour of a link and of a primary button's label.
+ *
+ * `fg-dim` and `fg-faint` are the small print: timestamps, hints under a field,
+ * the model line under an agent's name. They are held to AA-large (3:1), which
+ * is the floor WCAG puts under *any* meaningful pixel — and S5.17 raised both,
+ * because on `bg-hover` the old values were 4.00:1 and **2.74:1**, so a hovered
+ * row failed even that.
+ */
+const TEXT_STEPS: readonly { token: string; bar: number }[] = [
+  { token: '--color-fg', bar: AA_NORMAL },
+  { token: '--color-fg-secondary', bar: AA_NORMAL },
+  { token: '--color-fg-muted', bar: AA_NORMAL },
+  { token: '--color-accent', bar: AA_NORMAL },
+  { token: '--color-danger', bar: AA_NORMAL },
+  { token: '--color-fg-dim', bar: AA_LARGE },
+  { token: '--color-fg-faint', bar: AA_LARGE }
+]
+
+/** Reads a palette block into a lookup, so a test can ask for any token by name. */
+function paletteOf(block: string): (token: string) => string {
+  return (token) => {
+    const value = valueOf(block, token)
+    expect(value, token).toBeDefined()
+    return value as string
+  }
+}
+
+describe('palette contrast', () => {
+  const palettes = [
+    { name: 'dark', read: paletteOf(themeBlock()) },
+    { name: 'light', read: paletteOf(lightBlock()) }
+  ]
+
+  it.each(palettes)('keeps every text step readable on every surface ($name)', ({ read }) => {
+    const failures: string[] = []
+    for (const step of TEXT_STEPS) {
+      for (const surface of SURFACES) {
+        const ratio = contrastRatio(read(step.token), read(surface))
+        if (ratio < step.bar) {
+          failures.push(`${step.token} on ${surface}: ${formatRatio(ratio)} < ${step.bar}`)
+        }
+      }
+    }
+    expect(failures).toEqual([])
+  })
+
+  it.each(palettes)('keeps every monogram readable on its own tile ($name)', ({ read }) => {
+    const failures: string[] = []
+    for (const index of AVATAR_PALETTE_INDEXES) {
+      const ratio = contrastRatio(read(`--color-avatar-${index}-fg`), read(`--color-avatar-${index}-bg`))
+      // A monogram is bold, but it is also 10–13px: AA-normal, not AA-large.
+      if (ratio < AA_NORMAL) failures.push(`avatar ${index}: ${formatRatio(ratio)}`)
+    }
+    const neutral = contrastRatio(read('--color-avatar-neutral-fg'), read('--color-avatar-neutral-bg'))
+    if (neutral < AA_NORMAL) failures.push(`avatar neutral: ${formatRatio(neutral)}`)
+    const user = contrastRatio(read('--color-avatar-user-fg'), read('--color-avatar-user'))
+    if (user < AA_NORMAL) failures.push(`avatar user: ${formatRatio(user)}`)
+    expect(failures).toEqual([])
+  })
+
+  it.each(palettes)('keeps every status pill readable on its own surface ($name)', ({ read }) => {
+    const failures: string[] = []
+    for (const tone of ['ok', 'warn', 'idle']) {
+      const ratio = contrastRatio(read(`--color-status-${tone}`), read(`--color-status-${tone}-surface`))
+      if (ratio < AA_NORMAL) failures.push(`status ${tone}: ${formatRatio(ratio)}`)
+    }
+    expect(failures).toEqual([])
+  })
+
+  it.each(palettes)('keeps a presence dot visible on the panel it sits on ($name)', ({ read }) => {
+    // A dot is not text; AA-large is the non-text floor and the right bar here.
+    const failures: string[] = []
+    for (const state of ['available', 'working', 'away', 'offline']) {
+      const ratio = contrastRatio(read(`--color-presence-${state}`), read('--color-bg-panel'))
+      if (ratio < AA_LARGE) failures.push(`presence ${state}: ${formatRatio(ratio)}`)
+    }
+    expect(failures).toEqual([])
+  })
+
+  it('keeps the light foreground steps at least as strong as the dark ones', () => {
+    // S5.8's promise, finally measured: the light theme is not allowed to be the
+    // quieter of the two, because "it looked fine on my screen" is how a palette
+    // that is 3:1 in a bright room gets shipped.
+    //
+    // The *neutral* steps only. The accent and the danger hue are held to AA
+    // above and to nothing else: they are one hue each, and forcing a light red
+    // to match a pale dark red's 7:1 would produce a near-black that no longer
+    // reads as a warning.
+    const dark = paletteOf(themeBlock())
+    const light = paletteOf(lightBlock())
+    const failures: string[] = []
+    for (const step of TEXT_STEPS.filter((candidate) => candidate.token.startsWith('--color-fg'))) {
+      const darkRatio = contrastRatio(dark(step.token), dark('--color-bg-base'))
+      const lightRatio = contrastRatio(light(step.token), light('--color-bg-base'))
+      // Half a point of slack: these are two different hue families, and the
+      // rule is "no quieter", not "identical to two decimal places".
+      if (lightRatio < darkRatio - 0.5) {
+        failures.push(`${step.token}: light ${formatRatio(lightRatio)} < dark ${formatRatio(darkRatio)}`)
+      }
+    }
+    expect(failures).toEqual([])
+  })
+})
+
+describe('the accessibility preferences', () => {
+  it('answers prefers-contrast in both appearances, not just the base one', () => {
+    // The light palette's selector outranks a bare `:root` whatever the source
+    // order, so a single unqualified block would strengthen dark and silently do
+    // nothing in light. That is the mistake this assertion exists to catch.
+    const { dark, light } = blocksInside(mediaBlock('prefers-contrast: more'))
+    expect([...new Set(tokensIn(dark))].sort()).toEqual([...new Set(tokensIn(light))].sort())
+    expect(tokensIn(dark).length).toBeGreaterThan(0)
+  })
+
+  it('raises the quiet steps rather than restating them', () => {
+    const media = mediaBlock('prefers-contrast: more')
+    const { dark, light } = blocksInside(media)
+    const base = { normal: paletteOf(themeBlock()), more: paletteOf(dark) }
+    const alt = { normal: paletteOf(lightBlock()), more: paletteOf(light) }
+
+    for (const palette of [base, alt]) {
+      for (const token of tokensIn(dark)) {
+        const before = contrastRatio(palette.normal(token), palette.normal('--color-bg-base'))
+        const after = contrastRatio(palette.more(token), palette.normal('--color-bg-base'))
+        expect(after, token).toBeGreaterThan(before)
+      }
+    }
+  })
+
+  it('makes the one translucent surface opaque under prefers-reduced-transparency', () => {
+    const { dark, light } = blocksInside(mediaBlock('prefers-reduced-transparency: reduce'))
+    for (const block of [dark, light]) {
+      expect(tokensIn(block)).toEqual(['--color-bg-subtle'])
+      // Six digits, not eight: the whole point is that no alpha channel is left.
+      expect(valueOf(block, '--color-bg-subtle')).toMatch(/^#[0-9a-f]{6}$/)
+    }
+  })
+
+  it('has exactly one token with an alpha channel to answer for', () => {
+    // If a second translucent token appears, the media query above has to grow
+    // with it — and this is the assertion that says so, rather than a reviewer
+    // noticing a `/60` in a diff.
+    const withAlpha = (block: string): string[] =>
+      tokensIn(block).filter((token) => /^#[0-9a-f]{8}$/.test(valueOf(block, token) ?? ''))
+    expect(withAlpha(themeBlock())).toEqual(['--color-bg-subtle'])
+    expect(withAlpha(lightBlock())).toEqual(['--color-bg-subtle'])
   })
 })

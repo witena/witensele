@@ -61,7 +61,7 @@ export function McpChecklist({
               data-blocked={blocked ? 'true' : 'false'}
               className={clsx(
                 'flex items-start gap-2.5 px-3 py-2.5',
-                unavailable ? 'opacity-55' : 'cursor-pointer hover:bg-bg-hover/50'
+                unavailable ? 'opacity-55' : 'cursor-pointer hover:bg-bg-subtle'
               )}
             >
               <input

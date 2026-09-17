@@ -365,7 +365,19 @@ export function createAppContext(options: AppContextOptions): AppContext {
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
     memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
-    permissions: createPermissionGate({ emit: (event) => events.emit(event) }),
+    permissions: createPermissionGate({
+      emit: (event) => events.emit(event),
+      // The table, not a `Set`: S5.15 makes a grant something the user can see
+      // in Group settings and take back, which is what S5.4's "never persist"
+      // rule was protecting against in the first place.
+      grants: {
+        has: (chatId, toolName) => repos.permissionGrants.has(chatId, toolName),
+        grant: (chatId, toolName) => repos.permissionGrants.grant(chatId, toolName)
+      },
+      // Read per prompt rather than captured once, so changing the setting
+      // applies to the next card rather than to the next launch.
+      timeoutMs: () => repos.settings.get(options.userId ?? LOCAL_USER_ID).timeouts.permissionTimeoutMs
+    }),
     anthropicCli: options.anthropicCli ?? createAnthropicCli(),
     googleCli: options.googleCli ?? createGoogleCli(),
     // Constructed but never started: `start()` is called by `src/main/index.ts`

@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next'
 import { MENTION_ALL_KEYWORDS } from '@shared/mentions'
 import type { Agent, ChatGoal } from '@shared/types'
 import { validationReasonMessage } from '../../i18n/errors'
+import { avatarStyle } from '../agents/agent-display'
 import { Avatar, SectionTitle } from '../ui'
 import { handoffBlocker } from './handoff'
 
@@ -142,8 +143,7 @@ export function ActionsCard({
             >
               <Avatar
                 text={agent.avatar.text}
-                color={agent.avatar.color}
-                {...(agent.avatar.textColor ? { textColor: agent.avatar.textColor } : {})}
+                {...avatarStyle(agent.avatar)}
                 size="md"
               />
               <span className="min-w-0 truncate text-[13px] text-fg">{agent.name}</span>

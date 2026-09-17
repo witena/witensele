@@ -101,9 +101,9 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 |---|---|
 | `common` | App name, OK / Cancel / Save / Delete / Add / Search, loading, generic error |
 | `nav` | The three navigation rail entries |
-| `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, and since S5.5 the executor's permission card, the diff block and the file-reference chip |
+| `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, since S5.5 the executor's permission card, the diff block and the file-reference chip, and since S5.15 the `commandRisk.*` subtree (one line per `CommandRiskReason`) and the Always allowed block's four keys |
 | `agents` | Agent list and configuration form labels, plus the `templates.*` subtree (S7.5): one description per entry of `@shared/agent-templates`, looked up by a **runtime** key, so `locales.test.ts` checks the subtree against the table in both directions the way it already does for the MCP presets |
-| `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` and S5.7 extended with the Editor block's seven `editor*` keys |
+| `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` S5.7 extended with the Editor block's seven `editor*` keys and S5.15 with the Sandbox block's four — plus, under `timeouts`, S5.15's `permission` / `permissionHint` |
 | `presence` | The four presence states |
 | `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`). `errors.test.ts` asserts the namespace holds **exactly** the codes plus the reasons, in both directions, so a code added to the shared union without copy fails there rather than on screen (S5.3 added two of each; S5.13 three more codes, one per way the Google Cloud SDK can be unready; S5.6 three more reasons, for the hand-off's three refusals; S5.7 two more, for the two ways a path can be refused by `system.openInEditor`; S5.10 nine more, one per field of a chat goal that can be wrong — two of which the **renderer** raises itself, because a native dialog cannot be confined to a folder and the conversion is where that is noticed; S7.6 one more code, `key_unreadable`, for an API key encrypted by a previous installation) |
 | `notices` | Backend-authored notices — the keys `SystemNoticePart.key` may take |
@@ -151,6 +151,19 @@ the rule this feature keeps coming back to: a parameter is for a value inside a
 sentence, and these are two different sentences — one says "implement what the
 group decided", the other names a file. The error key follows the S5.2 shape
 exactly, so the disabled tooltip and the backend's rejection are one string.
+
+S5.16 added ten `chat.*` keys and no notice key at all, which is the interesting
+part. Eight of them are the conclusion — `conclusion`, `conclusionBy`,
+`conclusionCopy` / `conclusionCopied`, `conclusionDeliver` /
+`conclusionDeliverTitle`, `conclusionChipTitle` and `conclusionPreview` — and two
+are the "Closing speaker" select (`closingSpeaker`, `closingSpeakerFirst`). The
+`conclusionPreview` key is the one worth reading: the chat list shows a label in
+front of the group's own sentence, and the label is interpolated **around** the
+sentence (`"Conclusion: {{text}}"`) rather than concatenated as two nodes, so a
+language that puts the label last can. What is *not* here: the thing that marks a
+conclusion is a `ConclusionPart`, a flag with no text, so it needs no key and no
+notice — the backend says "this message is the answer" and the renderer chooses
+every word around it.
 
 S7.5 added three groups and one rule worth repeating. `chat.onboarding.*` is the
 first-run card; `agents.templates.*` is described above; `settings.about.*` plus
@@ -212,7 +225,11 @@ trap described in [frontend.md](./frontend.md).
 - **Runtime keys are unchecked.** `t(option.labelKey)`,
   `t('notices.' + part.key)` and the gallery's `settings.mcp.presets.<id>` cannot
   be resolved statically; `notices.test.ts` covers the second by exercising real
-  keys, and `locales.test.ts` covers the third against the preset table.
+  keys, and `locales.test.ts` covers the third against the preset table. S5.15's
+  sixteen `chat.commandRisk.*` lines avoid the problem instead of covering it:
+  `command-risk.ts` is a `switch` of sixteen literal `t()` calls, which the
+  ordinary guard resolves, and its own test then checks both locale files in
+  both directions anyway.
 - **No plural or gender rules** beyond i18next's defaults, because nothing needs
   them yet. Adding them is a locale-file change, not a code change.
 - **`zh-TW` is folded into `zh-CN`.** Adding it means a third resource and one

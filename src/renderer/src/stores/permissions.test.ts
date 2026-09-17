@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackendClient, BackendMethod } from '@shared/backend'
 import type { BackendEvent } from '@shared/events'
-import type { PermissionDecision } from '@shared/types'
+import type { CommandRisk, PermissionDecision, PermissionGrant } from '@shared/types'
 import { applyBackendEvent } from '../lib/event-bridge'
 import { resetBackend, setBackend } from '../lib/backend-provider'
 import { pendingForChat, usePermissionsStore } from './permissions'
@@ -27,13 +27,13 @@ interface Call {
   input: unknown
 }
 
-function fakeBackend(failure?: Error): Call[] {
+function fakeBackend(failure?: Error, answers: Partial<Record<BackendMethod, unknown>> = {}): Call[] {
   const calls: Call[] = []
   setBackend({
     invoke: (async (method: BackendMethod, input: unknown) => {
       calls.push({ method, input })
       if (failure) throw failure
-      return undefined
+      return answers[method]
     }) as BackendClient['invoke'],
     subscribe: () => () => {}
   })
@@ -42,7 +42,7 @@ function fakeBackend(failure?: Error): Call[] {
 
 function requested(
   requestId: string,
-  overrides: Partial<{ chatId: string; toolName: string; input: unknown }> = {}
+  overrides: Partial<{ chatId: string; toolName: string; input: unknown; risk: CommandRisk }> = {}
 ): BackendEvent {
   return {
     type: 'permission.requested',
@@ -50,12 +50,17 @@ function requested(
     chatId: overrides.chatId ?? CHAT,
     agentId: AGENT,
     toolName: overrides.toolName ?? 'write_file',
-    input: overrides.input ?? { path: 'NOTES.md', content: '# Notes\n' }
+    input: overrides.input ?? { path: 'NOTES.md', content: '# Notes\n' },
+    ...(overrides.risk ? { risk: overrides.risk } : {})
   }
 }
 
-function resolved(requestId: string, decision: PermissionDecision | 'aborted'): BackendEvent {
-  return { type: 'permission.resolved', requestId, chatId: CHAT, decision }
+function resolved(
+  requestId: string,
+  decision: PermissionDecision | 'aborted' | 'timeout',
+  chatId = CHAT
+): BackendEvent {
+  return { type: 'permission.resolved', requestId, chatId, decision }
 }
 
 const idsFor = (chatId: string): string[] =>
@@ -64,7 +69,7 @@ const idsFor = (chatId: string): string[] =>
   )
 
 beforeEach(() => {
-  usePermissionsStore.setState({ pending: {}, replyingById: {}, seq: 0 })
+  usePermissionsStore.setState({ pending: {}, replyingById: {}, seq: 0, grantsByChat: {} })
 })
 
 afterEach(() => {
@@ -169,5 +174,100 @@ describe('permissions store', () => {
   it('ignores a resolution for a prompt it never saw', () => {
     applyBackendEvent(resolved('request-ghost', 'allow'))
     expect(usePermissionsStore.getState().pending).toEqual({})
+  })
+})
+
+describe('permissions store, command risk (S5.15)', () => {
+  const risk: CommandRisk = { verdict: 'dangerous', reason: 'git-push' }
+
+  it('carries the verdict onto the card', () => {
+    applyBackendEvent(requested('request-1', { toolName: 'run_command', risk }))
+    expect(usePermissionsStore.getState().pending['request-1']?.risk).toEqual(risk)
+  })
+
+  it('leaves the field absent when the event carried none', () => {
+    // Absent rather than `{ verdict: 'normal' }`: the card decides what to draw
+    // by asking whether there is a verdict at all.
+    applyBackendEvent(requested('request-1'))
+    expect(usePermissionsStore.getState().pending['request-1']).not.toHaveProperty('risk')
+  })
+
+  it('drops a card that timed out, like any other resolution', () => {
+    applyBackendEvent(requested('request-1'))
+    applyBackendEvent(resolved('request-1', 'timeout'))
+    expect(idsFor(CHAT)).toEqual([])
+  })
+})
+
+describe('permissions store, grants (S5.15)', () => {
+  const grant = (toolName: string): PermissionGrant => ({
+    chatId: CHAT,
+    toolName,
+    createdAt: 1
+  })
+
+  it('loads a chat’s grants on demand', async () => {
+    const calls = fakeBackend(undefined, {
+      'permissions.grants.list': [grant('run_command')]
+    })
+
+    await usePermissionsStore.getState().loadGrants(CHAT)
+
+    expect(calls).toEqual([{ method: 'permissions.grants.list', input: { chatId: CHAT } }])
+    expect(usePermissionsStore.getState().grantsByChat[CHAT]).toEqual([grant('run_command')])
+  })
+
+  it('reloads after an allowAlways, so the panel shows what was just granted', async () => {
+    const calls = fakeBackend(undefined, {
+      'permissions.grants.list': [grant('run_command')]
+    })
+    applyBackendEvent(requested('request-1', { toolName: 'run_command' }))
+
+    applyBackendEvent(resolved('request-1', 'allowAlways'))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(calls.map((call) => call.method)).toEqual(['permissions.grants.list'])
+  })
+
+  it('does not reload for a plain allow', () => {
+    const calls = fakeBackend()
+    applyBackendEvent(requested('request-1'))
+    applyBackendEvent(resolved('request-1', 'allow'))
+    expect(calls).toEqual([])
+  })
+
+  it('redraws a revoke from the backend’s remaining list', async () => {
+    const calls = fakeBackend(undefined, {
+      'permissions.grants.revoke': [grant('write_file')]
+    })
+    usePermissionsStore.setState({ grantsByChat: { [CHAT]: [grant('run_command'), grant('write_file')] } })
+
+    await usePermissionsStore.getState().revokeGrant(CHAT, 'run_command')
+
+    expect(calls[0]).toEqual({
+      method: 'permissions.grants.revoke',
+      input: { chatId: CHAT, toolName: 'run_command' }
+    })
+    expect(usePermissionsStore.getState().grantsByChat[CHAT]).toEqual([grant('write_file')])
+  })
+
+  it('answers an empty list rather than throwing when the chat is gone', async () => {
+    fakeBackend(new Error('not_found'))
+    await usePermissionsStore.getState().loadGrants(CHAT)
+    expect(usePermissionsStore.getState().grantsByChat[CHAT]).toEqual([])
+  })
+
+  it('forgets a deleted chat’s grants', () => {
+    fakeBackend()
+    usePermissionsStore.setState({
+      grantsByChat: { [CHAT]: [grant('run_command')], [OTHER_CHAT]: [] }
+    })
+
+    applyBackendEvent({ type: 'chat.deleted', chatId: CHAT })
+
+    const { grantsByChat } = usePermissionsStore.getState()
+    expect(grantsByChat[CHAT]).toBeUndefined()
+    expect(grantsByChat[OTHER_CHAT]).toEqual([])
   })
 })

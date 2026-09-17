@@ -76,6 +76,20 @@ describe('db/repositories/chats', () => {
     expect(updated.title).toBe('Design review')
   })
 
+  it('keeps a null closing speaker out of the stored settings (S5.16)', () => {
+    const created = database.repos.chats.create({ settings: { closingAgentId: 'agent-bob' } })
+    expect(created.settings.closingAgentId).toBe('agent-bob')
+
+    const cleared = database.repos.chats.update(created.id, {
+      settings: { closingAgentId: null }
+    })
+    // The field is **absent** after a clear, not stored as null: `null` is the
+    // wire word for "unset it", and the row keeps `ChatSettings` as it is typed.
+    expect('closingAgentId' in cleared.settings).toBe(false)
+    // …and the reload agrees, which is the half that goes through JSON.
+    expect(database.repos.chats.get(created.id).settings).toEqual(DEFAULT_CHAT_SETTINGS)
+  })
+
   it('lists chats newest updatedAt first', () => {
     const first = database.repos.chats.create({ title: 'First' })
     tick()

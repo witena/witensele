@@ -12,7 +12,10 @@ in one file, not a change in every page.
 
 S1.1 defined the contract. S1.3 implemented the transport underneath it and the
 first handlers on top of it, so the same boundary now exists at runtime and not
-only in the type system.
+only in the type system. **S8.1 is where the promise is collected**: a second
+transport — `POST /api/<method>` plus a WebSocket — serves the *same* `BackendApi`
+from a plain Node process (`../server/`), and no handler, repository or page
+changed to make it work.
 
 ## Scope
 
@@ -42,6 +45,19 @@ only in the type system.
   normalised `UpdateEvent` union the updater port speaks. A shared module beside
   `usage.ts` and `presets.ts` rather than more of `types.ts`, because all three
   processes read it and none of them should know that `electron-updater` exists.
+  The surface has grown several times since S1.1 declared it, and each addition
+  follows the same three steps: the method on `BackendApi`, its name in
+  `BACKEND_METHODS`, and a case in `contracts.test.ts` (S5.3
+  `providers.authStatus` / `login` / `logout` and S5.13's
+  `providers.setQuotaProject`, S5.4 `permission.reply`, S5.6 `chat.handoff`,
+  S5.15 `permissions.grants.list` / `permissions.grants.revoke`). The
+  compile-time `Assert` below makes the first two inseparable.
+
+  S5.15 also gave one feature a **second** namespace, which is worth stating
+  because it reads like a mistake: `permission.reply` answers *a* prompt, and
+  `permissions.grants.*` manages the standing grants of a chat. Folding the
+  second into the first would have made `permission.grants.revoke` read as an
+  operation on the pending request.
 
 **The transport (S1.3)**
 
@@ -71,6 +87,15 @@ only in the type system.
   `backend` singleton, the only renderer file that knows a transport exists.
 - `e2e/smoke.spec.ts` — the Playwright harness that drives the real stack.
 
+**The second transport (S8.1)**
+
+- `src/server/http.ts` — the same two channels over HTTP and a WebSocket, the
+  twin of `src/main/ipc/register.ts`. It shares `ipc-protocol.ts`'s envelope and
+  `toBackendError` with it rather than defining a second wire format. The host
+  itself belongs to [`../server/`](../server/context.md); it is named here
+  because the contract's *server side* now has two implementations and neither
+  may drift from the other.
+
 ## Out of scope
 
 | Not here | Owned by |
@@ -81,6 +106,9 @@ only in the type system.
 | Provider presets (`shared/presets.ts`) and real key encryption on a live provider | `../providers/`, S1.6 |
 | Runtime validation beyond what the implemented handlers need | The handler that owns the method; the contract itself is type-level only |
 | Translating `BackendError.code` into UI copy | `../i18n`, S1.4 |
+| The Node host, its configuration, the Postgres dialect and `docker-compose.yml` | `../server/`, S8.1 |
+| `HttpBackendClient` — the **client** half of the HTTP transport | S8.3. S8.1 builds only the server side and verifies it with `fetch` and a `ws` client |
+| `system.capabilities`, so a browser hides the controls its host lacks | S8.3. Until then the electron-only methods reject with the message `handlers/system.ts` already gives them |
 
 ## Dependencies
 
@@ -118,6 +146,9 @@ through `BackendClient`.
 | **S7.4: `unsupported` is a status, not an error** | Reject `system.updateStatus` with `internal` on a build that cannot update, as the `pick*` methods do | The `pick*` rejection is right because nothing is going to render it — the caller cancels. Here the screen's entire job is to answer "am I on the newest version, and if you do not know, why not", and `internal` carries no reason a user could act on. So the refusal is data with a `reason` the UI translates |
 | **S7.4: two events and no progress event** | An `update.progress` event carrying the percentage | `update.available` and `update.downloaded` are the two moments that change what the user can *do*. A percentage changes what a number says, dozens of times, over a 150 MB download, for a screen almost nobody is looking at — and the one screen that is asks for the status when it mounts. The bar is raised by `downloaded`, which is also the state the reducer refuses to leave |
 | **End-to-end coverage with Playwright's Electron driver** | Only unit tests with a fake bridge; spectron | The acceptance criterion is a round trip through preload, `contextBridge` and structured clone — exactly the parts a fake bridge cannot exercise. Playwright drives the real binary and needs no browser download |
+| **S8.1: the HTTP transport reuses the IPC envelope** (`{ ok, value }` / `{ ok, error }`) and derives the status from `BackendError.code` | A bare value with the error only in the status; RFC 7807 `problem+json` | One envelope means S8.3's `HttpBackendClient` reuses the preload bridge's unwrapping, so the product has exactly one place where a `BackendError` becomes a throw again. The status is derived so proxies and `curl` see something truthful, but the body stays the authority — as it must, since IPC has no status at all and the two transports may not disagree about what happened |
+| **S8.1: the HTTP transport mounts `BACKEND_METHODS` by computing the route from the path**, not from a route table | A table of route → handler; a router with declared paths | The Electron transport validates the method name with `isBackendMethod` and looks it up; doing the same thing means there is no second list of methods to fall out of step with the contract. A method added to `BackendApi` is reachable over both transports the moment it has a handler |
+| **S8.1: the electron-only methods are mounted like any other and keep rejecting** | Omit their routes; answer `null` | Omitting them would make the mounted surface and `BACKEND_METHODS` differ, which is the invariant the whole arrangement exists to keep. `null` would be a lie the client cannot detect. The rejection names the `src/main/ipc/` file that would implement them, which is the sentence a developer needs and, until S8.3, the sentence a client gets |
 
 ## Open questions
 
@@ -145,4 +176,14 @@ through `BackendClient`.
   copy is ever needed, move the envelope into `src/shared/`.
 - Events are broadcast to every window. With a single window that is exactly
   right; a multi-window build would want per-window filtering, most likely by
-  chat id.
+  chat id. The HTTP transport broadcasts to every socket for the same reason and
+  will need the same filtering — by `userId` first, which is S8.2.
+- **Neither transport can replay an event a client missed.** Over IPC that is
+  almost theoretical: the window is there for the whole run. Over a WebSocket it
+  is a browser tab that slept, and the recovery is the one already documented —
+  re-read the messages. S8.3 has to confirm the store really does converge,
+  because S8.1 only proves the frames arrive while the socket is open.
+- **`system.pickFolder`'s doc comment says a server build "implements it by
+  rejecting, or by an upload dialog in the browser".** S8.1 took the first half;
+  the second is S8.3's materials-by-upload, and the comment should be settled
+  then rather than left offering two answers.

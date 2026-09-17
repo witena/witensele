@@ -2027,6 +2027,397 @@ it — the file's header records the three ways it failed first. Docs: all four
 documents of `orchestration`, `agent-turn`, `agents` and `chats`, plus
 `i18n/backend.md` for the two new notice keys.
 
+### S5.15 Executor command safety and visible grants `[x]` (2026-09-17)
+What: `run_command` stops being "anything the user clicks Allow on", and "always
+allow" stops being invisible.
+- **A command policy**, pure and unit-tested (`src/main/executor/command-policy.ts`):
+  tokenize the command line (quotes, `;`, `&&`, `||`, `|`, redirections, `$(…)`
+  and backticks) and classify it as `blocked`, `dangerous` or `normal`, with a
+  machine-readable reason. `blocked` never runs and never prompts — the tool
+  returns an error the model reads: privilege escalation (`sudo`, `su`, `doas`),
+  disk and device writes (`mkfs`, `dd of=/dev/…`, `diskutil erase…`),
+  shutdown/reboot, fork bombs, and a recursive delete or chmod/chown whose target
+  resolves to `/`, `~`, `$HOME` or outside the working directory. `dangerous`
+  always prompts, ignores any "always allow" grant, and the card shows a warning
+  with the reason: any other recursive delete, `git push`, `git reset --hard`,
+  `git clean`, history rewriting, package publishing, a download piped into a
+  shell, command substitution, a path argument that resolves outside the working
+  directory, background processes (`&`, `nohup`). Everything else is `normal` and
+  behaves as today. The policy is a guard rail, not a sandbox — say so in the docs.
+- **A write sandbox on macOS**: `run_command` runs under `/usr/bin/sandbox-exec`
+  with a generated profile that allows reads everywhere the user can read, and
+  allows writes only under the working directory, the system temp directories and
+  `/dev/null`-style devices; network stays allowed.
+  `AppSettings.executor.sandbox: 'workdir-write' | 'off'` (default
+  `'workdir-write'`), surfaced in Settings → Developer with an explanation; when
+  `sandbox-exec` is missing the tool runs unsandboxed and says so once through a
+  `notices.*` line. Test against the real `sandbox-exec` on this machine: a
+  command that writes outside the folder fails, one that writes inside succeeds.
+- **Grants are stored and visible**: a `permission_grants` table (additive
+  migration: `chat_id`, `tool_name`, `created_at`, unique on the pair) replaces
+  the in-memory set; `permissions.grants.list({ chatId })` and
+  `permissions.grants.revoke({ chatId, toolName })` added to `BackendApi`,
+  `BACKEND_METHODS` and `contracts.test.ts`; deleting a chat deletes its grants.
+  The chat's Group settings gain an "Always allowed" list with a revoke button
+  per row (test ids `grants-list`, `grant-row`, `grant-revoke`); empty state when
+  there are none.
+- **A prompt times out**: a pending `permission.requested` is auto-denied after
+  `AppSettings.timeouts.permissionTimeoutMs` (default 5 minutes, configurable
+  next to the other timeouts), resolving with reason `timeout` in
+  `permission.resolved`; the model reads "the user did not answer in time".
+- The permission card shows the policy verdict for `run_command`: nothing for
+  `normal`, a warning line with the translated reason for `dangerous` (and no
+  "Always allow" button). All strings through `t()` in both locale files; reasons
+  are codes translated in the renderer.
+- Unit tests: the policy table (each blocked and dangerous rule once, plus
+  look-alikes that must stay `normal`, e.g. `rm file.txt`, `git status`,
+  `echo "sudo"`), the sandbox profile generation and the two real `sandbox-exec`
+  runs, grants persisted / listed / revoked / cascade on chat delete, the timeout,
+  `dangerous` ignoring a grant, the card's rendering inputs. e2e: extend
+  `e2e/executor.spec.ts` offline — a grant written through the backend shows in
+  the panel and disappears on revoke.
+Acceptance: the tests above; a blocked command never reaches the shell; a write
+outside the folder fails under the sandbox; grants survive a restart and can be
+revoked. Docs: `docs/features/executor/`, `docs/features/chats/`,
+`docs/features/database/`, `docs/features/backend-client/` (all four each).
+Done: the step is four independent guards around one tool, and the reason they
+belong in one step is that each of them is unsafe without the others. A durable
+grant is a standing permission unless it is listed and revocable; a listed grant
+is a false promise unless a `git push` ignores it; a policy that refuses `sudo`
+buys nothing while an approved `npm install` can still write to the home
+directory; and a sandbox that confines writes is no help to a user who walked
+away from an open prompt.
+
+**The policy is a guard rail and the docs say so in three places** — the module
+header, `executor/context.md` and the Settings copy. `classifyCommand` is pure:
+it takes the line, the working directory and the home directory, resolves paths
+*lexically* and touches no filesystem, so the whole table is a unit test and a
+folder that has been unmounted cannot make it throw. Its own tokenizer, not a
+shell parser: quoting, operators and redirections are the three things that make
+"which word is the program" wrong, and everything else is noise. Command
+substitution is **recorded rather than parsed** — `$(…)` is a second command line
+whose nesting a half-parser would get subtly wrong, so it is simply always worth
+asking about. The look-alike half of the test table is the half that keeps the
+feature usable: `rm file.txt`, `git status`, `echo "sudo"` and `npm test 2>&1`
+must stay `normal`, and the last of those cost a rewrite of the tokenizer — a
+naive scan read `>` then `&` as "redirect, then background" and flagged every
+stderr-merging command in existence.
+
+**A `blocked` command never becomes a card**, which is the decision the rest of
+the prompt design depends on: a prompt whose only right answer is Deny teaches
+the user that prompts are noise. The model gets `CommandBlockedError` with a
+sentence naming the rule and telling it not to work around the limit — English,
+like `PermissionDeniedError`, because it is prompt content rather than UI copy.
+
+**The sandbox is `sandbox-exec -p` wrapping `/bin/sh`**, not wrapping the first
+program: anything else would confine `sh` and nothing a `&&` chain spawned. The
+profile is `(allow default)`, then `(deny file-write*)`, then the allowances —
+SBPL takes the *last* matching rule, and the reverse order yields a profile that
+looks right and confines nothing, which is exactly why the test shells out to the
+real binary instead of asserting on the string. Two things were found that way:
+every writable path has to be listed as given **and** realpathed (`/tmp` is
+`/private/tmp`, and so is everything `mkdtemp` returns), and the system temp
+directories have to be writable or a compiler fails in a way nobody can debug
+from a transcript. That last allowance has a consequence stated in the docs
+rather than hidden: a chat bound to a folder inside `/tmp` is not usefully
+confined against the rest of `/tmp`, which is also why both "a write outside
+fails" assertions target the home directory. Reads and the network are
+deliberately untouched, so the prompt is still the boundary for what a command
+reads or sends — half of S5.4's gap, closed, and the half that is irreversible.
+
+**Persisting the grants reverses S5.4 on purpose.** S5.4 refused, on the grounds
+that a grant surviving a restart is a permission the user cannot see; the grounds
+were right and the conclusion was half the fix. `permission_grants` is a pure
+join table like `chat_members` — the pair is the key, `onConflictDoNothing` keeps
+a repeat grant's original timestamp, and `ON DELETE CASCADE` is the whole of
+"deleting a chat deletes its grants", asserted straight against the table because
+`list` would answer `[]` either way. The gate reaches it through an injected
+`GrantStore` (CLAUDE.md rule #5), so its suite still runs against a three-line
+array. Two methods rather than one namespace entry: `permission.reply` answers
+*a* prompt, `permissions.grants.*` manages a chat's standing grants, and
+`permission.grants.revoke` would have read as an operation on the pending
+request. `revoke` returns the **remaining** list, because a row that vanished
+from the screen while the grant stayed in the database is the precise failure
+this step removes.
+
+**`'timeout'` is its own decision**, not a second spelling of `deny`: one of them
+means the user looked at the call and said no. The budget is read per prompt
+rather than captured at startup, so changing it applies to the next card; `0`
+disables it, which is what every suite that answers its own prompts wants.
+
+The card **hides** "Always allow" for a dangerous call rather than disabling it —
+the gate ignores a grant for exactly those lines, so the button would be a
+promise the product does not keep, and a disabled button invites the user to work
+out why. What to draw is decided in `describePermissionCard` and rendered in the
+component, the split `goal.ts` and `handoff.ts` already use, so both rules are
+unit-tested with no DOM. The sixteen reason codes are translated by a `switch` of
+literal `t()` calls rather than a computed key, so `used-keys.test.ts` sees every
+one.
+
+`npm test`: 97 files, 1724 tests, all passing; `npm run typecheck` clean.
+`e2e/executor.spec.ts` alone: 12 passed, 4 skipped — the four behind the
+`qwen2.5:3b` guard, because Ollama was not running on this machine. The new
+offline case writes two grants into the closed database with `sqlite3` (the
+technique `providers.spec.ts` uses), relaunches, and asserts the list, the
+ordering, one revoke and the empty state, against `permissions.grants.list` as
+well as against the screen.
+
+### S5.16 The conclusion as a first-class message `[x] (2026-09-17)`
+What: when a discussion closes, the user should see *the answer*, set apart from
+the talk that produced it, and be able to take it somewhere.
+- **A conclusion is marked.** The closing turn's message (S5.14) carries a new
+  `ConclusionPart` (`{ type: 'conclusion' }`, a flag part stored first in
+  `parts`; no migration). `transcript-rows.ts` and `message-item.tsx` render such
+  a message as a distinct card: a "Conclusion" label, the accent edge the design
+  tokens already provide, the closing speaker named underneath, and two actions —
+  **Copy** (the markdown source) and, when the chat's goal is `document` and the
+  hand-off rules of S5.12 allow it, **Write to the deliverable**, which starts the
+  `deliver` hand-off with the conclusion quoted in the instruction. The history
+  converter treats the part as invisible (the model never sees a flag).
+- **The latest conclusion is findable.** The chat header shows a small
+  "Conclusion" chip when the transcript holds one; clicking scrolls to it. The
+  chat list's preview line for such a chat is the conclusion's first line,
+  prefixed by the translated label.
+- **Who closes is a setting.** `ChatSettings.closingAgentId?: string` — Group
+  settings gain a "Closing speaker" select (members only; default "First in
+  speaking order"). The runner uses it when that member is present, available and
+  not an executor; otherwise it falls back to the first eligible member, as S5.14
+  does today.
+- **`mention-only` can close too.** In `mention-only` mode, when a round's
+  speakers all ended with `[AGREED]` and nobody was mentioned, the runner closes
+  exactly as in `roundrobin` (notice + closing turn). A round that mentions
+  someone continues as today.
+- Unit tests: the part added to the closing message and to nothing else; the
+  history converter ignoring it; the closing-speaker rule with its three
+  fallbacks; `mention-only` closing and not closing; the row model for a
+  conclusion; the chat-list preview; the deliverable action's enabled rule. e2e:
+  extend `e2e/closure.spec.ts` — seed a transcript containing a conclusion through
+  the backend client (deterministic, no model needed) and assert the card, the
+  Copy button writing the clipboard, the header chip scrolling to it, and the
+  chat-list preview; keep the existing model-gated case untouched. Run only
+  `e2e/closure.spec.ts` and `e2e/orchestration.spec.ts` (do not run the whole
+  suite; other agents share this machine's Ollama).
+Acceptance: the tests above; a closed discussion shows one visibly different
+conclusion card that can be copied and, for a document goal, written out. Docs:
+`docs/features/orchestration/`, `docs/features/chats/` and
+`docs/features/agent-turn/` (all four each).
+Done: the step is **one part, one setting and one deleted condition**, and the
+part is the piece the other two hang off.
+
+*The part.* `ConclusionPart` is `{ type: 'conclusion' }` — a flag with no content
+— and choosing that shape over a `MessageKind` or a column is what made the rest
+of the step small. `parts` is already the open, migration-free place where a
+message says what it is made of, every reader ignores a part it does not know
+(the history transform included, which is exactly what keeps the mark out of
+every prompt: a model shown it would learn to write one), and a row written
+before today simply has none. It is written by `markConclusion` at the
+**terminal update** rather than seeded before the stream, which costs one beat of
+latency and buys two things: the tool-free retry is gated on `parts.length === 0`
+and a seeded part would silence it, and a closing turn that failed would
+otherwise be labelled as an answer it never produced. Only a `done` turn is
+marked, for the same reason.
+
+*The setting.* `ChatSettings.closingAgentId` is one optional field of the
+existing JSON column, and the interesting half is that it is the first setting a
+control can **unset**. `undefined` cannot carry that across a transport — JSON
+drops the key, and a dropped key is what "leave this alone" already means in a
+field-by-field merge — so `null` is the wire word for "clear it", the shared type
+gained `ChatSettingsPatch` to say so, and `mergeChatSettings` in the chat
+repository is the single place it becomes an absent field again. The stored
+`ChatSettings` therefore still reads `closingAgentId?: string`, and the invariant
+holds for every caller including a future server. `closingSpeaker` is exported
+and pure, with three fallbacks that are three ways a preference goes stale — the
+member left, the member is offline, the member turns out to be the executor — and
+the fallback is **S5.14's rule unchanged**. The asymmetry there is deliberate and
+recorded: the *setting* refuses an executor, because an executor does not vote on
+the consensus and is the wrong voice to state one, while the *fallback* may reach
+one, because a chat that has nobody else available must still hand back an answer
+rather than silently skip the conclusion.
+
+*The deleted condition.* `#agreed` lost `chat.settings.mode !== 'roundrobin'` and
+gained nothing. S5.14 had excluded `mention-only` on the grounds that "everybody
+agreed" is not a statement one named member can make; that reads the rule wrong.
+What closes a chain is that everybody who spoke is finished **and nothing is left
+scheduled**, and in `mention-only` the second half is the stronger statement —
+the speakers were the ones the previous turn asked for, and they asked for
+nobody. A round that does mention somebody is stopped by the `carried.speakers`
+condition that was already there, which is that mode's own way of ending a chain.
+One deleted line, two tests.
+
+Three smaller decisions. **Copy goes through `navigator.clipboard`**, not through
+a new backend method: rule #6 is that the renderer reaches the *backend* only
+through `BackendClient`, and the clipboard is not the backend — a
+`system.copyToClipboard` would have put a desktop capability into a contract the
+server build has to implement. **"Write to the deliverable" is hidden when the
+goal is not a document and disabled with its reason otherwise**, because a
+permanently dead control on a card in a discussion chat explains a feature that
+chat is not using, while the other three refusals are states the user can act on;
+it calls the same `handoffBlocker` the Actions card does, through a one-line
+`deliverableBlocker`, so the two can never disagree. And a `deliver` hand-off now
+**quotes** the chat's latest conclusion as a block quote in the message it
+stores (`conclusionQuote`, capped at 2 000 characters): the transcript is
+budgeted and its oldest messages fall out of a long prompt while the instruction
+never does. Nothing the app wrote is in that quote — the sentence the user reads
+is the `handoffDeliver` notice, which is a key.
+
+The card is a **card around the message**, not a copy pinned to the top of the
+chat: the transcript is the record, in the order things happened, and a floating
+duplicate is a second thing to keep in step with it. The header chip is how it is
+found from the top of a long chat, and it *scrolls to* the card — with a nonce,
+because clicking the chip twice has to scroll twice, and through a ref rather
+than a dependency, because a list that rebuilds on every streamed token would
+otherwise drag the viewport back while the next answer arrives.
+
+Tests: `chat-runner.test.ts` gained a six-case `the conclusion as a message
+(S5.16)` block plus two rewritten `mention-only` cases and two `deliver`-quote
+cases; `agent-turn.test.ts` four (the flag on a closing turn, not on an ordinary
+one, not on a failed one, and `markConclusion`); `history.test.ts` two;
+`conclusion.test.ts` ten (new file); `transcript-rows.test.ts` two;
+`handlers/chats.test.ts` three; `db/chats.test.ts` one. `npm test`: 94 files,
+1617 tests, all passing; `npm run typecheck` clean. `e2e/closure.spec.ts` ran
+after `npm run build`: **1 passed, 2 skipped** — the new S5.16 case passed, and
+the two S5.14 cases skipped because **no Ollama was running on this machine**
+(`http://localhost:11434/v1/models` did not answer at all), so their behaviour is
+unchanged but unverified in this run; the same is true of
+`e2e/orchestration.spec.ts`, whose four cases all skipped for the same reason.
+`e2e/members.spec.ts`, `i18n.spec.ts` and `ui-shell.spec.ts` were re-run for the
+chat-page and chat-list changes: 13 passed. The S5.16 e2e case needs no model —
+it pushes a `message.created` carrying the flag down the app's own event channel,
+because **no backend method creates an agent message** (the only writer is
+`runAgentTurn`) — and asserts the card, the real clipboard, the chip scrolling
+past thirty later messages, and the chat-list preview. Docs: all four documents
+of `orchestration`, `chats`, `agent-turn`, `database` and `i18n`.
+
+### S5.17 Light-theme review and a theme-aware avatar palette `[x] (2026-09-17)`
+What: S5.8 proved the light theme on a handful of mostly empty screens. This step
+looks at every surface with content on it, in both themes, fixes what it finds,
+and makes the two things that ignored the theme — agent avatars and provider logo
+tiles — follow it.
+- **A review harness**: `e2e/theme-review.spec.ts` seeds a realistic installation
+  through the backend client (no model needed): providers, three agents with
+  different avatars and one executor, a chat with a working directory and a
+  document goal, and a transcript that contains every part kind the app renders —
+  markdown with a table, a fenced code block, a reasoning block, tool-call /
+  tool-result cards (one errored), a diff block, file-ref chips, system notices, a
+  conclusion-style closing message if that part exists on `main` when you run, a
+  pending permission card (emit the event through whatever test seam exists; if
+  none, render the card's component state through the store). It captures
+  full-window screenshots of chats, agents (list and editor), every settings
+  section (providers with a sign-in panel, MCP with the gallery open, skills,
+  timeouts, appearance, developer, about) and the onboarding card, in **both
+  themes**, into `test-results/theme-review/`. It asserts nothing visual; it is
+  the instrument. **Look at every screenshot** and list what you fixed.
+- **Fix through tokens only.** No hex colour outside `index.css` (a unit test
+  greps the renderer for hex literals outside `index.css`, the brand mark and the
+  stored-data migration table, and fails on a new one). Every new token gets a
+  light override; the S5.8 test keeps passing.
+- **Avatars follow the theme.** Replace the eight hard-coded
+  `{ color, textColor }` pairs with a palette index: tokens `--color-avatar-1-bg`
+  / `-fg` … `--color-avatar-8-bg` / `-fg`, tuned for each theme and no longer
+  derived from the old amber. `Agent.avatar` gains `palette?: 1..8`; new agents
+  store the index. Stored agents that carry a legacy hex are mapped to the nearest
+  palette index **at render time** by a pure, tested function (no database write,
+  no migration). The user avatar tokens are reviewed the same way. Provider logo
+  tiles get the same treatment (a background token per theme; brand marks keep
+  their own colours).
+- **Accessibility preferences**: under `@media (prefers-contrast: more)`
+  strengthen borders and the muted/faint foreground steps in both themes; under
+  `prefers-reduced-transparency` remove the translucent surfaces if any exist.
+  Record the AA contrast ratios of the foreground steps on every background token,
+  per theme, in `docs/features/ui-shell/frontend.md`, computed by a small test
+  helper rather than by hand.
+- Unit tests: the hex-literal guard; the legacy-hex → palette mapping (each of the
+  eight old pairs, and an unknown hex); the contrast helper asserting AA for the
+  text steps that carry body copy; the token-override test extended to the new
+  tokens. e2e: run `e2e/theme-review.spec.ts`, `e2e/theme.spec.ts`,
+  `e2e/ui-shell.spec.ts` and `e2e/agents.spec.ts` only (do not run the whole
+  suite; other agents share this machine's Ollama).
+Acceptance: every screenshot in `test-results/theme-review/` is readable in both
+themes and the write-up says what was wrong and what changed; avatars and provider
+tiles change with the theme; the tests above pass. Docs: `docs/features/ui-shell/`
+and `docs/features/agents/` (all four each), `docs/features/providers/frontend.md`.
+Done: the review found **nine** things, eight of them defects in the app and one
+of them the harness lying about the app. Per screen:
+
+| Screen | What was wrong | What changed |
+|---|---|---|
+| Chat transcript, light | Every avatar in the **message list** was still a dark slab with a pale monogram, while the member panel beside it had already gone pale — the two columns disagreed about the same five agents on one screen | `message-item.tsx` was the last component reading `agent.avatar.color`; it asks `avatarStyle` now. It was missed by the first sweep because its call site spells the props differently from the other six |
+| Chat transcript, both | A **passed / skipped** row was drawn at `opacity-50`: its name measured 3.26:1 in light and 4.33:1 in dark, and its `modelId · provider` line 2.17:1 and 2.37:1 — under the floor for any meaningful pixel, in *both* appearances. It had been that way since S2.x | `opacity-70`. A normal row is 13:1 or better, so the row still reads as superseded at a glance; it just no longer crosses into unreadable |
+| Every row with a hover state | `fg-dim` and `fg-faint` were 4.00:1 and **2.74:1** on `bg-hover` in dark, 4.41:1 and 3.39:1 in light. Hovering a chat row, an agent row or a settings section took that row's own timestamps and hints below their bar | `fg-dim` → `#969189` / `#665f55`, `fg-faint` → `#7c776e` / `#756f63`. `--color-status-idle` moved with `fg-dim` (it was 4.22:1 on its own surface) and `--color-presence-offline` with `fg-faint` |
+| Provider list, preset grid, onboarding tiles | The eight provider monograms were a fixed dark chip in both themes. On the near-white settings page they read as stickers applied to the cards rather than as part of them | `providerLogo` returns a slot from the shared eight-token palette. Two of the eight slots change hue (the two lists had drifted); the hash is untouched, so a preset keeps its slot number |
+| Agent editor | The avatar swatch marked as *pressed* was matched by **colour**, which cannot work once one slot is two different hexes | Matched by index, with `data-palette` on each swatch |
+| Hovered rows in six components | `hover:bg-bg-hover/50` and `/60` written into six files: the app's only translucent surface was also the one no stylesheet could answer for | One `--color-bg-subtle` token, which is what `prefers-reduced-transparency` now replaces |
+| Message error detail, permission card, input focus ring | `text-danger/80` (4.27:1 in light) and two `border-*/60` borders at 2.8–2.9:1 | Solid tokens. The permission card's full-strength accent border is also the better reading for a card demanding a decision |
+| Light theme, hovered danger | `--color-danger` was 4.47:1 on `bg-hover` — a hovered row's Delete button just under AA | `#a93636` (4.90:1) |
+| The harness itself | Several settings shots caught the 150ms `transition-colors` mid-flight, so the header named one section and the highlight was still on the previous one; and the light pass photographed a provider editor and a permission card the dark pass had left open | The walk reloads the renderer before each appearance, settles 350 ms before each shot, and sends `permission.resolved` after photographing the card |
+
+**The avatar palette is an index, not a migration.** `InitialAvatar.palette` is
+`1..8` and the stylesheet holds twenty tokens (eight pairs, a neutral pair, the
+human's own). That shape was chosen over the two obvious alternatives for one
+reason: the *choice* is data and a small integer stores it exactly, while the
+colour has to differ between the appearances — slot 3 is a deep violet in dark and
+a pale one in light, and no single stored hex can be both. Rewriting
+`agents.avatar` would have made the appearance a **database** concern, with a
+migration to write, a downgrade to think about and a half-converted table if the
+app were killed during it; instead `nearestAvatarPalette` resolves an old record
+to its slot **as it is drawn**, which costs one pure function and cannot fail.
+The eight amber-era hexes stay in `agent-display.ts` as the table that mapping
+measures against — and as the compatibility shadow a *new* record still writes
+into `avatar.color`, so an older build, an export or the future server always has
+a colour. They are also why that file is one of three the hex guard exempts, the
+others being `index.css` and the brand mark. Provider tiles were folded into the
+same eight slots rather than given a second theme-aware list, because the two
+lists were already copies that had drifted in two places.
+
+**The contrast is arithmetic now, not a claim.** `lib/contrast.ts` is twenty
+lines of WCAG relative luminance; `theme.test.ts` reads both palette blocks as
+text and asserts the body-copy steps are AA-normal on all six surfaces, the small
+print at least 3:1, every monogram AA on its own tile, every status pill on its
+own surface, every presence dot 3:1 on `bg-panel`, and the light foreground steps
+no quieter than the dark ones. The full matrix is printed in
+`docs/features/ui-shell/frontend.md`, generated from the same function rather than
+typed. `contrast.test.ts` pins the instrument against WCAG's own worked example
+and makes an unparseable colour **throw** — a silent `NaN` would have made every
+one of those assertions pass for the wrong reason.
+
+**The two media queries are each written twice**, once for `:root` and once for
+`:root[data-theme='light']`. That is not duplication to tidy up: the light
+selector is specificity (0,2,0) and outranks a bare `:root` however late the query
+appears, so a single unqualified block would have strengthened the dark theme and
+silently done nothing in light — exactly the class of bug this whole step exists
+to find. `prefers-contrast: more` moves only the three quiet foreground steps and
+the two borders (`fg-faint` 3.30 → 5.32 dark, 3.80 → 6.69 light); the hues that
+carry meaning are left alone, because shifting green to gain contrast it does not
+need would only make the two appearances disagree about what green means.
+`prefers-reduced-transparency` has exactly one surface to answer for, and
+`theme.test.ts` asserts `--color-bg-subtle` is the only token with an alpha
+channel so a second one cannot appear without the query growing to match.
+
+`e2e/theme-review.spec.ts` reaches around the app in exactly one place and says
+so: there is no `messages.append` method and there should not be one, so the
+transcript is written into `witena.db` with `node:sqlite` while the app is closed
+(`node:sqlite` and not `better-sqlite3`, because `postinstall` rebuilds that one
+for Electron's ABI and the Playwright runner is plain Node). Everything else is
+honest: records go through `providers.create` / `agents.create` / `chats.create`,
+and the pending permission card is a real `permission.requested` sent down
+`witena:event` from the main process — `PermissionGate`'s own path through
+preload, `event-bridge` and the store. Forty-two screenshots, twenty-one screens
+per appearance, all of them looked at; they are gitignored with the rest of
+`test-results/`. One note for whoever runs it: the provider sign-in panel shows
+the **machine's real** `ant` login state, so a shot of that screen has the
+developer's own account in it.
+
+Not done, and why: `about-section.tsx` keeps a `border-border/60` divider on its
+licence rows — S7.4's branch owns that file this batch and a one-class change was
+not worth the conflict. Nothing measures a *rendered* pixel, so the two remaining
+composites (`opacity-70` on a dimmed row, `opacity-45` on a disabled control) were
+checked by hand; a guard would need a real browser and a colour sampler. A
+streaming cursor and a live presence sweep are still only visible with a model
+attached, which is `e2e/presence.spec.ts`'s job. Docs in
+`docs/features/{ui-shell,agents}/` (all four each) and
+`docs/features/providers/frontend.md`.
+
+
 ## Phase 6: Backlog (decided, not yet scheduled)
 
 Everything below is agreed work that is deliberately **not** in Phase 5. Each
@@ -2084,22 +2475,36 @@ adds a line here in the same commit.
 
 ### Executor safety and reach
 
-- **The shell is not sandboxed.** S5.4's `run_command` runs `/bin/sh -c` as the
-  user, with the user's environment and `PATH`; only `cwd` is confined, so
-  `cat ../../secret` *inside a command* is not stopped by `executor/paths.ts`.
-  The permission prompt is the entire boundary, which is why S5.5 must show the
-  command line verbatim and never summarised. A real sandbox — a container, a
-  restricted `PATH`, a seccomp profile, or delegating to a coding agent that has
-  one — is a step of its own, and it is the one item here that should be picked
-  up before the executor is recommended for an unfamiliar folder.
-- **No prompt timeout of its own.** A pending `permission.requested` is ended
-  only by a reply, by Stop, or by the turn's hard timeout, which then records the
-  turn as `skipped` rather than as "nobody answered". A prompt-specific timeout
-  with its own notice would read better.
-- **`allowAlways` is not visible or revocable.** It lives in a `Set` for the life
-  of the process, so a user who granted it cannot see what they granted or take
-  it back without quitting. A chat-settings row listing the grants, with a
-  "forget" button, is the obvious shape.
+- **The sandbox confines writes, not reads.** S5.15 closed half of S5.4's gap:
+  an approved command runs under `sandbox-exec` and can no longer write outside
+  the working directory, the temp directories and the null-ish devices. It can
+  still read anything the user can read and send it anywhere, so the permission
+  prompt is still the whole boundary for that half and the command line is still
+  shown verbatim. Confining reads needs a policy for what a build legitimately
+  reads (`~/.npmrc`, `~/.cargo`, the toolchain) and is a step of its own; a
+  container, or delegating to a coding agent that has one, is the other route.
+- **The temp directories are writable, so a working directory inside `/tmp` is
+  not usefully confined against the rest of `/tmp`** (S5.15). The allowance is
+  deliberate — a compiler that cannot write a temp file fails unreadably — but a
+  chat bound to a scratch folder under `/tmp` gets less than the setting's name
+  suggests.
+- **`sandbox-exec` is deprecated by Apple** (S5.15) and macOS-only, while
+  remaining the only thing of its kind on the platform. When it is absent the
+  command runs unconfined behind one `notices.sandboxUnavailable` line; a macOS
+  that removes it turns the setting into a no-op, and the replacement (an App
+  Sandbox entitlement, or a container) is its own step.
+- **The command policy can be defeated by a variable or a script** (S5.15). An
+  assignment and an expansion is one way round it, and a `./deploy.sh` is not
+  read at all. It is a guard rail against the common accident, not a boundary;
+  the docs, the module header and the Settings copy all say so, and that has to
+  stay true of any rule added to it.
+- **Nothing tells the user the policy exists until it fires.** There is no list
+  of what is blocked or always asked about, in Settings or anywhere else — the
+  first a user learns of it is a refused command or a warning row.
+- **A revoked grant does not un-answer a call already in flight** (S5.15). A
+  tool released by a grant a millisecond before the revoke landed still runs.
+  Holding every gated call until a revoke could not arrive would slow the common
+  case down to protect a case that is a race by definition.
 - **`search_files` is a substring scan**, with a hard-coded prune list and no
   regular expression or glob. Once `run_command` exists the executor can reach
   for `rg` itself, so the question is whether the built-in should grow or go.
@@ -2223,19 +2628,46 @@ adds a line here in the same commit.
   transcript either. Whether the closure markers should survive the history
   transform while `[PASS]` does not is an open question in
   `docs/features/orchestration/context.md`.
-- **`mention-only` has no closure rule.** The markers are stripped there and
-  ignored, because "everybody agreed" is not something one named member can say.
-  A chat in that mode still ends only on `maxAutoRounds` or on nothing being
-  mentioned.
-- **The closing turn is always the first member in speaking order.** Not the
-  member the group deferred to, not the one with the largest context window.
-  Choosing better would need either a second model call or a signal the
-  transcript does not carry.
-- **The conclusion is not marked as one.** It is an ordinary agent message with
-  an ordinary round number; nothing in the schema says "this is the answer", so
-  it cannot be linked to, exported, or shown at the top of the chat. A
-  `MessageKind` or a column would be the smallest change, and is worth deciding
-  before anything else wants to find it.
+- ~~**`mention-only` has no closure rule.**~~ **Closed by S5.16**: `#agreed` no
+  longer asks which mode the chat is in. A `mention-only` round whose speakers all
+  wrote `[AGREED]` and mentioned nobody closes exactly as a `roundrobin` one does;
+  a round that mentions somebody carries on, through the rule that mode already
+  had.
+- ~~**The closing turn is always the first member in speaking order.**~~
+  **Closed by S5.16**, as far as a *choice* goes: `ChatSettings.closingAgentId`
+  names the member that closes, and the first eligible one is the fallback.
+  Nothing yet **derives** the speaker from the discussion — the member the group
+  deferred to, or the one with the largest context window — which would still
+  need a second model call or a signal the transcript does not carry.
+- ~~**The conclusion is not marked as one.**~~ **Closed by S5.16**: the closing
+  turn's message carries a `ConclusionPart` — a flag part, not a `MessageKind` and
+  not a column — which the transcript draws as a card, the header chip scrolls to,
+  the chat list previews and a `deliver` hand-off quotes.
+- **What S5.16 left unverified or out of scope.**
+  - The two model-gated cases of `e2e/closure.spec.ts` and all four of
+    `e2e/orchestration.spec.ts` **skipped** in S5.16's run: no Ollama was
+    running on the machine at the time. The S5.16 case itself needs no model and
+    passed.
+  - The e2e seeds its conclusion by pushing a `message.created` down the app's
+    own event channel, because **no backend method creates an agent message**. It
+    is therefore not persisted, and no test reloads the window onto a stored
+    conclusion.
+  - **The chat-list preview only covers loaded transcripts.** It is computed in
+    the renderer from the messages store, so a chat that has not been opened in
+    this session shows the member count it always did. Covering every chat needs a
+    query of its own — the same shape a "conclusions across chats" view would
+    want.
+  - **A chat that agreed twice has one current conclusion.** The header chip, the
+    preview and the quoted `deliver` instruction all mean the latest; the earlier
+    cards stay in the transcript with no way to pin one.
+  - **Copy fails silently** when the window may not write to the clipboard: the
+    button simply does not say "Copied".
+  - **`closingAgentId` is not checked against membership** when it is written.
+    Removing that member leaves the id stored, the select shows the default and
+    the runner falls back to it, so re-adding the member restores the preference.
+  - Exporting a conclusion anywhere other than the clipboard and the chat's own
+    deliverable — a file, a share sheet, a cross-chat list of decisions — was
+    deliberately left out.
 - **A `rounds` cap has no UI of its own.** It is reachable only through "Start a
   vote", which hard-codes `1`. There is no way to say "answer twice and stop" from
   the composer, and no indication in the transcript that a chain was capped until
@@ -2308,44 +2740,60 @@ adds a line here in the same commit.
 
 ### Appearance
 
-- **The light theme has not been reviewed on a full transcript.** S5.8 looked at
-  the chat, settings, agents, providers and agent-editor screens, and at one real
-  reply with a highlighted code block, but the screens that only exist while
-  something is running — a streaming message, a tool card, an error message, the
-  four presence dots side by side, S5.5's permission card and diff block — were
-  read from their tokens rather than seen. They use no colour of their own, so
-  the risk is a *step* that is too subtle rather than an unreadable screen.
-- **Avatar and provider-logo colours stay dark in both themes.** They are data,
-  not tokens: an agent's `avatar.color` is stored in its record and
-  `provider-logo.ts` picks from a fixed palette, so a dark tile with a light
-  monogram is what both themes show. It reads as a brand chip on white and was
-  left alone deliberately — theming it means either rewriting stored rows or a
-  second palette keyed by theme, which is a step of its own.
-- **`prefers-contrast` and `prefers-reduced-transparency` are not honoured**, and
-  there is no high-contrast variant of either palette.
-- **The new accent has not been seen on every accent surface (S7.1).** The rail,
-  the settings screens, the agents screens and both themes' chat screens were
-  looked at, and every accent pair was computed against all six surface tokens
-  (worst case 4.71:1 dark, 5.14:1 light — both AA). What was *not* seen is the
-  accent on the surfaces that only exist mid-run: the streaming cursor, S5.5's
-  permission card, the "Jump to latest" pill and the `@mention` chips in a live
-  transcript. They take the token like everything else, so the risk is a hue that
-  reads warm next to `presence-working` rather than an unreadable control — the
-  two are 1.15:1 apart, which is fine for a dot beside text and would be wrong if
-  they ever had to be told apart on their own.
+- ~~**The light theme has not been reviewed on a full transcript.**~~ **Done in
+  S5.17.** `e2e/theme-review.spec.ts` seeds a transcript holding every part kind
+  and photographs twenty-one screens per appearance. It found four defects in the
+  app — the message list's avatars, a dimmed row at 3.26:1, `fg-dim` / `fg-faint`
+  under their bar on `bg-hover`, and five components carrying alpha utilities —
+  all listed and fixed in that step's `Done:` paragraph.
+- ~~**Avatar and provider-logo colours stay dark in both themes.**~~ **Done in
+  S5.17**, and the premise turned out to be the mistake: what a record stores is
+  the *choice*, which is a palette index, and the colour belongs in `index.css`
+  where it can differ between the appearances. No rows were rewritten — a legacy
+  hex is mapped to its slot at render time.
+- ~~**`prefers-contrast` and `prefers-reduced-transparency` are not honoured.**~~
+  **Done in S5.17**, for the three quiet foreground steps, both borders and the
+  one translucent token. There is still no *separate* high-contrast palette: the
+  media query nudges the existing one rather than replacing it, which is enough
+  for `more` and would not be enough for a genuine forced-colours mode
+  (`forced-colors: active`, the Windows High Contrast path). Nothing in the app
+  is Windows-facing yet, so that stays open.
+- ~~**The new accent has not been seen on every accent surface (S7.1).**~~ **Done
+  in S5.17** for the permission card, the `@mention` chips and the "Jump to
+  latest" pill, all of which the review photographs in both appearances. The
+  **streaming cursor** is the one accent surface still unseen: it only exists
+  while a model is producing tokens, so it needs Ollama and belongs to
+  `e2e/presence.spec.ts` rather than to a seeded transcript. The note about the
+  accent reading warm next to `presence-working` stands — the two are 1.15:1
+  apart, fine for a dot beside text and wrong if they ever had to be told apart
+  on their own.
+- **Nothing measures a rendered pixel.** The contrast matrix in
+  `docs/features/ui-shell/frontend.md` is computed from token values, so it is
+  exact for text on a plain surface and blind to anything composited over it —
+  which is how a passed row at `opacity-50` stayed sub-AA from S2.x to S5.17. The
+  two remaining composites were checked by hand; a guard would need a real
+  browser and a colour sampler.
+- **`about-section.tsx` still carries one `border-border/60` divider.** The only
+  alpha utility left in the renderer after S5.17, skipped because another branch
+  owned that file in the same batch. One class to change.
 - **The mark is only drawn at 28 px and up inside the app (S7.1).** Below roughly
   20 px the six blades merge into a ring; the application icon's 16 px variant is
   re-rendered with a thickened stroke for exactly that reason, and no in-app
   surface renders it smaller than the rail's 28 px today. A favicon, a menu-bar
   item or a notification icon would be the first thing that does, and would need
   the same treatment or a simplified mark.
-- **The agent avatar palette was left on the amber-era hues (S7.1).** The eight
-  pairs in `agent-display.ts` are **data** — they are copied into `agents.avatar`
-  and stored in SQLite — so changing them would restyle new agents while every
-  existing one kept its old pair, which is worse than leaving all of them alone.
-  None of them was derived from the old accent (they are the mockup's five agents
-  plus three in the same family) and none clashes with terracotta. Re-picking them
-  is a step of its own, with a migration, if it is ever wanted.
+- ~~**The agent avatar palette was left on the amber-era hues (S7.1).**~~ **Done
+  in S5.17**, and without the migration this entry assumed was the price: the
+  eight pairs became twenty tokens, a record stores the slot number, and the old
+  hexes stayed in `agent-display.ts` as the table an existing agent is resolved
+  through. Nothing was restyled behind the user's back and nothing was written to
+  SQLite.
+- **The nearest-hex mapping is plain RGB distance.** The eight legacy values
+  round-trip exactly, which is the case that matters. A colour the picker could
+  never have produced gets a stable but not especially pretty answer — the table
+  it measures against is eight dark slabs, so a bright orange lands on the olive
+  slot. A perceptual space would fix it and is more colour science than a
+  fallback for impossible data deserves.
 - **The dmg has no custom background.** S7.1's brief allowed for one; nothing was
   added, because `dmg.background` also fixes the window size and the icon
   positions, and the default Finder layout electron-builder produces is correct
@@ -2353,12 +2801,50 @@ adds a line here in the same commit.
 
 ### Server and editor
 
-- **Server and multi-user** (PLAN "Reserved server capability"): lift the
-  main-process business logic into a Node server, swap the `BackendClient`
-  implementation for HTTP + WebSocket, real `userId`s, a server-side
-  `SecretStore`, and — only if several server instances or worker processes
-  exist — an `EventBus` / `MessageRepository` implementation over Redis
-  Streams, Postgres LISTEN/NOTIFY or NATS.
+- **Server and multi-user** (PLAN "Reserved server capability"): ~~lift the
+  main-process business logic into a Node server~~ (done, S8.1), swap the
+  `BackendClient` implementation for HTTP + WebSocket (S8.3), real `userId`s
+  (S8.2), a server-side `SecretStore` (S8.4), and — only if several server
+  instances or worker processes exist — an `EventBus` / `MessageRepository`
+  implementation over Redis Streams, Postgres LISTEN/NOTIFY or NATS. Phase 8
+  now owns the scheduled half; what stays here is the last item, which nothing
+  needs until there is more than one process.
+- **Make `Repositories` asynchronous (S8.1).** The blocker between the Postgres
+  dialect and the Postgres *database*: better-sqlite3 is synchronous and drizzle's
+  Postgres driver is not, so the repositories, the handlers that call them,
+  `resolveTimeouts`, the `AgentSupervisor`'s accessors and `probeAgentProvider`
+  all have to return and await promises before Postgres can be more than a
+  tested schema. Every one of those callers is already inside an `async`
+  function, so it looks mechanical; it has not been attempted, and it is a
+  cross-cutting diff that wants a branch to itself. The alternatives that were
+  rejected — a worker-thread synchronous driver, and a duplicated per-dialect
+  repository layer — are in `docs/features/server/context.md`.
+- **The Postgres schema has never run (S8.1).** `docker-compose.yml` and
+  `src/main/db/postgres/migrations/0000_init.sql` are written and reviewed but
+  were authored on a machine with neither Docker nor Postgres, so the Postgres
+  half of `src/main/db/dialects.test.ts` has only ever been skipped. The first
+  `docker compose up -d postgres` followed by
+  `DATABASE_URL=postgres://witena:witena@localhost:5432/witena npm test` is its
+  first real execution and may need a second commit.
+- **CI runs SQLite only (S8.1).** Adding a Postgres `services:` block to
+  `ci.yml` is one change; it is deliberately left until S8.5, when there is a
+  deployment whose migrations are worth gating on. Until then "CI proves
+  Postgres works" is not a claim this repository makes.
+- **The server has no CORS, no TLS, no WebSocket keepalive and no idle timeout
+  (S8.1).** It binds `127.0.0.1` and S8.5 puts an ALB in front of it, but a
+  browser on another origin cannot call it until S8.3 decides what
+  `Access-Control-Allow-Origin` should say, and a dead client that never sent a
+  FIN holds an entry in the fan-out set until the OS notices (S8.4).
+- **stdio MCP servers still spawn child processes on the Node host (S8.1).**
+  PLAN's "Online version" says they must not on a shared one; nothing stops them
+  yet, and the switch belongs with S8.3's capabilities.
+- **`pg` and `ws` ship in the dmg (S8.1).** Nothing in the Electron bundle
+  imports either, but they must be `dependencies` — the server needs them at
+  runtime and `vite.server.config.ts` derives its externals from that list — so
+  electron-builder copies them into every bundle. A few hundred kilobytes, and
+  the fix is the same `files` exclusion the `better-sqlite3` prebuilds want,
+  with `npm run e2e:packaged` run afterwards to prove nothing resolved through
+  them.
 - **VS Code extension** embedding the chat panel over that server backend
   (PLAN "Future extension", point 3, step two). Depends on the item above.
 
@@ -3213,7 +3699,7 @@ not do, in "API keys and the key file (S7.6)" in the Phase 6 backlog.
 
 Ordered so that each step runs end to end on a laptop before AWS is involved.
 
-### S8.1 Server host and Postgres `[ ]`
+### S8.1 Server host and Postgres `[x] (2026-09-17)`
 What: the business logic runs in a plain Node process.
 - `src/server/index.ts`: builds `AppContext` with injected storage, secrets
   and event bus, mounts every `BACKEND_METHODS` entry as `POST /api/<method>`
@@ -3229,6 +3715,101 @@ What: the business logic runs in a plain Node process.
 Acceptance: `npm run server` + the existing renderer over a
 `HttpBackendClient` (S8.3) streams a reply. Docs: new feature `server`
 (`docs/features/server/`), `docs/features/database/`, `backend-client`.
+Done: `src/server/` is the second host and it is genuinely only a host — six
+files (`config.ts`, `context.ts`, `http.ts`, `user.ts`, `index.ts`, and the build
+config beside them) that read the environment instead of asking electron, build
+the **same** `AppContext` through `createAppContext`, and mount the **same**
+`buildHandlers()` map. The route is computed from the path rather than declared
+in a table, exactly as `registerIpc` validates the method name it is handed, so
+there is no second list of methods to fall out of step with `BACKEND_METHODS`.
+The body is the IPC envelope unchanged — `{ ok, value }` / `{ ok, error }` from
+`ipc-protocol.ts`, which imports no electron and was always shared — with a
+status derived from `BackendError.code` by a table that is total over the union,
+because a proxy should see something truthful while the body stays the authority.
+`GET /ws` is one `ws` connection per client and **one** bus subscription for the
+whole process: the event is serialised once and written to each socket, so a
+streaming run does not pay N `JSON.stringify` calls per token. The five
+electron-only methods are mounted like every other one and answer with the
+rejection `handlers/system.ts` already wrote for exactly this case;
+`openInEditor` with a `custom` command actually works here, because that branch
+is `node:child_process`.
+The **HTTP stack is `node:http` + `ws`**, decided rather than defaulted: the
+routing surface is one literal prefix, one table lookup and two fixed paths, with
+no path parameter and no middleware chain, so Fastify or Hono would add a
+dependency (plus a WebSocket plugin that reaches for `ws` anyway) to save about
+thirty lines of `if`. Fastify's schema validation was the one real temptation and
+was refused for a better reason than size: the handlers already validate their
+own input because IPC needs them to, and a second validation layer on one
+transport is how two transports start disagreeing. One new runtime dependency,
+`ws`.
+`npm run server` is a Vite build into `out/server/` and then `node`, not
+`node src/server/index.ts`, because both migrators inline their SQL with
+`import.meta.glob(… '?raw')`; three toolchains now resolve that primitive, so all
+three hosts run the same migration code rather than two of them running it and
+the third approximating it. Verified by running it: `/healthz` answers,
+`system.ping` answers, `chats.get` on a missing id answers 404 with the envelope,
+and `SIGTERM` closes the sockets, the runners, the MCP children and the database.
+**Postgres is beside SQLite, not under the repositories, and that is the
+step's one deliberate deviation.** `Repositories` is a *synchronous* interface —
+better-sqlite3 is, and the handlers, `ChatRunner`, `AgentTurn` and the supervisor
+are all written against that — while drizzle's Postgres driver is asynchronous
+with no synchronous escape. "The same repository interfaces over Postgres" and
+"the repositories' public types must not change" cannot both hold, and the three
+ways out were weighed and written down (`docs/features/server/context.md`,
+"Postgres is not the server's database yet"): making the interface async is the
+right eventual answer and is a cross-cutting refactor this step was told not to
+do; a worker-thread sync driver would block the event loop of a server whose job
+is concurrent streaming; a second repository implementation is ~800 lines of
+duplicated patch semantics on a path nothing runs, which is not coverage but a
+second place to be wrong. So what shipped is the dialect *underneath* the
+repositories, complete: `src/main/db/postgres/` with the schema, the migrations,
+`openPostgresDatabase` and the migrator, `docker-compose.yml` for Postgres 16 on
+loopback, and `DATABASE_URL` selecting it. The server says so at startup when the
+variable is set instead of silently opening SQLite.
+Two sub-decisions inside that. **Two schema files kept in step by a test**, not
+one description emitting both: a generated description cannot carry drizzle's
+`$type<…>()` typing, which is what turns a change in `shared/types.ts` into a
+compile error in the schema, and it would rewrite the file every other open
+branch is editing — while `postgres/schema-drift.test.ts` compares the two
+through drizzle's own metadata (tables, columns, nullability, defaults, primary
+keys, enum values), needs no database, and runs in 400 ms. And **migrations
+generated per dialect**, not neutral SQL, because there is no neutral spelling:
+`created_at` holds `Date.now()`, which fits SQLite's dynamically sized `integer`
+and does not fit Postgres's four-byte one, so it has to be `bigint` — with
+`boolean` against `integer` and `jsonb` against `text` on top. The two dialects
+also have different histories: `0001`–`0003` exist to add a column to a database
+already on somebody's laptop, and nothing predates `postgres/0000_init.sql`.
+Tests: `src/main/db/dialects.ts` is the shared fixture and `dialects.test.ts` the
+suite — one body, SQLite always, Postgres when `DATABASE_URL` is set and
+otherwise a skip whose *name* carries the compose command. It asserts the
+storage contract the repositories stand on: parsed JSON, real booleans, an
+epoch-millisecond timestamp surviving intact (the assertion that would otherwise
+have found `integer` in production), the goal document replaced and cleared,
+ordering by `seq` rather than insertion, both cascades. The fixture is a small
+row gateway rather than `Repositories` for the reason above, and handler tests
+against Postgres are therefore **not** part of this step — they cannot be until
+the interface goes async. `src/server/http.test.ts` is the contract test: a real
+server on an ephemeral port, `providers.create` → `agents.create` →
+`chats.create` → `chat.send` against a `MockLanguageModelV4` injected through
+`runner.createModel` the way `agent-turn.test.ts` does, asserting that
+`message.created`, `message.delta` and `run.finished` arrive over the WebSocket
+and that the deltas reassemble into the model's own text. `no-electron.test.ts`
+walks the whole transitive import closure of `src/server/` — which reaches
+`app-context.ts`, `chat-runner.ts` and the handler registry — and fails on any
+`electron` specifier, with a guard on itself proving the scanner recognises all
+five spellings.
+What is **not** verified: the Postgres path has never executed. This machine has
+neither Docker nor Postgres, so `dialects.test.ts`'s Postgres half is skipped and
+`0000_init.sql` has never been applied — it is checked against the schema it must
+produce by the drift test, and by review. CI keeps running SQLite only, which is
+stated in `docs/features/server/implement.md` under "What CI does not run"; a
+Postgres service there is a one-line `services:` block and is left until S8.5,
+when there is a deployment whose migrations are worth gating on. The acceptance
+criterion's second half — the renderer over an `HttpBackendClient` — is S8.3's by
+construction: S8.1 builds only the server side and drives it with `fetch` and a
+`ws` client. `npm test` 1616 passed / 11 skipped, `npm run typecheck` clean, and
+`e2e/smoke.spec.ts` green so the desktop app still launches over the shared
+`migrate.ts`. Recorded in the Phase 6 backlog under "Server and editor".
 
 ### S8.2 Accounts `[ ]`
 What: sign in, and everything is yours only.

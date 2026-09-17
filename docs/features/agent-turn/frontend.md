@@ -58,8 +58,21 @@ itself is [`agents`](../agents/frontend.md)'s.
 
 S5.14's other renderer-visible change is two notice keys, `notices.consensus` and
 `notices.voteClosed`, both stored by the runner and drawn like every other
-notice, and the closing turn itself — which is an ordinary agent message with an
-ordinary round number. The message list needs no case for it.
+notice, and the closing turn itself — which was, until S5.16, an ordinary agent
+message with an ordinary round number.
+
+S5.16 gives that message one more **part**, and it is the first part in the
+product that carries no content at all:
+
+| From the turn | The renderer must |
+|---|---|
+| `message.updated` whose parts start with `{ type: 'conclusion' }` (S5.16) | Draw the message as the conclusion card — the label, the accent edge, the speaker underneath, Copy and (for a document goal) Write to the deliverable. The flag is **never** rendered as text: `messageText` already ignores anything that is not a `text` part, so it is invisible unless something looks for it |
+
+It arrives on the terminal `message.updated` rather than as a delta, because the
+turn writes it once it knows the turn finished `done`: a conclusion that was
+stopped or failed is not one. Everything else about that row — the avatar, the
+round label, the presence dot — is unchanged, and the card wraps the body rather
+than replacing it. The card itself is [`chats`](../chats/frontend.md)'s.
 
 The group briefing and the system prompt never reach the renderer at all: they
 are model-facing text, which is exactly why `briefing.zh-CN.ts` is a `.ts` file
