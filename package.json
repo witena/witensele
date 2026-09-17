@@ -23,6 +23,7 @@
     "e2e:packaged": "playwright test --config playwright.packaged.config.ts",
     "demo": "npm run build && playwright test --config playwright.demo.config.ts",
     "dist": "npm run build && electron-builder --mac",
+    "dist:signed": "npm run build && electron-builder --mac -c.extraMetadata.witenaSignedBuild=true -c.directories.output=\"${WITENA_DIST_DIR:-$HOME/Library/Caches/witena-dist}\"",
     "dist:dir": "npm run build && electron-builder --mac --dir",
     "preversion": "npm run typecheck && npm test",
     "version": "node scripts/sync-version.mjs && git add src/shared/version.ts",

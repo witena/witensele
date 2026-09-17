@@ -13,14 +13,27 @@
  * moment a rebuilt dmg replaced the previous one. `createFileKeySecretStore`
  * below holds the key in `userData/secrets.key` instead, which survives an
  * update because it belongs to the user's data rather than to the bundle. On a
- * signed build (`WITENA_SIGNED_BUILD`, S7.3) that file is itself wrapped by
- * `safeStorage`, which is the best of both: the Keychain protects the key file,
- * and the identity it is granted to stops changing.
+ * signed build (S7.3 — the `witenaSignedBuild` field electron-builder writes
+ * into the packaged manifest) that file is itself wrapped by `safeStorage`,
+ * which is the best of both: the Keychain protects the key file, and the
+ * identity it is granted to stops changing. `rewrapKeyFile` below is what moves
+ * a file written by the unsigned builds that came first.
  *
  * This module is Electron-free by construction — `node:crypto` and `node:fs`
  * only — so the file-key store works unchanged in a Node server.
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
 import { dirname } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { isBackendFailure, keyUnreadable } from './errors'
@@ -94,8 +107,19 @@ export const FILE_KEY_PREFIX = 'fk1:'
 /** File name of the key inside the data directory. */
 export const SECRETS_KEY_FILE = 'secrets.key'
 
-/** Environment variable the release workflow sets once the build is signed (S7.3). */
-export const SIGNED_BUILD_ENV = 'WITENA_SIGNED_BUILD'
+/**
+ * The `package.json` field that records a signed build (S7.3).
+ *
+ * S7.6 read an environment variable here, which was wrong and was recorded as
+ * wrong: a variable exported while the dmg is being built does not exist in the
+ * process the *user* launches three days later, so the flag it was supposed to
+ * carry was always false where it mattered. electron-builder's `extraMetadata`
+ * writes this field into the `package.json` inside the bundle instead
+ * (`-c.extraMetadata.witenaSignedBuild=true`, passed by `npm run dist:signed`
+ * and by the release workflow when the certificate exists), so the answer
+ * travels with the application and is read back from it at startup.
+ */
+export const SIGNED_BUILD_FIELD = 'witenaSignedBuild'
 
 /** AES-256-GCM sizes, in bytes. The IV is 12 because GCM is defined for 96 bits. */
 const KEY_BYTES = 32
@@ -109,10 +133,10 @@ const KEY_FILE_MODE = 0o600
  * How the key file itself is stored, written into the file so a build can always
  * tell which it is holding.
  *
- * Without the marker, a build whose `WITENA_SIGNED_BUILD` differs from the one
- * that wrote the file would hand 32 bytes of `safeStorage` ciphertext to AES as a
- * key, or the reverse — and both failures look exactly like "your keys are gone",
- * which is the failure this whole step exists to remove.
+ * Without the marker, a build whose signed-ness differs from the one that wrote
+ * the file would hand 32 bytes of `safeStorage` ciphertext to AES as a key, or
+ * the reverse — and both failures look exactly like "your keys are gone", which
+ * is the failure this whole step exists to remove.
  */
 const KEY_FILE_PLAIN = 'fkkey1:'
 const KEY_FILE_WRAPPED = 'fkkey1w:'
@@ -154,23 +178,40 @@ export interface FileKeySecretStoreOptions {
    */
   wrapper?: SecretStore | undefined
   /**
-   * Whether to wrap the key file. Defaults to "yes if this is a signed build",
-   * read from `WITENA_SIGNED_BUILD`; a test passes it explicitly.
+   * Whether to wrap the key file. Off unless the caller says otherwise, and the
+   * only caller that says so is `src/main/index.ts` on a signed build.
    *
-   * Wrapping is off by default on purpose. `safeStorage` can only protect the
+   * Passed in rather than discovered, because discovering it means asking
+   * electron where the bundle is, and this module may not (CLAUDE.md rule #5).
+   * Wrapping is off by default on purpose: `safeStorage` can only protect the
    * key file if the identity it grants the Keychain item to is stable, and an
    * unsigned build's is not — wrapping there would reintroduce the exact bug
    * S7.6 fixes.
    */
   wrap?: boolean
-  /** Overridable environment, so a test does not have to mutate `process.env`. */
-  env?: NodeJS.ProcessEnv
 }
 
-/** Whether this process is a signed build, by the release workflow's variable. */
-export function isSignedBuild(env: NodeJS.ProcessEnv = process.env): boolean {
-  const value = env[SIGNED_BUILD_ENV]
-  return typeof value === 'string' && value.length > 0 && value !== '0' && value !== 'false'
+/**
+ * Whether the running build was signed, according to its own manifest.
+ *
+ * Takes the parsed `package.json` rather than reading one, so it stays a pure
+ * function over data: the caller that knows where the bundle is
+ * (`src/main/index.ts`, the only file allowed to ask electron) hands the object
+ * over, and a test hands over a literal.
+ *
+ * `true` and `'true'` both count, because a value set on the command line
+ * (`-c.extraMetadata.witenaSignedBuild=true`) may arrive as either depending on
+ * how electron-builder's argument parser coerces it, and a flag that is
+ * silently false because it was a string is the failure mode this whole field
+ * exists to remove. `''`, `'0'` and `'false'` are false, matching what the
+ * environment variable used to accept.
+ */
+export function isSignedBuild(manifest: unknown): boolean {
+  if (typeof manifest !== 'object' || manifest === null) return false
+  const value = (manifest as Record<string, unknown>)[SIGNED_BUILD_FIELD]
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') return value.length > 0 && value !== '0' && value !== 'false'
+  return false
 }
 
 /**
@@ -196,7 +237,7 @@ export function isSignedBuild(env: NodeJS.ProcessEnv = process.env): boolean {
  */
 export function createFileKeySecretStore(options: FileKeySecretStoreOptions): SecretStore {
   const { keyPath, wrapper } = options
-  const wrap = options.wrap ?? isSignedBuild(options.env)
+  const wrap = options.wrap ?? false
   let key: Buffer | null = null
 
   function unwrap(contents: string): Buffer {
@@ -313,5 +354,112 @@ export function createFileKeySecretStore(options: FileKeySecretStoreOptions): Se
         throw keyUnreadable(cause instanceof Error ? cause.message : String(cause))
       }
     }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* S7.3: moving an existing key file under the Keychain                        */
+/* -------------------------------------------------------------------------- */
+
+/** What `rewrapKeyFile` did, for the caller's log line and for the tests. */
+export type RewrapOutcome =
+  /** Not a signed build: the plain file is the correct form and was left alone. */
+  | 'unsigned'
+  /** No key file yet — the store will create one, already wrapped. */
+  | 'absent'
+  /** Already `fkkey1w:`; nothing to do, which is every launch after the first. */
+  | 'already-wrapped'
+  /** Was `fkkey1:`, is now `fkkey1w:`, same 32 bytes. */
+  | 'wrapped'
+  /** The wrapper refused, or the file is not one of ours. The plain file stands. */
+  | 'failed'
+
+export interface RewrapKeyFileOptions {
+  /** Absolute path of the key file, normally `<userData>/secrets.key`. */
+  keyPath: string
+  /** The `safeStorage` store, or nothing when the platform has no key storage. */
+  wrapper?: SecretStore | undefined
+  /** Whether this is a signed build. False makes the whole call a no-op. */
+  wrap: boolean
+}
+
+/**
+ * Re-wrap a plain key file the first time a signed build runs (S7.3).
+ *
+ * S7.6 left this undone and said so: wrapping was only ever applied to a file
+ * this build *created*, so a machine that had been running unsigned dmgs kept a
+ * plain `secrets.key` forever and never gained the protection signing paid for.
+ * The missing half is exactly this — one rewrite, at startup, of a file that is
+ * already the user's.
+ *
+ * **It rewrites the container, never the contents.** The same 32 bytes go back
+ * in, only under `fkkey1w:` instead of `fkkey1:`, so every `fk1:` ciphertext in
+ * the database stays readable and no provider key is touched. That is what makes
+ * doing it silently defensible where re-encrypting the keys themselves would not
+ * be.
+ *
+ * **It is atomic.** A temp file in the same directory, `fsync`, then `rename` —
+ * because the interruption this has to survive is the one that would be
+ * catastrophic: a half-written key file is every API key the user has, gone. The
+ * `rename` is the only moment anything observable changes, and POSIX makes it
+ * indivisible within a filesystem.
+ *
+ * **It fails soft.** `safeStorage` can refuse — a locked keychain, a user who
+ * clicked Deny — and the honest answer there is to keep the plain file, which
+ * still works, and say so once. Never to leave the user with a file nothing can
+ * read.
+ *
+ * Electron-free: the wrapper is injected, exactly as it is for the store.
+ */
+export function rewrapKeyFile(options: RewrapKeyFileOptions): RewrapOutcome {
+  const { keyPath, wrapper, wrap } = options
+  if (!wrap) return 'unsigned'
+  if (!wrapper) return 'failed'
+
+  let contents: string
+  try {
+    contents = readFileSync(keyPath, 'utf8')
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return 'absent'
+    return 'failed'
+  }
+
+  if (contents.startsWith(KEY_FILE_WRAPPED)) return 'already-wrapped'
+  // Anything that is not one of our two markers is not ours to rewrite. The
+  // store will refuse it in a moment with a message that names the file; this
+  // is not the place to guess at what it might be.
+  if (!contents.startsWith(KEY_FILE_PLAIN)) return 'failed'
+
+  const body = contents.slice(KEY_FILE_PLAIN.length)
+  // Round-trip the base64 rather than trusting it: rewriting a file whose bytes
+  // we could not decode would turn "a key we can read" into "a key nobody can".
+  if (Buffer.from(body, 'base64').length !== KEY_BYTES) return 'failed'
+
+  let wrapped: string
+  try {
+    wrapped = KEY_FILE_WRAPPED + wrapper.encrypt(body)
+  } catch {
+    return 'failed'
+  }
+
+  const tempPath = `${keyPath}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    // `wx` so a concurrent launch cannot be writing the same temp file, and
+    // `0o600` so the intermediate is never more readable than the destination.
+    const handle = openSync(tempPath, 'wx', KEY_FILE_MODE)
+    try {
+      writeSync(handle, wrapped)
+      // Without this the rename can land before the bytes do, and a power cut in
+      // between leaves a correctly named, empty key file.
+      fsyncSync(handle)
+    } finally {
+      closeSync(handle)
+    }
+    chmodSync(tempPath, KEY_FILE_MODE)
+    renameSync(tempPath, keyPath)
+    return 'wrapped'
+  } catch {
+    rmSync(tempPath, { force: true })
+    return 'failed'
   }
 }

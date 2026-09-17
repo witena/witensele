@@ -402,7 +402,7 @@ The store the app writes provider keys with is `createFileKeySecretStore`:
 | Cipher | AES-256-GCM, a fresh 12-byte IV per value |
 | Stored form | `fk1:` + base64(iv ‖ tag ‖ ciphertext), one string for a `text` column |
 | Failure | `BackendFailure('key_unreadable')` on a wrong key, a failed tag, a truncated value or a value that is not `fk1:` at all |
-| Key file form | `fkkey1:` + base64(key), or `fkkey1w:` + `safeStorage` ciphertext when `WITENA_SIGNED_BUILD` is set |
+| Key file form | `fkkey1:` + base64(key), or `fkkey1w:` + `safeStorage` ciphertext on a signed build (S7.3) |
 
 `safeStorage` was the store until S7.6 and is the reason this changed. Its
 Keychain item ("Witena Safe Storage") is granted **per application identity**,
@@ -418,17 +418,17 @@ build, anyone who can read the user's files can read `secrets.key`, and
 therefore every stored API key.** That was already true of an unsigned app's
 Keychain item — it is granted to an identity nothing vouches for — and the file
 buys something the Keychain item does not, which is surviving the next rebuild.
-The stronger form is one environment variable away: with `WITENA_SIGNED_BUILD`
-set (S7.3's release workflow), the key file is stored **wrapped** by
-`safeStorage`, so the Keychain protects the key and the identity it is granted
-to has stopped changing. Wrapping is off by default on purpose — wrapping on an
-unsigned build would reintroduce the very bug this fixes.
+The stronger form arrives with signing: on a **signed** build (S7.3) the key file
+is stored **wrapped** by `safeStorage`, so the Keychain protects the key and the
+identity it is granted to has stopped changing. Wrapping stays off otherwise on
+purpose — wrapping on an unsigned build would reintroduce the very bug this
+fixes.
 
 Three things worth knowing before changing `src/main/secrets.ts`:
 
 - **The key file records how it is stored.** `fkkey1:` versus `fkkey1w:`, rather
-  than inferring it from the environment variable at read time: the variable
-  describes the running build, not the file it found, and a mismatch would hand
+  than inferring it from the build at read time: the build's signed-ness
+  describes the running process, not the file it found, and a mismatch would hand
   the wrong 32 bytes to AES.
 - **`djEw` is not a magic string.** It is base64 of `v10`, Chromium's `OSCrypt`
   version prefix, and base64 maps three bytes to four characters with no padding
@@ -436,7 +436,75 @@ Three things worth knowing before changing `src/main/secrets.ts`:
   writes when there is no keyring.
 - **Nothing in this module may import electron**, which is what lets the whole
   store move to a Node server and what makes `wrapper` an injected `SecretStore`
-  rather than a `safeStorage` import.
+  rather than a `safeStorage` import. The same rule is why `isSignedBuild` takes
+  a **parsed manifest** rather than finding one: locating the bundle is
+  `src/main/index.ts`'s job, and the store is handed a boolean.
+
+#### How the build tells the app it was signed (S7.3)
+
+S7.6 read the environment variable `WITENA_SIGNED_BUILD` and recorded in the same
+breath that this could not work: the variable is read by the **running** process,
+and one exported while the dmg is being built is not in the environment of the
+app a user launches days later. It was therefore false in exactly the situation
+it existed for.
+
+The answer now travels inside the bundle:
+
+```
+electron-builder  -c.extraMetadata.witenaSignedBuild=true
+                    ↓  written into the package.json inside the .app
+src/main/index.ts   signedBuild()  →  app.getAppPath()/package.json
+                    ↓  a boolean
+src/main/secrets.ts createFileKeySecretStore({ wrap }) and rewrapKeyFile({ wrap })
+```
+
+`isSignedBuild(manifest)` accepts `true` and `'true'` — a command-line value may
+arrive as either depending on how it is coerced, and a flag that is quietly false
+because it was a string is the failure this field replaced. Everything else,
+including a manifest with no such field and any failure to read one, is **not
+signed**: a checkout and the end-to-end harness both land there (the repository's
+own `package.json` has no such field), and the cost of guessing wrong the other
+way is a key file wrapped by a Keychain item nothing vouches for.
+
+#### Re-wrapping an existing key file (S7.3)
+
+`rewrapKeyFile({ keyPath, wrapper, wrap })`, called from `src/main/index.ts`
+**before** the store is constructed, because the store reads the file on first
+use. S7.6 left this undone and listed it as a gap: wrapping was only ever applied
+to a file the build *created*, so a machine that had been running unsigned dmgs
+kept a plain `secrets.key` forever and never gained what signing paid for.
+
+It rewrites the **container, not the contents**. The same 32 bytes go back in
+under `fkkey1w:` instead of `fkkey1:`, so every `fk1:` ciphertext in the database
+stays readable and no provider key is re-encrypted or touched. That is what makes
+doing it without asking defensible where re-encrypting the keys themselves would
+not be — and it is why there is no screen and no confirmation for it.
+
+| Case | Outcome | Effect |
+|---|---|---|
+| `wrap` is false | `unsigned` | Nothing. Wrapping on an unsigned build is the original bug |
+| No file yet | `absent` | Nothing; the store creates one already wrapped |
+| Already `fkkey1w:` | `already-wrapped` | Nothing — every launch after the first |
+| `fkkey1:`, wrapper succeeds | `wrapped` | Rewritten atomically, mode `0600` |
+| Wrapper throws, no wrapper, or the file is not ours | `failed` | The plain file stands, one warning, no temp file left |
+
+Two properties are load-bearing:
+
+- **Atomic.** A temp file in the same directory, `fsync`, then `rename`. The
+  interruption this has to survive is the catastrophic one: a half-written key
+  file is every API key the user has, gone. The `rename` is the only moment
+  anything observable changes, and POSIX makes it indivisible within a
+  filesystem.
+- **Fails soft.** `safeStorage` can refuse — a locked keychain, a user who
+  clicked Deny — and the answer there is to keep the plain file, which still
+  works, and log once. Never to leave the user with a key nobody can read. The
+  base64 is also decoded and length-checked before anything is written, because
+  rewriting a key that could not be decoded would turn "a key we can read" into
+  "a key nobody can".
+
+**Unit-tested with a fake wrapper; never observed on a real signed build.** No
+Developer ID certificate exists yet, so the real `safeStorage` has never been
+asked to wrap a real key file. STEPS.md S7.3 carries that.
 
 #### The startup migration
 

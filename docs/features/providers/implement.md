@@ -128,14 +128,19 @@ createLanguageModel(resolved, modelId, { anthropicCli, googleCli })
   → the token comes from that CLI's in-memory cache until 60 s before it expires
 ```
 
-Starting the app, since S7.6:
+Starting the app, since S7.6 and S7.3:
 
 ```
 app.whenReady()
   → createSafeStorageStore()            null when the platform has no key store
-  → createFileKeySecretStore({ keyPath: userData/secrets.key, wrapper })
-      first use only: 32 random bytes, written 0600, wrapped only if
-      WITENA_SIGNED_BUILD is set (S7.3)
+  → signedBuild()                       app.getAppPath()/package.json →
+                                        witenaSignedBuild, written by
+                                        electron-builder's extraMetadata (S7.3)
+  → rewrapKeyFile({ keyPath, wrapper, wrap })     S7.3, before the store:
+      a signed build rewrites a plain fkkey1: file as fkkey1w:, same 32 bytes,
+      temp file → fsync → rename. Any refusal keeps the plain file
+  → createFileKeySecretStore({ keyPath: userData/secrets.key, wrapper, wrap })
+      first use only: 32 random bytes, written 0600, wrapped iff wrap
   → createAppContext({ secrets })       every provider key is written with it
   → migrateProviderSecrets(ctx, { legacy: safeStorage })
       per row, by the ciphertext's own prefix:
@@ -186,7 +191,8 @@ never in a `Provider`, never in an event, never in the renderer.
 | `testConnection(resolved, options?)` | same | **Never throws.** `options` carries `modelId`, `timeoutMs` and the two test seams (`createModel`, `generate`) |
 | `resolveProvider(ctx, ref)` | `src/main/providers/resolve.ts` | The decryption seam. Since S7.6 a failed decrypt is `key_unreadable` rather than a raw throw, and the provider's id is remembered on the context |
 | `migrateProviderSecrets(ctx, { legacy })`, `SecretMigrationResult` | `src/main/providers/migrate-secrets.ts` | **S7.6.** Idempotent, never throws for a row it cannot read, returns what it did |
-| `createFileKeySecretStore`, `isFileKeySecret`, `isSafeStorageSecret`, `isLegacySecret`, `isSignedBuild`, `FILE_KEY_PREFIX`, `SECRETS_KEY_FILE` | `src/main/secrets.ts` | **S7.6.** The store and the prefix rules. Electron-free: `node:crypto` and `node:fs` |
+| `createFileKeySecretStore`, `isFileKeySecret`, `isSafeStorageSecret`, `isLegacySecret`, `FILE_KEY_PREFIX`, `SECRETS_KEY_FILE` | `src/main/secrets.ts` | **S7.6.** The store and the prefix rules. Electron-free: `node:crypto` and `node:fs` |
+| `isSignedBuild(manifest)`, `SIGNED_BUILD_FIELD`, `rewrapKeyFile(options)`, `RewrapOutcome` | `src/main/secrets.ts` | **S7.3.** Whether the bundle says it was signed (a parsed manifest in, a boolean out — no path, no environment, no electron), and the one-time move of a plain key file under the Keychain. `signedBuild()` in `src/main/index.ts` is the half that knows where the manifest is |
 | `createSafeStorageStore()` | `src/main/ipc/secret-store.ts` | **S7.6.** `safeStorage` or `null` — the legacy reader, and the wrapper on a signed build |
 | `useProvidersStore` | `src/renderer/src/stores/providers.ts` | See [frontend.md](./frontend.md) |
 | `errorMessage` / `translateError` | `src/renderer/src/i18n/errors.ts` | `BackendErrorCode` → a sentence, by literal `switch` |
@@ -265,7 +271,7 @@ Shared-contract changes made by S1.6:
 | `src/main/providers/anthropic-cli.test.ts` | The real implementation against a **fake `ant`** — an executable script first on the given `PATH`. Binary resolution (`PATH`, the fallback directories, `WITENA_ANT_BIN`, nothing at all); `status` for all three states; the status carrying no token and exactly five fields; that `print-credentials` is what is called; the token cache expiring 60 s early, not caching a credential with no expiry, and being dropped on logout; `ant_not_logged_in` on a non-zero exit; `internal` on output that is not JSON; a failing command quoting `stderr` and **never** `stdout`; login, a cancelled login, and logout being forgiving of "nothing to log out of" but not of a missing binary |
 | `src/main/providers/discovery.test.ts` | `fetchModels` for all four families with a fake `fetch` (URL, headers, id extraction, sorting, `/v1` not doubled); HTTP 401 and 404 → `provider_error` with the status; a 10 s timeout; an unreachable host. `testConnection` through the **real** `generateText` with `MockLanguageModelV4`, plus the failure, timeout, no-model and "keep the deliberate error code" paths |
 | `src/main/handlers/handlers.test.ts` | The `providers.*` block against the temp database: create stores ciphertext and reports only `hasApiKey`; the five validation refusals; a local preset saves with no key; an absent `apiKey` keeps the stored one and `''` clears it; delete; user scoping; `fetchModels` for a draft *and* for a saved row (proving decryption) with an injected `fetchImpl`. S5.3: an `oauth` provider saves with no key at all; the two reasoned refusals; an unknown mode; Save refused with `ant_missing` / `ant_not_logged_in`; the **merged** check on update (a patch of `{ auth: 'oauth' }` refused on an OpenAI row, accepted on an Anthropic one); `fetchModels` sending a bearer token, no `x-api-key` and the beta flag; and the three auth methods answering straight from the CLI. S5.13: the same three routed to the CLI the `{ type }` names, a sign-in type with no flow refused by reason, a Google provider saving with no key, Save refused with the **Google** codes, a signed-in Google provider with no quota project saving anyway, `setQuotaProject` passing the id through and refusing an empty one, and `fetchModels` for Google carrying the bearer token and the project header with **no `key=` in the URL** |
-| `src/main/secrets.test.ts` | **S7.6**: the round trip and its `fk1:` marker; non-ASCII, empty and 8 KB values; a fresh IV per value; a second instance reading what the first wrote from the same key file; the file created on **first use** rather than at construction, with mode `0600`; a flipped bit and a truncated value refused with `key_unreadable`; a value written under another key file refused; a `v10…` or `plain:` value refused as "not mine"; the key file stored plain when the build is unsigned and wrapped when it is signed, through a fake `safeStorage`; a wrapped file the current wrapper cannot unwrap (and one with no wrapper at all) reported rather than guessed at; a file that is not a key file refused; and `WITENA_SIGNED_BUILD` making that decision when the caller does not |
+| `src/main/secrets.test.ts` | **S7.6**: the round trip and its `fk1:` marker; non-ASCII, empty and 8 KB values; a fresh IV per value; a second instance reading what the first wrote from the same key file; the file created on **first use** rather than at construction, with mode `0600`; a flipped bit and a truncated value refused with `key_unreadable`; a value written under another key file refused; a `v10…` or `plain:` value refused as "not mine"; the key file stored plain when the build is unsigned and wrapped when it is signed, through a fake `safeStorage`; a wrapped file the current wrapper cannot unwrap (and one with no wrapper at all) reported rather than guessed at; a file that is not a key file refused; and the store never wrapping unless it is told to. **S7.3**: `isSignedBuild` over a parsed manifest — `true` and `'true'` both counting, `''` / `'0'` / `'false'` / a missing field / `null` / a non-object all answering "not signed"; and `rewrapKeyFile`'s five outcomes — a plain file moved under the wrapper with the same 32 bytes, mode `0600`, and a ciphertext written before it still decrypting; an already-wrapped file untouched byte-for-byte; a wrapper that throws leaving the plain file, the stored value still readable and **no temp file behind**; no-ops on an unsigned build, an absent file and a missing key store; and a refusal to rewrite either a file that is not ours or one whose marker is right but whose key is the wrong length |
 | `src/main/providers/migrate-secrets.test.ts` | **S7.6**, against the real temporary database with the file-key store on the context: a `safeStorage` row re-encrypted and still decrypting to the same plaintext; a `plain:` row migrated with no key store at all; a row written by **another identity** left byte-for-byte untouched and its id reported; the same when there is no key store; `fk1:` and keyless rows skipped without a write; a second pass doing nothing; and one pass that migrates what it can while reporting what it cannot |
 | `src/main/providers/resolve.test.ts` | **S7.6**: the decrypted key on the resolved provider; a key this build cannot read surfacing `key_unreadable` **and** marking the provider; the mark cleared by a successful decrypt; and a keyless provider marking nothing |
 | `src/renderer/src/stores/providers.test.ts` | Load, the draft lifecycle (preset application, the name the user typed surviving it, models add/remove/dedupe), save-create vs save-update, failures becoming state, remove, and both probes including the draft/record result key. S5.3: `loadAuthStatus` / `signIn` / `signOut` keeping the latest status and never leaving `authBusy` on, a refused sign-in being recorded and followed by a re-read, and the draft carrying `auth` both ways. S5.13: each of those taking a vendor and filing the answer under it, the two vendors' logins staying apart, and `setQuotaProject` storing the status that came back or recording a refusal without rejecting. S7.6: a rejected probe keeping its failure class instead of flattening to `internal`, and `keyState` mirrored from the backend and cleared by saving a pasted key |
@@ -324,5 +330,10 @@ are structured objects rather than a string and three numbers.
   same `userData` (which is what the key file buys), and a row holding real
   `safeStorage`-shaped ciphertext that nothing can decrypt is left untouched and
   explained. The reinstall itself is checked by hand, once, when a dmg is built.
-- **Nothing re-wraps an existing key file when the build becomes signed**, and
-  the key is never rotated. See `context.md` and the Phase 6 backlog.
+- **The re-wrap has never run against a real Keychain** (S7.3). `rewrapKeyFile`
+  moves a plain `fkkey1:` file to `fkkey1w:` on the first signed launch, and its
+  five outcomes are covered with a fake `safeStorage`. No Developer ID
+  certificate exists, so no signed build has ever asked the real one — which is
+  also the only way to see the refusal path (a locked keychain, a Deny) that the
+  fake can only simulate. STEPS.md S7.3.
+- **The key is never rotated.** See `context.md` and the Phase 6 backlog.

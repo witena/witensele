@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the hardened runtime (S7.3).
+
+  Used for the application and, through `entitlementsInherit`, for the helper
+  processes. It is deliberately SHORTER than both defaults it replaces:
+
+  - @electron/osx-sign's `default.darwin.plist` also asks for the camera, the
+    microphone, Bluetooth, USB, the printer and the user's location. Witena
+    touches none of them, and an entitlement that is requested but unused is a
+    permission prompt waiting to surprise somebody.
+  - app-builder-lib's own `templates/entitlements.mac.plist` — what a build with
+    no `entitlements` option gets — carries a third key,
+    `com.apple.security.cs.disable-library-validation`. See below for why it is
+    not here.
+
+  Every key is justified, because the hardened runtime is a list of things the
+  app promises *not* to do and each exception weakens it:
+
+  com.apple.security.cs.allow-jit
+    V8 compiles JavaScript to machine code at runtime. Without this the renderer
+    cannot allocate MAP_JIT pages and Electron does not start at all on arm64.
+
+  com.apple.security.cs.allow-unsigned-executable-memory
+    The other half of the same requirement, named by @electron/notarize's
+    prerequisites: V8 writes into pages it then executes, which library-validated
+    hardened processes otherwise refuse.
+
+  NOT here, and why — com.apple.security.cs.disable-library-validation:
+    Library validation only rejects code signed by a *different* team, and the
+    one native library Witena loads (`better_sqlite3.node`, dlopen'd out of
+    `app.asar.unpacked` because dlopen cannot read an asar) is signed by this
+    build with this project's own Developer ID: @electron/osx-sign walks
+    `Contents/` and signs every Mach-O file it finds there, the `.node` bundle
+    included, before the outer bundle is sealed. Same team, so validation passes
+    and the exception buys nothing — while granting it would let any library on
+    disk be loaded into the app.
+
+    This is reasoning, not an observation. It **cannot** be proven until a build
+    is signed with a real Developer ID certificate, which has not happened yet
+    (see STEPS.md S7.3). If the first signed build fails to open its database on
+    launch — a `Library not loaded` / `code signature` error naming
+    `better_sqlite3.node` in the crash log — the fix is to add the key here and
+    rebuild; nothing else about the configuration changes.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+  </dict>
+</plist>

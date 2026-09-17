@@ -1,10 +1,21 @@
 # packaging — Frontend
 
 **This feature has no renderer code.** S4.4 added no page, no component, no
-store field, no `BackendClient` call and no translation key, and S7.2 — the CI
-and release workflows — added none either. A packaged build renders exactly what
-`npm run dev` renders; nothing in the UI branches on `app.isPackaged`, and
-nothing in it branches on how the bundle was built.
+store field, no `BackendClient` call and no translation key; S7.2 — the CI and
+release workflows — added none either, and neither did S7.3. A packaged build
+renders exactly what `npm run dev` renders; nothing in the UI branches on
+`app.isPackaged`, and nothing in it branches on how the bundle was built.
+
+S7.3 is worth one sentence here because it introduced the first runtime fact
+that *could* have reached the UI and deliberately does not. Whether the build was
+signed decides whether the Keychain wraps the secrets key file, and the key file
+being wrapped or plain changes **nothing the user sees**: the same providers, the
+same keys, the same "a key is stored" hint. The one case that does show — a key
+this build cannot decrypt — already has its line under the provider card, and it
+belongs to [`../providers/frontend.md`](../providers/frontend.md). A user should
+not have to reason about their key file's storage format, so there is no screen
+for it and no notice when it is re-wrapped; the re-wrap logs to the console and
+is otherwise invisible, which is the point.
 
 The version number is the one thing a release changes that the renderer shows.
 **Settings → About arrived in S7.5** and reads `APP_VERSION` and

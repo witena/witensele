@@ -2364,6 +2364,13 @@ adds a line here in the same commit.
 
 ### Release workflow (S7.2)
 
+- **CI does not sign yet (S7.3).** The Developer ID certificate lives only in
+  the developer's login keychain. `release.yml` signs and notarizes as soon as
+  `CSC_LINK` (the exported `.p12`, base64), `CSC_KEY_PASSWORD`, `APPLE_ID`,
+  `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` exist as repository
+  secrets; until then a tag still produces unsigned dmgs and signed releases
+  are built locally with `npm run dist:signed`.
+
 - **Neither workflow has executed.** `ci.yml` and `release.yml` are validated by
   `actionlint` and by reading only; GitHub has never run them. The first push
   and the first `v*` tag are the first executions, and three things are most
@@ -2373,6 +2380,18 @@ adds a line here in the same commit.
   draft Release created by the first artifact upload is reused by the rest.
   Until a tag has been pushed, "a tag produces a draft Release" is a design, not
   an observation.
+- **A local `npm run dist` exits 1 after writing both dmgs.** Found while
+  verifying S7.3 and **not caused by it** — the identical crash reproduces with
+  the pre-S7.3 `electron-builder.yml` from `origin/main`. Both dmgs and both
+  blockmaps are written correctly, then app-builder-lib's `computeChannelNames`
+  throws `TypeError: Cannot read properties of null (reading 'channel')` while
+  building `latest-mac.yml`, because a local run has no publish configuration to
+  name a channel from. S7.2 added the `publish:` block but only ever verified
+  `npm run dist:dir` and `npx electron-builder --mac --dir --x64` locally, so a
+  full local `dist` was never run. `dist:dir` is unaffected, and the workflow's
+  `--publish always` with a `GH_TOKEN` probably is too — but that is inference,
+  because the workflows have never run. The likely fix is `--publish never` on
+  the local script.
 - **The x64 dmg has never been opened on an Intel Mac.** It packages correctly
   (an x86_64 `Witena.app` carrying `prebuilds/darwin-x64.node`), but running it
   needs hardware this project does not have. `e2e/packaged.spec.ts` is only ever
@@ -2437,16 +2456,19 @@ adds a line here in the same commit.
   because producing a genuine reinstall needs two differently packaged unsigned
   dmgs and a Gatekeeper prompt. The first S7.6 dmg that replaces an older one is
   the first real observation.
-- **Nothing re-wraps an existing key file when the build becomes signed** (S7.3).
-  A machine that has been running unsigned builds keeps a plain `secrets.key`;
-  only a file created after `WITENA_SIGNED_BUILD` exists is wrapped. Rewriting
-  the user's stored secrets silently on launch is not a side effect an update
-  should have, so the shape of the answer is an offer — "protect the key file
-  with the Keychain" — in Settings, and it needs a screen and a confirmation.
-- **`WITENA_SIGNED_BUILD` has to reach the packaged app**, not only the build
-  shell. It is read by the running process, so S7.3 has to inject it into the
-  bundle (a build-time constant is the obvious form) rather than exporting it in
-  a workflow step and assuming the app sees it.
+- ~~**Nothing re-wraps an existing key file when the build becomes signed**~~ —
+  **done in S7.3.** `rewrapKeyFile` rewrites a plain `fkkey1:` file as `fkkey1w:`
+  on the first signed launch, atomically and with the same 32 bytes. It is done
+  without asking, which reverses S7.6's position: the reasoning is that it
+  rewrites the **container, not the contents**, so no provider key is
+  re-encrypted and there is no observable outcome a confirmation could be about.
+  What is still open is only that it has never run against a real `safeStorage`
+  — see S7.3's remaining list.
+- ~~**`WITENA_SIGNED_BUILD` has to reach the packaged app**~~ — **done in S7.3.**
+  The variable is gone. The flag is `witenaSignedBuild` in the packaged
+  `package.json`, written by electron-builder's `extraMetadata` and read back
+  with `app.getAppPath()`; `isSignedBuild` takes the parsed manifest, so
+  `secrets.ts` stays Electron-free.
 - **The key is never rotated**, and there is no way to re-encrypt every stored
   key under a new one. Nothing needs it today; a compromised key file would.
 - **A copy of `witena.db` alone is no longer a complete backup.** Every `fk1:`
@@ -2661,7 +2683,7 @@ not executed them — and the x64 dmg has never been opened on an Intel Mac; bot
 are in the Phase 6 backlog. Docs: `docs/features/packaging/` (all four) and the
 README's build section.
 
-### S7.3 Signing and notarization `[ ]` (needs an Apple Developer account)
+### S7.3 Signing and notarization `[x]` (2026-09-17)
 What: the dmg opens on a double-click on any Mac.
 - Developer ID Application certificate in CI secrets (`CSC_LINK`,
   `CSC_KEY_PASSWORD`), `hardenedRuntime: true`, an entitlements file for the
@@ -2674,6 +2696,126 @@ What: the dmg opens on a double-click on any Mac.
   signed app.
 Acceptance: a fresh Mac with default Gatekeeper opens the downloaded app
 with no dialog. Docs: `docs/features/packaging/` (all four).
+
+Done: **the first signed and notarized build was produced and verified on
+2026-09-17** with the certificate `Developer ID Application: Shijie Huang
+(CHLLA4N24C)` and a `notarytool` keychain profile. Both architectures were
+accepted by Apple; `spctl -a -vv` reports `source=Notarized Developer ID` and
+`xcrun stapler validate` passes for `mac-arm64/Witena.app` and
+`mac/Witena.app`; `codesign --verify --deep --strict` passes on the installed
+app. Under the hardened runtime the `better-sqlite3` prebuild
+(`prebuilds/darwin-arm64.node`) loads and the database opens with only
+`allow-jit` and `allow-unsigned-executable-memory` — `disable-library-validation`
+is not needed, because electron-builder signs the native module with the same
+Team ID. On its first run the signed build rewrote `secrets.key` from the plain
+`fkkey1:` form to the `safeStorage`-wrapped `fkkey1w:` form, mode `0600` kept,
+every `fk1:` provider ciphertext untouched and still readable (the S7.6
+hand-off, observed on the real files). Two things the first attempt taught:
+**a signed build must not be staged inside an iCloud "Desktop & Documents"
+folder** — File Provider attaches extended attributes that make `codesign` fail
+with "resource fork, Finder information, or similar detritus not allowed", so
+`npm run dist:signed` now writes to `${WITENA_DIST_DIR:-~/Library/Caches/witena-dist}`
+— and **a new developer account's first notarization is slow** (55 minutes here;
+the second, 5). What remains is CI: the five GitHub secrets are not set yet, so
+`release.yml` still produces unsigned dmgs; recorded in Phase 6. The
+configuration notes that follow were written before the certificate existed.
+
+Configuration notes: the configuration is in place.
+`security find-identity -v -p codesigning` reports `0 valid identities found` on
+this machine and the repository has no signing secrets, so everything below is
+written and reasoned but unexercised — which is why this step is `[~]` and not
+`[x]`.
+
+`electron-builder.yml` no longer carries `identity` **at all**. Not `null` and
+not a name: its absence is what makes one file produce both builds, because
+electron-builder looks for a Developer ID Application certificate and either
+signs with it or logs `skipped macOS application code signing`. `null` means
+"never sign" and would need a second config to override; a name ties the file to
+one keychain. Alongside it: `hardenedRuntime: true` (notarization refuses a
+bundle that is not hardened), `gatekeeperAssess: false` (spelled out because
+`spctl --assess` *during* packaging fails on every correctly signed bundle that
+is not yet notarized), `entitlements` / `entitlementsInherit` pointing at the new
+`build/entitlements.mac.plist`, and `notarize: true` — a **boolean** in
+electron-builder 26, verified against `node_modules/app-builder-lib`'s own types
+rather than guessed; there is no sub-object and every credential lives in the
+environment (`APPLE_KEYCHAIN_PROFILE` locally, `APPLE_ID` +
+`APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` in CI).
+
+The entitlements file grants **two** keys, `com.apple.security.cs.allow-jit` and
+`com.apple.security.cs.allow-unsigned-executable-memory`, and deliberately not
+`disable-library-validation`, which is in electron-builder's own default
+template. The reasoning: library validation only rejects code signed by a
+*different* team, and `better_sqlite3.node` is signed by this build with this
+project's identity, because @electron/osx-sign walks `Contents/` and signs every
+Mach-O it finds there. Same team, so validation passes and the exception would
+widen what the app may load in exchange for nothing. **That is reasoning, not an
+observation, and it is the claim a certificate could overturn** — if the first
+signed build fails to open its database with a `Library not loaded` / `code
+signature` error naming the module, the fix is that one key. The plist says so in
+its own comment. The file is also shorter than @electron/osx-sign's default,
+which asks for the camera, microphone, Bluetooth, USB, printing and location —
+none of which Witena touches.
+
+**The unsigned path still works, and that was verified rather than assumed.**
+`npm run dist:dir` on this machine logs `skipped macOS application code signing
+… 0 identities found` and exits 0; `codesign -dv` on the result reports
+`Identifier=Electron`, `flags=0x20002(adhoc,linker-signed)`,
+`TeamIdentifier=not set` — byte-for-byte what S4.4 documented. Two independent
+reasons it cannot break: `findSigningIdentity` warns and returns null unless
+`forceCodeSigning` is set, which this project never sets; and
+`notarizeIfProvided` is only reached *after* a successful signature and skips
+itself again when no credential variable is present, so notarization cannot fire
+on an unsigned build whatever the environment holds.
+
+A full `npm run dist` writes both dmgs and both blockmaps correctly and then
+exits 1 on a `TypeError: Cannot read properties of null (reading 'channel')` in
+app-builder-lib's `computeChannelNames` — a local run has no publish
+configuration to name a channel from. **Pre-existing, not S7.3**: the identical
+crash reproduces with the pre-S7.3 `electron-builder.yml` from `origin/main`. It
+dates from S7.2, which added the `publish:` block but only ever verified
+`dist:dir` locally. Recorded in the Phase 6 backlog under "Release workflow
+(S7.2)".
+
+**Both S7.6 hand-offs are closed.** `WITENA_SIGNED_BUILD` is gone: the flag is
+now `witenaSignedBuild` in the packaged `package.json`, written by
+electron-builder's `extraMetadata` and read back through `app.getAppPath()` by
+`signedBuild()` in `src/main/index.ts`. `isSignedBuild` takes the **parsed
+manifest** and returns a boolean, so `src/main/secrets.ts` stays Electron-free
+and the function is testable with a literal; a checkout answers "not signed"
+because the repository's own manifest has no such field, and so does any failure
+to read one. The flag is passed by the new `npm run dist:signed` and by the
+release workflow only when `steps.signing.outputs.enabled` is true, which
+`src/main/packaging.test.ts` asserts. And `rewrapKeyFile` moves an existing plain
+`fkkey1:` key file to `fkkey1w:` on the first signed launch — same 32 bytes, so
+every `fk1:` ciphertext stays readable — written atomically (temp file, `fsync`,
+`rename`) and failing soft to the plain file with one warning. S7.6 declined this
+as "rewriting the user's stored secrets"; what changed the answer is that it
+rewrites the **container, not the contents**, so there is no observable outcome
+to ask about. Five outcomes unit-tested with a fake wrapper.
+
+`.github/workflows/release.yml` gained the `extraMetadata` argument behind the
+existing gate and `xcrun stapler validate` beside the existing `codesign` /
+`spctl` checks; both workflow files pass `actionlint` 1.7.12. The README's
+Gatekeeper note now distinguishes a released dmg from one you build yourself
+rather than claiming the project has no certificate. `npm run typecheck` and
+`npm test` pass (`Test Files 93 passed`, `Tests 1584 passed`).
+
+What remains before this is `[x]`:
+- A first **signed and notarized dmg**, verified with `spctl -a -vv` reporting
+  `source=Notarized Developer ID` and `xcrun stapler validate`.
+- **`better_sqlite3.node` loading under the hardened runtime** without
+  `disable-library-validation` — the one entitlement decision that is reasoning
+  rather than evidence.
+- **The re-wrap observed on a real signed build**, against the real `safeStorage`
+  rather than the fake, including the refusal path (a locked keychain, a Deny).
+- **The secrets added to GitHub** (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`,
+  `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) and one tagged release that
+  actually uses them.
+- `e2e/packaged.spec.ts` run against the signed app, and a fresh Mac with default
+  Gatekeeper opening it with no dialog, which is the acceptance criterion.
+
+Docs: `docs/features/packaging/` and `docs/features/providers/` (all four each),
+plus the README.
 
 ### S7.4 Auto-update `[ ]` (after S7.3)
 What: the app updates itself from GitHub Releases.
