@@ -2411,6 +2411,61 @@ adds a line here in the same commit.
   a release whose author skips them is packaged and uploaded exactly as one
   whose author does not.
 
+### Auto-update (S7.4)
+
+- **The GitHub feed has never been read, because the repository is private.**
+  This is the one thing standing between S7.4 and a user who never downloads a
+  dmg again. `electron-updater`'s GitHub provider fetches
+  `releases/download/<tag>/latest-mac.yml` unauthenticated, and GitHub answers
+  404 for a private repository's release assets whether or not they exist. The
+  fix is to **make the repository public**, which is what the owner intends and
+  what `provider: github` is already correct for. It is explicitly *not* to put
+  a `token:` in `electron-builder.yml`'s publish block: that block is copied
+  verbatim into `app-update.yml` inside every dmg, so the token would ship to
+  everyone who downloads the app — `src/main/packaging.test.ts` asserts the
+  block holds nothing but `provider` and `releaseType`. Until then a check ends
+  in `state: 'error'` with GitHub's own 404 sentence under it in Settings →
+  About, which is honest but is not a feature.
+- **The whole path was proven locally, and only locally.** Two signed bundles,
+  0.1.0 and 0.2.0, a static local feed, download, `Squirrel.Mac` validation,
+  "Restart to update", relaunch into 0.2.0 — all of it on this machine on
+  2026-09-17 (the procedure is in `docs/features/packaging/backend.md`,
+  "Auto-update"). What that leaves untested is everything GitHub adds:
+  redirects to `objects.githubusercontent.com`, the `latest-mac.yml` a *draft*
+  release serves, differential (blockmap) downloads over a real CDN, and both
+  architectures rather than arm64 alone.
+- **Neither test bundle was notarized.** Squirrel does not check for a ticket —
+  it checks that the new signature matches the running one — so the update path
+  does not need notarization. Gatekeeper's behaviour *after* an update, on a
+  bundle that was notarized when it was downloaded as a dmg and then replaced
+  in place, has not been observed.
+- **`autoInstallOnAppQuit` is on and nothing tells the user.** Once an update is
+  downloaded, quitting the app installs it, whether or not the notice bar was
+  dismissed — "Not now" means "not this restart", not "not at all". That is
+  `electron-updater`'s default and it is the behaviour most apps have, but the
+  copy does not say so, and a user who dismissed the bar and quit will find a
+  different version next morning.
+- **The notice bar has never been reviewed in the light theme.** It was read and
+  clicked in dark mode at 1440×900 during the manual run; `e2e/theme.spec.ts`'s
+  light screenshots cannot reach the `downloaded` state, so nobody has looked at
+  the strip on a white ground. Recorded again in
+  `docs/features/ui-shell/implement.md`.
+- **There is no "download now" and no way to defer for longer than a session.**
+  `autoDownload` is on, so an `available` update starts a 150 MB transfer with no
+  consent, on whatever network the user is on. A metered-connection or
+  "ask before downloading" setting is the obvious next decision, and it is a
+  product decision rather than a bug.
+- **A failed check is invisible unless the user opens Settings → About.** There
+  is deliberately no error event (see
+  `docs/features/backend-client/context.md`), so an app whose feed has been
+  broken for a month looks exactly like one that is up to date until somebody
+  looks. Acceptable while the alternative is nagging; worth revisiting if the
+  feed is ever expected to fail for a reason the user can fix.
+- **The six-hour timer is `setInterval`, not a wall-clock schedule.** A laptop
+  that sleeps for two days checks once when it wakes and then six hours later,
+  rather than catching up. Harmless, and named here so nobody reads the constant
+  and assumes otherwise.
+
 ### First run and About (S7.5)
 
 - **The licence list carries names, versions and SPDX ids, not licence texts.**
@@ -2817,7 +2872,7 @@ What remains before this is `[x]`:
 Docs: `docs/features/packaging/` and `docs/features/providers/` (all four each),
 plus the README.
 
-### S7.4 Auto-update `[ ]` (after S7.3)
+### S7.4 Auto-update `[x] (2026-09-17)`
 What: the app updates itself from GitHub Releases.
 - `electron-updater` in the main process behind an injected interface (rule
   5: the updater is electron and lives in `src/main/ipc/` or `index.ts`),
@@ -2830,6 +2885,123 @@ What: the app updates itself from GitHub Releases.
 Acceptance: an older installed build sees a newer draft-published Release,
 downloads it and restarts into it. Docs: `docs/features/packaging/` and the
 settings owner (all four each).
+
+Done: **the acceptance criterion was met against a local feed rather than a
+Release, because the repository is private** — and that is the one fact this step
+is designed around. `electron-updater`'s GitHub provider fetches
+`releases/download/<tag>/latest-mac.yml` unauthenticated and GitHub answers 404
+for a private repository's assets. The fix is to make the repository public,
+which the owner intends and which `provider: github` is already correct for; the
+fix is **not** a `token:` in the publish block, because electron-builder copies
+that block verbatim into `app-update.yml` **inside the dmg**, so the token would
+ship to everyone who downloads the app. `src/main/packaging.test.ts` now asserts
+the block holds nothing but `provider` and `releaseType`, so nobody can take the
+other route by accident.
+
+What *was* exercised, on this machine on 2026-09-17: two signed bundles (0.1.0
+and 0.2.0, the same `Developer ID Application: Shijie Huang (CHLLA4N24C)` S7.3
+used, neither notarized — Squirrel checks that the new signature matches the
+running one, not that a ticket exists), a static local feed on
+`127.0.0.1:45999`, and the whole walk. The older app found 0.2.0, downloaded the
+150 MB zip, `Squirrel.Mac` validated and staged it, the notice bar appeared
+reading *"Version 0.2.0 is ready to install."*, Settings → About showed
+`data-state="downloaded"`, and clicking **Restart to update** quit and relaunched
+into a bundle whose `CFBundleShortVersionString` is `0.2.0`. The procedure is
+written down in `docs/features/packaging/backend.md`, "Auto-update", including
+the two things that cost an attempt each: the downloaded zip is cached in
+`~/Library/Caches/witena-updater/pending/`, so a second run never asks the feed
+again; and `autoInstallOnAppQuit` means **quitting installs the update whether or
+not anyone pressed Restart**, so the old bundle has to be rebuilt between
+attempts. What GitHub would add on top — redirects to
+`objects.githubusercontent.com`, a draft release's asset URLs, differential
+downloads over a CDN, x64 — is untested and is in the Phase 6 backlog.
+
+**The seam is an injected port, not the `handlers/system.ts` + `src/main/ipc/`
+overlay S5.8 established.** Every earlier electron exception is a one-line call
+with no state behind it, so an overlay that rejects everywhere else costs
+nothing. The updater has a cached status, a six-hour timer and two emitted
+events, and putting those in `src/main/ipc/` would put them in the one directory
+no unit test can enter. So `src/shared/updates.ts` holds the status and the
+normalised `UpdateEvent` union, `src/main/updates/state.ts` is the reducer,
+`src/main/updates/service.ts` owns the status, the schedule, the emissions and
+the refusal, and `src/main/ipc/updater.ts` is the **only** file that imports
+`electron-updater` — which is electron in everything but the package name, since
+it reads `app.getVersion()`, the bundle's `app-update.yml` and the code signature
+of what it downloaded. `ctx.updates` is a real `UpdateService` in every build; a
+context built without a port (every unit test, a future server) answers
+`{ state: 'unsupported', reason }` and opens no socket and no timer.
+
+**`unsupported` is a status rather than a rejection**, which is the decision the
+UI depends on. The `pick*` methods reject because nothing renders their failure —
+the caller treats it as a cancel. Here the screen's whole job is to answer "am I
+on the newest version, and if you do not know, why not", and `internal` carries
+no reason a user can act on. So an unsigned bundle says *"This build is not
+signed, so macOS cannot replace it with an update"* and a checkout says *"This is
+a development build"*, and the button is visibly disabled rather than missing.
+The signed flag is S7.3's `witenaSignedBuild`, read in `src/main/index.ts` where
+`app.isPackaged` is also readable; the gate's order is the order of the reasons,
+since a checkout is a checkout whether or not it would have been signed.
+
+Two rules in `reduceUpdate` exist only because the check repeats every six hours.
+**`downloaded` is terminal**: a later check must not move the state back to
+`checking` or `up-to-date`, because the downloaded bundle is still installable and
+a notice bar that vanished on its own would strand the user one restart away from
+a version they can no longer reach; only a `downloaded` event for a *different*
+version replaces it. **`unsupported` is terminal** too. Both are unit-tested by
+identity — the reducer returns the same object — which is also what keeps
+`update.downloaded` from being emitted twice when the library re-reports itself.
+
+**Two events, and deliberately no third.** `update.available` and
+`update.downloaded` are the moments that change what the user can *do*, and both
+fire on the transition rather than the state. There is no `update.progress`: a
+percentage changes dozens of times over a 150 MB download for a screen almost
+nobody has open, and the one screen that does re-reads `system.updateStatus` when
+it mounts. The percentage therefore exists in the status and never in an event.
+
+**`electron-builder.yml` gained the `zip` target**, which S4.4 had explicitly
+declined ("the zip exists for auto-update, which the MVP does not have"). There is
+nothing to weigh: `Squirrel.Mac` replaces a bundle from a zip and nothing else,
+and `latest-mac.yml` is generated from whatever targets were built, so a release
+carrying only dmgs is a feed the updater downloads and then cannot apply. The dmg
+stays what a human downloads. A related trap worth recording: electron-builder
+writes `app-update.yml` into the bundle **only when a dmg or zip target is
+built**, so an app packaged with `--dir` fails at download time with
+`ENOENT … app-update.yml` however well the rest is configured.
+
+`WITENA_UPDATE_FEED` points the updater at a generic feed **and lifts the
+packaged/signed gate**, because its entire purpose is to run the updater on a
+build that would otherwise refuse to look. It is a developer's environment
+variable: nothing in the UI writes it and nothing reads it back.
+
+The UI is two surfaces over one store. Settings → About grew an **Updates** block
+directly under the version — the question it answers — with one sentence per
+state, a "Check for updates" button that is disabled while a check or a download
+is running, and "Restart to update" once there is something to restart into. The
+**notice bar** is a strip along the **bottom** of `AppShell`, not the top:
+`titleBarStyle: 'hiddenInset'` leaves the traffic lights floating over the
+top-left of the content, and the bottom edge belongs to nobody. It is dismissable
+per **version** rather than by a boolean, in the renderer rather than in the
+settings row, because a dismissal that survived a restart would hide an update
+that restart did not install. `lib/updates.ts` spells all eight state keys out in
+a `switch` rather than assembling `'settings.about.updates.' + state`, so the
+usage guard can see them; `lib/updates.test.ts` walks `UPDATE_STATES` and asserts
+each key resolves in `en.json`, which is the other direction. The updater's own
+failure text is interpolated as **data** into `settings.about.updates.error` —
+there is no fixed set of network failures to write copy for, the same call
+`notices.providerError` already makes.
+
+One interop trap cost a launch: `electron-updater` is CommonJS and this project
+is ESM, so `import { autoUpdater } from 'electron-updater'` type-checks and then
+fails at runtime with `Named export 'autoUpdater' not found`. The default import
+plus a destructure is the documented fix and the error message recommends it.
+
+Verified: `npm run typecheck` clean; `npm test` **Test Files 97 passed, Tests
+1626 passed**; `npm run build`; and `npx playwright test e2e/smoke.spec.ts
+e2e/updates.spec.ts e2e/ui-shell.spec.ts` — **9 passed** (`ui-shell` because
+`AppShell` became a column for the bar). The rest of the e2e suite was not run:
+other agents were sharing this machine's Ollama. Docs:
+`docs/features/{packaging,backend-client,ui-shell,i18n}/` (all four each) and the
+`docs/README.md` index.
 
 ### S7.5 First run `[x] (2026-09-13)`
 What: a new user reaches a working chat without reading the README.

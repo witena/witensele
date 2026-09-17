@@ -22,6 +22,7 @@ import { useMessagesStore } from '../stores/messages'
 import { usePermissionsStore } from '../stores/permissions'
 import { usePresenceStore } from '../stores/presence'
 import { useRunStore } from '../stores/run'
+import { useUpdatesStore } from '../stores/updates'
 import { useUsageStore } from '../stores/usage'
 import { getBackend } from './backend-provider'
 
@@ -73,6 +74,16 @@ export function applyBackendEvent(event: BackendEvent): void {
       break
     case 'permission.resolved':
       usePermissionsStore.getState().applyResolved(event.requestId)
+      break
+    // The two auto-update announcements (S7.4). There is deliberately no
+    // progress event between them — see `stores/updates.ts` — so these are the
+    // only two moments the bar and the About screen learn anything without
+    // asking.
+    case 'update.available':
+      useUpdatesStore.getState().applyAvailable(event.version)
+      break
+    case 'update.downloaded':
+      useUpdatesStore.getState().applyDownloaded(event.version)
       break
     // `system.test` belongs to the Developer section, which subscribes itself.
     default:

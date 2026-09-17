@@ -40,6 +40,7 @@ import { createProviderFetch } from './providers/registry'
 import type { ModelOptions, ResolvedProvider } from './providers/registry'
 import { resolveProvider } from './providers/resolve'
 import type { SecretStore } from './secrets'
+import { UpdateService, type UpdateServiceOptions } from './updates/service'
 
 /**
  * The parts of `AgentSupervisorOptions` a caller may override.
@@ -249,6 +250,17 @@ export interface AppContext {
    * stub rather than run whatever `gcloud` the developer happens to have.
    */
   googleCli: GoogleCli
+  /**
+   * The auto-updater's status, schedule and events (S7.4).
+   *
+   * On the context for the same reason as `runners` and `supervisor`: it owns a
+   * six-hour timer and a cached status that outlive every IPC call, and two
+   * contexts (a test's and the app's) must never share one. Electron-free, like
+   * everything else here — the `electron-updater` half is injected as
+   * `options.updater` by `src/main/index.ts`, and a context built without one
+   * answers `unsupported`, which is the truth for a server build.
+   */
+  updates: UpdateService
   /** Releases the database. Safe to call more than once. */
   close(): void
 }
@@ -280,7 +292,25 @@ export interface AppContextOptions {
    * repositories, exactly like the supervisor's accessors.
    */
   mcp?: Omit<McpManagerOptions, 'getServer'>
+  /**
+   * The auto-updater behind `system.updateStatus` (S7.4).
+   *
+   * Omitted — which is every test and every non-Electron build — the service is
+   * constructed in the `unsupported` state and never touches the network.
+   * `src/main/index.ts` passes the `electron-updater`-backed port, or the reason
+   * there is none.
+   */
+  updates?: UpdateServiceInjection
 }
+
+/**
+ * What `createAppContext` takes for the updater: the port, or why there is none,
+ * plus the two knobs a test turns.
+ *
+ * Shaped as the `UpdaterSetup` of `src/main/ipc/updater.ts` plus overrides, so
+ * `index.ts` can spread the setup straight in.
+ */
+export type UpdateServiceInjection = Omit<UpdateServiceOptions, 'emit'>
 
 /** Builds the MCP pool's accessors from a finished context. */
 export function createMcpManager(
@@ -338,6 +368,15 @@ export function createAppContext(options: AppContextOptions): AppContext {
     permissions: createPermissionGate({ emit: (event) => events.emit(event) }),
     anthropicCli: options.anthropicCli ?? createAnthropicCli(),
     googleCli: options.googleCli ?? createGoogleCli(),
+    // Constructed but never started: `start()` is called by `src/main/index.ts`
+    // once the window exists, so building a context in a test can never open a
+    // six-hour timer or a socket.
+    updates: new UpdateService({
+      updater: null,
+      reason: 'development',
+      ...(options.updates ?? {}),
+      emit: (event) => events.emit(event)
+    }),
     // Spread rather than assigned: `exactOptionalPropertyTypes` wants the field
     // absent, not present and undefined.
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
@@ -349,6 +388,9 @@ export function createAppContext(options: AppContextOptions): AppContext {
       // After `stopAll`, so a prompt whose turn is being aborted is closed by
       // its own signal and this only catches whatever that missed.
       ctx.permissions.abortAll()
+      // Stops the six-hour check and unsubscribes from the updater; a no-op on
+      // a context whose updater was never started.
+      ctx.updates.stop()
       // Fire and forget: `close()` is synchronous because every caller of it is
       // (electron's `will-quit`, a test's `afterEach`), and a child process that
       // takes a moment to exit must not hold either of them up. The transport

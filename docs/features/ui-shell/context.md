@@ -36,6 +36,14 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
   licences of every bundled dependency. It is the shell's section because
   nothing else owns it — it describes the application itself rather than a
   feature — and because the settings navigation it joins is this feature's.
+- **The Updates block and the notice bar (S7.4)**, for the same reason. The
+  block sits directly under the version, which is the question it answers, and
+  the bar is a strip along the **bottom** of `AppShell` offering "Restart to
+  update" once something has been downloaded. The mechanism behind them —
+  `electron-updater`, the state machine, the feed — belongs to
+  [`../packaging/context.md`](../packaging/context.md) and
+  [`../backend-client/context.md`](../backend-client/context.md); what this
+  feature owns is `stores/updates.ts`, `lib/updates.ts` and the two surfaces.
 
 ## Out of scope
 
@@ -49,7 +57,7 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
 | Live presence dots | S2.4 (`presence`) — the `PresenceDot` component exists, nothing feeds it yet |
 | The Data & backup settings section | S4.x — it renders an empty state naming the step. Providers (S1.6), MCP servers (S3.1), Skills (S3.2), Appearance & language (S1.5), Timeouts & heartbeat (S2.4), About (S7.5) and Developer have content |
 | The first-run card itself | S7.5, split between [`../chats/context.md`](../chats/context.md) (it is drawn in the conversation column, in place of this feature's empty state) and [`../providers/context.md`](../providers/context.md) (the controls it drives). The shell's part is one line: the column asks whether the card is visible and renders the `EmptyState` only when it is not |
-| "Check for updates" in About | S7.4 — the updater is not written yet, so About shows the version without offering to change it |
+| ~~"Check for updates" in About~~ | **Shipped in S7.4.** The block shows the state, the version being offered and the button; an unsigned build or a checkout shows why there is nothing to check instead |
 | ~~A light theme~~ | **Shipped in S5.8**, and it was the swap this row predicted: one override block in `index.css` plus `data-theme` on `<html>`. No component changed |
 
 The group-settings controls in the member panel are the one grey area: they are
@@ -91,6 +99,9 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | The smoke widgets moved to Settings → Developer rather than deleted | Delete them; keep a hidden debug route | `smoke.spec.ts` and `i18n.spec.ts` are the only end-to-end proof the transport works, and nothing else is observable until S1.7. A visible settings section is cheaper than a hidden one and survives being forgotten |
 | `smoke.*` strings moved under `settings.developer.*` | Keep the `smoke` namespace | The namespace belonged to a screen that no longer exists. `locales.test.ts`'s `EXPECTED_NAMESPACES` was updated with it, which is the deliberate decision its comment asks for |
 | Group settings are live local state, not disabled controls | Render them `disabled` | A page of dead controls is hard to judge against the mockup. Local state shows the real interaction and is obviously temporary |
+| **S7.4: the notice bar is along the bottom of the window** | A banner across the top, above the rail and the page; a toast in a corner; a badge on the Settings rail icon | `titleBarStyle: 'hiddenInset'` leaves the traffic lights floating over the top-left of the *content*, so a full-width top bar either sits under them or needs the same inset every draggable header already carries — a cost paid for a strip that is visible for one restart in a user's whole month. The bottom edge belongs to nobody. A toast implies "this will go away"; this offer should not. A badge on the rail is a nudge rather than an offer, and the offer is one click |
+| **S7.4: the bar is dismissable per version, in the renderer** | Not dismissable; a settings row like `onboardingDismissed`; one boolean | "Not now" has to mean something or the strip is nagging, and it has to stop meaning it when a *newer* version arrives — hence per version, not a boolean. It stays in the store rather than the database because it is a fact about this window: a dismissal that survived a restart would hide an update the restart did not install, since Electron installs the pending update on quit either way |
+| **S7.4: About re-reads the status on mount** | Trust the bootstrap read and the two events | The events carry `available` and `downloaded` and nothing else — there is deliberately no progress or error event — so a window that has been open for hours has a status that is right about what the user can do and possibly stale about the rest. `system.updateStatus` is a cached read with no network behind it, so the mount costs one IPC round trip |
 | The leftmost column headers sit 32px from the top, not 14px | Keep the mockup's 14px; use a custom title bar | macOS draws the traffic lights over the top-left of the content. The mockup has no window chrome to design around; something had to give (see [frontend.md](./frontend.md)) |
 
 ## Open questions

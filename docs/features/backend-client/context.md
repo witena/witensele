@@ -29,13 +29,19 @@ only in the type system.
 - `src/shared/index.ts` — one import point for all of the above.
 - `src/shared/contracts.test.ts` — runtime and type-level tests over the contract.
 
-  The surface has grown three times since S1.1 declared it, and each addition
+  The surface has grown four times since S1.1 declared it, and each addition
   follows the same three steps: the method on `BackendApi`, its name in
   `BACKEND_METHODS`, and a case in `contracts.test.ts` (S5.3
   `providers.authStatus` / `login` / `logout` and S5.13's
   `providers.setQuotaProject`, S5.4 `permission.reply`, S5.6
-  `chat.handoff`). The compile-time `Assert` below makes the first two
-  inseparable.
+  `chat.handoff`, S7.4 `system.updateStatus` / `checkForUpdates` /
+  `installUpdate` plus the first **new event pair** since S5.4,
+  `update.available` / `update.downloaded`). The compile-time `Assert` below
+  makes the first two inseparable.
+- `src/shared/updates.ts` (S7.4) — the update status, its eight states and the
+  normalised `UpdateEvent` union the updater port speaks. A shared module beside
+  `usage.ts` and `presets.ts` rather than more of `types.ts`, because all three
+  processes read it and none of them should know that `electron-updater` exists.
 
 **The transport (S1.3)**
 
@@ -53,8 +59,13 @@ only in the type system.
   (`ipcMain.handle` plus event forwarding), `secret-store.ts` (`safeStorage`),
   `dialogs.ts` (`system.pickFolder`, S3.2, plus `system.pickSavePath` and
   `system.pickPaths`, S5.10), `theme.ts` (`system.applyTheme`,
-  S5.8) and `editor.ts` (`system.openInEditor`, S5.7) — the methods that need a
-  window, see [`backend.md`](./backend.md).
+  S5.8), `editor.ts` (`system.openInEditor`, S5.7) — the methods that need a
+  window, see [`backend.md`](./backend.md) — and `updater.ts` (S7.4), which is
+  the first of them that is not a *method* at all but an **injected port**.
+- `src/main/updates/` (S7.4) — `state.ts`, the pure reducer over the eight update
+  states, and `service.ts`, which owns the cached status, the six-hour schedule
+  and the two emitted events. Electron-free, and on the `AppContext` for the same
+  reason `runners` and `supervisor` are: it outlives every IPC call.
 - `src/preload/index.ts` / `index.d.ts` — the `window.witena` bridge.
 - `src/renderer/src/lib/backend.ts` — `createElectronBackendClient` and the
   `backend` singleton, the only renderer file that knows a transport exists.
@@ -103,6 +114,9 @@ through `BackendClient`.
 | **Two channel constants (`witena:invoke`, `witena:event`)** | One channel per method name from `BACKEND_METHODS` | 35 registrations buy nothing: the method name is already the first argument and is validated with `isBackendMethod` before dispatch |
 | **`SecretStore` falls back to base64 with a `plain:` marker** | Refusing to start when `safeStorage` is unavailable | The app must still run on a machine with no keyring (CI, a fresh Linux session). The prefix makes the downgrade visible in the database and the store warns on first use |
 | **`WITENA_USER_DATA` overrides `app.getPath('userData')`** | Pointing the e2e test at the real database; injecting a database path only | The whole userData directory moves, so skills and memory land in the temporary directory too when they arrive, and no test run can touch a developer's real data |
+| **S7.4: the updater is an injected port, not a layered overlay** | The `handlers/system.ts` + `src/main/ipc/` overlay that `system.applyTheme` uses; `electron-updater` called straight from `index.ts` | Every earlier electron exception is a *one-line call with no state behind it*, so an overlay that rejects everywhere else costs nothing. The updater has a cached status, a six-hour timer and two emitted events, and all three are behaviour a test has to reach — an overlay would put them in the one directory no unit test can enter. So `src/main/updates/` is Electron-free and takes an `Updater` port; `src/main/ipc/updater.ts` is the only implementation that touches the library, and a build without one answers `{ state: 'unsupported', reason }` rather than rejecting. The cost is a fourth constructor argument on `AppContext`; the gain is that the whole state machine is driven by a twenty-line fake |
+| **S7.4: `unsupported` is a status, not an error** | Reject `system.updateStatus` with `internal` on a build that cannot update, as the `pick*` methods do | The `pick*` rejection is right because nothing is going to render it — the caller cancels. Here the screen's entire job is to answer "am I on the newest version, and if you do not know, why not", and `internal` carries no reason a user could act on. So the refusal is data with a `reason` the UI translates |
+| **S7.4: two events and no progress event** | An `update.progress` event carrying the percentage | `update.available` and `update.downloaded` are the two moments that change what the user can *do*. A percentage changes what a number says, dozens of times, over a 150 MB download, for a screen almost nobody is looking at — and the one screen that is asks for the status when it mounts. The bar is raised by `downloaded`, which is also the state the reducer refuses to leave |
 | **End-to-end coverage with Playwright's Electron driver** | Only unit tests with a fake bridge; spectron | The acceptance criterion is a round trip through preload, `contextBridge` and structured clone — exactly the parts a fake bridge cannot exercise. Playwright drives the real binary and needs no browser download |
 
 ## Open questions

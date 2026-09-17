@@ -2,7 +2,8 @@
 
 ## Approach
 
-Six pieces, none of which touches runtime behaviour except the third:
+Eight pieces, none of which touches runtime behaviour except the third and the
+seventh:
 
 1. **`electron-builder.yml`** at the repository root. electron-builder reads it
    without being told to; `package.json` carries no `build` key, so there is one
@@ -23,7 +24,14 @@ Six pieces, none of which touches runtime behaviour except the third:
 6. **`scripts/sync-version.mjs`** (S7.2), the one line of glue that makes
    `npm version` enough to cut a release: it rewrites `APP_VERSION` from the
    manifest between npm's bump and npm's commit.
-7. **`scripts/generate-licenses.mjs`** (S7.5), which runs from `prebuild` — so
+7. **The `zip` target and the `publish:` block** (S7.4), which together are the
+   whole of what packaging owes the auto-updater: the zip is the only form
+   macOS can install over a running app, and the publish block is copied into
+   the bundle as `app-update.yml`, which is where `electron-updater` learns
+   which feed to ask. Neither is read by anything at build time; both are read
+   by a *running* app weeks later. See [`backend.md`](./backend.md),
+   "Auto-update".
+8. **`scripts/generate-licenses.mjs`** (S7.5), which runs from `prebuild` — so
    `npm run build`, and therefore `npm run dist`, starts by regenerating the
    licence list Settings → About renders. It reads `node_modules`, which a
    packaged app does not have, which is exactly why it runs at build time. See
@@ -392,7 +400,7 @@ channel and no event. The only runtime symbol it touches is the private
 | File | Covers |
 |---|---|
 | `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran) |
-| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg for both architectures, an `artifactName` carrying `${arch}` so the two cannot collide, and `publish: github` / `releaseType: draft`. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
+| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there to reach the private repository's release assets would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
 | `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
 | `actionlint` (a CI job, not a file here) | Both workflow files: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |
 
@@ -413,15 +421,12 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
 
 ## Known limitations and TODOs
 
-- **Signing is configured but has never run** (S7.3). There is no Developer ID
-  certificate on the machine — `security find-identity -v -p codesigning` reports
-  `0 valid identities found` — and no GitHub secrets, so everything the hardened
-  runtime, the entitlements and notarization do is reasoning checked against
-  electron-builder's source rather than against an artifact. What remains
-  unproven, exactly: that a signature is accepted, that notarization returns and
-  staples a ticket, that `better_sqlite3.node` loads under the hardened runtime
-  **without** `disable-library-validation`, and that the key file is re-wrapped
-  on the first signed launch. Listed in STEPS.md, S7.3.
+- **Signing runs locally but not in CI** (S7.3). The first signed and notarized
+  build was produced and verified on 2026-09-17 — see [`backend.md`](./backend.md),
+  "What the first signed build measured" — and S7.4 used the same certificate
+  again for its two update bundles. What is still unproven is the *runner*: none
+  of the five `CSC_*` / `APPLE_*` secrets is set on GitHub, so `release.yml`
+  would still produce unsigned dmgs. Listed in STEPS.md, Phase 6.
 - **A build you make yourself is unsigned**, and Gatekeeper refuses its first
   double-click; right-click → Open once. Verified to still be true after S7.3:
   `npm run dist:dir` with no identity logs `skipped macOS application code
@@ -455,9 +460,18 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
 - **The dmg is ~150 MB.** Mostly the Electron runtime. The production dependency
   tree is shipped whole even though the renderer's share of it is already bundled
   into `out/renderer`, which is the obvious place to look if it ever matters.
-- **`latest-mac.yml` and the blockmaps** are uploaded to the Release for an
-  updater that does not exist yet (S7.4). Harmless, and the feed is exactly
-  what `electron-updater` will read, so producing it now costs nothing.
+- **The GitHub feed cannot be read while the repository is private** (S7.4).
+  `latest-mac.yml`, the zips and the blockmaps are all uploaded to the Release
+  and are exactly what `electron-updater` wants; GitHub simply will not serve a
+  private repository's release assets to an unauthenticated request, and the only
+  token that would fix it would ship inside the dmg. A check therefore ends in
+  `state: 'error'` with GitHub's 404 under it until the repository is public. The
+  mechanism itself was proven against a local generic feed — procedure in
+  [`backend.md`](./backend.md), "Auto-update".
+- **A local `npm run dist` now writes four artifacts instead of two** (S7.4): a
+  dmg and a zip per architecture, roughly 150 MB each. The zip is not a second
+  download for a human — it is the only form the updater can apply — but it does
+  double the time and the disk a local packaging run costs.
 - **The release notes are written by hand** in the draft. Nothing generates
   them from the commits.
 - **The demo recording needs a warm machine.** It expects `qwen2.5:3b` and

@@ -16,7 +16,7 @@
 import { join } from 'node:path'
 import type { BackendEvent } from '@shared/events'
 import { LOCAL_USER_ID } from '@shared/types'
-import type { AppContext, SupervisorOverrides } from './app-context'
+import type { AppContext, SupervisorOverrides, UpdateServiceInjection } from './app-context'
 import { createMcpManager, createSupervisor, MEMORY_DIR } from './app-context'
 import { createRepositories } from './db/repositories'
 import type { TestDatabase } from './db/testing'
@@ -32,6 +32,7 @@ import type { GoogleCli } from './providers/google-cli'
 import { gcloudMissing } from './providers/google-cli'
 import type { FetchImpl } from './providers/discovery'
 import { createInsecureSecretStore, type SecretStore } from './secrets'
+import { UpdateService } from './updates/service'
 
 export interface TestAppContextOptions {
   /** Injected outbound HTTP, so a test never opens a socket. */
@@ -87,6 +88,12 @@ export interface TestAppContextOptions {
    * and it makes the assertions readable (`request-1`).
    */
   newRequestId?: () => string
+  /**
+   * The auto-updater (S7.4). Defaults to none, which is the honest baseline: a
+   * unit test has no bundle to replace, so `unsupported` is the true answer and
+   * no timer or socket is ever opened.
+   */
+  updates?: UpdateServiceInjection
 }
 
 /**
@@ -184,10 +191,22 @@ export function createTestAppContext(
     }),
     anthropicCli: options.anthropicCli ?? absentAnthropicCli(),
     googleCli: options.googleCli ?? absentGoogleCli(),
+    // S7.4: no updater unless the test brings one, which is the same answer a
+    // checkout gives — and the reason the whole suite can call
+    // `system.updateStatus` without a network or a bundle. A suite about the
+    // updater builds its own `UpdateService` with a fake port instead
+    // (`updates/service.test.ts`); this one only has to be present and quiet.
+    updates: new UpdateService({
+      updater: null,
+      reason: 'development',
+      ...(options.updates ?? {}),
+      emit: (event) => bus.emit(event)
+    }),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     close: () => {
       ctx.supervisor.stop()
       ctx.permissions.abortAll()
+      ctx.updates.stop()
       void ctx.mcp.closeAll().catch(() => undefined)
       database.cleanup()
     }

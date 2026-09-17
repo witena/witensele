@@ -27,6 +27,13 @@ database that opens on the first launch.
   the shipped binary rather than `out/`.
 - The demo recording (`e2e/demo.record.ts`) and the repository `README.md` that
   shows it, because both are produced from the same shipped surface.
+- **Since S7.4**, auto-update: the `zip` target beside the dmg (the only form
+  `electron-updater` can apply on macOS), the `publish:` block read back out of
+  the packaged `app-update.yml`, and the `WITENA_UPDATE_FEED` escape hatch that
+  points a build at a generic feed instead. The code that consumes it —
+  `src/main/updates/` and `src/main/ipc/updater.ts` — belongs to
+  [`backend-client`](../backend-client/context.md); this feature owns what the
+  build has to produce for it.
 - **Since S7.2**, the two GitHub Actions workflows: `ci.yml` (the gate on every
   push and pull request) and `release.yml` (a `v*` tag → two dmgs in a draft
   Release), plus the version bump that produces such a tag —
@@ -43,7 +50,7 @@ database that opens on the first launch.
 | **Producing** a signed and notarized build | S7.3 configured it; nothing has exercised it. There is no certificate on this machine and no GitHub secrets, so the signed path is reasoning checked against electron-builder's source. See "Open questions" and STEPS.md S7.3 |
 | Wrapping the secrets key file on a real signed build | Same reason. `rewrapKeyFile` is unit-tested against a fake `safeStorage`; the real Keychain on a real Developer ID bundle has never been asked |
 | Windows and Linux targets | PLAN.md scopes the MVP to macOS. The layout has never been reviewed on another platform (`titleBarStyle: 'hiddenInset'` is macOS-only), so shipping a build there would be a promise nobody has checked |
-| Auto-update | S7.4. `electron-updater` needs a signed build; the feed it will read (`latest-mac.yml` beside the dmgs in the Release) is produced today and nothing reads it yet |
+| **Updates from the real GitHub feed** | S7.4 built and proved the whole mechanism against a **local generic feed**. It cannot work against this repository yet, because the repository is **private** and `electron-updater`'s GitHub provider cannot read a private repository's release assets without a token — which would have to ship inside the app. The fix is to make the repository public, not to embed a token; recorded in STEPS.md's Phase 6 |
 | A universal binary | Two dmgs instead: each is half the download, and the native module is compiled per architecture either way (PLAN.md, "Local release") |
 | Windows and Linux in CI | Same reason as the targets themselves. `ci.yml` runs on `macos-latest` only |
 | e2e in CI | `npm run e2e` drives the real Electron binary and the specs that matter talk to a local Ollama. A hosted runner has neither, and a suite that skips its own assertions is worse than one that is honestly local |
@@ -75,7 +82,9 @@ Nothing depends on packaging in return: no runtime code branches on it except
 | The 16 px variant is re-rendered from the same SVG with a thicker stroke (S7.1) | Accept the mush; commit a separate `icon-16.svg`; thicken the stroke everywhere | 0.47 px of stroke averages to grey at 16 px, which is the one size where an icon has to be recognised rather than read. A second committed file would be a second drawing that can drift; a `sed` over the one SVG cannot. Thickening everywhere would coarsen the sizes that are already right |
 | The tile has no border (S7.1) | A hairline edge, as the proposal drew on a light ground | A hairline is invisible against a light Dock and a grey fuzz at 16 px — it makes the mark *look* like a rendering artefact at exactly the size where it has least room. The tile's own anti-aliased edge is enough |
 | `build/icon-dark.svg` is kept but never shipped (S7.1) | Derive a dark version when something needs one; ship both and pick at runtime | macOS takes one icns; there is nothing to pick between. It is kept because the README and future dark surfaces need a mark that does not carry a white slab, and re-deriving it by hand each time is how the two drawings drift apart. `brand-mark.test.ts` holds it to the same geometry as the light one |
-| One dmg, no zip | Both, as electron-builder does by default | The zip exists for auto-update, which the MVP does not have. A second 150 MB artifact with no reader is noise |
+| ~~One dmg, no zip~~ — **S7.4 added the zip** | Keep the dmg only and teach the updater to read it; a universal zip | S4.4's reasoning was "the zip exists for auto-update, which the MVP does not have", and S7.4 is that auto-update. There is no alternative to reason about: macOS's `Squirrel.Mac` replaces an app bundle from a **zip** and nothing else, and `latest-mac.yml` is generated from whatever targets were built — a release with only a dmg is a feed `electron-updater` downloads and then cannot apply. The dmg stays what a human downloads; the zip is what the app downloads |
+| **S7.4: `provider: github` stays although the repository is private** | Switch to `provider: generic` and host `latest-mac.yml` somewhere public; ship a read-only token in the bundle | The owner intends to make the repository public, and on that day `github` starts working with no edit. A token is out of the question whatever its scope: `app-update.yml` is a plain file inside the dmg, so "a token in the config" means "a token handed to everyone who downloads the app" — `packaging.test.ts` asserts the `publish` block has none. A second host is a second thing to keep in step with the Release for as long as the private phase lasts. Until then a check ends in `state: 'error'` with GitHub's own 404 under it, which is at least honest |
+| **S7.4: `WITENA_UPDATE_FEED` lifts the signed/packaged gate as well as changing the URL** | A second variable for the gate; never lift it | The variable exists to exercise the updater on a build that would otherwise refuse to look, so a version of it that changed only the URL would be useless for the one job it has. It is a developer's environment variable: nothing in the UI writes it, nothing reads it back, and an app the user double-clicks has never seen it |
 | electron-builder publishes the Release itself (`--publish always`) | `softprops/action-gh-release` uploading `dist/*` | electron-builder is what writes `latest-mac.yml` and the `.blockmap` files, and it writes them knowing which release and which files they describe. A generic upload step would carry the same bytes but leave the update feed a hand-maintained copy of a fact the builder already knows — and S7.4's `electron-updater` reads exactly that feed. The cost is a `GH_TOKEN` env var and less obvious logs |
 | A **draft** Release, never a published one | Publishing straight from the tag | A tag is cheap to push and a published release is not cheap to retract. The draft is the review step: the artifacts exist, the notes can be written, and nothing is offered to a user until someone clicks |
 | Both architectures in one `electron-builder` invocation | A `strategy.matrix` of two jobs | `latest-mac.yml` describes a *release*, not an architecture. Two jobs would each write one listing only their own dmg and the second upload would overwrite the first, leaving an updater feed that knows about half the release |
@@ -97,6 +106,12 @@ Nothing depends on packaging in return: no runtime code branches on it except
   Actions have never been enabled, and validated only by `actionlint`. The
   first tag will be the first execution; what it is most likely to trip over is
   listed in `implement.md`, "Known limitations", and in STEPS.md's Phase 6.
+- **The GitHub feed has never been read** (S7.4). The download-and-install path
+  was proven end to end on 2026-09-17 against a **local** generic feed with two
+  locally built, signed bundles — see [`backend.md`](./backend.md),
+  "Auto-update". What has never happened is the same walk against a real draft
+  Release, because the repository is private and the provider cannot read it.
+  The first public release is the first test of that half.
 - Whether the dmg's 150 MB is worth attacking. Most of it is the Electron
   runtime; the biggest avoidable share is `node_modules` dependencies that only
   the renderer bundle uses and that are therefore shipped twice.

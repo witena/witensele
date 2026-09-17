@@ -138,6 +138,13 @@ than by the usage guard, which cannot see a key that is assembled:
 asserted **in both directions** — no entry without copy, no copy left behind by
 an entry that was renamed.
 
+S7.4's eight update-state sentences look like a third case and deliberately are
+not one: `lib/updates.ts` spells every key out in a `switch` over `UpdateState`,
+so the usage guard sees all eight and the compiler proves the switch is total.
+What `lib/updates.test.ts` adds is the other direction — it walks `UPDATE_STATES`,
+calls the function and asserts the key it lands on resolves in `en.json` — which
+is the same guarantee a runtime key needs, bought without a runtime key.
+
 ## Accessibility and keyboard
 
 - `<html lang>` is set during bootstrap and updated on every `languageChanged`,

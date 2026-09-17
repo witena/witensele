@@ -17,6 +17,7 @@
 import type { BackendEvent, BackendEventType, EventOf } from './events'
 import type { OAuthProviderType } from './presets'
 import type { ChatUsageSummary } from './usage'
+import type { UpdateStatus } from './updates'
 import type {
   Agent,
   AgentInput,
@@ -163,6 +164,38 @@ export interface BackendApi {
     /** The chat whose `workdir` confines the path, when the call came from one. */
     chatId?: string
   }) => Promise<void>
+  /**
+   * What the app knows about its own next version (S7.4).
+   *
+   * Cheap and side-effect free: it reads the cached status the `UpdateService`
+   * has been keeping since launch and never touches the network, so the About
+   * screen can ask for it on every mount. A build that cannot update itself — a
+   * checkout, or an unsigned bundle macOS would refuse to replace — answers
+   * `{ state: 'unsupported', reason }` rather than rejecting, because "why is
+   * there no update" is a question the screen has to answer.
+   */
+  'system.updateStatus': () => Promise<UpdateStatus>
+  /**
+   * Asks the release feed now, and resolves with the status the check left
+   * behind (S7.4).
+   *
+   * The download that follows an `available` answer is **not** awaited: it
+   * reports itself through `update.downloaded`, and a call that waited for a
+   * 150 MB transfer would be a button that never comes back. A second call while
+   * one is in flight joins the first rather than starting a second download.
+   * Never rejects for a feed that is unreachable — that is `state: 'error'` with
+   * the message beside it.
+   */
+  'system.checkForUpdates': () => Promise<UpdateStatus>
+  /**
+   * Quits and relaunches into the downloaded version (S7.4).
+   *
+   * Resolves before the process is gone, which is as close to a return value as
+   * a call that ends the process can get. Rejects with `validation` when nothing
+   * has been downloaded: the renderer only offers the button in the `downloaded`
+   * state, so reaching it otherwise is a bug worth seeing rather than a no-op.
+   */
+  'system.installUpdate': () => Promise<void>
 
   /* -- settings ----------------------------------------------------------- */
 
@@ -461,6 +494,9 @@ export const BACKEND_METHODS = [
   'system.pickPaths',
   'system.applyTheme',
   'system.openInEditor',
+  'system.updateStatus',
+  'system.checkForUpdates',
+  'system.installUpdate',
   'settings.get',
   'settings.update',
   'providers.list',

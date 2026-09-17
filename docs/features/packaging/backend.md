@@ -37,7 +37,7 @@ kind of thing that goes stale.
 | `files` | `out/**`, `package.json`, minus `*.map` and `.DS_Store` | Everything electron-vite produced, plus the manifest that carries `main` and the dependency list. **`node_modules` is deliberately absent**: electron-builder appends the production dependency tree itself, and a second hand-written copy of that fact would drift |
 | `asarUnpack` | `**/node_modules/better-sqlite3/**` | `dlopen` takes a filesystem path. A `.node` binary inside an asar archive is not at one, and the app would fail to open its database on the first launch |
 | `extraResources` | `resources` → `resources` | Ships `resources/skills/`. See the path note below |
-| `mac.target` | `dmg`, `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The zip target exists for auto-update, which does not exist yet (S7.4) |
+| `mac.target` | `dmg` and `zip`, both `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The **zip is S7.4's** and is not a second download offered to anyone: macOS's `Squirrel.Mac` replaces a bundle from a zip and nothing else, and `latest-mac.yml` lists whatever targets were built — a release with only a dmg is a feed the updater downloads and then cannot apply |
 | `mac.category` | `public.app-category.developer-tools` | `LSApplicationCategoryType` in the Info.plist |
 | `mac.icon` | `build/icon.icns` | Copied to `Contents/Resources/icon.icns` |
 | `mac.hardenedRuntime` | `true` (S7.3) | Notarization refuses a bundle that is not hardened. It costs an unsigned build nothing, because the flag is only ever written by `codesign`, which does not run without an identity |
@@ -46,7 +46,7 @@ kind of thing that goes stale.
 | `mac.gatekeeperAssess` | `false` | electron-builder's default, spelled out because the alternative is a trap: `spctl --assess` **during** packaging fails on a bundle that is correctly signed but not yet notarized, which is every bundle at the moment it is built. Gatekeeper is checked afterwards instead |
 | `mac.notarize` | `true` | A boolean in electron-builder 26 — there is no sub-object. It means "do not disable the built-in @electron/notarize integration"; the credentials are environment variables and never live in this repository. With none of them set the build logs `skipped macOS notarization` and succeeds |
 | `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` and `Witena-0.1.0-x64.dmg` — `${arch}` is what keeps two builds of one version from overwriting each other in `dist/` and in the Release |
-| `publish.provider` | `github` | electron-builder uploads the artifacts itself and writes the `latest-mac.yml` feed S7.4 will read. `owner` / `repo` are deliberately absent: they are inferred from the checkout's git remote, so a tag pushed on a fork publishes to that fork |
+| `publish.provider` | `github` | electron-builder uploads the artifacts itself and writes the `latest-mac.yml` feed S7.4's `electron-updater` reads. `owner` / `repo` are deliberately absent: they are inferred from the checkout's git remote, so a tag pushed on a fork publishes to that fork. The block is also copied verbatim into the bundle as `Contents/Resources/app-update.yml`, which is why it must never gain a `token:` — see "Auto-update" |
 | `publish.releaseType` | `draft` | The review step. CI packages; a human reads the artifacts and presses Publish |
 
 ## The resources path
@@ -449,6 +449,87 @@ README's Gatekeeper note, and `WITENA_SIGNED_BUILD` reaching the packaged app so
 the key file is wrapped (see "What being unsigned does to the stored secrets").
 Not this workflow's structure.
 
+## Auto-update (S7.4)
+
+What the *build* has to produce, and what a *running* app does with it. The code
+that consumes this — the Electron-free `src/main/updates/` and its
+`electron-updater` adapter in `src/main/ipc/updater.ts` — is documented in
+[`../backend-client/backend.md`](../backend-client/backend.md).
+
+The build produces three things, and all three come from the `publish:` block:
+
+| Artifact | Where | Read by |
+|---|---|---|
+| `Contents/Resources/app-update.yml` | Inside every bundle | `electron-updater` at startup, to learn which feed to ask. Written by electron-builder's `PublishManager` **only when a `dmg` or `zip` target is built** — a `--dir` build has no such file, and an app packaged that way reports `ENOENT … app-update.yml` the moment it tries to download |
+| `Witena-<version>-<arch>-mac.zip` (+ `.blockmap`) | Beside the dmgs in the Release | `Squirrel.Mac`, which is the only thing that can replace a running `.app`. The blockmap is what makes the *next* update a differential download |
+| `latest-mac.yml` | Beside them | `electron-updater`, to compare versions and to check the zip's sha512 |
+
+### Why the GitHub feed does not work yet
+
+`provider: github` means `electron-updater` asks
+`https://github.com/<owner>/<repo>/releases/download/…/latest-mac.yml`. **This
+repository is private**, and GitHub serves a private repository's release assets
+only to an authenticated request. `electron-updater` supports a `token` in the
+publish configuration — and that configuration is copied verbatim into
+`app-update.yml` **inside the dmg**, so a token there is a token handed to
+everyone who downloads the app. There is no scope that makes that acceptable, so
+none is shipped; `src/main/packaging.test.ts` asserts the `publish` block holds
+nothing but `provider` and `releaseType`.
+
+The answer is to make the repository public, which is what the owner intends and
+what `provider: github` is already correct for. Until then a check ends in
+`state: 'error'` with GitHub's own 404 under it — the provider says so in as many
+words ("Please double check that your authentication token is correct. Due to
+security reasons, actual status maybe not reported, but 404"), and that sentence
+is what Settings → About prints.
+
+### `WITENA_UPDATE_FEED`
+
+The escape hatch, read once in `src/main/index.ts` and passed to
+`createElectronUpdater`. It points the updater at a **generic** feed — a
+directory over HTTP holding `latest-mac.yml` and the zip it names — and it also
+lifts the packaged/signed gate, because its whole purpose is to run the updater
+on a build that would otherwise refuse to look. It is a developer's environment
+variable: nothing in the UI writes it, nothing reads it back, and an app the user
+double-clicks has never seen it.
+
+### Proving the whole path locally (done on 2026-09-17)
+
+This is the procedure that produced the result recorded in STEPS.md S7.4. It
+needs a Developer ID in the keychain — **not** notarization, which Squirrel does
+not check — because macOS replaces an app bundle only when the new signature and
+the old one match.
+
+```sh
+# A private electron-builder config whose publish block points at the local feed.
+# It is what makes `app-update.yml` exist and name a generic provider.
+sed 's/provider: github/provider: generic/; s/releaseType: draft/url: http:\/\/127.0.0.1:45999\//' \
+  electron-builder.yml > "$TMP/eb-local.yml"
+
+# The old version and the new one. `zip` rather than `--dir`: see the table above.
+npm run build
+npx electron-builder --mac zip -c "$TMP/eb-local.yml" \
+  -c.extraMetadata.witenaSignedBuild=true -c.directories.output="$TMP/v1"
+npx electron-builder --mac zip -c "$TMP/eb-local.yml" \
+  -c.extraMetadata.witenaSignedBuild=true -c.extraMetadata.version=0.2.0 \
+  -c.directories.output="$TMP/v2"
+
+# The feed is what electron-builder already wrote beside the new zip.
+cp "$TMP"/v2/Witena-0.2.0-arm64-mac.zip* "$TMP"/v2/latest-mac.yml "$TMP/feed/"
+# Serve $TMP/feed on 127.0.0.1:45999 with **range requests supported** —
+# Squirrel.Mac's proxy uses them, and a server that ignores `Range` hangs.
+
+WITENA_USER_DATA=$TMP/userdata WITENA_UPDATE_FEED=http://127.0.0.1:45999/ \
+  "$TMP/v1/mac-arm64/Witena.app/Contents/MacOS/Witena"
+```
+
+Two things worth knowing before repeating it. The downloaded zip is cached in
+`~/Library/Caches/witena-updater/pending/`, so a second run finds it already
+there and the feed server never sees a second request — delete that directory
+between attempts or the run proves nothing. And `autoInstallOnAppQuit` is on, so
+**quitting the app installs the update whether or not anybody pressed Restart**:
+the v1 bundle is 0.2.0 afterwards and has to be rebuilt before the next attempt.
+
 ## Cutting a release
 
 `npm version <patch|minor|major>` bumps `package.json`, commits and tags.
@@ -480,4 +561,5 @@ in [`implement.md`](./implement.md), "Making a release".
 | `ffmpeg` | The demo GIF | `palettegen` / `paletteuse` must be two passes over the *same* filtered frames, or the palette describes footage that is not what gets encoded. This build of ffmpeg has no `drawtext` filter, so frame-timestamp overlays are not available while inspecting a recording — use `tile` contact sheets and arithmetic instead |
 | GitHub Actions (`actions/checkout@v4`, `actions/setup-node@v4`) | CI and release | Pinned to major tags. `setup-node`'s `cache: npm` needs `package-lock.json`, which is committed. `npm ci` runs the `postinstall` electron-rebuild, which downloads the Electron binary — the slow step of every job |
 | `actionlint` 1.7.12 | Linting the workflows | Pinned by version and SHA-256 of the release tarball. On a runner with `shellcheck` installed — the Ubuntu images have it — it also lints every `run:` block, so findings can appear in CI that a local run without shellcheck does not report |
+| `electron-updater` 6 (S7.4) | Reading the feed, downloading the zip, handing it to Squirrel.Mac | It is **CommonJS** while this project is ESM, so `import { autoUpdater } from 'electron-updater'` type-checks and then fails at runtime with "Named export 'autoUpdater' not found" — the default import plus a destructure is the documented interop and is what `src/main/ipc/updater.ts` does. It reads `app.getVersion()`, `app-update.yml` and the code signature of what it downloaded, so it is electron in everything but the package name and may only be imported from `src/main/ipc/` (CLAUDE.md rule #5). Its `error` event is an EventEmitter `error` event: with no listener it is re-thrown and takes the main process with it |
 | Playwright `_electron.launch` | Both extra specs | `executablePath` plus an empty `args` is how a *packaged* app is launched; the `args: ['.']` every other spec uses points electron at a project directory and is wrong for a bundle. `recordVideo` on the launch options records the window, and `page.video().path()` only resolves after the context has closed |

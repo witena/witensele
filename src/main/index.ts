@@ -12,6 +12,7 @@ import { createAppContext, skillsDir, type AppContext } from './app-context'
 import { buildHandlers } from './handlers'
 import { createSafeStorageStore } from './ipc/secret-store'
 import { forwardEvents, registerIpc } from './ipc/register'
+import { createElectronUpdater, UPDATE_FEED_ENV } from './ipc/updater'
 import { migrateProviderSecrets } from './providers/migrate-secrets'
 import { createFileKeySecretStore, isSignedBuild, rewrapKeyFile, SECRETS_KEY_FILE } from './secrets'
 import { seedSkills } from './skills/loader'
@@ -236,8 +237,23 @@ void app.whenReady().then(() => {
     ...(legacySecrets ? { wrapper: legacySecrets } : {})
   })
 
-  context = createAppContext({ databasePath, userDataDir, secrets })
+  // S7.4: the updater is decided here, where `app.isPackaged` and the signed
+  // flag are both readable, and injected as a port. Everything above it — the
+  // status, the six-hour schedule, the events — is Electron-free
+  // (`src/main/updates/`); this is the only line that knows the library exists.
+  const updater = createElectronUpdater({
+    packaged: app.isPackaged,
+    signed: wrap,
+    ...(process.env[UPDATE_FEED_ENV] ? { feedUrl: process.env[UPDATE_FEED_ENV] } : {})
+  })
+
+  context = createAppContext({ databasePath, userDataDir, secrets, updates: updater })
   console.log(`[witena] database: ${databasePath}`)
+  if (updater.updater) {
+    console.log('[witena] auto-update is on; checking now and every six hours')
+  } else {
+    console.log(`[witena] auto-update is off: ${updater.reason}`)
+  }
 
   // Once per launch, and a no-op from the second one on: every key still stored
   // in the pre-S7.6 format is read with the store that wrote it and re-encrypted
@@ -274,6 +290,12 @@ void app.whenReady().then(() => {
   nativeTheme.themeSource = currentThemeSetting()
 
   createWindow()
+
+  // After the window, so the `update.available` a launch check can produce
+  // reaches a renderer rather than an empty window list. The status is cached
+  // either way — Settings → About asks for it on mount — but the notice bar
+  // should not have to wait six hours for its first chance.
+  context.updates.start()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

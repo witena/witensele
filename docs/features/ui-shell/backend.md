@@ -75,7 +75,20 @@ through the existing `settings.get` / `settings.update` handlers.
 
 `system.applyTheme` (S5.8), declared in `handlers/system.ts` as a rejection and
 implemented in `src/main/ipc/theme.ts`; see
-[`../backend-client/backend.md`](../backend-client/backend.md). Otherwise none added. The Developer section drives the three that already exist —
+[`../backend-client/backend.md`](../backend-client/backend.md).
+
+S7.4 added the three the Updates block calls — `system.updateStatus`,
+`system.checkForUpdates` and `system.installUpdate` — which are **not** stubs
+here: the updater is injected rather than layered, so `handlers/system.ts`
+implements all three against `ctx.updates`, an Electron-free `UpdateService` that
+exists in every build. A build with no `electron-updater` behind it answers
+`{ state: 'unsupported', reason }` instead of rejecting, which is what lets this
+screen print a reason rather than an error. The mechanism is documented in
+[`../backend-client/backend.md`](../backend-client/backend.md), "The fifth
+exception", and what the *build* has to produce for it in
+[`../packaging/backend.md`](../packaging/backend.md), "Auto-update".
+
+Otherwise none added. The Developer section drives the three that already exist —
 `system.ping`, `system.emitTestEvent` and `settings.update` — through the
 `BackendClient`, exactly as the smoke screen did before it moved.
 
@@ -96,7 +109,10 @@ Electron API sets it, and `src/main/index.ts` never names it. See
 
 ## Events emitted
 
-None added.
+None added. Two are **consumed** since S7.4 — `update.available` and
+`update.downloaded` — through `lib/event-bridge.ts` into `stores/updates.ts`;
+they are emitted by the `UpdateService`
+([`../backend-client/backend.md`](../backend-client/backend.md)).
 
 ## External dependencies
 
