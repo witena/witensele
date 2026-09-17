@@ -4,7 +4,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends; from S5.11 `workspaceWorkdir` (the read-only rule), `buildTurnPrompt` (the prompt plus `materialsOmitted`) and the read-only branch of `collectAgentTools`; and from S5.12 `TurnStage` (the `handoff` intent and `reviewing`) and `deliveredRef`, which appends the deliverable's `FileRefPart` after the diffs; from S5.14 `showsThinking`, which decides whether a `reasoning-delta` is kept at all, and `closing` on `TurnStage` |
+| `src/main/agents/agent-turn.ts` | `runAgentTurn`: the message row, the per-turn `AbortController`, `streamText`, the deltas, the flush, the terminal status, the usage, and the supervisor calls around all of it. From S3.1 also `collectAgentTools` (which enforces the side-effects rule), the tool loop and `looksLikeToolRejection`; from S3.2 `enabledSkills` and the prompt sections; from S5.4 `executorWorkdir`, the executor branch of `collectAgentTools` and the permission wrapper around a `sideEffects` MCP call; from S5.5 `diffPartsFrom`, which appends one `DiffPart` per written file when the stream ends; from S5.11 `workspaceWorkdir` (the read-only rule), `buildTurnPrompt` (the prompt plus `materialsOmitted`) and the read-only branch of `collectAgentTools`; and from S5.12 `TurnStage` (the `handoff` intent and `reviewing`) and `deliveredRef`, which appends the deliverable's `FileRefPart` after the diffs; from S5.14 `showsThinking`, which decides whether a `reasoning-delta` is kept at all, and `closing` on `TurnStage`; from S5.16 `markConclusion`, which puts the `ConclusionPart` in front of a finished closing turn's parts |
 | `src/main/agents/history.ts` | `toModelMessages`: the shared transcript → one agent's `ModelMessage[]`. From S4.2 it also caps each replayed `tool-result` at `MAX_TOOL_RESULT_CHARS` (4 KB) and strips a trailing marker from a reply that had real content — `[PASS]` since S4.3, `[AGREED]` and `[CONTINUE]` since S5.14, all through the same `stripTrailingMarkers` |
 | `src/main/agents/context-budget.ts` | `estimateTokens` and `fitHistory`: the character-count estimate and the drop-oldest-first budget (S4.2). Pure; no database, no `AppContext` |
 | `src/main/agents/materials.ts` | `buildMaterialsSection`: the goal's materials as a prompt section, inside a quarter of the model's window, with the rest named by path (S5.11). Reads the files it is pointed at through `executor/paths.ts`; no database, no `AppContext` |
@@ -69,7 +69,7 @@ No migration. It writes one `messages` row per turn:
 
 | Column | Written | When |
 |---|---|---|
-| `parts` | `[]`, then the accumulated parts — text, reasoning **when this agent shows its thinking** (S5.14), and from S3.1 `tool-call` / `tool-result` | On create, on every flush, once per tool part, and once at the end |
+| `parts` | `[]`, then the accumulated parts — text, reasoning **when this agent shows its thinking** (S5.14), and from S3.1 `tool-call` / `tool-result`. A `closing` turn that finished `done` has a `ConclusionPart` put in **front** of them at the terminal update (S5.16, `markConclusion`) | On create, on every flush, once per tool part, and once at the end |
 | `status` | `streaming`, then `done` \| `passed` \| `error` | Create, then the terminal update |
 | `round` | The round the runner passed | On create |
 | `in_reply_to` | The `inReplyTo` the runner passed, when it is not empty | On create |
@@ -91,7 +91,7 @@ None. This feature is called by `ChatRunner`, never by the transport.
 |---|---|---|
 | `message.created` | `{ message }` | The empty `streaming` row is inserted, before the request goes out |
 | `message.delta` | `{ chatId, messageId, delta: { kind, text } }` | Once per `text-delta`, and once per `reasoning-delta` **only when `showsThinking(ctx, agent)` is true** (S5.14). A hidden reasoning delta is neither emitted nor stored; it still reaches `ctx.supervisor.activity`, because the model really is working |
-| `message.updated` | `{ message }` | The terminal status is persisted — on every path |
+| `message.updated` | `{ message }` | The terminal status is persisted — on every path. This is also where a conclusion's flag first reaches the renderer (S5.16): it is written once the turn is known to have finished `done`, so there is no delta for it |
 | `presence.changed` | `{ presence }` | Emitted by `AgentSupervisor`, which the turn drives: `beginTurn` → `working`, `endTurn` → `available` (or `offline`). Every stream part is reported as `activity`, which emits only when it clears `away` |
 | `message.delta` | `{ delta: { kind: 'part', part } }` | A `tool-call` or `tool-result` part was appended (S3.1) |
 | `message.created` | the `agentSkipped` notice | The turn ended on the supervisor's hard timeout |

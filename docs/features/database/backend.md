@@ -124,7 +124,7 @@ names are snake_case, the TypeScript properties camelCase. JSON columns are
 | `title` | text not null | Defaults to `DEFAULT_CHAT_TITLE` |
 | `workdir` | text null | Absolute path of the folder this chat's executor works in; real since S5.2 |
 | `goal` | text json null | `ChatGoal` (S5.10), or null while nobody has said what the chat is for. **Null means "no goal"**, which is what every row written before S5.10 holds, and a chat with no goal behaves exactly as it did. Written as a **whole object** by `chats.update`, never merged: `materials` is a list the user removes from, and a merge could not delete its last entry |
-| `settings` | text json not null | `ChatSettings`, defaulted from `DEFAULT_CHAT_SETTINGS` |
+| `settings` | text json not null | `ChatSettings`, defaulted from `DEFAULT_CHAT_SETTINGS`. Patched **field by field** through `mergeChatSettings`, which since S5.16 also drops a `closingAgentId` the caller sent as `null`: that is the wire word for "clear it", and the stored object keeps the field simply absent. No migration — a row written before S5.16 has no `closingAgentId` and reads as "the first eligible member" |
 
 `updated_at` is bumped by `messages.create` and by `setMembers`, which is what
 makes `chats.list` (ordered `updated_at` descending) show active chats first.
@@ -149,7 +149,7 @@ timestamps: it is a pure join table, scoped through the chat and the agents.
 | `seq` | integer not null | Per-chat monotonic counter assigned in the insert transaction; the ordering key and the paging cursor. Not part of the shared `Message` type |
 | `sender_type` | text not null | `user` / `agent` / `system` |
 | `sender_id` | text not null | `UserId`, agent id, or `system` |
-| `parts` | text json not null | `MessagePart[]` |
+| `parts` | text json not null | `MessagePart[]`. An open union: S5.16's `ConclusionPart` (`{ type: 'conclusion' }`, a flag with no content, stored first on a closing turn's message) needed no migration, and a row written before it simply has none |
 | `status` | text not null | `streaming` / `done` / `error` / `passed` / `skipped` |
 | `round` | integer not null default 0 | 1-based round; 0 outside a run |
 | `mentions` | text json not null | `string[]` of agent ids this message @mentioned |

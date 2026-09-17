@@ -9,7 +9,10 @@ S2.3 made it real.
 S5.6 adds the one **control** that is this feature's own: "Hand to executor",
 directly above the composer. It is the second way to start a run, so it lives in
 the run store beside `send` and `stop` rather than in the Actions card, whose two
-actions are deliberately ordinary messages.
+actions are deliberately ordinary messages. S5.16 adds a third caller of that
+same store action: the conclusion card's "Write to the deliverable", which is
+`handoff(chatId, 'deliver')` — the same call the Actions card makes, refused by
+the same `handoffBlocker`.
 
 ## The renderer's half
 
@@ -22,7 +25,8 @@ actions are deliberately ordinary messages.
 | `src/renderer/src/lib/event-bridge.ts` | Routes the three `run.*` events into the store |
 | `src/renderer/src/pages/chats-page.tsx` | The header's run status, and the members it passes to the composer and the message list |
 | `src/renderer/src/components/chat/composer.tsx` | Renders Stop instead of Send while a run is active, and resolves `@Name` before sending |
-| `src/renderer/src/components/chat/message-item.tsx` | `Round n`, `Replying to @x`, and the accent-coloured mentions in the body |
+| `src/renderer/src/components/chat/message-item.tsx` | `Round n`, `Replying to @x`, the accent-coloured mentions in the body, and (S5.16) the conclusion card around the body of a closing message |
+| `src/renderer/src/components/chat/conclusion.ts` | `latestConclusion`, `conclusionPreview` and `deliverableBlocker` — the three pure questions the card, the header chip and the chat list ask about a transcript (S5.16) |
 | `src/renderer/src/components/chat/markdown.tsx` | `highlightMentions`, applied to the children of `p` and `li` |
 | `src/shared/mentions.ts` | The matching rule itself, shared with the backend |
 
@@ -50,7 +54,7 @@ takes a moment to unwind, and the button must not lie about it.
 | `presence.changed` | The dot on the member row and on the message avatar follows that agent through the four states. Presence is per (chat, agent), so the parallel speakers of one round do not flip each other back. The state machine behind it is [`presence`](../presence/frontend.md)'s |
 | `run.finished` | The status disappears and the button returns to Send, whatever the reason |
 | `message.created` with a `system-notice` | A dimmed line in the transcript, translated by `translateNotice` — `notices.noMentions`, `notices.maxRoundsReached`, `notices.runFailed`, and from S5.14 `notices.consensus` and `notices.voteClosed` |
-| `run.round` with one speaker, right after `notices.consensus` | The closing turn (S5.14). Nothing on the screen marks it as special: it is one more agent message, carrying its own round number, and the dimmed line above it is what says the discussion ended |
+| `run.round` with one speaker, right after `notices.consensus` | The closing turn (S5.14). Until S5.16 nothing on the screen marked it as special; now the message it produces arrives carrying a `ConclusionPart` and is drawn as the **conclusion card** — see [`chats`](../chats/frontend.md), which owns the card, the header chip and the chat-list preview |
 
 ## Message header and body
 

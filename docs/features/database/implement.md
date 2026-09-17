@@ -223,7 +223,7 @@ Patch semantics, identical in every repository:
 | `src/main/db/providers.test.ts` | CRUD; absent optional columns come back absent; a key is reported only as `hasApiKey` and is stored as ciphertext; the three `apiKey` patch semantics (absent keeps, `''` clears, string replaces); `''` clears `baseUrl` / `presetId`; `auth` round-trips, is absent when it was never set, survives a patch that does not mention it and is switched back with `'apiKey'` rather than `''` (S5.3); `userId` scoping; `not_found` on every method, including the exact `BackendError` shape |
 | `src/main/db/agents.test.ts` | CRUD; JSON columns round-trip across a reopen; deleting an agent removes it from every chat through the cascade; scoping and `not_found` |
 | `src/main/db/mcpServers.test.ts` | CRUD for a stdio server; an http server stores no stdio half; scoping and `not_found` |
-| `src/main/db/chats.test.ts` | Defaults on create (title, `DEFAULT_CHAT_SETTINGS`, `workdir: null`, `goal: null`); the goal replaced wholesale rather than merged, surviving a reopen, cleared with `null`, and left alone by a patch that does not mention it (S5.10); partial settings merge; list ordered by `updatedAt` descending; delete cascades to members and messages while leaving the agents and other chats alone; `setMembers` replaces the list and numbers positions by array index; duplicate or unknown agent ids are rejected without changing the stored membership; scoping and `not_found` |
+| `src/main/db/chats.test.ts` | Defaults on create (title, `DEFAULT_CHAT_SETTINGS`, `workdir: null`, `goal: null`); the goal replaced wholesale rather than merged, surviving a reopen, cleared with `null`, and left alone by a patch that does not mention it (S5.10); partial settings merge, including S5.16's `closingAgentId` cleared with `null` back to an **absent** field and still absent after a reopen; list ordered by `updatedAt` descending; delete cascades to members and messages while leaving the agents and other chats alone; `setMembers` replaces the list and numbers positions by array index; duplicate or unknown agent ids are rejected without changing the stored membership; scoping and `not_found` |
 | `src/main/db/messages.test.ts` | Create and read back across a reopen; `seq` monotonic per chat and restarting per chat; ordering holds for messages written in the same millisecond; `list` newest first with `before` as an exclusive cursor over three pages; `listForContext` oldest first; patching parts / status / usage / mentions / error and clearing an error with `''`; the parent chat's `updatedAt` is bumped on create; `not_found` for an unknown chat, message or cursor; scoping |
 | `src/main/db/settings.test.ts` | Defaults when nothing is stored; shallow merge persisted across a reopen; `timeouts` merged field by field; a stored row missing newer fields is filled in from the defaults; one row per user |
 | `src/main/db/postgres/schema-drift.test.ts` | **S8.1**: the SQLite and Postgres schemas declare the same seven tables, and each table the same columns, nullability, defaults, primary keys and enum values. Needs no database, so it runs everywhere; includes a guard on itself (a table with a column removed must compare unequal) |
@@ -240,6 +240,10 @@ without Docker reports honestly instead of pretending. CI runs SQLite only; see
 
 ## Known limitations and TODOs
 
+- **A settings patch can clear exactly one field.** `mergeChatSettings` drops a
+  `closingAgentId` sent as `null` (S5.16); every other field is set-only, and a
+  second clearable field should extend that function rather than grow a second
+  convention.
 - **The repositories run on SQLite only** (S8.1). The Postgres dialect exists and
   is tested, but `Repositories` is a synchronous interface and drizzle's Postgres
   driver is asynchronous, so nothing above the schema runs on it yet. Making the

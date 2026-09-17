@@ -27,7 +27,7 @@
  */
 import type { TFunction } from 'i18next'
 import { MessagesSquare, Plus, Search, SearchX } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatCost, formatTokens } from '@shared/pricing'
 import {
@@ -38,10 +38,12 @@ import {
   type Agent,
   type ChatMode,
   type ChatSettings,
+  type ChatSettingsPatch,
   type SpeakingMode
 } from '@shared/types'
 import { ActionsCard } from '../components/chat/actions-card'
 import { ChatList } from '../components/chat/chat-list'
+import { conclusionPreview, latestConclusion } from '../components/chat/conclusion'
 import { Composer, type ComposerHandle } from '../components/chat/composer'
 import { GoalChip } from '../components/chat/goal-chip'
 import { GoalSettings } from '../components/chat/goal-settings'
@@ -156,6 +158,16 @@ export function ChatsPage(): React.JSX.Element {
   )
   // What the box holds right now; the store only ever sees the debounced value.
   const [query, setQuery] = useState('')
+  // Which message the transcript should scroll to, and the click that asked for
+  // it (S5.16). The header's "Conclusion" chip is the only writer; the nonce is
+  // what makes a second click on the same message scroll again.
+  const [scrollTo, setScrollTo] = useState<{ messageId: string; nonce: number } | undefined>(
+    undefined
+  )
+  // Every loaded transcript, for the chat list's conclusion previews. The map
+  // itself is a stable reference in the store, so this subscribes to "a
+  // transcript changed" rather than to every delta of the open chat.
+  const transcripts = useMessagesStore((state) => state.byChat)
   // Whether a fresh installation is still being walked through its first chat
   // (S7.5). Asked here because this column draws either the card or the bare
   // "no chat selected" state, never both.
@@ -234,6 +246,22 @@ export function ChatsPage(): React.JSX.Element {
     Object.entries(membersByChat).map(([chatId, ids]) => [chatId, ids.length])
   )
 
+  // The chat list's preview lines (S5.16). Only chats whose transcript has been
+  // read can have one — the store holds a page per opened chat, and a preview
+  // for every chat in the database would be a query of its own; the row falls
+  // back to the member count, which is what it always showed.
+  const conclusionPreviews = useMemo(() => {
+    const previews: Record<string, string> = {}
+    for (const [chatId, messages] of Object.entries(transcripts)) {
+      const preview = conclusionPreview(messages)
+      if (preview !== null) previews[chatId] = preview
+    }
+    return previews
+  }, [transcripts])
+
+  // The header chip: the message the chip scrolls to, or `null` for no chip.
+  const conclusion = latestConclusion(messages)
+
   // Filtering **hides rows**, it does not regroup them: `ChatList` still buckets
   // what is left into Today / Yesterday / Earlier, and a heading with nothing
   // under it is dropped by `groupChats` on its own.
@@ -258,7 +286,7 @@ export function ChatsPage(): React.JSX.Element {
   const settings: ChatSettings = selected?.settings ?? DEFAULT_CHAT_SETTINGS
   const hardTimeoutMs = settings.hardTimeoutMs ?? DEFAULT_APP_SETTINGS.timeouts.hardTimeoutMs
 
-  const patchSettings = (patch: Partial<ChatSettings>): void => {
+  const patchSettings = (patch: ChatSettingsPatch): void => {
     if (!selectedId) return
     void useChatsStore.getState().updateSettings(selectedId, patch)
   }
@@ -341,6 +369,7 @@ export function ChatsPage(): React.JSX.Element {
               chats={visibleChats}
               selectedId={selectedId}
               memberCounts={memberCounts}
+              conclusionPreviews={conclusionPreviews}
               onSelect={(id) => {
                 useRunStore.getState().clearError()
                 useChatsStore.getState().select(id)
@@ -383,6 +412,25 @@ export function ChatsPage(): React.JSX.Element {
               {selected ? (
                 <GoalChip chatId={selected.id} goal={selected.goal} status={goalStatus} />
               ) : null}
+              {/* The answer this chat reached (S5.16). A chip rather than a
+                  pinned copy of the conclusion: the transcript is the record,
+                  and this only says "there is one, here it is". */}
+              {conclusion ? (
+                <button
+                  type="button"
+                  data-testid="chat-conclusion-chip"
+                  data-message-id={conclusion.id}
+                  title={t('chat.conclusionChipTitle')}
+                  onClick={() =>
+                    setScrollTo({ messageId: conclusion.id, nonce: Date.now() })
+                  }
+                  className="inline-flex rounded focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
+                >
+                  <Badge tone="accent" font="sans">
+                    {t('chat.conclusion')}
+                  </Badge>
+                </button>
+              ) : null}
             </>
           }
           actions={
@@ -407,7 +455,12 @@ export function ChatsPage(): React.JSX.Element {
         />
 
         {selected ? (
-          <MessageList chatId={selected.id} messages={messages} members={members} />
+          <MessageList
+            chatId={selected.id}
+            messages={messages}
+            members={members}
+            scrollTo={scrollTo}
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center overflow-y-auto px-7 py-5">
             {/* On a fresh installation the bare empty state is replaced by the
@@ -536,6 +589,35 @@ export function ChatsPage(): React.JSX.Element {
                   value: String(rounds),
                   label: String(rounds)
                 }))}
+              />
+            </Field>
+
+            {/*
+              Who writes the conclusion when the group agrees (S5.16). The
+              members of this chat and one default row, and the default is an
+              empty value rather than a sentinel id: "first in speaking order" is
+              the absence of a choice, and `null` on the wire is what clears it
+              (see `ChatSettingsPatch`). A member removed from the chat leaves a
+              stored id that matches no option, so the select falls back to
+              showing the default — which is exactly what the runner will do.
+            */}
+            <Field label={t('chat.closingSpeaker')} htmlFor="chat-closing-speaker">
+              <Select
+                id="chat-closing-speaker"
+                data-testid="chat-closing-speaker"
+                disabled={!selected || members.length === 0}
+                value={
+                  members.some((member) => member.id === settings.closingAgentId)
+                    ? (settings.closingAgentId as string)
+                    : ''
+                }
+                onChange={(event) =>
+                  patchSettings({ closingAgentId: event.target.value || null })
+                }
+                options={[
+                  { value: '', label: t('chat.closingSpeakerFirst') },
+                  ...members.map((member) => ({ value: member.id, label: member.name }))
+                ]}
               />
             </Field>
 

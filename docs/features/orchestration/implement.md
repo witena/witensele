@@ -199,7 +199,7 @@ chat can satisfy in the runner, which is the same split the other three follow:
 the handler knows what a well-formed request looks like, the runner is the only
 object that holds the chat, its members and whether a run is going.
 
-### Closing a discussion (S5.14)
+### Closing a discussion (S5.14, S5.16)
 
 ```
 round ends
@@ -209,16 +209,20 @@ round ends
   └─ agreed()?             → notice('consensus')
          │                    runClosing():
          │                      round += 1
-         │                      emit run.round { round, speakers: [first member] }
+         │                      emit run.round { round, speakers: [closingSpeaker()] }
          │                      runAgentTurn({ …, closing: true })
+         │                      → its message gains a ConclusionPart (S5.16)
          │                    → completed
          └─ otherwise       → next iteration
 ```
 
-`agreed()` is six conditions, every one of them a way of being conservative —
-`roundrobin` only, not a hand-off's rounds, nothing mentioned, nothing pending,
-at least one non-executor speaker finished, and every such speaker's text ending
-with `[AGREED]`. They are listed with their reasons in
+`agreed()` is five conditions, every one of them a way of being conservative —
+not a hand-off's rounds, nothing mentioned, nothing pending, at least one
+non-executor speaker finished, and every such speaker's text ending with
+`[AGREED]`. (It was six until S5.16, which dropped "`roundrobin` only": a
+`mention-only` round that mentions nobody is caught by "nothing mentioned", and
+one that agreed without mentioning anybody is a chain with nothing left to do.)
+They are listed with their reasons in
 [`backend.md`](./backend.md#the-agreed-chain); the short version is that the
 failure that matters is a discussion cut short, so "no marker" and "one
 `[CONTINUE]`" both mean carry on.
@@ -226,8 +230,15 @@ failure that matters is a discussion cut short, so "no marker" and "one
 The closing turn is an **ordinary round with one speaker**. Nothing about Stop,
 the barrier, presence or usage needs a case for it; the only difference is
 `AgentTurnOptions.closing`, which swaps the marker rule in the briefing for
-"state the conclusion, add nothing, write no marker". Whatever it mentions is
-ignored, because the loop breaks straight after.
+"state the conclusion, add nothing, write no marker" and, since S5.16, puts a
+`ConclusionPart` in front of the message's parts when the turn finished `done`.
+Whatever it mentions is ignored, because the loop breaks straight after.
+
+**Who speaks** is `closingSpeaker(chat, members, isOffline)`: the chat's
+`settings.closingAgentId` when that member is present, available and not an
+executor, and otherwise the first member in `position` order that is not offline
+— S5.14's rule, kept as the fallback so a stale setting can only cost the
+preference, never the conclusion.
 
 ### Stop
 
@@ -246,7 +257,7 @@ chat.stop → registry.stop(chatId) → runner.stop()
 |---|---|
 | `completed` | No round scheduled another one — including `mention-only` with nothing mentioned, which also writes the `noMentions` notice |
 | `max-rounds` | `roundsSinceUser` reached the chain's limit. The limit is `ChatSendInput.rounds` when the message carried one and `chat.settings.maxAutoRounds` otherwise; the notice is `voteClosed` in the first case and `maxRoundsReached` in the second (S5.14) |
-| `completed`, via agreement | Every non-executor speaker of an ordinary `roundrobin` round wrote `[AGREED]`, nothing was mentioned and nothing was pending: writes `consensus`, runs one closing turn, ends (S5.14) |
+| `completed`, via agreement | Every non-executor speaker of an ordinary round wrote `[AGREED]`, nothing was mentioned and nothing was pending: writes `consensus`, runs one closing turn, ends (S5.14). In **either** mode since S5.16 |
 | `stopped` | The signal was aborted — Stop, `chats.delete`, or `AppContext.close()` |
 | `error` | Every speaker of a round errored, or the loop itself threw (which also writes `runFailed`) |
 
@@ -317,9 +328,15 @@ wrapper that only reads the `message.created` of each turn to learn its
 | `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker`: the enabled case, the three refusals, a blank `workdir`, and the order the rules are applied in |
 | `src/renderer/src/stores/run.test.ts` (S5.6 block) | `handoff` calling `chat.handoff` with nothing but the id, and a refusal keeping its `details` so the composer can name the reason |
 | `e2e/orchestration.spec.ts` | Two real models: round-robin in round 1, parallel streaming both rows at once, `mention-only` answering with one member, and the `noMentions` notice |
-| `e2e/closure.spec.ts` | S5.14 against a real local model: two agents prompted to agree immediately end with the `consensus` line and a closing message by the first member in round 2, with no `maxRoundsReached`; and "Start a vote" produces exactly one round and the `voteClosed` line. The first test asks up to three times in fresh chats — a 3B model writes the marker about three runs in four, which is a fact about the model, not the runner |
+| `e2e/closure.spec.ts` | S5.14 against a real local model: two agents prompted to agree immediately end with the `consensus` line and a closing message by the first member in round 2, with no `maxRoundsReached`; and "Start a vote" produces exactly one round and the `voteClosed` line. The first test asks up to three times in fresh chats — a 3B model writes the marker about three runs in four, which is a fact about the model, not the runner. Its S5.16 block needs **no model**: it pushes a `message.created` carrying a `ConclusionPart` down the app's own event channel and asserts the card, the Copy button against the real clipboard, the header chip scrolling a conclusion back into view past thirty messages, and the chat-list preview |
 | `e2e/executor.spec.ts` | Offline: the hand-off button's `data-blocked` naming the rule that disabled it, and the backend refusing on the same rule. Behind the `qwen2.5:3b` guard: two participants plus an executor discuss, "Hand to executor" is clicked, the permission prompt is allowed, a file appears in the folder and a participant speaks again |
 | `src/main/orchestration/chat-runner.test.ts` (`describe('ChatRunner (discussion closure)')`) | S5.14, nineteen cases. **Agreement**: unanimous `[AGREED]` producing the notice, one closing round with the first member alone and the conclusion it wrote; the notice stored before the conclusion; the closing prompt carrying the closing block and *not* the marker rule while the discussion prompt carries the reverse; one `[CONTINUE]` and no marker at all both carrying on; a pending `@mention` postponing the close to the round that answers it; an executor's marker-free reply not blocking it; a round of nothing but `[PASS]` never closing; `mention-only` stripping the markers and ignoring them; and the marker being absent from the next speaker's prompt. **The cap**: `rounds: 1` running exactly one round and closing with `voteClosed`; the same when the answers mention nobody; the cap winning over agreement; a cap of 2 running two; the cap not leaking into the next message; and four refusals |
+| `src/main/orchestration/chat-runner.test.ts` (`describe('the conclusion as a message (S5.16)')`) | Six cases: the `ConclusionPart` first on the closing message and on nothing else in the transcript; the flag absent from `toModelMessages` while that message's text is present; the chat's `closingAgentId` getting the closing round; the fallback to the first member when it names nobody and when it names the executor; and a cleared setting (`null`) going back to the first member. Beside them, in the same file: `mention-only` closing when its round agreed and mentioned nobody, and carrying on when it mentioned somebody; and the two `deliver` hand-off cases — the latest conclusion quoted as `> ` lines in the stored message and in the executor's prompt, nothing quoted when the chat has none, and nothing quoted for `implement` |
+| `src/main/agents/agent-turn.test.ts` (S5.16 cases) | `closing: true` producing the flag first in `parts` and in the stored row; an ordinary turn producing none; a closing turn that **failed** producing none; and `markConclusion`'s three cases |
+| `src/renderer/src/components/chat/conclusion.test.ts` | `latestConclusion` (none, the last of several, never a non-agent message), `conclusionPreview` (first non-empty line, a leading heading marker skipped, the cap, and `null` for a flag with no text) and `deliverableBlocker` (the enabled case and the four refusals in the backend's order) |
+| `src/renderer/src/components/chat/transcript-rows.test.ts` (S5.16 cases) | The row model marking a conclusion row and only that row, and `isConclusion` reading the flag wherever it sits |
+| `src/main/agents/history.test.ts` (S5.16 cases) | A conclusion's text in the prompt with no trace of the flag, and a message that is nothing but the flag dropped entirely |
+| `src/main/handlers/chats.test.ts` / `src/main/db/chats.test.ts` (S5.16 cases) | `closingAgentId` stored, cleared with `null` back to an **absent** field, surviving the JSON round trip, and refused when it is not a non-empty string |
 | `src/main/orchestration/chat-runner.test.ts` (S5.12 cases) | `intent: 'deliver'` storing the `handoffDeliver` key with the agent and the relative path while scheduling the same two rounds; the executor's prompt carrying the deliver paragraph and the path and *not* the implement one; the notice reaching the reviewers as prose; the review round's prompts carrying the review block while the executor's does not, and the round after it carrying neither; the refusal with no goal and with a `codebase` goal; the folder and the executor still checked first; and an unknown intent refused |
 
 ## Known limitations and TODOs
@@ -365,9 +382,18 @@ wrapper that only reads the `message.created` of each turn to learn its
 - **`[AGREED]` is stripped from the history**, like `[PASS]`, so a later speaker
   cannot see who has already agreed — and cannot learn the protocol from the
   transcript either. Recorded as an open question in `context.md`.
-- **The closing turn is always the first member.** Not the member the group
-  deferred to, and not a member chosen for having the largest context; the
-  speaking order the user set is the tie-break.
+- **The closing turn is one member, chosen once.** S5.16 made *which* member a
+  setting (`ChatSettings.closingAgentId`); with none, the speaking order the user
+  set is still the tie-break. Nothing derives the speaker from the discussion —
+  the member the group deferred to, or the one with the largest context, would
+  need a signal the transcript does not carry.
+- **The conclusion is the latest one, everywhere.** A chat that agreed twice has
+  two cards in its transcript, but one header chip, one chat-list preview and one
+  quoted conclusion in a `deliver` hand-off, and all three mean the newest.
+- **The chat-list preview only covers chats that have been opened.** It is
+  computed from the transcripts the messages store holds, so a chat whose
+  transcript has never been loaded shows the member count it always showed. A
+  preview for every chat would be a query of its own.
 - **A `rounds` cap has no UI of its own.** It is reachable only through "Start a
   vote", which hard-codes `1`; there is no way to say "answer twice" from the
   composer.

@@ -556,6 +556,26 @@ describe('handlers/chats members and settings', () => {
       expect(updated.settings).toMatchObject({ hardTimeoutMs: 300_000, stallTimeoutMs: 30_000 })
     })
 
+    it('stores a closing speaker and clears it again with null (S5.16)', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      const chosen = await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: { settings: { closingAgentId: 'agent-bob' } }
+      })
+      expect(chosen.settings.closingAgentId).toBe('agent-bob')
+
+      // `null` on the wire, an **absent** field in the row: the select's "First
+      // in speaking order" is the absence of a choice, and `undefined` is not a
+      // word a transport can be trusted to carry.
+      const cleared = await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: { settings: { closingAgentId: null } }
+      })
+      expect(cleared.settings).toEqual(DEFAULT_CHAT_SETTINGS)
+      expect('closingAgentId' in cleared.settings).toBe(false)
+    })
+
     it.each([
       ['an unknown mode', { mode: 'freeforall' as never }],
       ['an unknown speaking mode', { speaking: 'shouting' as never }],
@@ -563,7 +583,9 @@ describe('handlers/chats members and settings', () => {
       ['more rounds than the cap', { maxAutoRounds: 11 }],
       ['a fractional round count', { maxAutoRounds: 2.5 }],
       ['a negative hard timeout', { hardTimeoutMs: -1 }],
-      ['a zero stall timeout', { stallTimeoutMs: 0 }]
+      ['a zero stall timeout', { stallTimeoutMs: 0 }],
+      ['a closing speaker that is not an id', { closingAgentId: 7 as never }],
+      ['an empty closing speaker', { closingAgentId: '' }]
     ])('rejects %s with validation', async (_label, settings) => {
       const chat = await handlers['chats.create'](ctx, { input: {} })
       events.length = 0

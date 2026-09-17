@@ -11,7 +11,14 @@
  *   order the caller passed and can never end up with gaps or duplicates.
  */
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
-import type { Chat, ChatMember, ChatPatch, UserId } from '@shared/types'
+import type {
+  Chat,
+  ChatMember,
+  ChatPatch,
+  ChatSettings,
+  ChatSettingsPatch,
+  UserId
+} from '@shared/types'
 import { DEFAULT_CHAT_SETTINGS, LOCAL_USER_ID } from '@shared/types'
 import type { DrizzleDb } from '../database'
 import type { ChatRow } from '../schema'
@@ -50,6 +57,29 @@ export const LIKE_ESCAPE_CHAR = '\\'
  */
 export function escapeLike(query: string): string {
   return query.replace(/[\\%_]/g, (match) => `${LIKE_ESCAPE_CHAR}${match}`)
+}
+
+/**
+ * The stored settings after a patch: a field-by-field merge in which a `null`
+ * clears the field instead of storing one (S5.16).
+ *
+ * The merge is what lets one control persist one field without resending the
+ * rest. `closingAgentId` is the first field a control can also **unset**, and
+ * `undefined` is not a word any transport can be trusted to carry — so `null` is
+ * the wire word for "clear it" and this is the single place it is turned back
+ * into an absent field. Doing it here rather than in the handler means the
+ * invariant holds for every caller, including the tests and a future server, and
+ * `ChatSettings.closingAgentId` can stay `string | undefined`.
+ */
+export function mergeChatSettings(
+  current: ChatSettings,
+  patch: ChatSettingsPatch
+): ChatSettings {
+  const merged = { ...current, ...patch }
+  if (typeof merged.closingAgentId !== 'string' || merged.closingAgentId.length === 0) {
+    delete merged.closingAgentId
+  }
+  return merged as ChatSettings
 }
 
 export interface ChatRepository {
@@ -141,7 +171,7 @@ export function createChatRepository(db: DrizzleDb): ChatRepository {
         title: input.title ?? DEFAULT_CHAT_TITLE,
         workdir: input.workdir ?? null,
         goal: input.goal ?? null,
-        settings: { ...DEFAULT_CHAT_SETTINGS, ...input.settings },
+        settings: mergeChatSettings(DEFAULT_CHAT_SETTINGS, input.settings ?? {}),
         createdAt: timestamp,
         updatedAt: timestamp
       }
@@ -157,7 +187,9 @@ export function createChatRepository(db: DrizzleDb): ChatRepository {
       // A whole-object replace, not a merge: a goal's `materials` is a list the
       // user removes from, and a merge could never delete its last entry.
       if (patch.goal !== undefined) next.goal = patch.goal
-      if (patch.settings !== undefined) next.settings = { ...current.settings, ...patch.settings }
+      if (patch.settings !== undefined) {
+        next.settings = mergeChatSettings(current.settings, patch.settings)
+      }
       db.update(chats).set(next).where(eq(chats.id, current.id)).run()
       return toChat(row(id, userId))
     },

@@ -14,6 +14,7 @@ import {
   collectFileRefs,
   countDiffLines,
   formatFileRef,
+  isConclusion,
   dayBucket,
   startOfDay
 } from './transcript-rows'
@@ -106,6 +107,33 @@ describe('buildTranscriptRows', () => {
     const day = startOfDay(NOW)
     const rows = buildTranscriptRows([message('a', NOW)], NOW)
     expect(rows[0]?.key).toBe(`day-${day}`)
+  })
+
+  it('marks the row of a conclusion, and only that row (S5.16)', () => {
+    const ordinary = message('ordinary', NOW)
+    const conclusion = {
+      ...message('conclusion', NOW),
+      senderType: 'agent' as const,
+      parts: [{ type: 'conclusion' as const }, { type: 'text' as const, text: 'We decided.' }]
+    }
+
+    const rows = buildTranscriptRows([ordinary, conclusion], NOW)
+
+    expect(
+      rows.filter((row) => row.kind === 'message').map((row) => [row.message.id, row.conclusion])
+    ).toEqual([
+      ['ordinary', false],
+      ['conclusion', true]
+    ])
+  })
+})
+
+describe('isConclusion', () => {
+  it('reads the flag wherever it sits, and says no when there is none', () => {
+    expect(isConclusion([{ type: 'conclusion' }, { type: 'text', text: 'x' }])).toBe(true)
+    expect(isConclusion([{ type: 'text', text: 'x' }, { type: 'conclusion' }])).toBe(true)
+    expect(isConclusion([{ type: 'text', text: 'x' }])).toBe(false)
+    expect(isConclusion([])).toBe(false)
   })
 })
 
