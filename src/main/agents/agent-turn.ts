@@ -728,6 +728,15 @@ export interface CollectToolsOptions {
   signal: AbortSignal
   toolTimeoutMs: number
   /**
+   * Appends a `notices.*` line to the turn's own message (S5.15).
+   *
+   * Passed down to `buildExecutorTools`, which uses it for the one thing the
+   * user has to be told and the model does not: `sandbox-exec` is missing, so
+   * `run_command` ran unconfined. Optional, because the two suites that call
+   * `collectAgentTools` directly have no message to append to.
+   */
+  notice?: (key: string, params?: Record<string, string | number>) => void
+  /**
    * Everyone in the chat, in `position` order.
    *
    * Needed only to pick the chat's executor deterministically when the member
@@ -873,7 +882,11 @@ export async function collectAgentTools(
       agentId: agent.id,
       signal: options.signal,
       timeoutMs: options.toolTimeoutMs,
-      permissions: ctx.permissions
+      permissions: ctx.permissions,
+      // Read here rather than inside the tool, so one turn's commands cannot
+      // half-run under a setting the user changed mid-round (S5.15).
+      sandbox: ctx.repos.settings.get(ctx.userId).executor.sandbox,
+      ...(options.notice ? { notice: options.notice } : {})
     })
     if (executing) {
       Object.assign(tools, built)
@@ -1170,7 +1183,12 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const attached = await collectAgentTools(ctx, chat, agent, {
       signal: turnSignal,
       toolTimeoutMs,
-      members
+      members,
+      // The executor's tools reach the transcript through the same channel a
+      // tool call does, so a notice they raise lands in the message that caused
+      // it rather than in some later system row (S5.15).
+      notice: (key, params) =>
+        onPart({ type: 'system-notice', key, ...(params ? { params } : {}) })
     })
     const hasTools = Object.keys(attached.tools).length > 0
 

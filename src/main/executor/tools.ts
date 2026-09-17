@@ -42,10 +42,12 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, type Dir
 import { dirname, join, relative } from 'node:path'
 import { createPatch } from 'diff'
 import { jsonSchema, tool, type ToolSet } from 'ai'
-import type { ChatGoal, HandoffIntent } from '@shared/types'
+import type { ChatGoal, CommandRisk, ExecutorSandboxMode, HandoffIntent } from '@shared/types'
 import { isBackendFailure, validation } from '../errors'
+import { blockedCommandMessage, classifyCommand } from './command-policy'
 import { resolveInWorkdir, realWorkdir, type ResolvedPath } from './paths'
 import type { PermissionGate, PermissionOutcome } from './permissions'
+import { sandboxCommand } from './sandbox'
 
 export const READ_FILE_TOOL = 'read_file'
 export const LIST_DIR_TOOL = 'list_dir'
@@ -134,6 +136,42 @@ export interface ExecutorToolContext {
   /** `AppSettings.timeouts.toolTimeoutMs`, the budget for one command. */
   timeoutMs: number
   permissions: PermissionGate
+  /**
+   * `AppSettings.executor.sandbox` (S5.15). Omitted, the sandbox is on.
+   *
+   * The safe default is the one that applies when a caller forgot to pass it:
+   * a missing setting must not silently mean "unconfined".
+   */
+  sandbox?: ExecutorSandboxMode
+  /**
+   * Emits a `notices.*` line into the turn's message (S5.15).
+   *
+   * Used for exactly one thing so far: telling the user, **once per turn**, that
+   * `sandbox-exec` is missing and the command therefore ran unconfined. That is
+   * a fact about the machine the user needs and the model does not, which is why
+   * it is a notice rather than a field in the tool result — and a key rather
+   * than a sentence, because the backend does not know the UI language
+   * (CLAUDE.md rule #4).
+   */
+  notice?: (key: string, params?: Record<string, string | number>) => void
+}
+
+/** The notice key for "`sandbox-exec` is missing, the command ran unconfined". */
+export const NOTICE_SANDBOX_UNAVAILABLE = 'sandboxUnavailable'
+
+/**
+ * Thrown when the command policy refused a line outright.
+ *
+ * Separate from `PermissionDeniedError` because the two say different things to
+ * the model: one of them is the user's answer and can be discussed with them,
+ * and this one is a limit of the product that no amount of asking changes. Both
+ * are model-facing English for the same reason (see `PermissionDeniedError`).
+ */
+export class CommandBlockedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CommandBlockedError'
+  }
 }
 
 /**
@@ -146,13 +184,15 @@ export interface ExecutorToolContext {
  * the tool card exactly as every other tool failure is shown.
  */
 export class PermissionDeniedError extends Error {
-  readonly reason: 'denied' | 'aborted'
+  readonly reason: 'denied' | 'aborted' | 'timeout'
 
-  constructor(toolName: string, reason: 'denied' | 'aborted') {
+  constructor(toolName: string, reason: 'denied' | 'aborted' | 'timeout') {
     super(
       reason === 'denied'
         ? `The user declined to allow ${toolName}. Do not try the same call again; say what you wanted to do and why, and ask what they would prefer.`
-        : `The permission prompt for ${toolName} was closed because the run was stopped.`
+        : reason === 'timeout'
+          ? `The user did not answer in time: the permission prompt for ${toolName} expired and the call was refused. They may not be at the machine. Do not retry it; finish by saying what is still waiting on their approval.`
+          : `The permission prompt for ${toolName} was closed because the run was stopped.`
     )
     this.name = 'PermissionDeniedError'
     this.reason = reason
@@ -303,6 +343,8 @@ export function buildExecutorSection(input: ExecutorSectionInput): string {
     `- ${GIT_DIFF_TOOL}(path) — the working tree's current diff, when the folder is a git repository.`,
     '',
     `${WRITE_FILE_TOOL}, ${EDIT_FILE_TOOL} and ${RUN_COMMAND_TOOL} pause until the user allows or declines the call. A declined call is an answer, not a failure: do not retry it, say what you wanted to do and why.`,
+    '',
+    `Some command lines are refused before the user is asked — privilege escalation, disk and device writes, shutting the machine down, and a recursive delete or permission change outside this directory. Others always ask, even if the user allowed ${RUN_COMMAND_TOOL} once: publishing, rewriting history, discarding the working tree, and anything that reaches outside this directory. Commands normally also run in a sandbox that lets them read anything and write only inside this directory and the temporary directories, so a write that fails with "Operation not permitted" is outside the folder rather than a broken tool.`,
     '',
     `Read a file before you edit it, prefer ${EDIT_FILE_TOOL} over rewriting a whole file, and make the smallest change that does the job. When you are finished, end your message with a short summary of every file you changed and what it now does, and ask the others to review it.`,
     ...(handoff
@@ -536,17 +578,21 @@ export function buildExecutorTools(context: ExecutorToolContext): ToolSet {
    * rather than a comment: a tool added to the set is confirmed from then on,
    * and a tool taken out of it stops asking, without a second edit here.
    */
-  const gate = async (toolName: string, input: unknown): Promise<void> => {
+  const gate = async (toolName: string, input: unknown, risk?: CommandRisk): Promise<void> => {
     if (!GATED_EXECUTOR_TOOLS.has(toolName)) return
     const outcome: PermissionOutcome = await permissions.ask({
       chatId: context.chatId,
       agentId: context.agentId,
       toolName,
       input,
-      signal
+      signal,
+      ...(risk ? { risk } : {})
     })
     if (!outcome.allowed) throw new PermissionDeniedError(toolName, outcome.reason)
   }
+
+  /** Set once the turn has already said that `sandbox-exec` is missing. */
+  let saidUnsandboxed = false
 
   const resolvePath = (path: string | undefined): ResolvedPath => resolveInWorkdir(workdir, path)
 
@@ -797,17 +843,42 @@ export function buildExecutorTools(context: ExecutorToolContext): ToolSet {
       }),
       execute: async ({ command }) => {
         const line = requireString(command, 'command')
-        await gate(RUN_COMMAND_TOOL, { command: line })
 
+        // Classified before the prompt, not after it (S5.15). A `blocked` line
+        // never becomes a card: a prompt whose only right answer is Deny trains
+        // the user to read prompts as noise, which is the failure mode every
+        // rule in this file exists to avoid.
         const cwd = realWorkdir(workdir)
-        const result = await runCommand('/bin/sh', ['-c', line], {
-          cwd,
+        const risk = classifyCommand(line, { workdir: cwd })
+        if (risk.verdict === 'blocked' && risk.reason) {
+          throw new CommandBlockedError(blockedCommandMessage(risk.reason))
+        }
+
+        await gate(RUN_COMMAND_TOOL, { command: line }, risk)
+
+        // Resolved again after the prompt, exactly as the write tools do: the
+        // sandbox profile names the folder, and a folder that moved while the
+        // user was deciding must not leave the profile naming the old one.
+        const runIn = realWorkdir(workdir)
+        const mode = context.sandbox ?? 'workdir-write'
+        const sandboxed = sandboxCommand({ command: line, mode, workdir: runIn })
+        if (mode === 'workdir-write' && !sandboxed.sandboxed && !saidUnsandboxed) {
+          saidUnsandboxed = true
+          context.notice?.(NOTICE_SANDBOX_UNAVAILABLE)
+        }
+
+        const result = await runCommand(sandboxed.file, sandboxed.args, {
+          cwd: runIn,
           timeoutMs: context.timeoutMs,
           signal
         })
         return {
           command: line,
           exitCode: result.exitCode,
+          // Reported to the model as well as to the user: a write that failed
+          // with `Operation not permitted` is otherwise a mystery it will spend
+          // the rest of the turn trying to debug.
+          sandbox: sandboxed.sandboxed ? 'workdir-write' : 'off',
           ...(result.timedOut ? { timedOut: true, timeoutMs: context.timeoutMs } : {}),
           stdout: result.stdout,
           stderr: result.stderr

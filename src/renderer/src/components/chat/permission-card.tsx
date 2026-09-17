@@ -19,9 +19,25 @@
  * ## What it shows
  *
  * `describePermissionInput` decides; the rule that matters is that a
- * `run_command` command line is printed **verbatim** in monospace. The shell is
- * not sandboxed — only `cwd` is confined — so this prompt is the entire security
- * boundary, and a summarised command line would be a boundary that lies.
+ * `run_command` command line is printed **verbatim** in monospace. Since S5.15
+ * the command also runs under a write sandbox and has been through the command
+ * policy, but neither of those reads the line the way a person does — the
+ * sandbox stops writes and says nothing about what is read or sent — so this
+ * prompt is still the boundary, and a summarised command line would be a
+ * boundary that lies.
+ *
+ * ## The warning row (S5.15)
+ *
+ * A `run_command` whose verdict is `dangerous` draws one line naming the rule
+ * that fired, translated from the reason **code** the backend sent — the backend
+ * does not know the UI language (CLAUDE.md rule #4). The same card **hides**
+ * "Always allow": the gate ignores every grant for a dangerous call, so the
+ * button would be a promise the product does not keep. Hidden rather than
+ * disabled, because a disabled button invites the user to work out why.
+ *
+ * A `blocked` command never reaches this component at all: the tool throws
+ * before it asks, which is the point — a prompt whose only right answer is Deny
+ * teaches the user that prompts are noise.
  *
  * ## Keyboard
  *
@@ -32,7 +48,7 @@
  * card is gone.
  */
 import clsx from 'clsx'
-import { ShieldAlert } from 'lucide-react'
+import { ShieldAlert, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { PermissionDecision } from '@shared/types'
@@ -40,7 +56,8 @@ import { useAgent } from '../../stores/agents'
 import { useIsReplying, usePermissionsStore, type PendingPermission } from '../../stores/permissions'
 import { Button } from '../ui'
 import { CodeBlock } from './code-block'
-import { describePermissionInput } from './permission-input'
+import { commandRiskLabel } from './command-risk'
+import { describePermissionCard } from './permission-input'
 
 export interface PermissionCardProps {
   request: PendingPermission
@@ -54,7 +71,10 @@ export function PermissionCard({ request, autoFocus = false }: PermissionCardPro
   const replying = useIsReplying(request.requestId)
   const card = useRef<HTMLElement>(null)
 
-  const view = describePermissionInput(request.toolName, request.input)
+  // What to draw is decided in `permission-input.ts` and rendered here, so the
+  // two S5.15 rules — when to warn, and when to offer a grant — are unit-tested
+  // without a DOM (the split `goal.ts` and `handoff.ts` already use).
+  const view = describePermissionCard(request)
 
   // The card itself takes the focus rather than the Allow button: a focused
   // default button is one stray Enter away from being pressed by a user who was
@@ -127,6 +147,17 @@ export function PermissionCard({ request, autoFocus = false }: PermissionCardPro
         <p className="text-[10px] text-fg-faint">{t('chat.permissionTruncated')}</p>
       ) : null}
 
+      {view.warn ? (
+        <p
+          data-testid="permission-card-risk"
+          data-reason={view.warn}
+          className="flex items-start gap-1.5 rounded border border-danger/50 bg-danger/10 px-2 py-1.5 text-[11px] leading-relaxed text-danger"
+        >
+          <TriangleAlert aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>{commandRiskLabel(t, view.warn)}</span>
+        </p>
+      ) : null}
+
       {view.kind === 'command' ? (
         <p data-testid="permission-card-command-hint" className="text-[10px] text-fg-faint">
           {t('chat.permissionCommandHint')}
@@ -143,14 +174,18 @@ export function PermissionCard({ request, autoFocus = false }: PermissionCardPro
         >
           {t('chat.permissionAllow')}
         </Button>
-        <Button
-          size="sm"
-          data-testid="permission-allow-always"
-          disabled={replying}
-          onClick={() => answer('allowAlways')}
-        >
-          {t('chat.permissionAllowAlways')}
-        </Button>
+        {/* Hidden, not disabled, for a dangerous call: the gate ignores a grant
+            for exactly these lines, so the button would do nothing. */}
+        {view.offersAlwaysAllow ? (
+          <Button
+            size="sm"
+            data-testid="permission-allow-always"
+            disabled={replying}
+            onClick={() => answer('allowAlways')}
+          >
+            {t('chat.permissionAllowAlways')}
+          </Button>
+        ) : null}
         <Button
           variant="danger"
           size="sm"

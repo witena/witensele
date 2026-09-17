@@ -21,7 +21,8 @@ touch the filesystem.
 
 ## Database
 
-S1.2 created every table this feature uses. S2.3 added one column to `messages`:
+S1.2 created every table this feature uses except `permission_grants`, which
+S5.15 added beside them. S2.3 added one column to `messages`:
 `in_reply_to` (migration `0001_spooky_odin.sql`), the agent ids — plus the
 literal `user` — whose messages asked for that reply. It is nullable, so every
 row written before it stores nothing at all, and the UI's "replying to @x" label
@@ -37,6 +38,7 @@ is the only thing that reads it. See
 | | `settings` | json | `ChatSettings`; written by the member panel's group-settings block, merged field by field |
 | | `created_at` / `updated_at` | integer | Epoch ms. `updated_at` is bumped by every message insert, which is what floats an active chat to the top |
 | `chat_members` | `chat_id`, `agent_id`, `position` | text / text / integer | Composite key; `ON DELETE CASCADE` from both parents |
+| `permission_grants` | `chat_id`, `tool_name`, `created_at` | text / text / integer | S5.15, migration `0004_messy_the_renegades.sql`. The standing "always allow in this chat" grants, listed in the group settings. Composite key, `ON DELETE CASCADE` from the chat — which is the whole of "deleting a chat deletes its grants" — and owned by [`executor`](../executor/backend.md); it appears here because it hangs off `chats` |
 | `messages` | `seq` | integer | Per-chat monotonic, assigned inside the insert transaction. The transcript's total order, and the `before` cursor's |
 | | `sender_type` / `sender_id` | text | `user` + `ctx.userId`, or `agent` + the agent id |
 | | `parts` | json | `MessagePart[]`; rewritten by the flush during streaming |

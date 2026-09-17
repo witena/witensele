@@ -9,7 +9,12 @@
  * the user needs to see what the model really sent.
  */
 import { describe, expect, it } from 'vitest'
-import { CONTENT_PREVIEW_CHARS, describePermissionInput } from './permission-input'
+import type { CommandRisk } from '@shared/types'
+import {
+  CONTENT_PREVIEW_CHARS,
+  describePermissionCard,
+  describePermissionInput
+} from './permission-input'
 
 describe('describePermissionInput', () => {
   it('shows a command line verbatim, however it is written', () => {
@@ -80,5 +85,54 @@ describe('describePermissionInput', () => {
     expect(describePermissionInput('write_file', { path: 'a.txt' }).kind).toBe('json')
     expect(describePermissionInput('edit_file', { path: 'a.txt' }).kind).toBe('json')
     expect(describePermissionInput('write_file', null).kind).toBe('json')
+  })
+})
+
+describe('describePermissionCard (S5.15)', () => {
+  const command = 'git push origin main'
+  const dangerous: CommandRisk = { verdict: 'dangerous', reason: 'git-push' }
+
+  it('warns and withholds the grant button for a dangerous command', () => {
+    const view = describePermissionCard({ toolName: 'run_command', input: { command }, risk: dangerous })
+
+    expect(view.warn).toBe('git-push')
+    // The gate ignores a grant for exactly these calls, so offering one would be
+    // a promise the product does not keep.
+    expect(view.offersAlwaysAllow).toBe(false)
+    // …and the command line is still verbatim.
+    expect(view.body).toBe(command)
+  })
+
+  it('does neither for a normal command', () => {
+    const view = describePermissionCard({
+      toolName: 'run_command',
+      input: { command: 'npm test' },
+      risk: { verdict: 'normal', reason: null }
+    })
+
+    expect(view.warn).toBeNull()
+    expect(view.offersAlwaysAllow).toBe(true)
+  })
+
+  it('does neither for a tool with no verdict at all', () => {
+    const view = describePermissionCard({
+      toolName: 'write_file',
+      input: { path: 'a.md', content: '# a\n' }
+    })
+
+    expect(view.warn).toBeNull()
+    expect(view.offersAlwaysAllow).toBe(true)
+    expect(view.path).toBe('a.md')
+  })
+
+  it('fails safe on a blocked verdict, which cannot normally reach a card', () => {
+    const view = describePermissionCard({
+      toolName: 'run_command',
+      input: { command: 'sudo rm -rf /' },
+      risk: { verdict: 'blocked', reason: 'privilege-escalation' }
+    })
+
+    expect(view.warn).toBe('privilege-escalation')
+    expect(view.offersAlwaysAllow).toBe(false)
   })
 })

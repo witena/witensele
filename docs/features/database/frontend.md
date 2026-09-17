@@ -23,8 +23,12 @@ server that keeps its rows in Postgres.
 ## State
 
 None. The stores listed in `../backend-client/frontend.md` mirror
-backend-owned data (`chats`, `messages`, `agents`, `providers`, `settings`), but
-they are populated by `BackendClient` calls and events, never by a query.
+backend-owned data (`chats`, `messages`, `agents`, `providers`, `settings`, and
+since S5.15 the permission grants), but they are populated by `BackendClient`
+calls and events, never by a query. S5.15's `permission_grants` is the newest
+illustration: the renderer draws a list of grants and has no idea that there is
+a table behind it — it calls `permissions.grants.list` and renders what comes
+back.
 
 | Store | Field | Type | Meaning |
 |---|---|---|---|
@@ -34,7 +38,8 @@ they are populated by `BackendClient` calls and events, never by a query.
 
 None of its own. The `BackendClient` methods that end up in a repository are
 listed in `implement.md` and belong to the features that own them: `providers.*`,
-`agents.*`, `mcp.*`, `chats.*`, `messages.list`, `chat.send`, `settings.*`.
+`agents.*`, `mcp.*`, `chats.*`, `messages.list`, `chat.send`, `settings.*`, and
+since S5.15 `permissions.grants.*` ([`executor`](../executor/frontend.md)).
 
 | Call / subscription | Called from | Purpose |
 |---|---|---|

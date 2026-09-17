@@ -32,7 +32,7 @@
  */
 import { create } from 'zustand'
 import type { PermissionRequestedEvent } from '@shared/events'
-import type { PermissionDecision } from '@shared/types'
+import type { CommandRisk, PermissionDecision, PermissionGrant } from '@shared/types'
 import { getBackend } from '../lib/backend-provider'
 
 /** One prompt waiting for an answer, as the card reads it. */
@@ -44,6 +44,15 @@ export interface PendingPermission {
   toolName: string
   /** The tool arguments exactly as the model produced them. Never summarised. */
   input: unknown
+  /**
+   * The command policy's verdict for a `run_command` prompt (S5.15).
+   *
+   * Absent for every other tool and for a command the policy called `normal`.
+   * The card draws a warning row and hides "Always allow" when it is
+   * `dangerous` — hides rather than disables, because the button would do
+   * nothing: the gate ignores a grant for exactly these calls.
+   */
+  risk?: CommandRisk | undefined
   /** Arrival order, so the oldest card is unambiguous. */
   seq: number
 }
@@ -55,6 +64,14 @@ export interface PermissionsState {
   replyingById: Record<string, boolean>
   /** Monotonic arrival counter. Exposed only so a test can reset it. */
   seq: number
+  /**
+   * Each chat's standing "always allow" grants, newest first (S5.15).
+   *
+   * Keyed by chat and loaded on demand, because the list is drawn in one panel
+   * of one chat: loading every chat's grants at startup would be a query per
+   * chat for a row almost none of them have.
+   */
+  grantsByChat: Record<string, PermissionGrant[]>
 
   /** `permission.requested`, fanned in by `lib/event-bridge.ts`. */
   applyRequested: (event: PermissionRequestedEvent) => void
@@ -62,7 +79,11 @@ export interface PermissionsState {
   applyResolved: (requestId: string) => void
   /** Answers one prompt. Never rejects; a refusal drops the stale card. */
   reply: (requestId: string, decision: PermissionDecision) => Promise<void>
-  /** Drops a chat's prompts, after that chat is deleted. */
+  /** Reads one chat's grants from the backend. Never rejects. */
+  loadGrants: (chatId: string) => Promise<void>
+  /** Forgets one grant and redraws the list from what the backend answers. */
+  revokeGrant: (chatId: string, toolName: string) => Promise<void>
+  /** Drops a chat's prompts and grants, after that chat is deleted. */
   clear: (chatId: string) => void
 }
 
@@ -76,6 +97,7 @@ export const usePermissionsStore = create<PermissionsState>()((set, get) => ({
   pending: {},
   replyingById: {},
   seq: 0,
+  grantsByChat: {},
 
   applyRequested(event) {
     set((state) => ({
@@ -88,6 +110,7 @@ export const usePermissionsStore = create<PermissionsState>()((set, get) => ({
           agentId: event.agentId,
           toolName: event.toolName,
           input: event.input,
+          ...(event.risk ? { risk: event.risk } : {}),
           seq: state.seq + 1
         }
       }
@@ -121,18 +144,47 @@ export const usePermissionsStore = create<PermissionsState>()((set, get) => ({
     }
   },
 
+  async loadGrants(chatId) {
+    try {
+      const grants = await getBackend().invoke('permissions.grants.list', { chatId })
+      set((state) => ({ grantsByChat: { ...state.grantsByChat, [chatId]: grants } }))
+    } catch {
+      // A chat that was deleted while the panel was open. An empty list is the
+      // honest answer and the panel's own empty state says the rest.
+      set((state) => ({ grantsByChat: { ...state.grantsByChat, [chatId]: [] } }))
+    }
+  },
+
+  async revokeGrant(chatId, toolName) {
+    try {
+      const grants = await getBackend().invoke('permissions.grants.revoke', { chatId, toolName })
+      // The backend's remaining list, never an optimistic splice: a grant the
+      // user believes they revoked and did not is the exact failure this step
+      // exists to remove.
+      set((state) => ({ grantsByChat: { ...state.grantsByChat, [chatId]: grants } }))
+    } catch {
+      await get().loadGrants(chatId)
+    }
+  },
+
   clear(chatId) {
     set((state) => {
       const dropped = Object.values(state.pending)
         .filter((request) => request.chatId === chatId)
         .map((request) => request.requestId)
-      if (dropped.length === 0) return {}
+      const hadGrants = chatId in state.grantsByChat
+      if (dropped.length === 0 && !hadGrants) return {}
       return {
         pending: Object.fromEntries(
           Object.entries(state.pending).filter(([, request]) => request.chatId !== chatId)
         ),
         replyingById: Object.fromEntries(
           Object.entries(state.replyingById).filter(([id]) => !dropped.includes(id))
+        ),
+        // The rows themselves are gone by then — `chat_id` cascades — so keeping
+        // the cache would be the one place in the app claiming otherwise.
+        grantsByChat: Object.fromEntries(
+          Object.entries(state.grantsByChat).filter(([id]) => id !== chatId)
         )
       }
     })
@@ -159,4 +211,14 @@ export function usePendingPermissions(chatId: string | null): PendingPermission[
 /** True while this prompt's answer is on its way to the backend. */
 export function useIsReplying(requestId: string): boolean {
   return usePermissionsStore((state) => state.replyingById[requestId] === true)
+}
+
+/** One empty array for every chat that has no grants, so the selector is stable. */
+const NO_GRANTS: PermissionGrant[] = []
+
+/** One chat's standing grants, newest first (S5.15). */
+export function useGrants(chatId: string | null): PermissionGrant[] {
+  return usePermissionsStore((state) =>
+    chatId ? (state.grantsByChat[chatId] ?? NO_GRANTS) : NO_GRANTS
+  )
 }

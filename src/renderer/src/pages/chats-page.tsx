@@ -45,6 +45,7 @@ import { ChatList } from '../components/chat/chat-list'
 import { Composer, type ComposerHandle } from '../components/chat/composer'
 import { GoalChip } from '../components/chat/goal-chip'
 import { GoalSettings } from '../components/chat/goal-settings'
+import { GrantsList } from '../components/chat/grants-list'
 import { HandoffButton } from '../components/chat/handoff-button'
 import { MemberPanel } from '../components/chat/member-panel'
 import { OnboardingCard, useOnboarding } from '../components/onboarding/onboarding-card'
@@ -610,6 +611,11 @@ export function ChatsPage(): React.JSX.Element {
               workdir={selected?.workdir ?? null}
               goal={selected?.goal ?? null}
             />
+
+            {/* "Always allowed" (S5.15), last in the block because it is the
+                only row that is a *record* of something the user did rather
+                than a setting they are making. */}
+            <GrantsList chatId={selectedId} />
           </section>
 
           <div className="flex-1" />

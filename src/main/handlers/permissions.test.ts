@@ -92,3 +92,80 @@ describe('permission.reply', () => {
     await pending
   })
 })
+
+describe('permissions.grants (S5.15)', () => {
+  it('lists what an allowAlways wrote, through the real table', async () => {
+    const chat = database.repos.chats.create()
+    const pending = ctx.permissions.ask({
+      chatId: chat.id,
+      agentId: 'agent-1',
+      toolName: 'run_command',
+      input: { command: 'npm test' },
+      signal: new AbortController().signal
+    })
+    await handlers['permission.reply'](ctx, {
+      requestId: 'request-1',
+      decision: 'allowAlways'
+    })
+    await pending
+
+    await expect(handlers['permissions.grants.list'](ctx, { chatId: chat.id })).resolves.toEqual([
+      { chatId: chat.id, toolName: 'run_command', createdAt: expect.any(Number) }
+    ])
+  })
+
+  it('answers the remaining list from a revoke, not void', async () => {
+    const chat = database.repos.chats.create()
+    database.repos.permissionGrants.grant(chat.id, 'run_command')
+    database.repos.permissionGrants.grant(chat.id, 'write_file')
+
+    const left = await handlers['permissions.grants.revoke'](ctx, {
+      chatId: chat.id,
+      toolName: 'run_command'
+    })
+    // The panel redraws from this rather than from an optimistic splice.
+    expect(left.map((grant) => grant.toolName)).toEqual(['write_file'])
+  })
+
+  it('asks again once a grant is revoked', async () => {
+    const chat = database.repos.chats.create()
+    database.repos.permissionGrants.grant(chat.id, 'run_command')
+
+    const request = {
+      chatId: chat.id,
+      agentId: 'agent-1',
+      toolName: 'run_command',
+      input: { command: 'ls' },
+      signal: new AbortController().signal
+    }
+    // Answered from the grant, with no card at all.
+    await expect(ctx.permissions.ask(request)).resolves.toEqual({
+      allowed: true,
+      remembered: true
+    })
+
+    await handlers['permissions.grants.revoke'](ctx, { chatId: chat.id, toolName: 'run_command' })
+
+    const asked = ctx.permissions.ask(request)
+    await Promise.resolve()
+    expect(ctx.permissions.pending()).toHaveLength(1)
+    ctx.permissions.abortAll()
+    await asked
+  })
+
+  it('is idempotent and needs no chat to exist', async () => {
+    await expect(
+      handlers['permissions.grants.revoke'](ctx, { chatId: 'gone', toolName: 'run_command' })
+    ).resolves.toEqual([])
+    await expect(handlers['permissions.grants.list'](ctx, { chatId: 'gone' })).resolves.toEqual([])
+  })
+
+  it('rejects a blank chat id or tool name', async () => {
+    await expect(
+      handlers['permissions.grants.list'](ctx, { chatId: '' })
+    ).rejects.toMatchObject({ code: 'validation' })
+    await expect(
+      handlers['permissions.grants.revoke'](ctx, { chatId: 'chat-1', toolName: '' })
+    ).rejects.toMatchObject({ code: 'validation' })
+  })
+})

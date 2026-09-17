@@ -39,6 +39,7 @@ import type {
   MemorySearchHit,
   Message,
   PermissionDecision,
+  PermissionGrant,
   Provider,
   ProviderInput,
   SkillDetail,
@@ -376,10 +377,34 @@ export interface BackendApi {
    * was stopped, or because the same card was answered twice — rejects with
    * `not_found`, which is the renderer's cue that the card is stale.
    *
-   * `allowAlways` runs this call **and** remembers the chat + tool pair for the
-   * life of the process; see `PermissionDecision`.
+   * `allowAlways` runs this call **and** writes a `permission_grants` row for
+   * the chat + tool pair, which survives a restart and is listed by
+   * `permissions.grants.list`; see `PermissionDecision`.
    */
   'permission.reply': (input: { requestId: string; decision: PermissionDecision }) => Promise<void>
+
+  /**
+   * Every "always allow" this chat has been given, newest first (S5.15).
+   *
+   * The read behind the "Always allowed" list in Group settings. An empty array
+   * for a chat that has never been granted anything, and for a chat that does
+   * not exist — this is a question about grants, not a way to probe for chat
+   * ids, and the list is redrawn from `permission.resolved` anyway.
+   */
+  'permissions.grants.list': (input: { chatId: string }) => Promise<PermissionGrant[]>
+
+  /**
+   * Forgets one grant, so the tool asks again from the next call on (S5.15).
+   *
+   * Idempotent: revoking a grant that is not there succeeds. The renderer
+   * redraws from the returned list rather than from its own optimistic state,
+   * because a grant the user thinks they revoked and did not is exactly the
+   * failure this whole step exists to remove.
+   */
+  'permissions.grants.revoke': (input: {
+    chatId: string
+    toolName: string
+  }) => Promise<PermissionGrant[]>
 
   /* -- running a chat ----------------------------------------------------- */
 
@@ -509,6 +534,8 @@ export const BACKEND_METHODS = [
   'messages.list',
   'messages.usageSummary',
   'permission.reply',
+  'permissions.grants.list',
+  'permissions.grants.revoke',
   'chat.send',
   'chat.stop',
   'chat.handoff'

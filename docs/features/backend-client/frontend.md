@@ -103,7 +103,8 @@ Event handling worth writing down once:
 - `presence.changed` → update the dot in the member panel and on that agent's
   message avatars (the dot shows the agent's *current* state, not the state at
   send time).
-- `permission.requested` → add a card to `stores/permissions.ts`;
+- `permission.requested` → add a card to `stores/permissions.ts`, carrying
+  S5.15's `risk` when the backend sent one;
   `permission.resolved` → remove it, whatever the decision says. Exactly one
   `resolved` per `requested`, on every path, which is what lets the card be
   dismissed without knowing why (S5.4, drawn in S5.5).

@@ -8,6 +8,7 @@
 | `src/renderer/src/components/onboarding/onboarding-card.tsx` | **S7.5.** The first-run card, drawn in the conversation column in place of the "no chat selected" empty state. Five steps done in place, the first three of them the provider editor's own components (see [`providers`](../providers/frontend.md)), then the agent templates and the button that creates the first chat. Exports `useOnboarding()`, which the page calls to decide which of the two to render |
 | `src/renderer/src/lib/onboarding.ts` | `onboardingState(input)` and `credentialReady(draft, authStatus)`: which step is current, and whether the card should be on screen at all. Pure and unit-tested, like `handoff.ts` and `goal.ts` |
 | `src/renderer/src/components/chat/goal-settings.tsx` | The **Goal** block (S5.10) under the Working directory row: the kind `SegmentedControl` (Document and Codebase disabled without a folder, with the reason under them), the description, the deliverable and its "Choose…", and the materials list with "Add…". The one block in the panel that holds a **draft**, because a goal is one JSON column and two of its fields are free text; it writes on blur |
+| `src/renderer/src/components/chat/grants-list.tsx` | The **Always allowed** block (S5.15), last in the group settings: one monospace row per standing permission grant, newest first, each with a revoke button that appears on hover, or an empty line saying how a row gets there. Owned by [`executor`](../executor/frontend.md); hosted here |
 | `src/renderer/src/components/chat/goal-chip.tsx` | The goal chip in the header (S5.10). Four states, one of which is a button: a **delivered** document opens in the editor through S5.7's `openInEditor`, and a refused open paints the chip red for 2.5 s |
 | `src/renderer/src/components/chat/goal.ts` | `goalChipState(goal, status)`: which of those four states to draw, and what to open. Pure and unit-tested; the component turns it into `t()` copy |
 | `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete |
@@ -116,7 +117,9 @@ Event handling is written once, in `lib/event-bridge.ts`:
   agent's message avatars.
 - `permission.requested` → add a card. `permission.resolved` → remove it,
   whatever the `decision` says (`aborted` is a Stop closing a prompt nobody
-  answered).
+  answered, and S5.15's `timeout` is one nobody answered in time). An
+  `allowAlways` resolution additionally reloads that chat's grants, so the
+  **Always allowed** block gains its row without the panel being reopened.
 
 ## Interaction states
 
@@ -142,6 +145,8 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | folder bound | An accent chip beside the chat title holding the folder's **name**, with the whole path in its `title`; the settings row prints the same name in mono and enables "Clear" |
 | folder refused | The left column's `chats-error` line names the reason: not absolute, no longer there, or a file rather than a folder |
 | chat with no folder | The Goal block's Document and Codebase segments are disabled and a hint under them says to choose a working directory. Discussion stays available: a chat can be about something without owning a folder |
+| chat with no grants | **Always allowed** shows one line: nothing yet, and that "Always allow" on a prompt is what adds a row (S5.15) |
+| chat with grants | One row per tool, newest first, with a revoke button on hover. Revoking removes the row — redrawn from what the backend answers, never optimistically — and the tool asks again from its next call |
 | goal set | A chip beside the folder chip. `discussion` / `codebase` show the kind; `document` shows the deliverable's **file name**, with the whole relative path in the tooltip |
 | deliverable written | The same chip reads `name · Delivered`, turns accent and becomes a button that opens the file (S5.7). A refused open paints it red for 2.5 s, exactly as a file-reference chip does. Since S5.12 it flips without the user touching anything: the query is re-asked at every round boundary and at the end of a run, so the executor turn that wrote the file is what changes the header |
 | the deliverable can be written | The Actions card's third row, "Write the deliverable", is enabled: the chat has a folder, an executor and a `document` goal naming a file, and no run is going. Otherwise it is disabled with the reason in its tooltip and in `data-blocked`, exactly like "Hand to executor" |
@@ -178,6 +183,7 @@ New keys, all under the existing namespaces:
 | `chat.jumpToLatest` | The pill that appears when a message arrives while the user is scrolled up |
 | `chat.workdir`, `chat.workdirHint`, `chat.workdirNone`, `chat.workdirChoose`, `chat.workdirClear` | The Working directory row. The **path itself is never translated** — it is data, printed as it is stored |
 | `chat.goal`, `chat.goalHint`, `chat.goalKindDiscussion`, `chat.goalKindDocument`, `chat.goalKindCodebase`, `chat.goalNeedsWorkdirHint` | The Goal block's heading, its three segments and the hint under the two that need a folder |
+| `chat.grantsTitle`, `chat.grantsEmpty`, `chat.grantsHint`, `chat.grantRevoke` | The Always allowed block (S5.15). The **tool name itself is never translated** — it is an identifier, printed as the transcript prints it, the same rule the working directory follows |
 | `chat.goalDescription`, `chat.goalDescriptionPlaceholder`, `chat.goalDeliverable`, `chat.goalDeliverablePlaceholder`, `chat.goalDeliverableChoose` | The description box, the deliverable field and its picker button. The paths are data and are never translated |
 | `chat.goalMaterials`, `chat.goalMaterialsAdd`, `chat.goalMaterialsNone`, `chat.goalMaterialRemove` | The materials list, its "Add…" and each row's remove button. Since S5.11 the rows are what every member is shown before the first round; the panel says nothing about how much of them fits, and `notices.materialsTruncated` is what reports that after the fact |
 | `chat.goalDelivered`, `chat.goalChipTitleDiscussion`, `chat.goalChipTitleCodebase`, `chat.goalChipTitleDocument`, `chat.goalChipTitleDelivered` | The header chip's label and its four tooltips (`{{path}}` in the last two) |

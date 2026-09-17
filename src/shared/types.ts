@@ -617,6 +617,121 @@ export interface AppTimeouts {
   hardTimeoutMs: number
   /** Budget for a single MCP tool call. */
   toolTimeoutMs: number
+  /**
+   * How long a permission prompt waits for an answer before it denies itself
+   * (S5.15).
+   *
+   * Minutes rather than seconds, and much longer than the other three, because
+   * the thing being waited for is a **person** reading a diff — not a model
+   * answering or a process exiting. Until S5.15 a prompt nobody answered was
+   * ended only by Stop or by `hardTimeoutMs`, which recorded the turn as
+   * `skipped`: true, and not the reason.
+   */
+  permissionTimeoutMs: number
+}
+
+/* -------------------------------------------------------------------------- */
+/* Executor safety (S5.15)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How `run_command` is confined (S5.15).
+ *
+ * `'workdir-write'` runs the command under `/usr/bin/sandbox-exec` with a
+ * generated profile that lets it read anything the user can read and write only
+ * inside the chat's folder, the system temp directories and the null-ish
+ * devices; the network stays open, because a build that cannot fetch its
+ * dependencies is not a build. `'off'` is S5.4's behaviour and is kept for the
+ * cases the profile is too tight for — a tool that insists on writing its cache
+ * into the home directory, or a machine where `sandbox-exec` has been removed.
+ */
+export type ExecutorSandboxMode = 'workdir-write' | 'off'
+
+/** Every value `ExecutorSettings.sandbox` accepts, in the order the control shows them. */
+export const EXECUTOR_SANDBOX_MODES = [
+  'workdir-write',
+  'off'
+] as const satisfies readonly ExecutorSandboxMode[]
+
+export interface ExecutorSettings {
+  sandbox: ExecutorSandboxMode
+}
+
+/**
+ * How dangerous a `run_command` line is (S5.15).
+ *
+ * `blocked` never runs and never prompts; `dangerous` always prompts and
+ * ignores an `allowAlways` grant; `normal` behaves as it did before S5.15. The
+ * classifier is `src/main/executor/command-policy.ts`, and its header explains
+ * why a `normal` verdict is not a claim that the command is safe.
+ */
+export type CommandVerdict = 'blocked' | 'dangerous' | 'normal'
+
+/**
+ * Why a command got the verdict it got.
+ *
+ * A **code**, never a sentence: the backend does not know the UI language, so
+ * the card translates it under `chat.commandRisk.*` (CLAUDE.md rule #4), and the
+ * model reads a separate English sentence from `blockedCommandMessage`.
+ */
+export type CommandRiskReason =
+  | 'privilege-escalation'
+  | 'disk-write'
+  | 'shutdown'
+  | 'fork-bomb'
+  | 'destructive-delete'
+  | 'destructive-permissions'
+  | 'recursive-delete'
+  | 'git-push'
+  | 'git-reset-hard'
+  | 'git-clean'
+  | 'history-rewrite'
+  | 'package-publish'
+  | 'download-to-shell'
+  | 'command-substitution'
+  | 'outside-workdir'
+  | 'background-process'
+
+/** Every reason code, for the locale guard and the policy's own tests. */
+export const COMMAND_RISK_REASONS = [
+  'privilege-escalation',
+  'disk-write',
+  'shutdown',
+  'fork-bomb',
+  'destructive-delete',
+  'destructive-permissions',
+  'recursive-delete',
+  'git-push',
+  'git-reset-hard',
+  'git-clean',
+  'history-rewrite',
+  'package-publish',
+  'download-to-shell',
+  'command-substitution',
+  'outside-workdir',
+  'background-process'
+] as const satisfies readonly CommandRiskReason[]
+
+/** One verdict with the rule that produced it; `reason` is null only for `normal`. */
+export interface CommandRisk {
+  verdict: CommandVerdict
+  reason: CommandRiskReason | null
+}
+
+/**
+ * One remembered "always allow in this chat" (S5.15).
+ *
+ * Persisted since S5.15, which is a reversal of S5.4's decision that a grant
+ * must die with the process. The reason it is safe to reverse is the rest of
+ * this step: a grant is now **listed and revocable** in the chat's Group
+ * settings, and a `dangerous` command ignores it entirely. An invisible grant
+ * was the problem, not a durable one.
+ */
+export interface PermissionGrant {
+  chatId: string
+  /** The tool the grant is about: `run_command`, or an MCP tool's own name. */
+  toolName: string
+  createdAt: number
 }
 
 /**
@@ -670,6 +785,8 @@ export interface AppSettings {
   theme: ThemeSetting
   /** Where a `path:line` chip, a diff header or a file tool card opens (S5.7). */
   editor: EditorSettings
+  /** How `run_command` is confined (S5.15). */
+  executor: ExecutorSettings
   timeouts: AppTimeouts
   /**
    * True once the user pressed Skip on the first-run card (S7.5).
@@ -692,10 +809,14 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     kind: 'vscode',
     command: DEFAULT_EDITOR_COMMAND
   },
+  executor: {
+    sandbox: 'workdir-write'
+  },
   timeouts: {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,
-    toolTimeoutMs: 60_000
+    toolTimeoutMs: 60_000,
+    permissionTimeoutMs: 300_000
   },
   onboardingDismissed: false
 }
@@ -712,6 +833,7 @@ export interface AppSettingsPatch {
   language?: AppSettings['language']
   theme?: AppSettings['theme']
   editor?: Partial<EditorSettings>
+  executor?: Partial<ExecutorSettings>
   timeouts?: Partial<AppTimeouts>
   onboardingDismissed?: boolean
 }
@@ -791,9 +913,14 @@ export interface MemorySearchHit {
  * remembers the **chat + tool** pair, so every later call of that tool in that
  * chat runs without asking again. It is deliberately not remembered per input —
  * a user who has decided that this executor may run `write_file` in this chat
- * has decided about the tool, not about one path — and deliberately not
- * persisted: the memory lives for the life of the process, so closing the app is
- * always a way back to being asked.
+ * has decided about the tool, not about one path.
+ *
+ * Since S5.15 the grant is **persisted** (`permission_grants`), which S5.4
+ * refused to do on the grounds that a grant surviving a restart is a permission
+ * the user cannot see. The grounds were right and the conclusion was the wrong
+ * half: S5.15 makes the grant visible and revocable in the chat's Group settings
+ * instead, and a `dangerous` command ignores every grant, so quitting the app is
+ * no longer the only way back to being asked.
  */
 export const PERMISSION_DECISIONS = ['allow', 'deny', 'allowAlways'] as const
 

@@ -138,6 +138,15 @@ than by the usage guard, which cannot see a key that is assembled:
 asserted **in both directions** — no entry without copy, no copy left behind by
 an entry that was renamed.
 
+S5.15's `chat.commandRisk.*` is a third family of the same shape and takes the
+*other* route on purpose. The sixteen `CommandRiskReason` codes could have been
+resolved as `chat.commandRisk.${reason}` and checked the same way; instead
+`components/chat/command-risk.ts` is a `switch` of sixteen **literal** `t()`
+calls, so the ordinary usage guard sees every one of them and a renamed key
+fails at the usual place. Its own test then asserts both directions over the two
+locale files as well, which is what a computed key would have needed anyway —
+the difference is that the literals cost nothing to check twice.
+
 ## Accessibility and keyboard
 
 - `<html lang>` is set during bootstrap and updated on every `languageChanged`,

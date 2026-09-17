@@ -2,8 +2,8 @@
  * The executor: the role and the chat's working directory (S5.2), the permission
  * prompt and the diff block (S5.5), the hand-off with its review round (S5.6),
  * the chat goal that briefs all of them (S5.10), the read-only tools plus the
- * materials briefing every member now gets (S5.11), and the goal-aware delivery
- * that closes the loop (S5.12).
+ * materials briefing every member now gets (S5.11), the goal-aware delivery
+ * that closes the loop (S5.12), and the visible, revocable grants of S5.15.
  *
  * Everything up to the hand-off button's disabled states is **offline** — it is
  * all configuration, and no message is ever sent — and always runs. The three
@@ -34,6 +34,7 @@
  * rendered copy, so none of them depends on the active language, and no Chinese
  * appears in this file (CLAUDE.md rule #1).
  */
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -451,6 +452,71 @@ test('an invalid goal is refused with a reason, and the goal survives a restart'
   await expect(window.getByTestId('chat-goal-chip')).toContainText('NOTES.md')
   await expect(window.getByTestId('goal-deliverable')).toHaveValue('docs/NOTES.md')
   await expect(window.getByTestId('goal-material')).toHaveAttribute('data-path', 'notes.md')
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.15: the grants are visible and revocable                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The step's acceptance sentence for grants, offline: what "Always allow" wrote
+ * is on screen, and the revoke button really removes it.
+ *
+ * The grant is written through the backend rather than by clicking "Always
+ * allow" on a real card, for the same reason the folder is bound through the
+ * backend: raising a real prompt needs a model that emits a tool call, and this
+ * assertion is about the panel, not about the model. The restart is the part
+ * that matters most — S5.4 kept grants in a `Set` for the life of the process,
+ * and a row that did not survive here would mean the table is not being read.
+ */
+test('the grants a chat was given are listed, survive a restart and can be revoked', async () => {
+  const chatId = await selectedChatId()
+
+  // Nothing granted yet: the empty state, not an empty list with no explanation.
+  await expect(window.getByTestId('grants-list')).toHaveAttribute('data-count', '0')
+  await expect(window.getByTestId('grants-empty')).toBeVisible()
+  await expect(window.getByTestId('grant-row')).toHaveCount(0)
+
+  // Two grants, written straight into the file the way `permission.reply`
+  // would — the app is closed first so the write lands in the database the next
+  // launch opens, the same technique `providers.spec.ts` uses for a key this
+  // build cannot decrypt. Clicking "Always allow" on a real card would need a
+  // model that emits a tool call, and this test is about the panel.
+  await app?.close()
+  const now = Date.now()
+  execFileSync('sqlite3', [
+    join(userDataDir, 'witena.db'),
+    `INSERT INTO permission_grants (chat_id, tool_name, created_at) VALUES ` +
+      `('${chatId}', 'write_file', ${now - 1000}), ('${chatId}', 'run_command', ${now});`
+  ])
+
+  ;({ app, window } = await launchWitena(userDataDir))
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chat-item').first().click()
+
+  // Newest first, which is the order the repository promises.
+  await expect(window.getByTestId('grants-list')).toHaveAttribute('data-count', '2')
+  await expect(window.getByTestId('grants-empty')).toHaveCount(0)
+  await expect(window.getByTestId('grant-row')).toHaveCount(2)
+  await expect(window.getByTestId('grant-row').first()).toHaveAttribute('data-tool', 'run_command')
+
+  // Revoke the first, and only the first.
+  await window
+    .locator('[data-testid="grant-row"][data-tool="run_command"]')
+    .getByTestId('grant-revoke')
+    .click()
+
+  await expect(window.getByTestId('grant-row')).toHaveCount(1)
+  await expect(window.getByTestId('grant-row').first()).toHaveAttribute('data-tool', 'write_file')
+  // …and the row really left the table, not only the screen.
+  expect(await call('permissions.grants.list', { chatId })).toMatchObject({
+    ok: true,
+    value: [{ chatId, toolName: 'write_file' }]
+  })
+
+  await window.getByTestId('grant-row').first().getByTestId('grant-revoke').click()
+  await expect(window.getByTestId('grants-list')).toHaveAttribute('data-count', '0')
+  await expect(window.getByTestId('grants-empty')).toBeVisible()
 })
 
 /* -------------------------------------------------------------------------- */

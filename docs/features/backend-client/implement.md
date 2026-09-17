@@ -252,15 +252,15 @@ editor settings; see [`backend.md`](./backend.md).
 | `run.started` | `{ chatId, round }` | A user message starts a run |
 | `run.round` | `{ chatId, round, speakers }` | A round begins, with its speaker ids in order |
 | `run.finished` | `{ chatId, reason }` | The run ends: `completed` / `stopped` / `max-rounds` / `error` |
-| `permission.requested` | `{ requestId, chatId, agentId, toolName, input }` | A gated executor or `sideEffects` MCP tool is about to run and the turn is suspended (S5.4) |
-| `permission.resolved` | `{ requestId, chatId, decision }` — a `PermissionDecision` or `'aborted'` | That prompt ended, however it ended. Exactly one per `permission.requested`, so a card can be dismissed without knowing why (S5.4) |
+| `permission.requested` | `{ requestId, chatId, agentId, toolName, input, risk? }` | A gated executor or `sideEffects` MCP tool is about to run and the turn is suspended (S5.4). `risk` is S5.15's command-policy verdict, present only for a `run_command` the policy called `dangerous` |
+| `permission.resolved` | `{ requestId, chatId, decision }` — a `PermissionDecision`, `'aborted'` or `'timeout'` | That prompt ended, however it ended. Exactly one per `permission.requested`, so a card can be dismissed without knowing why (S5.4). `'timeout'` is S5.15's: nobody answered within `AppTimeouts.permissionTimeoutMs`, which is a different fact about the user than a denial |
 | `system.test` | `{ payload }` | `system.emitTestEvent` was called — the only event emitted as of S1.3 |
 
 ## Tests
 
 | File | Covers |
 |---|---|
-| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus` to it), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
+| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus`; S5.15 added `permissions.grants.list` / `permissions.grants.revoke` and the `permissions` namespace beside `permission`), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
 | `src/main/events/bus.test.ts` | Delivery order, payload identity, unsubscribe (twice is harmless), a throwing listener being logged without stopping the others, a listener added during delivery not receiving the in-flight event |
 | `src/main/secrets.test.ts` | Insecure store round trip including empty, long and non-ASCII values; the `plain:` marker; `isAvailable()` false; exactly one warning |
 | `src/main/app-context.test.ts` | The context opens a real temporary database, defaults to `LOCAL_USER_ID`, binds the repositories to the injected secret store, and `close()` is idempotent. From S3.2 it is also given `userDataDir`, from which `skillsDir()` / `memoryDir()` and `ctx.memory` are derived |
