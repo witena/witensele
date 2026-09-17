@@ -14,8 +14,7 @@ import {
   DEFAULT_USER_NAME,
   MAX_TOOL_RESULT_CHARS,
   SYSTEM_SENDER_NAME,
-  toModelMessages
-} from './history'
+  toModelMessages, YOUR_TURN_TEXT } from './history'
 
 function agent(id: string, name: string): Agent {
   return {
@@ -98,7 +97,10 @@ describe('toModelMessages', () => {
       messages: [message('agent', ada.id, text('I would start with the data model.'))]
     })
 
-    expect(result).toEqual([{ role: 'assistant', content: 'I would start with the data model.' }])
+    expect(result).toEqual([
+      { role: 'assistant', content: 'I would start with the data model.' },
+      { role: 'user', content: YOUR_TURN_TEXT }
+    ])
   })
 
   it("prefixes another agent's messages with that agent's name, as a user turn", () => {
@@ -201,7 +203,10 @@ describe('toModelMessages', () => {
       ]
     })
 
-    expect(result).toEqual([{ role: 'assistant', content: 'The answer is 42.' }])
+    expect(result).toEqual([
+      { role: 'assistant', content: 'The answer is 42.' },
+      { role: 'user', content: YOUR_TURN_TEXT }
+    ])
   })
 
   it('renders a known system notice as short English text, attributed to system', () => {
@@ -251,7 +256,8 @@ describe('toModelMessages', () => {
     ])
     expect(toModelMessages({ self: bob, agentsById, messages })).toEqual([
       { role: 'user', content: `[${DEFAULT_USER_NAME}]: Question.\n\n[Ada]: Ada answers.` },
-      { role: 'assistant', content: 'Bob answers.' }
+      { role: 'assistant', content: 'Bob answers.' },
+      { role: 'user', content: YOUR_TURN_TEXT }
     ])
   })
 
@@ -330,6 +336,41 @@ describe('toModelMessages', () => {
     // write its own, and every later speaker would claim to be concluding.
     expect(result).toEqual([
       { role: 'user', content: '[Ada]: We will ship the smallest version first.' }
+    ])
+  })
+
+  it('never ends with the agent’s own reply: a closing speaker who spoke last', () => {
+    // The round ended with Bob agreeing; the consensus notice is stored; Bob is
+    // the closing speaker. Without a rendered notice his prompt would end with
+    // his own reply, which Anthropic rejects as a prefill.
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [
+        message('user', 'local', [{ type: 'text', text: 'Which database?' }]),
+        message('agent', ada.id, [{ type: 'text', text: 'SQLite. [AGREED]' }]),
+        message('agent', bob.id, [{ type: 'text', text: 'SQLite as well. [AGREED]' }]),
+        message('system', 'system', [{ type: 'system-notice', key: 'consensus' }])
+      ]
+    })
+    const last = result[result.length - 1]
+    expect(last?.role).toBe('user')
+    expect(String(last?.content)).toContain('reached agreement')
+  })
+
+  it('appends a your-turn line when nothing at all follows the agent’s reply', () => {
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [
+        message('user', 'local', [{ type: 'text', text: 'Go on.' }]),
+        message('agent', bob.id, [{ type: 'text', text: 'First point.' }])
+      ]
+    })
+    expect(result).toEqual([
+      { role: 'user', content: '[User]: Go on.' },
+      { role: 'assistant', content: 'First point.' },
+      { role: 'user', content: YOUR_TURN_TEXT }
     ])
   })
 

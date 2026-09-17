@@ -209,3 +209,7 @@ Language selection: `resolveMainLanguage(settings.language)` passes `zh-CN` and
 `navigator`, and a renderer round trip inside a turn would be a needless
 dependency. Anything that is not a Chinese locale resolves to English, matching
 the renderer's own rule.
+
+## Closure notices reach the model (fix after S5.16)
+
+The `consensus` and `voteClosed` notices (S5.14) are rendered into the history like the hand-off ones. The first real use found the case the S5.14 tests had not: the closing speaker was also the last speaker of the agreed round, the consensus notice was not rendered, so its prompt ended with its own reply and the Anthropic provider rejected the turn. `history.ts` now renders both notices and, as a general guard, ends every prompt with a user message (`YOUR_TURN_TEXT`).
