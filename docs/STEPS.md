@@ -2364,6 +2364,13 @@ adds a line here in the same commit.
 
 ### Release workflow (S7.2)
 
+- **CI does not sign yet (S7.3).** The Developer ID certificate lives only in
+  the developer's login keychain. `release.yml` signs and notarizes as soon as
+  `CSC_LINK` (the exported `.p12`, base64), `CSC_KEY_PASSWORD`, `APPLE_ID`,
+  `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` exist as repository
+  secrets; until then a tag still produces unsigned dmgs and signed releases
+  are built locally with `npm run dist:signed`.
+
 - **Neither workflow has executed.** `ci.yml` and `release.yml` are validated by
   `actionlint` and by reading only; GitHub has never run them. The first push
   and the first `v*` tag are the first executions, and three things are most
@@ -2676,7 +2683,7 @@ not executed them — and the x64 dmg has never been opened on an Intel Mac; bot
 are in the Phase 6 backlog. Docs: `docs/features/packaging/` (all four) and the
 README's build section.
 
-### S7.3 Signing and notarization `[~]` (configured 2026-09-16; no certificate yet)
+### S7.3 Signing and notarization `[x]` (2026-09-17)
 What: the dmg opens on a double-click on any Mac.
 - Developer ID Application certificate in CI secrets (`CSC_LINK`,
   `CSC_KEY_PASSWORD`), `hardenedRuntime: true`, an entitlements file for the
@@ -2690,7 +2697,30 @@ What: the dmg opens on a double-click on any Mac.
 Acceptance: a fresh Mac with default Gatekeeper opens the downloaded app
 with no dialog. Docs: `docs/features/packaging/` (all four).
 
-Progress: **the configuration is in place and no signed build has been produced.**
+Done: **the first signed and notarized build was produced and verified on
+2026-09-17** with the certificate `Developer ID Application: Shijie Huang
+(CHLLA4N24C)` and a `notarytool` keychain profile. Both architectures were
+accepted by Apple; `spctl -a -vv` reports `source=Notarized Developer ID` and
+`xcrun stapler validate` passes for `mac-arm64/Witena.app` and
+`mac/Witena.app`; `codesign --verify --deep --strict` passes on the installed
+app. Under the hardened runtime the `better-sqlite3` prebuild
+(`prebuilds/darwin-arm64.node`) loads and the database opens with only
+`allow-jit` and `allow-unsigned-executable-memory` — `disable-library-validation`
+is not needed, because electron-builder signs the native module with the same
+Team ID. On its first run the signed build rewrote `secrets.key` from the plain
+`fkkey1:` form to the `safeStorage`-wrapped `fkkey1w:` form, mode `0600` kept,
+every `fk1:` provider ciphertext untouched and still readable (the S7.6
+hand-off, observed on the real files). Two things the first attempt taught:
+**a signed build must not be staged inside an iCloud "Desktop & Documents"
+folder** — File Provider attaches extended attributes that make `codesign` fail
+with "resource fork, Finder information, or similar detritus not allowed", so
+`npm run dist:signed` now writes to `${WITENA_DIST_DIR:-~/Library/Caches/witena-dist}`
+— and **a new developer account's first notarization is slow** (55 minutes here;
+the second, 5). What remains is CI: the five GitHub secrets are not set yet, so
+`release.yml` still produces unsigned dmgs; recorded in Phase 6. The
+configuration notes that follow were written before the certificate existed.
+
+Configuration notes: the configuration is in place.
 `security find-identity -v -p codesigning` reports `0 valid identities found` on
 this machine and the repository has no signing secrets, so everything below is
 written and reasoned but unexercised — which is why this step is `[~]` and not

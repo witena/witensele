@@ -152,6 +152,31 @@ and every later launch is ordinary. `xattr -dr com.apple.quarantine
 because a user who does not know this concludes the app is broken. A user who
 downloads a **released** dmg sees none of it.
 
+### Where a signed build may be staged
+
+`codesign` refuses any file that carries a resource fork or Finder information,
+and macOS's File Provider adds exactly those extended attributes to everything
+under an iCloud "Desktop & Documents" folder. A checkout in `~/Documents` on
+such a machine therefore signs nothing: the first S7.3 attempt failed on
+`Witena Helper (GPU)` with "resource fork, Finder information, or similar
+detritus not allowed". An unsigned build never runs `codesign`, which is why
+S4.4–S7.2 never met it. `npm run dist:signed` stages and writes its output in
+`${WITENA_DIST_DIR:-$HOME/Library/Caches/witena-dist}`, which no sync provider
+manages; `npm run dist` (unsigned) still writes to `dist/`. CI is unaffected —
+a runner's checkout is on a plain volume.
+
+### What the first signed build measured (2026-09-17)
+
+| Check | Result |
+|---|---|
+| `spctl -a -vv` on both `.app`s | `accepted`, `source=Notarized Developer ID` |
+| `xcrun stapler validate` | passes for both |
+| `codesign --verify --deep --strict` on the installed app | passes |
+| Native module under the hardened runtime | `prebuilds/darwin-arm64.node` loads, the database opens |
+| Entitlements actually needed | `allow-jit`, `allow-unsigned-executable-memory`; not `disable-library-validation` |
+| Notarization latency | 55 min for the account's first submission, 5 min for the second |
+| `secrets.key` on the first signed run | `fkkey1:` → `fkkey1w:`, mode `0600`, provider ciphertexts unchanged |
+
 ### The entitlements
 
 `build/entitlements.mac.plist`, used for the app and — through
