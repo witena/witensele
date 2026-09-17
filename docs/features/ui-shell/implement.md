@@ -2,7 +2,9 @@
 
 ## Approach
 
-Three layers, bottom up.
+Three layers, bottom up. (S7.4 added one surface that sits outside all three —
+the update notice bar, which is chrome rather than a page; see "Key types and
+contracts" and [`frontend.md`](./frontend.md).)
 
 **Tokens.** `src/renderer/src/index.css` declares every colour, the two font
 stacks and (new in S1.5) the `drag-region` / `no-drag` utilities inside
@@ -200,6 +202,8 @@ Everything new is renderer-local; no shared type and no IPC channel was added.
 | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` | `components/layout/window-chrome.ts` | Class names, not styles |
 | `applyLanguageSetting(setting)` | `pages/settings/language.ts` | The single handler both language controls call |
 | `applyThemeSetting(setting)` | `pages/settings/theme.ts` | Its counterpart for the appearance control (S5.8) |
+| `updateStateLabel`, `unsupportedLabel`, `canCheckForUpdates`, `TranslateFn` | `src/renderer/src/lib/updates.ts` | S7.4. The status as one translated sentence, and whether the button can be pressed. Pure, so `t` is declared structurally and the test needs no i18next — note `params` is **required** rather than optional, because an optional second argument is not assignable to i18next's overloaded `t` under `exactOptionalPropertyTypes` |
+| `useUpdatesStore`, `updateReadyVersion`, `useUpdateReady`, `UpdatesState` | `src/renderer/src/stores/updates.ts` | S7.4. `updateReadyVersion` is a plain function of `(status, dismissedVersion)` and the hook is one line over it, so the rule that decides whether a persistent strip covers part of the window is testable without React |
 | `BUNDLED_LICENSES`, `licenseSummary`, `LicenseEntry` | `src/renderer/src/lib/licenses.ts` | The typed view of the generated JSON, and the per-licence counts About leads with (S7.5) |
 | `APP_REPOSITORY_URL` | `src/shared/version.ts` | Next to `APP_VERSION`, because About renders the two together (S7.5) |
 | `resolveTheme`, `ResolvedTheme`, `WINDOW_BACKGROUND` | `src/shared/theme.ts` | The rule and the one duplicated colour, shared with the main process |
@@ -211,6 +215,11 @@ Types consumed from `@shared/types`: `PresenceState`, `ChatMode`, `SpeakingMode`
 
 S5.8 added one `BackendClient` method, `system.applyTheme` — see
 [`../backend-client/backend.md`](../backend-client/backend.md). No event.
+
+S7.4 added three (`system.updateStatus`, `system.checkForUpdates`,
+`system.installUpdate`), the `UpdateStatus` type in `@shared/updates`, and the
+first event pair this feature listens to (`update.available`,
+`update.downloaded`, fanned out by `lib/event-bridge.ts` like every other).
 
 ## Tests
 
@@ -230,6 +239,9 @@ S5.8 added one `BackendClient` method, `system.applyTheme` — see
 | `src/renderer/src/i18n/used-keys.test.ts` | Unchanged, and it did its job twice during S1.5 — once on a runtime-assembled key, once on a `switch` returning adjacent JSX |
 | `src/main/licenses.test.ts` | `scripts/generate-licenses.mjs` driven as an executable against a fixture `node_modules`: the production closure and nothing else, transitive edges and a cycle, both licence spellings, `UNKNOWN`, a normalised git URL, the warning for a package that is not installed — plus that the generated file the renderer imports actually exists, which is also the check that the `pretest` hook is still wired up (S7.5) |
 | `e2e/onboarding.spec.ts` | Its last case: About shows `package.json`'s version, an `https://github.com/…` link and a non-trivial licence list (S7.5) |
+| `src/renderer/src/lib/updates.test.ts` | S7.4: every one of the eight update states reaching a **distinct** key that `en.json` actually defines — the runtime half of rule #4, since `used-keys.test.ts` can only see the literal calls — the parameters each sentence needs, and when "Check for updates" is offered |
+| `src/renderer/src/stores/updates.test.ts` | S7.4: the mirror, a backend with no such method not breaking the screen, the busy flag, both events through `applyBackendEvent`, an `available` event never undoing a finished download, and the dismissal rule — closed for this version, open again for the next |
+| `e2e/updates.spec.ts` | S7.4: an ordinary launch is a checkout, so About says why there is nothing to check and the button is disabled; with `WITENA_UPDATE_FEED` the offered version travels all the way to the sentence on screen |
 | `e2e/ui-shell.spec.ts` | Rail navigation with one page mounted at a time, section switching, the section surviving a page change, and the three 1440×900 screenshots |
 | `e2e/smoke.spec.ts` | Unchanged assertions, now reached through Settings → Developer |
 | `e2e/i18n.spec.ts` | The quick toggle, the Appearance select as the same setting, and survival across a restart |
@@ -241,6 +253,17 @@ Screenshots land in `$WITENA_SHOTS_DIR` (default: `test-results/shots`, gitignor
 - **The default `WITENA_SHOTS_DIR` is a machine-specific absolute path.** It was
   the review directory for S1.5. Point it somewhere inside the repo (and gitignore
   it) the next time the spec is touched.
+- **The notice bar has never been seen in a screenshot** (S7.4). It is asserted
+  in `e2e/updates.spec.ts` only through the `downloaded` state, which an ordinary
+  e2e run cannot reach — that needs two signed bundles and a local feed, which is
+  a packaging procedure rather than a spec. It *was* seen, and read, during the
+  manual run recorded in STEPS.md S7.4, in dark mode at 1440×900; it has not been
+  looked at in the light theme, and it is not in the `e2e/theme.spec.ts` shots.
+- **`AppShell` became a column for one strip.** The rail and the page now sit in
+  a `flex-1` row inside a `flex-col`, which is a layout every screen pays for and
+  almost no screen uses. It costs nothing measurable and it is the honest shape
+  for "something can appear below the app", but it is worth knowing the wrapper
+  exists if a later step wonders where the extra div came from.
 - **Group settings are not persisted.** Local `useState` in `ChatsPage`; S2.2
   replaces it with the chat's `ChatSettings`.
 - ~~**Nothing renders a `PresenceDot` yet.**~~ S1.7 renders it in two places: on

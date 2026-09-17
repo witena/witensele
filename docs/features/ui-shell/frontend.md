@@ -8,7 +8,8 @@ main-process fact it depends on.
 | File | Responsibility |
 |---|---|
 | `src/renderer/src/App.tsx` | Composition root. Renders `AppShell` and nothing else (it used to hold the smoke screen) |
-| `src/renderer/src/components/layout/app-shell.tsx` | The frame: `NavRail` plus the page named by the store. A `Record<Page, Component>` lookup, one page mounted at a time |
+| `src/renderer/src/components/layout/app-shell.tsx` | The frame: `NavRail` plus the page named by the store. A `Record<Page, Component>` lookup, one page mounted at a time. Since S7.4 it is a column — rail and page in a `flex-1` row, `UpdateBar` under them — which changes nothing while the bar renders `null`, which is almost always |
+| `src/renderer/src/components/layout/update-bar.tsx` | S7.4: the strip along the bottom offering "Restart to update", visible only in the `downloaded` state and only until the user waves it away |
 | `src/renderer/src/components/layout/nav-rail.tsx` | 56px rail: the brand mark, Chats, Agents, Settings pinned to the bottom. The window's drag handle |
 | `src/renderer/src/components/layout/column.tsx` | One vertical strip: fixed width, one border, its own scroll context |
 | `src/renderer/src/components/layout/page-header.tsx` | The 52px title bar; drag region, with `actions` opted back out |
@@ -17,7 +18,9 @@ main-process fact it depends on.
 | `src/renderer/src/pages/chats-page.tsx` | Chat list (264px) · conversation · member panel (288px), with the composer and the group-settings block |
 | `src/renderer/src/pages/agents-page.tsx` | Agent list (264px) and the editor area's empty state |
 | `src/renderer/src/pages/settings-page.tsx` | Section nav (220px) with the language quick toggle, and the content area |
-| `src/renderer/src/pages/settings/about-section.tsx` | Settings → About (S7.5): the version, the repository link and the generated licence list. No state, no backend call, no primitive of its own |
+| `src/renderer/src/pages/settings/about-section.tsx` | Settings → About (S7.5): the version, the repository link and the generated licence list. S7.4 added the **Updates** block directly under the version — one sentence for whatever state the backend is in, "Check for updates", and "Restart to update" once something is downloaded — which is also the first state and the first backend call this file has |
+| `src/renderer/src/lib/updates.ts` | S7.4: `updateStateLabel`, `unsupportedLabel` and `canCheckForUpdates` — the status turned into one translated sentence and one boolean. Pure, unit-tested, and a `switch` of literal `t()` calls so the usage guard can see all eight keys |
+| `src/renderer/src/stores/updates.ts` | S7.4: the mirror of `system.updateStatus`, the two event reducers, and `dismissedVersion` — the only piece of update state the backend does not own |
 | `src/renderer/src/lib/licenses.ts` | The typed view of `generated/licenses.json` plus `licenseSummary()`, the per-licence counts About leads with. The only file that knows the generator's output shape |
 | `src/renderer/src/pages/settings/appearance-section.tsx` | The appearance `SegmentedControl` (System / Light / Dark, S5.8) and the language `Select` |
 | `src/renderer/src/pages/settings/theme.ts` | `applyThemeSetting` — the appearance control's counterpart to `language.ts` |
@@ -44,6 +47,9 @@ That is what keeps an untranslated literal from hiding inside a shared component
 | `settings` | `settings.theme` | `'system' \| 'light' \| 'dark'` | Backend-owned (S5.8). Read by the appearance control, written through `applyThemeSetting`. The *painted* theme is not state at all — it is an attribute on `<html>` |
 | `settings` | `error` | `string \| undefined` | Backend-owned. Rendered by the Developer section under `data-testid="error"` |
 | `settings` | `settings.onboardingDismissed` | `boolean` | Backend-owned (S7.5). Written once, by the first-run card's Skip link; the shell only reads it through [`../chats/frontend.md`](../chats/frontend.md)'s `useOnboarding` |
+| `updates` | `status` | `UpdateStatus` | Backend-owned (S7.4). Read by the Updates block and, through `updateReadyVersion`, by the notice bar |
+| `updates` | `checking` | `boolean` | Purely local. True only while a check the *user* started is in flight, so the button can be disabled without the six-hourly one disabling it too |
+| `updates` | `dismissedVersion` | `string \| null` | Purely local, and deliberately not persisted: a dismissal that survived a restart would hide an update the restart did not install |
 
 Actions: `setPage(page)`, `setSettingsSection(section)`. Neither touches the
 backend and neither persists — nothing about "which page was open" is worth a row
@@ -63,13 +69,18 @@ Component-local state, deliberately not in a store:
 | `invoke('settings.update', { patch: { language } })` | `applyLanguageSetting`, via `useSettingsStore.setLanguage` | Persist the language chosen in either control |
 | `invoke('settings.update', { patch: { theme } })` | `applyThemeSetting`, via `useSettingsStore.setTheme` | Persist the appearance (S5.8) |
 | `invoke('system.applyTheme', { theme })` | The same action, after the write | Tints the window chrome the renderer cannot paint. Its failure is swallowed: a server build rejects it and the page is still correct |
+| `invoke('system.updateStatus')` | `useUpdatesStore.load()`, from the bootstrap in `main.tsx` and again when the Updates block mounts (S7.4) | The cached status. It never rejects out of the store: a transport with no such method is a build without updates, which `idle` already says |
+| `invoke('system.checkForUpdates')` | "Check for updates" | Asks the feed now. The button is disabled while a check or a download is running, because a second click would join the first anyway |
+| `invoke('system.installUpdate')` | "Restart to update", in the bar and in About | Quits and relaunches into the downloaded version |
 | `invoke('system.ping')` | `DeveloperSection` on mount | Request/response, end to end |
 | `invoke('system.emitTestEvent', { payload })` | The Developer section's button | The push direction |
 | `subscribe(…)` filtered to `system.test` | `DeveloperSection` effect | Renders the last payload received; unsubscribes on cleanup (StrictMode runs effects twice in development) |
 
 `settings.get` is still called once by the bootstrap in `main.tsx`, before the
-shell mounts. No page calls the client directly except the Developer section,
-which is a deliberate test surface rather than product UI.
+shell mounts, and since S7.4 `system.updateStatus` is called there too — not
+awaited, because no frame depends on it. No page calls the client directly except
+the Developer section, which is a deliberate test surface rather than product UI;
+the Updates block goes through `stores/updates.ts` like every other screen.
 
 ## Interaction states
 
@@ -79,6 +90,7 @@ which is a deliberate test surface rather than product UI.
 | loading | None. The bootstrap resolves settings, the language **and the theme** before the React root is created, so the first frame is already correct — and the window itself was created in that theme's `backgroundColor` (S5.8), so a light-theme launch never flashes dark |
 | streaming | Shipped in S1.7, see [`../chats/frontend.md`](../chats/frontend.md): the reply grows with a cursor and Send becomes Stop |
 | empty | This is the shell's normal state in S1.5: an `EmptyState` (icon, title, description) for no chats, no conversation, no members, no agents, no agent selected, and for each settings section that its own step has yet to build |
+| update ready | A strip along the bottom of the window: "Version 0.2.0 is ready to install.", **Restart to update**, and a close button. It is the only persistent chrome the shell grows, and it exists for at most one restart (S7.4) |
 | error | `settings.get` failing leaves the language at the system default and shows the detail in Settings → Developer under `data-testid="error"`; the app still starts. A failed `settings.update` is written into the same field by `applyLanguageSetting`, and the optimistic highlight is corrected by the next successful read |
 
 ## Copy and i18n
@@ -90,7 +102,7 @@ Keys added, by namespace:
 | `nav` | `primary` (the rail's accessible name) |
 | `chat` | `noChatSelected`, `emptyChatsTitle`, `emptyChatsDescription`, `emptyConversationTitle`, `emptyConversationDescription`, `emptyMembersTitle`, `emptyMembersDescription`, `mode`, `modeRoundrobin`, `modeMentionOnly`, `speaking`, `speakingSequential`, `speakingParallel`, `maxAutoRounds`, `maxRoundsShort`, `timeout`, `secondsValue`, `speakingOrder`, `speakingOrderHint`, `actions.*` (S2.5 turned the flat `actions` / `actionSummarize` / `actionVote` into the nested `actions.title` / `.summarize` / `.vote` plus the two prompts the buttons send), `mentionHint` |
 | `agents` | `emptyTitle`, `selectOrCreateTitle`, `selectOrCreateDescription` (and `empty` reworded into a description, since it now sits under a title) |
-| `settings` | `sections.about` and the `about.*` subtree — `version`, `versionHint`, `repository`, `repositoryHint`, `licenses`, `licensesHint` (`{{packages}}`) — all added in S7.5; `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint` (S5.8), `sections.developer`, `comingSoonTitle`, `comingSoonDescription`, `interfaceLanguage`, `languageHint`, `languageSystemShort`, `languageZhShort`, `languageEnShort`, and the `developer.*` subtree (`backend`, `languageSetting`, `resolvedLanguage`, `lastEvent`, `emitTestEvent`, `pending`, `noEvent`) |
+| `settings` | `sections.about` and the `about.*` subtree — `version`, `versionHint`, `repository`, `repositoryHint`, `licenses`, `licensesHint` (`{{packages}}`) — all added in S7.5, plus S7.4's `about.updates.*`: `title`, `check`, `restart`, one sentence per update state (`idle`, `checking`, `available`, `downloading`, `downloaded`, `upToDate`, `error`), `unsignedBuild` and `developmentBuild` for the two reasons a build cannot update itself, `hint`, and the bar's own `barTitle` / `barDismiss`. The interpolations are `{{version}}`, `{{percent}}` and `{{message}}` — the last of which is the updater's own words, not a key, because there is no fixed set of network failures to translate; `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint` (S5.8), `sections.developer`, `comingSoonTitle`, `comingSoonDescription`, `interfaceLanguage`, `languageHint`, `languageSystemShort`, `languageZhShort`, `languageEnShort`, and the `developer.*` subtree (`backend`, `languageSetting`, `resolvedLanguage`, `lastEvent`, `emitTestEvent`, `pending`, `noEvent`) |
 
 Removed: the whole `smoke` namespace. Its strings are the `settings.developer.*`
 subtree now, and `EXPECTED_NAMESPACES` in `locales.test.ts` was updated to match —

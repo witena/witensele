@@ -149,6 +149,32 @@ export interface PermissionResolvedEvent {
   decision: PermissionDecision | 'aborted' | 'timeout'
 }
 
+/**
+ * A newer version exists and is being fetched (S7.4).
+ *
+ * Emitted once per transition into `available`, not once per check: the app asks
+ * the feed every six hours and a user who has already been told must not be told
+ * again every six hours. The download starts on its own (`autoDownload`), so this
+ * event is informational — there is no "download now" to offer.
+ */
+export interface UpdateAvailableEvent {
+  type: 'update.available'
+  version: string
+}
+
+/**
+ * The newer version is on disk and one restart away (S7.4).
+ *
+ * The event the notice bar exists for. Emitted once per transition into
+ * `downloaded`, for the same reason as above, and the state it announces is
+ * terminal — a later check cannot take the offer away (see
+ * `src/main/updates/state.ts`).
+ */
+export interface UpdateDownloadedEvent {
+  type: 'update.downloaded'
+  version: string
+}
+
 /** Round-trip probe used by the S1.3 acceptance test; carries no domain meaning. */
 export interface SystemTestEvent {
   type: 'system.test'
@@ -168,6 +194,8 @@ export type BackendEvent =
   | RunFinishedEvent
   | PermissionRequestedEvent
   | PermissionResolvedEvent
+  | UpdateAvailableEvent
+  | UpdateDownloadedEvent
   | SystemTestEvent
 
 /** The `type` tag of any backend event. */

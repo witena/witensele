@@ -177,6 +177,21 @@ stored in `agents.name`, `@mentions` resolve against it and every model sees it,
 so it lives in `@shared/agent-templates` as an English literal and only its
 description is a key.
 
+S7.4 added the `settings.about.updates.*` subtree — sixteen keys under the About
+screen's own namespace, because the Updates block lives there and the notice bar
+is the same two sentences seen from the bottom of the window. Three of them are
+worth naming. The eight **state** sentences are reached by a `switch` of literal
+`t()` calls in `lib/updates.ts` rather than by `t('settings.about.updates.' + state)`,
+which is the rule S1.5's two traps established; `lib/updates.test.ts` walks every
+state and asserts the key it lands on exists in `en.json`, so the compiler, the
+usage guard and that test between them make an unwritten sentence impossible.
+`error`'s `{{message}}` is the **updater's own words** — a 404 from GitHub, a
+DNS failure — and is interpolated as data rather than translated, because there
+is no fixed set of network failures to write copy for; it is the same call
+`notices.providerError` already makes. And `unsignedBuild` / `developmentBuild`
+are two sentences rather than one with a parameter, for the reason S5.12 gives:
+a parameter is for a value inside a sentence, and these say different things.
+
 S5.8 added five `settings.theme*` keys next to the language ones, and nothing
 else: the theme is an attribute on `<html>`, so the only translated text it
 owns is the three segment labels and one hint. `themeSystem` is worded

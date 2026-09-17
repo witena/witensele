@@ -54,9 +54,19 @@ extraResources:
       - '**/*'
       - '!**/.DS_Store'
 
+# S7.4 added the **zip** beside the dmg. It is not a second download offered to
+# anyone: `electron-updater`'s macOS updater can only apply a zip — it unpacks
+# the new `Witena.app`, verifies its signature against the running one and swaps
+# it — and `latest-mac.yml` is written from whatever targets were built, so a
+# release with only a dmg produces a feed the updater cannot act on. The dmg
+# stays what a human downloads; the zip is what the app downloads.
 mac:
   target:
     - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
       arch:
         - arm64
         - x64

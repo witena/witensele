@@ -8,6 +8,15 @@ import {
 } from '@shared/backend'
 import type { BackendEvent, BackendEventType, EventOf, MessageDelta } from '@shared/events'
 import {
+  IDLE_UPDATE_STATUS,
+  UNSUPPORTED_REASONS,
+  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_STATES,
+  type UnsupportedReason,
+  type UpdateState,
+  type UpdateStatus
+} from '@shared/updates'
+import {
   COMMAND_RISK_REASONS,
   DEFAULT_APP_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
@@ -38,6 +47,9 @@ const EXPECTED_METHODS = [
   'system.pickPaths',
   'system.applyTheme',
   'system.openInEditor',
+  'system.updateStatus',
+  'system.checkForUpdates',
+  'system.installUpdate',
   'settings.get',
   'settings.update',
   'providers.list',
@@ -300,6 +312,43 @@ describe('type contracts', () => {
     expectTypeOf<HandoffIntent>().toEqualTypeOf<'implement' | 'deliver'>()
     // The stored hand-off message comes back, like `chat.send`'s.
     expectTypeOf<ReturnType<BackendApi['chat.handoff']>>().toEqualTypeOf<Promise<Message>>()
+  })
+
+  it('carries the auto-update status and its two announcements (S7.4)', () => {
+    // The status is the *whole* answer: the screen shows the state, the version
+    // and the reason a build cannot update, so none of them may be squeezed out
+    // into a second call.
+    expectTypeOf<ReturnType<BackendApi['system.updateStatus']>>().toEqualTypeOf<
+      Promise<UpdateStatus>
+    >()
+    expectTypeOf<ReturnType<BackendApi['system.checkForUpdates']>>().toEqualTypeOf<
+      Promise<UpdateStatus>
+    >()
+    expectTypeOf<Parameters<BackendApi['system.installUpdate']>>().toEqualTypeOf<[]>()
+    expectTypeOf<UpdateStatus['state']>().toEqualTypeOf<UpdateState>()
+    expectTypeOf<UpdateStatus['reason']>().toEqualTypeOf<UnsupportedReason | undefined>()
+
+    // Both events name the version: a notice bar that said "an update is ready"
+    // without saying which would be untestable and unhelpful in a bug report.
+    expectTypeOf<EventOf<'update.available'>['version']>().toBeString()
+    expectTypeOf<EventOf<'update.downloaded'>['version']>().toBeString()
+  })
+
+  it('names every update state and every unsupported reason exactly once', () => {
+    expect([...UPDATE_STATES]).toEqual([
+      'idle',
+      'checking',
+      'available',
+      'downloading',
+      'downloaded',
+      'up-to-date',
+      'error',
+      'unsupported'
+    ])
+    expect([...UNSUPPORTED_REASONS]).toEqual(['unsigned', 'development'])
+    expect(IDLE_UPDATE_STATUS).toEqual({ state: 'idle' })
+    // Six hours, as S7.4 specifies.
+    expect(UPDATE_CHECK_INTERVAL_MS).toBe(6 * 60 * 60 * 1000)
   })
 
   it('returns an unsubscribe function from subscribe', () => {

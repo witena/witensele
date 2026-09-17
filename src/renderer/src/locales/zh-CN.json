@@ -450,7 +450,24 @@
       "repository": "代码仓库",
       "repositoryHint": "源码、发行版与问题追踪，会在系统浏览器中打开。",
       "licenses": "开源许可",
-      "licensesHint": "Witena 构建在 {{packages}} 个开源软件包之上。该列表在构建时根据已安装的依赖生成。"
+      "licensesHint": "Witena 构建在 {{packages}} 个开源软件包之上。该列表在构建时根据已安装的依赖生成。",
+      "updates": {
+        "title": "更新",
+        "check": "检查更新",
+        "restart": "重启以更新",
+        "idle": "尚未检查过新版本。",
+        "checking": "正在检查新版本……",
+        "available": "已发现 {{version}} 版本，正在下载。",
+        "downloading": "正在下载 {{version}} 版本 —— {{percent}}%。",
+        "downloaded": "{{version}} 版本已就绪，重启即可安装。",
+        "upToDate": "当前已是最新版本。",
+        "error": "上次检查失败：{{message}}",
+        "unsignedBuild": "此构建未签名，macOS 无法用更新替换它。请到代码仓库下载最新发布版本。",
+        "developmentBuild": "这是开发版本，没有可更新的内容。",
+        "hint": "Witena 会在启动时以及之后每六小时检查一次，并在你重启时安装更新。",
+        "barTitle": "{{version}} 版本已就绪，可以安装。",
+        "barDismiss": "暂不"
+      }
     },
     "developer": {
       "backend": "后端：",

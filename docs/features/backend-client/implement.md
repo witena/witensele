@@ -48,9 +48,18 @@ i18n `key` and `params` instead of a sentence.
 ### Events
 
 `BackendEvent` is one union covering message lifecycle, chat changes, presence,
-run progress, the executor's permission prompt and its resolution (S5.4), and
-`system.test` (the S1.3 acceptance probe). `BackendEventType` is its `type` tag and
-`EventOf<'message.delta'>` narrows to a single member.
+run progress, the executor's permission prompt and its resolution (S5.4), the
+auto-updater's two announcements (S7.4) and `system.test` (the S1.3 acceptance
+probe). `BackendEventType` is its `type` tag and `EventOf<'message.delta'>`
+narrows to a single member.
+
+S7.4's pair is worth one note, because the obvious third member is deliberately
+absent. `update.available` and `update.downloaded` are the two moments that change
+what the user can *do*; there is no `update.progress`, because a percentage
+changes dozens of times over a 150 MB download for a screen almost nobody has
+open, and the one screen that does asks for the status when it mounts. Both fire
+on the **transition**, not on the state, so a six-hourly check cannot announce the
+same version twice.
 
 ### Method names as data
 
@@ -250,6 +259,9 @@ Naming conventions the whole app follows:
 | `mcp.list` / `create` / `update` / `delete` | — / `{ input }` / `{ id, patch }` / `{ id }` | `McpServer[]` / `McpServer` / `McpServer` / `void` | |
 | `mcp.testConnection` | `{ id }` | `McpConnectionTestResult` | Success also returns `toolNames` |
 | `system.pickFolder` | — | `string \| null` | **S3.2**; the first of the methods implemented in `src/main/ipc/` because they need a window. `null` means the user cancelled, which is not an error |
+| `system.updateStatus` | — | `UpdateStatus` | **S7.4**; the cached status, never a network call. A build that cannot update itself answers `{ state: 'unsupported', reason }` rather than rejecting |
+| `system.checkForUpdates` | — | `UpdateStatus` | **S7.4**; asks the feed and resolves with what the check left behind. It does not wait for the download, and an unreachable feed is `state: 'error'` inside a resolved status |
+| `system.installUpdate` | — | `void` | **S7.4**; quits and relaunches. Rejects `validation` unless something has been downloaded |
 | `system.pickSavePath` | `{ defaultDir? }` | `string \| null` | **S5.10**; the native **save** dialog, for a `document` goal's deliverable. The file need not exist, so nothing is checked here; `null` is a cancelled dialog |
 | `system.pickPaths` | `{ defaultDir? }` | `string[]` | **S5.10**; files and folders, multi-select, for a goal's materials. Cancelling resolves `[]`, because a caller appending to a list treats that and "picked nothing" the same |
 | `system.applyTheme` | `{ theme }` | `void` | **S5.8**. A notification, not a write — the setting is stored by `settings.update` — so it carries no state and its caller ignores a rejection. `validation` for a theme outside `THEME_SETTINGS` |
@@ -297,6 +309,7 @@ editor settings; see [`backend.md`](./backend.md).
 
 | File | Covers |
 |---|---|
+| `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus` to it; S7.4 the three `system.update*`), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
 | `src/shared/contracts.test.ts` | `BACKEND_METHODS` matches a hand-written expected list (S5.10 added `system.pickSavePath`, `system.pickPaths` and `chats.goalStatus`; S5.15 added `permissions.grants.list` / `permissions.grants.revoke` and the `permissions` namespace beside `permission`), has no duplicates, uses `namespace.method` names and covers the expected namespaces; `isBackendMethod`; the default constants; `expectTypeOf` assertions over event narrowing, method inputs and results |
 | `src/main/events/bus.test.ts` | Delivery order, payload identity, unsubscribe (twice is harmless), a throwing listener being logged without stopping the others, a listener added during delivery not receiving the in-flight event |
 | `src/main/secrets.test.ts` | Insecure store round trip including empty, long and non-ASCII values; the `plain:` marker; `isAvailable()` false; exactly one warning |
@@ -304,6 +317,11 @@ editor settings; see [`backend.md`](./backend.md).
 | `src/main/ipc-protocol.test.ts` | Channel names; `toBackendError` for a `BackendFailure` with and without details, an ordinary `Error`, and a non-`Error` throw |
 | `src/main/handlers/handlers.test.ts` | Every `BACKEND_METHODS` entry has a handler and the map has no extras; unimplemented methods reject with `internal` and the STEPS.md message; `system.ping`; `system.emitTestEvent` emitting exactly one event and rejecting a non-string payload; `settings.get` / `settings.update` against the temporary-database fixture, including the `timeouts` field-by-field merge, unknown-key rejection and per-user scoping |
 | `src/renderer/src/lib/backend.test.ts` | `createElectronBackendClient` against a fake bridge: resolving the envelope value, forwarding the single object argument, `undefined` for an argument-free method, rejecting with a `BackendClientError` that carries `code` and `details`, a malformed envelope becoming `internal`, `subscribe` / unsubscribe, `subscribeTo` filtering, independent subscribers |
+| `src/main/updates/state.test.ts` | **S7.4**: the reducer, step by step — the whole `idle → checking → available → downloading → downloaded` walk, `up-to-date` and `error` with their `checkedAt`, percentages clamped and rounded, the version carried across a download and kept through a failure, and the two terminal rules (`downloaded` ignores a later check unless a *newer* version is downloaded; `unsupported` ignores everything) |
+| `src/main/updates/service.test.ts` | **S7.4**: the service against a fake `Updater` — one `update.available` per transition, `update.downloaded` emitted once however often the library repeats itself, a rejected check becoming `state: 'error'` rather than a rejection, a second `check()` joining the first instead of starting a second download, a check on `start()` and again every six hours until `stop()`, `install()` refusing anything but `downloaded`, and the whole unsupported branch: a reason instead of a rejection, nothing emitted, no timer, no subscription |
+| `src/renderer/src/lib/updates.test.ts` | **S7.4**: every one of the eight states reaching a distinct key that exists in `en.json` — the runtime half of CLAUDE.md rule #4, since the usage guard can only see the literal calls — the interpolations each sentence needs, and when "Check for updates" is offered |
+| `src/renderer/src/stores/updates.test.ts` | **S7.4**: the mirror, a backend with no updater at all not breaking the screen, the busy flag, the two events through `applyBackendEvent`, an `available` event never undoing a finished download, and the dismissal rule — closed for this version, open again for the next |
+| `e2e/updates.spec.ts` | **S7.4**: on an ordinary launch (a checkout, so the updater is genuinely absent) Settings → About says why and disables the button; with `WITENA_UPDATE_FEED` pointed at a feed the spec is holding, the request really arrives and the offered version travels feed → `electron-updater` → `UpdateService` → `update.available` → the store → the sentence on screen. The feed **holds** its answer until the test asks for it, because the launch check starts before the renderer has mounted |
 | `e2e/smoke.spec.ts` | The real Electron app: `system.ping` renders `pong`, `settings.get` renders `system`, clicking the button round-trips a `system.test` event into `last-event`, and the database is created inside the `WITENA_USER_DATA` directory. Since S1.5 it navigates to Settings -> Developer first, via `openDeveloperSettings` |
 | `src/server/http.test.ts` | **S8.1**: the contract over the second transport, on a real ephemeral port — `/healthz`, an argument-free method, a `not_found` serialised into a 404 *and* the IPC envelope, an unknown method, a `GET` on a method route, the electron-only rejections, a body that is not JSON, two WebSocket clients each receiving the same event as one frame, an upgrade refused on any other path, and a whole `chat.send` run against a `MockLanguageModelV4` whose `message.created` / `message.delta` / `run.finished` frames arrive over the socket and reassemble into the model's own text |
 | `src/server/no-electron.test.ts` | **S8.1**: nothing the second transport reaches imports electron, followed transitively through every relative and `@shared` import |
@@ -323,6 +341,18 @@ list derived from `BackendApi` would follow a rename instead of failing on it.
   build has to answer the first some other way (an upload, or a path field) and
   simply leaves the second rejecting — a browser tab has no window chrome to
   tint, and the page itself is themed by `data-theme` either way. Everything
+  else moves across untouched.
+- **The updater is transport-agnostic, but only because the library is behind a
+  port** (S7.4). `src/main/updates/` imports nothing electron and would lift into
+  a Node server unchanged; what would not lift is `src/main/ipc/updater.ts`, and
+  a server that passes no updater gets `{ state: 'unsupported', reason:
+  'development' }` — which is the truth, since a server has no bundle to replace.
+  A hosted build that wanted to tell its users about a new version would
+  implement the same three-method port over whatever it does have.
+- **A second window would see a second `update.available`** only if the event were
+  re-emitted, which it is not: the events fire on a transition of the one
+  `UpdateService`, and a window opened afterwards catches up by calling
+  `system.updateStatus`, which is exactly what `main.tsx` does at bootstrap.
   else moves across untouched. **S8.1 settled the server half of that
   sentence**: the Node host mounts all five like any other method and lets them
   reject; `openInEditor` with a `custom` command genuinely works there, because

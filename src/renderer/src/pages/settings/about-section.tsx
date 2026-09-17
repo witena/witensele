@@ -19,11 +19,79 @@
  * unusual in here?" is the question, and 244 rows do not answer it. The rows
  * themselves are below it in one scrolling block; a package's name and version
  * are data and are printed, never translated.
+ *
+ * **S7.4 added a fourth block, Updates**, directly under the version — which is
+ * the question it answers ("am I on the newest one?"). It shows one sentence for
+ * whatever state the backend is in, a "Check for updates" button that is
+ * disabled while a check or a download is running, and, once something has been
+ * downloaded, the same "Restart to update" the notice bar offers. A build that
+ * cannot update itself shows the reason instead of a live state: the button is
+ * still there and still disabled, because a missing button raises the question
+ * this block exists to answer.
  */
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { APP_NAME, APP_REPOSITORY_URL, APP_VERSION } from '@shared/version'
-import { SectionTitle } from '../../components/ui'
+import { Button, SectionTitle } from '../../components/ui'
 import { BUNDLED_LICENSES, licenseSummary } from '../../lib/licenses'
+import { canCheckForUpdates, updateStateLabel } from '../../lib/updates'
+import { useUpdatesStore } from '../../stores/updates'
+
+/** The Updates block; see the file header for what it is and why it is here. */
+function UpdatesBlock(): React.JSX.Element {
+  const { t } = useTranslation()
+  const status = useUpdatesStore((state) => state.status)
+  const checking = useUpdatesStore((state) => state.checking)
+  const check = useUpdatesStore((state) => state.check)
+  const install = useUpdatesStore((state) => state.install)
+
+  // The backend keeps the status between launches of this screen, but a window
+  // that has been open for hours has only the status it was given at bootstrap;
+  // re-reading on mount costs one cheap, side-effect-free call.
+  useEffect(() => {
+    void useUpdatesStore.getState().load()
+  }, [])
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionTitle level={3}>{t('settings.about.updates.title')}</SectionTitle>
+      <p
+        data-testid="about-update-state"
+        data-state={status.state}
+        className="text-[11px] leading-relaxed text-fg-muted"
+      >
+        {updateStateLabel(t, status)}
+      </p>
+      <div className="flex items-center gap-2">
+        <Button
+          data-testid="about-update-check"
+          size="sm"
+          onClick={() => {
+            void check()
+          }}
+          disabled={!canCheckForUpdates(status, checking)}
+        >
+          {t('settings.about.updates.check')}
+        </Button>
+        {status.state === 'downloaded' ? (
+          <Button
+            data-testid="about-update-restart"
+            size="sm"
+            variant="primary"
+            onClick={() => {
+              void install()
+            }}
+          >
+            {t('settings.about.updates.restart')}
+          </Button>
+        ) : null}
+      </div>
+      <p className="text-[11px] leading-relaxed text-fg-faint">
+        {t('settings.about.updates.hint')}
+      </p>
+    </div>
+  )
+}
 
 export function AboutSection(): React.JSX.Element {
   const { t } = useTranslation()
@@ -42,6 +110,8 @@ export function AboutSection(): React.JSX.Element {
           {t('settings.about.versionHint')}
         </p>
       </div>
+
+      <UpdatesBlock />
 
       <div className="flex flex-col gap-1.5">
         <SectionTitle level={3}>{t('settings.about.repository')}</SectionTitle>

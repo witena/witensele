@@ -66,6 +66,8 @@ missing land consistently:
 | `run` | `activeByChat` | `Record<string, { round: number; speakers: string[] }>` | Backend-owned; set by `run.*` events, drives the Stop button. Absent, rather than `null`, when the chat is idle |
 | `presence` | `byChatAgent` | `Record<string, AgentPresence>` | Backend-owned; replaced by `presence.changed`, drives the dots |
 | `agents` / `providers` / `settings` | records | `Agent[]` / `Provider[]` / `AppSettings` | Backend-owned mirrors of their list methods |
+| `updates` | `status` | `UpdateStatus` | Backend-owned mirror of `system.updateStatus`; patched by `update.available` / `update.downloaded` (S7.4) |
+| `updates` | `dismissedVersion` | `string \| null` | Local UI state, and the one piece of update state the backend has no business knowing: which offer the user has waved away. Per *version*, so dismissing 0.2.0 does not hide 0.3.0 a week later |
 
 Backend-owned state is never edited optimistically on its own: an action calls
 `invoke`, and the store applies either the returned value or the event that
@@ -90,6 +92,9 @@ follows.
 | `invoke('chats.*')`, `invoke('chats.members.list')` | Chat list and member panel, since S1.7 | Chat CRUD and reading the membership. `chats.members.set` gets its UI in S2.2 |
 | `invoke('messages.list')` | Chat view on open and when scrolling up | Initial page and history paging |
 | `invoke('chat.send' / 'chat.stop')` | Composer and Stop button | Starts and aborts a run |
+| `invoke('system.updateStatus')` | `stores/updates.ts` — from the renderer bootstrap and again when Settings → About mounts (S7.4) | The cached status. Cheap and side-effect free: it reads what the `UpdateService` has been keeping since launch and never touches the network. It is also the second call whose rejection is deliberately swallowed — a transport with no such method is a build without updates, which is what `idle` already says |
+| `invoke('system.checkForUpdates')` | The "Check for updates" button | Asks the feed now. It does **not** wait for the download — that reports itself through `update.downloaded` — and a feed that cannot be reached comes back as a resolved status with `state: 'error'` rather than a rejection |
+| `invoke('system.installUpdate')` | "Restart to update", in the notice bar and in Settings → About | Quits and relaunches into the downloaded version. The one call in the app that is not expected to return |
 | `invoke('chat.handoff')` | The "Hand to executor" button (S5.6), and the Actions card's "Write the deliverable" with `intent: 'deliver'` (S5.12) | Starts the implement + review run. Its four `validation` refusals are read through `translateFailure(t, code, details)`, which is why the run store keeps `errorDetails` beside `errorCode` |
 
 Event handling worth writing down once:
@@ -114,6 +119,12 @@ Event handling worth writing down once:
   `permission.resolved` → remove it, whatever the decision says. Exactly one
   `resolved` per `requested`, on every path, which is what lets the card be
   dismissed without knowing why (S5.4, drawn in S5.5).
+- `update.available` → set the status to `available` with that version, **unless
+  the store already holds `downloaded`**: the backend has already refused to move
+  a finished download backwards, and the mirror must not undo that on its own.
+  `update.downloaded` → set `downloaded`, and clear `dismissedVersion` only when
+  the version is a *different* one, so a repeated announcement cannot raise a bar
+  the user closed (S7.4).
 
 ## Interaction states
 

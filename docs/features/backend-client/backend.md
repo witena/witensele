@@ -11,12 +11,13 @@
 | `src/shared/types.ts` | Domain types, `LOCAL_USER_ID`, `DEFAULT_CHAT_SETTINGS`, `DEFAULT_APP_SETTINGS` |
 | `src/shared/events.ts` | `BackendEvent`, `MessageDelta`, `EventOf` |
 | `src/shared/backend.ts` | `BackendApi`, `BackendClient`, `BACKEND_METHODS`, `isBackendMethod` |
+| `src/shared/updates.ts` | S7.4: `UpdateStatus`, `UPDATE_STATES`, `UNSUPPORTED_REASONS`, `UPDATE_CHECK_INTERVAL_MS` and the normalised `UpdateEvent` union. No electron, no node — read by main, preload and renderer alike |
 | `src/shared/index.ts` | Single import point for the three above plus `version.ts` |
 | `src/main/events/bus.ts` | `EventBus` + `createEventBus()`. Services emit here; a listener that throws is logged and skipped so one broken window cannot abort a run |
 | `src/main/secrets.ts` | `SecretStore` + `createInsecureSecretStore()`, the base64 `plain:` fallback used when the OS has no key storage |
-| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `mcp`, `memory`, `permissions`, `anthropicCli`, `close`) and `createAppContext({ databasePath, userDataDir, secrets, userId?, events?, fetchImpl?, anthropicCli?, runner?, supervisor?, mcp? })`. `close()` stops every run, the supervisor's loops and every pending permission prompt before closing the database |
+| `src/main/app-context.ts` | `AppContext` (`db`, `repos`, `events`, `secrets`, `userId`, `runners`, `supervisor`, `mcp`, `memory`, `permissions`, `anthropicCli`, `updates`, `close`) and `createAppContext({ databasePath, userDataDir, secrets, userId?, events?, fetchImpl?, anthropicCli?, runner?, supervisor?, mcp?, updates? })`. `close()` stops every run, the supervisor's loops and every pending permission prompt before closing the database |
 | `src/main/handlers/types.ts` | `HandlerMap` — `BackendApi` with an `AppContext` threaded in front of each method's arguments — and `HandlerModule` (`Partial<HandlerMap>`) |
-| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, the `system.pickFolder` / `system.pickSavePath` / `system.pickPaths` / `system.applyTheme` **stubs**, and `system.openInEditor`, which is half implemented here (see "The electron exceptions") |
+| `src/main/handlers/system.ts` | `system.ping`, `system.emitTestEvent`, the `system.pickFolder` / `system.pickSavePath` / `system.pickPaths` / `system.applyTheme` **stubs**, `system.openInEditor`, which is half implemented here, and S7.4's three `system.update*` methods, which are **fully** implemented here because the updater is injected rather than layered (see "The electron exceptions") |
 | `src/main/handlers/settings.ts` | `settings.get`, `settings.update` |
 | `src/main/handlers/presence.ts` | `presence.list`, `presence.retry` (S2.4); the state machine itself is [`presence`](../presence/backend.md)'s |
 | `src/main/handlers/index.ts` | `buildHandlers()`: merges the modules and fills every remaining `BACKEND_METHODS` entry with a rejecting stub |
@@ -27,6 +28,9 @@
 | `src/main/ipc/dialogs.ts` | The three native dialogs, layered over their stubs inside `registerIpc`: `system.pickFolder` over `dialog.showOpenDialog` (S3.2), and S5.10's `system.pickSavePath` over `dialog.showSaveDialog` and `system.pickPaths` over a multi-select `showOpenDialog` |
 | `src/main/ipc/theme.ts` | `system.applyTheme` over `nativeTheme.themeSource`, layered the same way (S5.8) |
 | `src/main/ipc/editor.ts` | `system.openInEditor`'s URL branch over `shell.openExternal`, layered the same way (S5.7). Owned by [`editor`](../editor/backend.md) |
+| `src/main/updates/state.ts` | S7.4: `reduceUpdate(status, event, now)` — the whole eight-state machine as a pure function. No electron, no timer, no library |
+| `src/main/updates/service.ts` | S7.4: the `Updater` port and `UpdateService` — the cached status, the six-hour schedule, the `update.available` / `update.downloaded` emissions and the refusal an unsupported build gives |
+| `src/main/ipc/updater.ts` | S7.4: `createElectronUpdater({ packaged, signed, feedUrl })` — the gate, and the adapter from `electron-updater`'s six events to `UpdateEvent`. The only file that imports the library |
 | `src/main/index.ts` | Applies `WITENA_USER_DATA`, builds the secret store and the context on ready, registers IPC and event forwarding **before** the first window, closes the context on `before-quit` |
 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld('witena', { invoke, onEvent })` |
 | `src/preload/index.d.ts` | Ambient `Window['witena']` for the renderer project |
@@ -44,6 +48,7 @@ which must print nothing. Moving the backend to a Node server means replacing
 `src/main/ipc/`, `src/main/index.ts` and the preload bridge — the handlers, the
 context, the bus and the repositories go across untouched.
 
+### The electron exceptions: the three `pick*` dialogs, `system.applyTheme`, half of `system.openInEditor` — and, differently, the updater
 **S8.1 did exactly that and nothing else.** `src/server/` replaces those three
 and reuses everything else, and the claim is now a test rather than a grep:
 `src/server/no-electron.test.ts` starts at every production file under
@@ -116,6 +121,57 @@ still prints nothing, because all three files are inside `src/main/ipc/`.
 Cancelling the dialog resolves **`null`**, which is not an error — the renderer
 must not show a failure for a user who changed their mind.
 
+### The fifth exception, which is not a method: the updater (S7.4)
+
+`electron-updater` reads `app.getVersion()`, the bundle's `app-update.yml` and
+the code signature of what it downloaded. It is electron in everything but the
+package name, so it may only be imported from `src/main/ipc/` — and
+`src/main/ipc/updater.ts` is the only file that does.
+
+What is different is **where the seam is cut**. Every exception above is a
+one-line call with no state behind it, so declaring it in `handlers/system.ts`
+and layering the real one over it inside `registerIpc` costs nothing. The updater
+is not one line: it owns a cached status, a timer that fires every six hours and
+two events the renderer reacts to, and putting those in `src/main/ipc/` would put
+them in the one directory a unit test cannot enter. So the seam is an **injected
+port** instead:
+
+| Layer | What it does | Imports electron |
+|---|---|---|
+| `shared/updates.ts` | `UpdateStatus`, the eight states, the normalised `UpdateEvent` union | no |
+| `updates/state.ts` | `reduceUpdate` — every transition, as a pure function of `(status, event, now)` | no |
+| `updates/service.ts` | The `Updater` port (`subscribe` / `check` / `install`), the status, the schedule, the two emissions, the `NOTHING_TO_INSTALL` refusal | no |
+| `handlers/system.ts` | The three methods, delegating to `ctx.updates` | no |
+| `ipc/updater.ts` | Decides whether this build may update itself, and wires `electron-updater` if it may | **yes** |
+| `index.ts` | Reads `app.isPackaged`, the signed flag and `WITENA_UPDATE_FEED`, passes the setup to `createAppContext`, and calls `ctx.updates.start()` after the first window | **yes** |
+
+A context built without an updater — every unit test, and a server build — gets a
+real `UpdateService` in the `unsupported` state. It opens no socket, starts no
+timer, and answers `system.updateStatus` with a **status** rather than a
+rejection, because "why is there no update" is a question the screen has to
+answer and `internal` carries no reason a user could act on.
+
+Two rules in `reduceUpdate` exist only because the check repeats:
+
+- **`downloaded` is terminal.** The six-hourly check must not move the state back
+  to `checking` or `up-to-date`: the downloaded bundle is still installable, and a
+  notice bar that vanished on its own would strand the user one restart away from
+  a version they can no longer reach. Only a `downloaded` event for a *different*
+  version replaces it.
+- **`unsupported` is terminal.** Nothing the feed says makes a build able to
+  install an update. The service does not subscribe in that case at all, so this
+  is a belt on top of braces — but it is the invariant the UI relies on when it
+  shows a reason instead of a button.
+
+The gate itself is three lines in `createElectronUpdater`, and the order is the
+order of the reasons: a checkout is a checkout whether or not it would have been
+signed (`development`), and an unsigned bundle cannot be replaced by macOS
+however well it is packaged (`unsigned`). `WITENA_UPDATE_FEED` lifts both,
+because its entire purpose is to run the updater on a build that would otherwise
+refuse to look; see [`../packaging/backend.md`](../packaging/backend.md),
+"Auto-update", for the feed, the private-repository problem and the local
+procedure that proved the download-and-install path.
+
 ## Database
 
 This feature owns no tables. It defines the types that S1.2's drizzle schema is
@@ -150,6 +206,9 @@ Two channels carry everything:
 |---|---|---|---|
 | `system.ping` | none | `'pong'` | — |
 | `system.emitTestEvent` | `{ payload: string }` | `void` | `validation` when `payload` is not a string |
+| `system.updateStatus` | none | `UpdateStatus` | — (a build that cannot update answers `{ state: 'unsupported', reason }`) |
+| `system.checkForUpdates` | none | `UpdateStatus` | — a feed that cannot be reached is `state: 'error'` inside a **resolved** status, not a rejection |
+| `system.installUpdate` | none | `void` | `validation` (`NOTHING_TO_INSTALL`) unless the status is `downloaded`. On a build that really installs it does not return: the process is replaced (S7.4) |
 | `settings.get` | none | `AppSettings` | — |
 | `settings.update` | `{ patch: AppSettingsPatch }` | `AppSettings` | `validation` when the patch is not an object or carries a key other than `language`, `theme`, `timeouts` |
 | `permission.reply` | `{ requestId, decision }` | `void` | `validation` for a blank id or a decision outside `PERMISSION_DECISIONS`; `not_found` when nothing is waiting on that id (S5.4 — see [`executor`](../executor/backend.md)) |
@@ -214,6 +273,8 @@ unsubscribe function, which `before-quit` calls before closing the database.
 | Event | Payload | Emitted when |
 |---|---|---|
 | `system.test` | `{ payload }` | `system.emitTestEvent` was invoked — the only event any code emits as of S1.3 |
+| `update.available` | `{ version }` | S7.4: the `UpdateService` first learns a newer version exists. Once per *transition*, not once per check — the app asks every six hours and a user who has been told must not be told again every six hours |
+| `update.downloaded` | `{ version }` | S7.4: the newer version is on disk and one restart away. Once per transition, for the same reason, and the state it announces is terminal — a later check cannot take the offer back |
 
 Every other member of `BackendEvent` is emitted by the feature that owns it
 (`../orchestration/`, `../agent-turn/`, `../presence/`, `../chats/`); the table in

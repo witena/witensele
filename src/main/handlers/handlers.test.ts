@@ -162,6 +162,37 @@ describe('handlers/buildHandlers', () => {
     })
   })
 
+  /**
+   * The unsupported path (S7.4), which is what an unsigned build and a checkout
+   * both get — and what the test context gets, because `createTestAppContext`
+   * injects no updater. It is the case worth pinning here rather than in
+   * `updates/service.test.ts`: the *handlers* must answer with a status a screen
+   * can render, not with a rejection, or Settings → About would show an error
+   * where it should show a reason.
+   */
+  describe('system.updateStatus / system.checkForUpdates / system.installUpdate', () => {
+    it('reports why a build that cannot update itself will not', async () => {
+      await expect(handlers['system.updateStatus'](ctx)).resolves.toEqual({
+        state: 'unsupported',
+        reason: 'development'
+      })
+    })
+
+    it('answers a check with the same status and emits nothing', async () => {
+      await expect(handlers['system.checkForUpdates'](ctx)).resolves.toEqual({
+        state: 'unsupported',
+        reason: 'development'
+      })
+      expect(events).toEqual([])
+    })
+
+    it('refuses to install what was never downloaded', async () => {
+      await expect(handlers['system.installUpdate'](ctx)).rejects.toMatchObject({
+        code: 'validation'
+      })
+    })
+  })
+
   describe('settings.get / settings.update', () => {
     it('returns the defaults before anything was stored', async () => {
       await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
@@ -903,7 +934,14 @@ describe('handlers/stubs', () => {
       // S5.7 — see the comment above: half of it is implemented here.
       'system.openInEditor',
       // S5.10
-      'chats.goalStatus'
+      'chats.goalStatus',
+      // S7.4 — the updater is *injected*, not layered, so all three are really
+      // implemented here: `ctx.updates` is an Electron-free `UpdateService` in
+      // every build and a build with no `electron-updater` behind it answers
+      // `unsupported` rather than rejecting. Their cases are above.
+      'system.updateStatus',
+      'system.checkForUpdates',
+      'system.installUpdate'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

@@ -1,10 +1,19 @@
 # packaging — Frontend
 
-**This feature has no renderer code.** S4.4 added no page, no component, no
-store field, no `BackendClient` call and no translation key; S7.2 — the CI and
-release workflows — added none either, and neither did S7.3. A packaged build
-renders exactly what `npm run dev` renders; nothing in the UI branches on
-`app.isPackaged`, and nothing in it branches on how the bundle was built.
+**This feature has almost no renderer code.** S4.4 added no page, no component,
+no store field, no `BackendClient` call and no translation key; S7.2 — the CI
+and release workflows — added none either, and neither did S7.3.
+
+**S7.4 is the first exception, and a narrow one.** A packaged build still
+renders exactly what `npm run dev` renders, but it is now the first time the UI
+branches on *how the bundle was built*: an unsigned or unpackaged build reports
+`state: 'unsupported'` from `system.updateStatus` and Settings → About prints the
+reason instead of a live check. That is deliberate rather than a leak of build
+detail into the page — "why is there no update" is a question the screen has to
+answer, and a button that silently did nothing would be worse than the sentence.
+The screen itself, the notice bar and the store belong to
+[`../ui-shell/frontend.md`](../ui-shell/frontend.md); what this feature owns is
+the fact the two of them render.
 
 S7.3 is worth one sentence here because it introduced the first runtime fact
 that *could* have reached the UI and deliberately does not. Whether the build was
@@ -42,6 +51,7 @@ The three renderer-visible facts it does produce, and where they belong:
 | The window's size, colour and title bar | Unchanged from S1.5; the contract is written out in [`../ui-shell/backend.md`](../ui-shell/backend.md), "Window options" |
 | The skills a fresh installation opens with | Seeded before the first window exists, and then read through the ordinary `skills.list` handler. The screen is [`../skills/frontend.md`](../skills/frontend.md)'s Settings → Skills |
 | The version, the repository link and the licences of the bundled dependencies | Settings → About (S7.5), from `@shared/version` and the generated `licenses.json` |
+| Whether this build can update itself, and which version is waiting | Settings → About's Updates block and the notice bar at the bottom of the window (S7.4). Both read `stores/updates.ts`, which mirrors `system.updateStatus`; see [`../ui-shell/frontend.md`](../ui-shell/frontend.md) |
 
 ## Screenshots and the demo recording
 

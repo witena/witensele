@@ -103,5 +103,21 @@ export const systemHandlers: HandlerModule = {
       return
     }
     throw new BackendFailure('internal', OPEN_IN_EDITOR_UNAVAILABLE)
+  },
+
+  // The three update methods (S7.4) are **not** declared-and-rejecting stubs
+  // like the four above, because the updater is injected rather than layered:
+  // `ctx.updates` is a real, Electron-free `UpdateService` in every build, and
+  // what differs is only whether `src/main/index.ts` gave it an
+  // `electron-updater`-backed port. A build that has none answers
+  // `{ state: 'unsupported', reason }` — a sentence the screen can show —
+  // instead of an `internal` rejection nobody could act on.
+  'system.updateStatus': async (ctx) => ctx.updates.getStatus(),
+
+  'system.checkForUpdates': async (ctx) => ctx.updates.check(),
+
+  'system.installUpdate': async (ctx) => {
+    // Does not return on a build that really installs: the process is replaced.
+    ctx.updates.install()
   }
 }

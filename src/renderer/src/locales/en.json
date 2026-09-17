@@ -450,7 +450,24 @@
       "repository": "Repository",
       "repositoryHint": "Source code, releases and the issue tracker. Opens in your browser.",
       "licenses": "Open-source licences",
-      "licensesHint": "Witena is built on {{packages}} open-source packages. The list is generated from the installed dependencies at build time."
+      "licensesHint": "Witena is built on {{packages}} open-source packages. The list is generated from the installed dependencies at build time.",
+      "updates": {
+        "title": "Updates",
+        "check": "Check for updates",
+        "restart": "Restart to update",
+        "idle": "Witena has not checked for a new version yet.",
+        "checking": "Checking for a new version…",
+        "available": "Version {{version}} is available and is downloading now.",
+        "downloading": "Downloading version {{version}} — {{percent}}%.",
+        "downloaded": "Version {{version}} is ready. Restart to install it.",
+        "upToDate": "Witena is up to date.",
+        "error": "The last check failed: {{message}}",
+        "unsignedBuild": "This build is not signed, so macOS cannot replace it with an update. Download the latest release from the repository instead.",
+        "developmentBuild": "This is a development build, so there is nothing to update.",
+        "hint": "Witena checks on launch and every six hours, and installs the update when you restart.",
+        "barTitle": "Version {{version}} is ready to install.",
+        "barDismiss": "Not now"
+      }
     },
     "developer": {
       "backend": "backend:",

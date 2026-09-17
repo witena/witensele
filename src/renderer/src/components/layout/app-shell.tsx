@@ -17,6 +17,7 @@ import { AgentsPage } from '../../pages/agents-page'
 import { SettingsPage } from '../../pages/settings-page'
 import { useUiStore, type Page } from '../../stores/ui'
 import { NavRail } from './nav-rail'
+import { UpdateBar } from './update-bar'
 
 const PAGE_COMPONENTS: Record<Page, () => React.JSX.Element> = {
   chats: ChatsPage,
@@ -28,10 +29,18 @@ export function AppShell(): React.JSX.Element {
   const page = useUiStore((state) => state.page)
   const CurrentPage = PAGE_COMPONENTS[page]
 
+  // The column exists only for the update bar (S7.4): the rail and the page keep
+  // the full height of the window until there is something to say, and the bar
+  // takes the bottom edge rather than the top, where `titleBarStyle:
+  // 'hiddenInset'` puts the traffic lights. It renders `null` in every other
+  // state, so the ordinary layout is exactly what it was.
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-bg-base font-sans text-fg">
-      <NavRail />
-      <CurrentPage />
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg-base font-sans text-fg">
+      <div className="flex min-h-0 flex-1">
+        <NavRail />
+        <CurrentPage />
+      </div>
+      <UpdateBar />
     </div>
   )
 }

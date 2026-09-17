@@ -56,11 +56,13 @@ describe('electron-builder.yml', () => {
   const config = readYaml('electron-builder.yml')
   const mac = config['mac'] as Record<string, unknown> & { target: MacTarget[] }
 
-  it('builds a dmg for both macOS architectures', () => {
+  it('builds a dmg and an update zip for both macOS architectures', () => {
     // Two dmgs rather than a universal binary: PLAN.md, "Local release".
-    expect(mac.target).toHaveLength(1)
-    expect(mac.target[0]?.target).toBe('dmg')
-    expect(mac.target[0]?.arch).toEqual(['arm64', 'x64'])
+    // The zip is S7.4's: `electron-updater` can only apply a zip on macOS, and
+    // `latest-mac.yml` lists whatever was built — a release with only a dmg is a
+    // feed the updater cannot act on.
+    expect(mac.target.map((target) => target.target)).toEqual(['dmg', 'zip'])
+    for (const target of mac.target) expect(target.arch).toEqual(['arm64', 'x64'])
   })
 
   it('names the artifacts so the two architectures cannot collide', () => {
@@ -74,6 +76,17 @@ describe('electron-builder.yml', () => {
     const publish = config['publish'] as { provider: string; releaseType: string }
     expect(publish.provider).toBe('github')
     expect(publish.releaseType).toBe('draft')
+  })
+
+  it('leaves no update credential in the repository (S7.4)', () => {
+    // `electron-updater` reads this same `publish` block out of the packaged
+    // `app-update.yml`, so a `token:` added here to reach the **private**
+    // repository's release assets would ship inside every dmg. The fix for a
+    // private repository is to make it public, never to embed a token; this
+    // asserts that nobody took the other route.
+    const publish = config['publish'] as Record<string, unknown>
+    expect(publish['token']).toBeUndefined()
+    expect(Object.keys(publish).sort()).toEqual(['provider', 'releaseType'])
   })
 
   it('signs with whatever Developer ID the keychain holds, and skips when it holds none (S7.3)', () => {

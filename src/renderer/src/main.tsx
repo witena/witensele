@@ -20,6 +20,7 @@ import { getNavigatorLanguage, initI18n, resolveLanguage } from './i18n'
 import { startEventBridge } from './lib/event-bridge'
 import { activateTheme } from './lib/theme'
 import { useSettingsStore } from './stores/settings'
+import { useUpdatesStore } from './stores/updates'
 import './index.css'
 
 async function bootstrap(): Promise<void> {
@@ -43,6 +44,11 @@ async function bootstrap(): Promise<void> {
   // `'system'`, and is deliberately never stopped: the subscription lives as long
   // as the window, and `stores/settings.ts` replaces it when the user chooses.
   activateTheme(useSettingsStore.getState().settings?.theme ?? DEFAULT_APP_SETTINGS.theme)
+
+  // S7.4: the updater has been running since the main process started, so a
+  // window opened afterwards has to ask once for what it missed. Deliberately
+  // not awaited — a window must not wait for it, and it never rejects.
+  void useUpdatesStore.getState().load()
 
   const setting = useSettingsStore.getState().settings?.language ?? 'system'
   const language = resolveLanguage(setting, getNavigatorLanguage())

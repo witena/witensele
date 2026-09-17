@@ -52,6 +52,15 @@ first-run card on a machine where nothing is set up. No migration was needed —
 reads merge the stored object over `DEFAULT_APP_SETTINGS`, so a row written
 before it existed answers `false`.
 
+S7.4 added no settings key at all, which is worth one line because it looks as
+though it should have. Whether the app may update itself is a fact about the
+*bundle* — signed or not, packaged or not — read fresh at every launch by
+`src/main/index.ts`, not a preference; and the notice bar's "Not now" is a fact
+about this window (see [`../ui-shell/context.md`](../ui-shell/context.md)). The
+one piece of backend-authored text S7.4 produces is the updater's own error
+message, and it travels as **data** inside a resolved `UpdateStatus` rather than
+as a `SystemNoticePart` key: it is not a sentence the product wrote.
+
 S5.8 made `theme` the exception: `assertPatch` checks it against
 `THEME_SETTINGS` and refuses anything else with `validation`. The asymmetry is
 deliberate and is about the *consequence*, not the source — an unknown language
