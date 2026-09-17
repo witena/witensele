@@ -34,6 +34,21 @@ const MIGRATIONS_TABLE = '__migrations'
 /** drizzle-kit separates the statements of one file with this marker. */
 const STATEMENT_BREAKPOINT = '--> statement-breakpoint'
 
+/**
+ * Splits one migration file into its statements.
+ *
+ * Exported because the Postgres migrator (`./postgres/database.ts`) splits its
+ * own files the same way: the marker is drizzle's, not SQLite's, and two
+ * spellings of "split on the breakpoint" would be two chances to disagree about
+ * a trailing semicolon.
+ */
+export function splitStatements(sql: string): string[] {
+  return sql
+    .split(STATEMENT_BREAKPOINT)
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0)
+}
+
 export interface Migration {
   /** File name without the directory, e.g. `0000_outstanding_medusa.sql`. */
   name: string
@@ -47,12 +62,7 @@ export function loadMigrations(): Migration[] {
     .sort()
     .map((path) => {
       const name = path.slice(path.lastIndexOf('/') + 1)
-      const sql = migrationSources[path] ?? ''
-      const statements = sql
-        .split(STATEMENT_BREAKPOINT)
-        .map((statement) => statement.trim())
-        .filter((statement) => statement.length > 0)
-      return { name, statements }
+      return { name, statements: splitStatements(migrationSources[path] ?? '') }
     })
 }
 
