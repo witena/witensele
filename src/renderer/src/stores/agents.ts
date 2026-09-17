@@ -167,6 +167,7 @@ function sameDraft(a: AgentInput, b: AgentInput): boolean {
     a.memoryEnabled === b.memoryEnabled &&
     a.role === b.role &&
     a.avatar.text === b.avatar.text &&
+    a.avatar.palette === b.avatar.palette &&
     a.avatar.color === b.avatar.color &&
     a.avatar.textColor === b.avatar.textColor &&
     a.params.temperature === b.params.temperature &&
@@ -406,9 +407,11 @@ export const useAgentsStore = create<AgentsState>()((set, get) => ({
 
   pickAvatarColor(index) {
     const draft = get().draft
-    const palette = AGENT_AVATAR_COLORS[index]
-    if (!draft || !palette) return
-    get().patchDraft({ avatar: { ...draft.avatar, ...palette } })
+    const entry = AGENT_AVATAR_COLORS[index]
+    if (!draft || !entry) return
+    // Spreads all three fields: the index the tile is painted from, plus the
+    // legacy pair kept as the record's compatibility shadow (S5.17).
+    get().patchDraft({ avatar: { ...draft.avatar, ...entry } })
   },
 
   async saveDraft() {

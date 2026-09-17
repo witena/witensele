@@ -19,7 +19,7 @@ the name is an **identifier the models will type**, not a label.
   the validation that keeps an unusable record out of the database.
 - The Agents page: the 264px list (avatar, name, `modelId · provider`, count in
   the header, "+" opens a draft) and the configuration editor beside it.
-- The editor: basic info (name, avatar monogram and an eight-colour palette,
+- The editor: basic info (name, avatar monogram and an eight-slot palette,
   description, and since S5.2 the **role**), model (provider select, model select
   or free-text id, the **Show thinking** toggle — S5.14's renaming of the
   reasoning one), system prompt, the skills checklist, the
@@ -33,7 +33,9 @@ the name is an **identifier the models will type**, not a label.
 - `stores/agents.ts`: the list plus the editor draft, `dirty`, and the validation
   that gates Save.
 - `components/agents/agent-display.ts`: the derived strings two screens print
-  about an agent, and the avatar palette.
+  about an agent, the avatar palette, and (S5.17) the rule that turns whatever an
+  agent's record happens to hold — a palette index, a colour from three steps
+  ago, or nothing usable — into the two tokens its tile is painted from.
 - **The agent templates (S7.5)**: `src/shared/agent-templates.ts` — three
   entries of name, description, system prompt, model hints and a palette index —
   and `agentsStore.createFromTemplate`, the one action that writes an agent
@@ -82,7 +84,9 @@ resolves `@name` against the names created here.
 | Validation is computed in the store **and** enforced in the handler | Only one of the two | The handler is the authority (a future HTTP client is not this UI). The store's copy is what lets Save be disabled with the reason under the field instead of a rejection after the click |
 | Deleting an agent stops the runs of every chat it was in | Let the cascade fire and hope | A turn streaming for that agent would keep writing into a chat whose membership changed under it. Stopping first makes the outcome the same every time |
 | `agents.update` / `delete` emit `chat.updated` per affected chat | A new `agent.updated` event | The renderer already has one path for "this chat changed"; a second event type would need its own reducer in every store that cares. The chat rows are what actually re-render |
-| Avatar colours are literal hex pairs in TypeScript, not CSS variables | Tokens in `index.css` | An avatar is *data*: the pair is copied into `agents.avatar` and stored in SQLite, where `var(--color-…)` resolves to nothing |
+| ~~Avatar colours are literal hex pairs in TypeScript, not CSS variables~~ **Reversed in S5.17: the record holds a palette *index* (`InitialAvatar.palette`) and `index.css` holds the colours** | Keep the hexes; migrate every row to a new pair; keep two lists and branch on the theme in the component | The old reasoning confused the choice with its consequence. The *choice* is data and `3` stores it perfectly; the colour is a rendering decision, and it has to differ between the appearances — slot 3 is a deep violet in dark and a pale one in light, and no single hex can be both. That is why a dark slab with a pale monogram survived onto the light theme's near-white panels for two steps |
+| Legacy records are mapped to a slot **at render time**, never rewritten | A database migration; a lazy write-on-read; default an index-less record to neutral | A migration rewrites rows for a cosmetic reason, can half-fail, and makes a downgrade render wrong. `nearestAvatarPalette` is a pure function over eight known values, it cannot fail, and the eight legacy hexes round-trip to the slot the user actually picked. Defaulting to neutral was the cheap option and would have repainted every existing agent grey |
+| A record written today **still carries the old hex pair** beside the index | Drop `color` / make it optional | `InitialAvatar.color` is a compatibility shadow now, not what gets painted: an older build, an export or the future server has something to fall back on, and `nearestAvatarPalette` maps it straight back to the index it shadows. Making it optional would have rippled through the main-process fixtures for no gain |
 | `InitialAvatar` gained an optional `textColor` | Derive the foreground from the background at render time | The palette pairs come from the artboard and are not computable from the background; making it optional keeps records written before S2.1 rendering on the neutral fallback |
 | The model control is a `<select>` when the provider lists models and a text field when it does not | Always free text; always a dropdown | A provider's model list can legitimately be empty (a custom endpoint, an Ollama that was down when it was added), and a dropdown-only form would make such a provider unusable |
 | The role is a segmented control with the explanation printed under it, not a tooltip | A select; a tooltip; a checkbox called "can write" | It is the one control on this form that changes what the agent may do to the user's disk. That is not a thing to discover by hovering, and two named roles read better than a negated capability |

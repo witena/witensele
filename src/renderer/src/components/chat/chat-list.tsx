@@ -109,7 +109,7 @@ export function ChatList(props: ChatListProps): React.JSX.Element {
                   }}
                   className={clsx(
                     'group flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left',
-                    selected ? 'bg-bg-hover text-fg' : 'text-fg-muted hover:bg-bg-hover/60'
+                    selected ? 'bg-bg-hover text-fg' : 'text-fg-muted hover:bg-bg-subtle'
                   )}
                 >
                   <span data-testid="chat-item-title" className="w-full truncate text-[13px]">

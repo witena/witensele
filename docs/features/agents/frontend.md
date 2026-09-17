@@ -7,7 +7,7 @@
 | `src/renderer/src/pages/agents-page.tsx` | The two columns: the 264px list and the editor. Owns the three loads it needs and the "Delete is armed" view state |
 | `src/renderer/src/components/agents/agent-list.tsx` | The mockup's `.agent-item` rows: avatar, name, the `executor` chip, `modelId · provider` in mono. Takes `executorLabel` as an already-translated prop, so the row stays free of i18next |
 | `src/renderer/src/components/agents/agent-editor.tsx` | The header (avatar, name, "in N chats", Duplicate / Delete / Save) and the two-column body, including the S5.2 role control and the explanation under it |
-| `src/renderer/src/components/agents/agent-display.ts` | Pure helpers: the avatar palette, `avatarInitial`, `agentModelLabel`, and `isExecutor` / `hasExecutor`. Shared with the chat's member panel, its picker and the message header |
+| `src/renderer/src/components/agents/agent-display.ts` | Pure helpers: the avatar palette, `avatarInitial`, `agentModelLabel`, and `isExecutor` / `hasExecutor`. Since S5.17 it also owns *what a tile is painted with* — `avatarPalette`, `avatarPaletteStyle`, `avatarStyle`, `nearestAvatarPalette` and the `LEGACY_AVATAR_COLORS` table they resolve through. Shared with the chat's member panel, its picker, the message header, the composer's mention popover, the actions card, the first-run tiles and the provider monograms |
 | `src/renderer/src/stores/agents.ts` | The list, the editor draft, validation |
 
 ## Store fields (`useAgentsStore`)
@@ -97,7 +97,10 @@ written before S5.14 shows what it actually does rather than a flat `off`.
 
 - The avatar control is a row of eight colour swatches next to a live preview,
   where the artboard draws a single field reading "letter · warm brown". The
-  artboard's version has no way to actually pick anything.
+  artboard's version has no way to actually pick anything. Since S5.17 each
+  swatch carries `data-palette` and is compared to the draft **by index**, not by
+  colour: the same slot is two different hexes in the two appearances, so a
+  colour comparison would have left no swatch marked as pressed in one of them.
 - The Skills block *is* the artboard's checkbox list from S3.2
   (`components/agents/skill-checklist.tsx`), bound to `skillNames`, with an extra
   row per bound name the library can no longer resolve — tagged "missing" rather

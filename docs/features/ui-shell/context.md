@@ -27,6 +27,14 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
   stamped. The three-segment control in Appearance & language, the window's
   first-frame colour and the title-bar traffic lights are the same setting
   seen from three places.
+- **The monogram palette and the accessibility preferences (S5.17).** Eight
+  indexed background / foreground pairs, plus a neutral one, that every avatar
+  and every provider tile is painted from — the last two things in the app that
+  held a colour of their own — and the `prefers-contrast` /
+  `prefers-reduced-transparency` blocks that answer for the palette when the
+  machine asks for something stronger or flatter. The contrast of every step on
+  every surface is arithmetic the suite runs (`lib/contrast.ts`) rather than a
+  claim, and the matrix is printed in [frontend.md](./frontend.md).
 - The language switch, which is the one piece of real behaviour on the page: the
   quick toggle at the bottom of the settings nav and the select in Appearance &
   language, both writing the setting S1.4 already persists.
@@ -83,7 +91,10 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | `--color-brand-point` is the same value in both palettes | Give it a light override like every other token; hard-code the terracotta in the component | It is an **identity**, not a role: a mark whose colour shifted with the appearance would be two marks. It is still declared in both blocks so `theme.test.ts` keeps watching it, and `CONSTANT_TOKENS` in that file is the named, deliberately tiny exception to "every override differs" |
 | The rail mark is an inlined SVG with `currentColor` blades | Two PNG assets; one SVG per theme; an `<img>` pointing at `build/icon.svg` | `currentColor` is what makes one drawing work in both palettes, which is the same argument S5.8 makes for the whole theme. An `<img>` cannot inherit a colour, and two assets is two things to keep in step with the icon |
 | `'system'` is stored as itself and resolved at use (S5.8) | Resolve once and store `light` / `dark` | Exactly the language decision from S1.4. A machine that flips at sunset should take the app with it |
-| Avatar and provider-logo colours stay dark in both themes (S5.8) | A second palette keyed by theme | They are **data** — an agent's `avatar.color` is a stored row — so theming them means rewriting records. A dark tile with a light monogram reads as a brand chip on white |
+| ~~Avatar and provider-logo colours stay dark in both themes (S5.8)~~ **Reversed in S5.17: a tile stores a palette *index* and the stylesheet holds the colours** | Keep them dark; migrate every stored row to new hexes; keep two palettes and branch on `data-theme` in the component | The premise was wrong, not the reasoning: the *choice* is data, the colour is not. `InitialAvatar.palette` is a small integer, so the stylesheet can give slot 3 a deep violet in dark and a pale one in light and no record has to change. A migration was the alternative and it is the bad one — it rewrites rows for a cosmetic reason, it can half-fail, and it makes a downgrade render wrong; mapping a stored hex to its slot **at render time** costs one pure function and cannot fail at all |
+| The eight legacy hexes stay in `agent-display.ts` as a named table (S5.17) | Delete them and default an index-less record to neutral; move them into a database migration | Deleting them would repaint every agent written before this step as grey — the one outcome the no-migration design exists to avoid. As a table they do two jobs: they resolve an old record, and they are the compatibility shadow a *new* record still writes into `avatar.color` for any consumer that has never heard of `palette`. It is the one file besides `index.css` and the brand mark where `hex-literals.test.ts` allows a colour |
+| Provider tiles reuse the agent palette rather than keeping a list of their own (S5.17) | Give providers their own eight theme-aware pairs | Two eight-entry lists that were copies of each other had already drifted in two slots. One list is one thing to tune, and the hash that assigns a preset to a slot is unchanged, so a provider keeps its swatch number |
+| `prefers-contrast` and `prefers-reduced-transparency` are written **twice**, once per appearance (S5.17) | One unqualified `:root` block | `:root[data-theme='light']` has higher specificity than `:root` whatever the source order, so a single block would strengthen the dark theme and silently do nothing in the light one. `theme.test.ts` asserts both halves name the same tokens |
 | `drag-region` / `no-drag` as `@utility` in `index.css` | Tailwind arbitrary properties `[-webkit-app-region:drag]`, inline styles | The leading `-` of the vendor prefix collides with Tailwind's negative-value syntax, and `WebkitAppRegion` is not in React's `CSSProperties` |
 | The licence list is generated at build time, gitignored, and imported as JSON (S7.5) | A hand-maintained Markdown list; a runtime scan of `node_modules`; committing the generated file | The list is derived from the installed tree, so a hand-written copy is wrong the first time a dependency moves and **nothing fails** — a stale licence list looks exactly like a correct one. A packaged app has no `node_modules` to scan at runtime. Committing it would mean reviewing a 244-entry diff on every `npm update`, so it is produced by `pretypecheck` / `pretest` / `prebuild` instead and ignored by git |
 | About prints the version, the package names and the repository URL as data, never through `t()` (S7.5) | Translate "Witena {{version}}" | Every label around them *is* translated; the values are identifiers. `0.1.0`, `react@19.3.0` and a URL are the same in both languages, and a placeholder would only add a way for them to differ |
@@ -95,11 +106,25 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 
 ## Open questions
 
-- The light theme has not been seen on the screens that only exist while a
-  run is in progress (a streaming message, a tool card, an error, the four
-  presence dots together). They use no colour of their own, so the risk is a
-  step that is too subtle rather than an unreadable screen — recorded under
-  "Appearance" in Phase 6 of STEPS.md.
+- ~~The light theme has not been seen on the screens that only exist while a
+  run is in progress.~~ **Closed by S5.17**, which photographs every screen with
+  content on it in both appearances (`e2e/theme-review.spec.ts`). It found four
+  things: the message-list avatars were the last component still painting from a
+  stored hex, a passed or skipped row was drawn at 50% opacity and measured
+  3.26:1 in light, `fg-dim` and `fg-faint` were under their bars on `bg-hover`,
+  and five components carried `/50` and `/60` alpha utilities that no stylesheet
+  could answer for. All four are fixed; the per-screen list is in S5.17's
+  `Done:` paragraph.
+- **Nothing measures a *rendered* pixel.** The contrast matrix is computed from
+  the token values, so it is exact for text on a plain surface and says nothing
+  about text over an `opacity` — which is how the dimmed-row defect survived
+  from S2.x to S5.17. The two places the app still composites (`opacity-70` on a
+  passed row, `opacity-45` on a disabled control) were checked by hand this
+  time; a guard would need a real browser and a colour sampler.
+- **A streaming message and a live presence sweep are still only seen with a
+  model attached.** The review seeds a finished transcript, so the blinking
+  accent cursor and the four presence colours changing under one another are the
+  two states it cannot reach. `e2e/presence.spec.ts` covers them with Ollama.
 
 - The 32px traffic-light inset makes the leftmost column header sit lower than
   the 52px page header next to it. It is defensible (Slack and Discord do the

@@ -124,7 +124,7 @@ export function MemoryPanel({ agentId }: MemoryPanelProps): React.JSX.Element {
             type="button"
             data-testid="memory-index"
             onClick={() => void store().open(MEMORY_INDEX_PATH)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-bg-hover/50 focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-bg-subtle focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
           >
             <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted">
               {MEMORY_INDEX_PATH}
@@ -142,7 +142,7 @@ export function MemoryPanel({ agentId }: MemoryPanelProps): React.JSX.Element {
               data-testid="memory-entry"
               data-path={entry.path}
               onClick={() => void store().open(entry.path)}
-              className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left hover:bg-bg-hover/50 focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
+              className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left hover:bg-bg-subtle focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none"
             >
               <span
                 data-testid="memory-entry-title"

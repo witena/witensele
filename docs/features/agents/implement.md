@@ -47,11 +47,12 @@ Delete (first click arms, second acts)
 
 | Name | Where | Notes |
 |---|---|---|
-| `Agent`, `AgentInput`, `AgentParams`, `AgentAvatar`, `AgentRole` | `src/shared/types.ts` | `AgentInput = Omit<Agent, keyof EntityBase>`; `InitialAvatar` gained an optional `textColor` in S2.1. `AgentRole` stopped being reserved in S5.2, and its doc comment is where PLAN.md's one-writer decision is restated |
+| `Agent`, `AgentInput`, `AgentParams`, `AgentAvatar`, `AgentRole`, `AvatarPaletteIndex` | `src/shared/types.ts` | `AgentInput = Omit<Agent, keyof EntityBase>`; `InitialAvatar` gained an optional `textColor` in S2.1 and an optional `palette` (1–8) in S5.17, which is the authority at render time while `color` becomes a compatibility shadow. `AgentRole` stopped being reserved in S5.2, and its doc comment is where PLAN.md's one-writer decision is restated |
 | `isExecutor`, `hasExecutor` | `src/renderer/src/components/agents/agent-display.ts` | The badge's rule and the member picker's, in one place. Pure and unit-tested |
 | `agents.get / create / update / delete` | `src/shared/backend.ts` | Declared since S1.1; implemented in S2.1 |
 | `AgentDraftErrors`, `validateDraft`, `duplicateName` | `src/renderer/src/stores/agents.ts` | Pure, exported, and unit-tested |
-| `AGENT_AVATAR_COLORS`, `avatarInitial`, `agentModelLabel` | `src/renderer/src/components/agents/agent-display.ts` | Shared by the Agents page and the chat's member panel |
+| `AGENT_AVATAR_COLORS`, `avatarInitial`, `agentModelLabel` | `src/renderer/src/components/agents/agent-display.ts` | Shared by the Agents page and the chat's member panel. Each entry is now `{ palette, color, textColor }`, so every `{ ...entry }` spread at a call site writes the index *and* its shadow in one go |
+| `avatarStyle(avatar) → { color, textColor }` | the same file (S5.17) | The one rule for painting a tile, and the reason two dozen call sites agree: the stored index wins, a record that predates it is resolved through `nearestAvatarPalette`, and anything else is the neutral slot. Both values are `var(--color-avatar-…)` strings, never hexes |
 | `AgentTemplate`, `AGENT_TEMPLATES`, `getAgentTemplate`, `suggestedModel` | `src/shared/agent-templates.ts` | S7.5. Static data like `presets.ts` and `mcp-presets.ts`: no electron, no node, imported by the renderer directly. The **name and the system prompt are stored content** and are English literals here, exactly like `DEFAULT_AGENT_NAME`; only the one-line description is copy, under `agents.templates.<id>` in both locale files |
 
 ## Validation rules
@@ -81,6 +82,14 @@ always accepted either — and nothing about `role` is validated *against a chat
 here; that is `chats.members.set`'s job (see
 [`../chats/backend.md`](../chats/backend.md)).
 
+S5.17 added one rule to the same pipeline, and it is a *rendering* rule rather
+than a store rule: nothing between the draft and SQLite knows what colour an
+avatar is any more. `pickAvatarColor` writes `{ palette, color, textColor }` from
+one `AGENT_AVATAR_COLORS` entry, `sameDraft` compares `palette` along with the
+other two so picking a swatch still marks the form dirty, and every component
+that draws the tile asks `avatarStyle` instead of reading `avatar.color`. The
+main process is unchanged apart from one field on the bootstrap agent.
+
 The stored name is trimmed; the avatar monogram falls back to the first character
 of the name, uppercased, when the user did not type one.
 
@@ -92,7 +101,7 @@ of the name, uppercased, when the user did not type one.
 | `src/renderer/src/stores/agents.test.ts` | `validateDraft` (including that it says nothing about `temperature` / `maxTokens` since S5.9), `duplicateName`, the draft lifecycle (create → save → edit), `dirty` going true and back, a params field being removed rather than set to `undefined`, a stored temperature surviving an edit untouched, and the editor closing when its agent is deleted |
 | `src/shared/agent-templates.test.ts` | S7.5's invariants: two or three entries, unique ids and names (a clash would make the second tile fail on click), a name every `@mention` rule accepts, an English prompt and description, lowercase model hints, a palette index the editor offers — plus `suggestedModel` preferring the earliest matching hint, matching case-insensitively, falling back to the provider's first model and answering `undefined` for none |
 | `src/renderer/src/stores/agents.test.ts` (S7.5) | `createFromTemplate`: the template written verbatim on the model its hints prefer, the editor left closed, nothing written when there is no model or no provider, the `<name> copy` rename when the name is taken, and each template landing on a different avatar colour |
-| `src/renderer/src/components/agents/agent-display.test.ts` | `agentModelLabel` with and without a provider, `avatarInitial` including an astral-plane character, the palette's size, and `isExecutor` / `hasExecutor` over an empty list, a list of participants and a mixed one |
+| `src/renderer/src/components/agents/agent-display.test.ts` | `agentModelLabel` with and without a provider, `avatarInitial` including an astral-plane character, the palette's size and its 1–8 ordering, and `isExecutor` / `hasExecutor` over an empty list, a list of participants and a mixed one. S5.17 added the mapping that stands in for a migration: **each of the eight legacy hexes maps back to the slot the user picked** (get this wrong and every existing agent changes colour on upgrade), case and the short `#333` form, a stored index beating the shadow beside it, a deterministic answer for a hex the picker could never produce, `undefined` rather than a guess for `rebeccapurple` or an `oklch(…)`, and that no helper ever returns a literal colour |
 | `e2e/agents.spec.ts` | The whole screen: empty library, create, the absence of the S5.9 sampling fields, duplicate name refused, a second agent on a second model, duplicate, two-click delete, restart |
 | `e2e/executor.spec.ts` | S5.2: the role control writing `executor` and surviving a save and a restart, the explanation rendered under it, and the badge appearing in the agent list for the executors and only for them. The rest of that spec is [`chats`](../chats/implement.md)'s half of the step |
 

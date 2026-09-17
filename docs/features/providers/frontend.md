@@ -12,7 +12,7 @@
 | `src/renderer/src/components/settings/provider-models.tsx` | **S7.5**, extracted likewise: "Fetch models", the chips and the inline "add a model" field, with the documented rule that a fetch *replaces* what the form held |
 | `src/renderer/src/components/settings/provider-sign-in.tsx` | **S5.3**, generalised in **S5.13** (it was `anthropic-sign-in.tsx`). The sign-in panel for whichever vendor its `type` prop names: the three states, that vendor's install command, the Sign in / Sign out buttons, and — for a Google login with no quota project — the project field |
 | `src/renderer/src/components/settings/preset-grid.tsx` | The three-column preset picker, rendered straight from `PROVIDER_PRESETS` |
-| `src/renderer/src/components/settings/provider-logo.ts` | Monogram initials and the colour derived from the preset id |
+| `src/renderer/src/components/settings/provider-logo.ts` | Monogram initials, and the palette **slot** derived from the preset id. Since S5.17 it returns `{ text, palette, color, textColor }` where the two colours are `var(--color-avatar-N-…)` references from the shared eight-slot palette in [`../agents/frontend.md`](../agents/frontend.md), not hexes of its own |
 | `src/renderer/src/components/settings/provider-display.ts` | `providerHost`, `providerStatus`, `providerStatusTone`, (S5.3) `authControl`, `signedInName`, `formatExpiry` and (S7.6) `keyUnreadable` — the editor's decisions as pure functions, because the suite has no DOM |
 | `src/renderer/src/components/ui/chip.tsx` | New primitive: an item in an editable set, optionally removable or clickable |
 | `src/renderer/src/components/ui/spinner.tsx` | New primitive: the indeterminate ring |
@@ -211,6 +211,19 @@ Known differences from the artboard:
 - The card subtitle is the host only; the artboard appends an "OpenAI-compatible"
   suffix to compatible providers. Dropped as noise once the monogram already distinguishes
   them.
+- The monogram tile follows the appearance (S5.17). It used to be a fixed dark
+  chip with a pale letter in both themes, which on the light settings page read
+  as a sticker someone had put on the card rather than as part of it. It is the
+  same eight slots the agent avatars use now, for one tuned list instead of two
+  copies that had already drifted: the old provider list held a red at slot 5 and
+  a green at 6, the agent list a green and a rose, so those are the two slots
+  whose hue changed for a preset that hashes to them. The hash itself is
+  untouched, so a preset keeps its slot number and — for six of eight — its
+  colour. `NEUTRAL_AVATAR_STYLE` is what a provider with no preset gets, which is
+  still the "you configured this one yourself" look.
+
+  Witena's own mark is **not** part of this: `--color-brand-point` is an identity
+  and is the one token deliberately identical in both palettes (S7.1).
 - A fourth status (`untested`) exists that the artboard does not draw; see
   [context.md](./context.md).
 - The editor has a result line and a probe-model select the artboard does not
