@@ -88,6 +88,7 @@ as the run having been stopped.
 | Another agent's | role `user`, prefixed `[Name]: ` |
 | **This** agent's | role `assistant`, no prefix |
 | A system notice | role `user`, prefixed `[system]: `, rendered from the key into short English |
+| A transcript that would end with this agent's own reply | a trailing `[system]: It is your turn to speak.` user message is appended (`YOUR_TURN_TEXT`), because Anthropic refuses a conversation that ends with an `assistant` turn ("does not support assistant message prefill") while OpenAI-compatible servers accept it; the case arises whenever an agent speaks twice with nothing stored between — the closing turn after a round it ended, a self-mention, a retry |
 
 Then: consecutive same-role messages are merged with a blank line (several
 providers reject two adjacent user messages, and one round of three agents

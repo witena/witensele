@@ -86,8 +86,27 @@ const NOTICE_TEXT: Record<string, (params: Record<string, string | number>) => s
   handoffDeliver: (params) =>
     `The user asked ${String(params['agent'] ?? 'the executor')} to write the deliverable of ` +
     `this chat, ${String(params['path'] ?? 'the goal file')}, now: write the file itself from ` +
-    'the conclusion reached above, then report the path.'
+    'the conclusion reached above, then report the path.',
+  // Both closure notices (S5.14) are rendered for the same reason as the
+  // hand-off ones: the closing turn that follows `consensus` may belong to the
+  // member who spoke last, and without this line its history would end with
+  // its own reply — which some providers reject outright (see `endsWithUser`).
+  consensus: () => 'The group has reached agreement. Sum up what was decided, for the user.',
+  voteClosed: () => 'The vote is closed: every member answered once.'
 }
+
+/**
+ * What the model is told when its own reply would otherwise be the last thing
+ * in the prompt.
+ *
+ * Providers disagree about a conversation that ends with an `assistant`
+ * message: OpenAI-compatible servers treat it as a continuation, Anthropic
+ * refuses it ("This model does not support assistant message prefill"). It
+ * happens whenever an agent speaks twice in a row with nothing stored between —
+ * the closing turn after a round it ended, a self-mention, a retry — and the
+ * fix is the same each time: end with the user, as the API contract says.
+ */
+export const YOUR_TURN_TEXT = `[${SYSTEM_SENDER_NAME}]: It is your turn to speak.`
 
 /**
  * How much of one stored tool result may reach the prompt, in characters.
@@ -213,5 +232,12 @@ export function toModelMessages(input: ToModelMessagesInput): ModelMessage[] {
     result.push(role === 'assistant' ? { role, content } : { role, content })
   }
 
-  return result
+  return endsWithUser(result)
+}
+
+/** Appends `YOUR_TURN_TEXT` when the transcript would end with the agent's own reply. */
+function endsWithUser(messages: ModelMessage[]): ModelMessage[] {
+  const last = messages[messages.length - 1]
+  if (!last || last.role !== 'assistant') return messages
+  return [...messages, { role: 'user', content: YOUR_TURN_TEXT }]
 }
