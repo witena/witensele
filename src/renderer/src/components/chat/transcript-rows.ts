@@ -19,6 +19,13 @@
  * worth testing (a part in the middle of the text, a message with none, a
  * message with several), and `message-item.tsx` is markup that should not also
  * be the place those cases are decided.
+ *
+ * ## The conclusion (S5.16)
+ *
+ * A message row also says whether it is the group's **conclusion** —
+ * `isConclusion(parts)`, the one reading of the `ConclusionPart` flag the
+ * backend stores on a closing turn. It is part of the row model rather than a
+ * check inside the component for the same reason everything else here is.
  */
 import type { DiffPart, FileRefPart, Message, MessagePart } from '@shared/types'
 
@@ -28,7 +35,21 @@ export type DayBucket = 'today' | 'yesterday' | 'date'
 /** A row of the virtualized transcript: either a separator or a message. */
 export type TranscriptRow =
   | { kind: 'day'; key: string; bucket: DayBucket; timestamp: number }
-  | { kind: 'message'; key: string; message: Message }
+  | {
+      kind: 'message'
+      key: string
+      message: Message
+      /**
+       * True when this message is the group's conclusion (S5.16).
+       *
+       * Decided in the row model rather than inside `MessageItem`, because it is
+       * the same kind of statement the day separator is — a property of the row
+       * the list is drawing — and because a boolean computed here is a unit test
+       * while the same `if` inside the component is not (the renderer suite runs
+       * in `node`, with no DOM).
+       */
+      conclusion: boolean
+    }
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -76,10 +97,27 @@ export function buildTranscriptRows(
       currentDay = day
       rows.push({ kind: 'day', key: `day-${day}`, bucket: dayBucket(day, now), timestamp: day })
     }
-    rows.push({ kind: 'message', key: message.id, message })
+    rows.push({
+      kind: 'message',
+      key: message.id,
+      message,
+      conclusion: isConclusion(message.parts)
+    })
   }
 
   return rows
+}
+
+/**
+ * Whether these parts carry the conclusion flag (S5.16).
+ *
+ * The whole reading of `ConclusionPart`: it is a marker with no content, so
+ * "does it exist" is all there is to ask. Its position — first, as the backend
+ * stores it — is deliberately not asserted here: a reader that insisted on
+ * `parts[0]` would break the day a second flag part is added in front of it.
+ */
+export function isConclusion(parts: readonly MessagePart[]): boolean {
+  return parts.some((part) => part.type === 'conclusion')
 }
 
 /**

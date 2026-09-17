@@ -56,6 +56,12 @@ can hold a real conversation and still holds it after a restart.
   [`orchestration`](../orchestration/context.md)'s; this feature owns the place
   it sits and the chat facts it reads (`workdir`, the member list, whether a run
   is going).
+- **The conclusion** (S5.16): the card a message carrying a `ConclusionPart` is
+  drawn as — the label, the accent edge, the speaker underneath, **Copy** and
+  **Write to the deliverable** — plus the header's "Conclusion" chip, the
+  chat-list preview line and the "Closing speaker" select in the group settings.
+  What *produces* a conclusion is [`orchestration`](../orchestration/context.md)'s
+  closing turn; this feature owns everything the user does with one.
 - The three renderer surfaces the executor needs (S5.5): the **permission card**
   above the composer (`stores/permissions.ts` plus `permission-card.tsx`), the
   **diff block** a `DiffPart` renders as, and the `path:line` chip a
@@ -137,11 +143,23 @@ the next round boundary rather than mid-turn.
 | The action prompts are locale keys, not English constants | One English sentence for both languages | An agent answers in the language it is addressed in; a Chinese UI asking in English gets an English summary |
 | The autocomplete's query may contain spaces, bounded at 40 characters | Stop the query at the first space | A member can be called `Ann Lee`, and a completion that stopped at the space could never reach her. The bound plus "closes when nothing matches" keeps a stray `@` from leaving a popover open behind a paragraph |
 | The autocomplete writes the textarea's value and caret **synchronously** | Restore the caret in `requestAnimationFrame` | The deferred version looks right by hand and races anything that reads or replaces the box in between — which is how it first showed up, as a flaky end-to-end assertion |
+| **The conclusion is a card around the message, not a panel above the chat** (S5.16) | Pin a copy of the conclusion to the top of the transcript; a side panel listing every conclusion | The transcript is the record, in the order things happened; a floating duplicate is a second thing to keep in step with it and pushes the conversation down the screen for ever. The header chip is how it is found from the top of a long chat, and it *scrolls to* the card rather than repeating it |
+| **Copy goes through the browser clipboard, not through `BackendClient`** (S5.16) | A `system.copyToClipboard` method beside `system.openInEditor` | Rule #6 is that the renderer reaches the **backend** only through that client; the clipboard is not the backend, it belongs to the window the user is in. A method would also put a desktop capability into a contract the server build has to implement |
+| **"Write to the deliverable" is hidden when the goal is not a document, and disabled otherwise** (S5.16) | Always show it; never show it outside a document chat | A permanently dead control on a card in a discussion chat explains a feature that chat is not using. The other three refusals — no folder, no executor, a run in flight — are states the user can act on, so there the button stays with its reason, exactly like the hand-off button |
+| **Who closes is a chat setting, not a per-run choice** (S5.16) | Ask at the moment the group agrees; derive it from the discussion | The run has already ended by then and a modal in the middle of the answer is worse than a default. `closingAgentId` is one field of the settings column, the select offers the chat's own members, and a stale value costs the preference and never the conclusion |
+| **The chat-list preview replaces the member count rather than joining it** (S5.16) | A second line under the title; show both separated by a dot | The row is one line high and the count is on screen the moment the chat is opened. What a discussion concluded is the better answer to "which one was this" |
 
 ## Open questions
 
 - Reordering is mouse-only. `ChatRunner` reads `position` every round, so the
   order matters more since S2.3 and a keyboard path for it is still missing.
+- Whether a conclusion should be **exportable** beyond the clipboard — a file, a
+  share sheet, an entry in a "decisions" list across chats. S5.16 deliberately
+  shipped the two destinations that need no new concept: the clipboard, and the
+  deliverable this chat already names.
+- Whether the chat-list preview should cover chats whose transcript has never
+  been loaded, which would need a backend query of its own rather than the
+  messages store.
 - Whether the member count belongs on `Chat` after all: membership is now
   mutable and the left column re-reads `chats.members.list` per chat to follow it.
 - Upward paging: the transcript is virtualized but still loads one page of 100,

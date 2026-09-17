@@ -313,4 +313,33 @@ describe('toModelMessages', () => {
 
     expect(result).toEqual([{ role: 'user', content: '[Ada]: Use exponential backoff.' }])
   })
+
+  it('shows the conclusion’s text and never its flag (S5.16)', () => {
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [
+        message('agent', ada.id, [
+          { type: 'conclusion' },
+          { type: 'text', text: 'We will ship the smallest version first.' }
+        ])
+      ]
+    })
+
+    // The mark is the UI's, not the group's: a model that saw one would learn to
+    // write its own, and every later speaker would claim to be concluding.
+    expect(result).toEqual([
+      { role: 'user', content: '[Ada]: We will ship the smallest version first.' }
+    ])
+  })
+
+  it('drops a message that is nothing but the flag', () => {
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [message('agent', ada.id, [{ type: 'conclusion' }])]
+    })
+
+    expect(result).toEqual([])
+  })
 })

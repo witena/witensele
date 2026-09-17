@@ -336,10 +336,41 @@ export interface ChatSettings {
   speaking: SpeakingMode
   /** How many rounds may run without the user before control returns to them. */
   maxAutoRounds: number
+  /**
+   * The member that writes the conclusion when a discussion closes (S5.16).
+   *
+   * Absent — the default — means "the first eligible member in speaking order",
+   * which is what S5.14 always did. When it names a member of this chat that is
+   * available and is not an executor, that member writes the conclusion instead;
+   * anything else (a member since removed, one the supervisor has taken offline,
+   * an executor) falls back to the same first-in-order rule rather than skipping
+   * the conclusion, because a chat that agreed must still hand back an answer.
+   *
+   * An agent id rather than a position, because the speaking order is dragged
+   * around by the user and "the second member" would silently become somebody
+   * else.
+   */
+  closingAgentId?: string
   /** Per-chat override in milliseconds; absent means use the global setting. */
   stallTimeoutMs?: number
   /** Per-chat override in milliseconds; absent means use the global setting. */
   hardTimeoutMs?: number
+}
+
+/**
+ * A patch of `ChatSettings`, in which `closingAgentId` may be `null` (S5.16).
+ *
+ * Every other field is only ever *set*, so `Partial<ChatSettings>` says all
+ * there is to say about them. `closingAgentId` is the first setting that can be
+ * **unset** — picking "First in speaking order" again — and `undefined` cannot
+ * carry that across a transport: JSON drops the key, and a dropped key is
+ * exactly what "leave this field alone" means in a merge. So the wire word for
+ * "clear it" is `null`, and `chats.update` turns it back into an absent field
+ * before the row is written, which is why the stored type has no `null` in it.
+ */
+export interface ChatSettingsPatch extends Partial<Omit<ChatSettings, 'closingAgentId'>> {
+  /** The member that closes, or `null` for "the first eligible one". */
+  closingAgentId?: string | null
 }
 
 /** Settings a new chat starts with: everyone speaks, in order, for up to 3 rounds. */
@@ -459,10 +490,12 @@ export type ChatInput = Omit<Chat, keyof EntityBase>
  * `settings` is a **partial of a partial**: the backend merges it field by field,
  * so a single control (the speaking toggle, the round count) can be persisted on
  * its own without the caller having to resend the rest and risk overwriting a
- * field another control changed a moment earlier.
+ * field another control changed a moment earlier. Since S5.16 it is a
+ * `ChatSettingsPatch`, which is that partial plus the one field a control can
+ * clear.
  */
 export interface ChatPatch extends Partial<Omit<ChatInput, 'settings'>> {
-  settings?: Partial<ChatSettings>
+  settings?: ChatSettingsPatch
 }
 
 /**
@@ -575,6 +608,25 @@ export interface SystemNoticePart {
   params?: Record<string, string | number>
 }
 
+/**
+ * The mark on the one message that is the group's answer (S5.16).
+ *
+ * A **flag**: it carries no content of its own, it is stored **first** in
+ * `parts`, and it says one thing — this message is the conclusion S5.14's
+ * closing turn was run to produce. A part rather than a column or a
+ * `MessageKind`, because `parts` is already the open, migration-free place
+ * where a message says what it is made of: a new member of this union costs no
+ * schema change and a row written before S5.16 simply has none.
+ *
+ * Everything that reads a message treats it as invisible unless it is looking
+ * for it: `partsToText` (the history transform) skips it, so the model never
+ * sees a flag; `messageText` in the renderer skips it, so it is never drawn as
+ * text. Only the transcript row model and the chip that finds it read it.
+ */
+export interface ConclusionPart {
+  type: 'conclusion'
+}
+
 /** Everything a message can be made of, discriminated on `type`. */
 export type MessagePart =
   | TextPart
@@ -583,6 +635,7 @@ export type MessagePart =
   | ToolResultPart
   | DiffPart
   | FileRefPart
+  | ConclusionPart
   | SystemNoticePart
 
 /** Token accounting for one message, as reported by the provider. */

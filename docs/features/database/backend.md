@@ -21,13 +21,19 @@
 | `src/main/db/repositories/settings.ts` | Settings get and merge-update |
 | `src/main/db/repositories/index.ts` | `createRepositories(db, { encrypt })` and the `Repositories` type |
 | `src/main/db/testing.ts` | Temporary-file fixtures and input builders; imported only by tests |
+| `src/main/db/postgres/schema.ts` | **S8.1**: the same seven tables in `drizzle-orm/pg-core` — `bigint` timestamps, `boolean`, `jsonb` |
+| `src/main/db/postgres/migrations/0000_init.sql` | **S8.1**: the current shape as Postgres DDL, split on drizzle's `--> statement-breakpoint` |
+| `src/main/db/postgres/database.ts` | **S8.1**: `openPostgresDatabase(url)`, `runPostgresMigrations(pool)`, `truncateAll(db)`, `PostgresDb`, `PostgresHandle` |
+| `src/main/db/dialects.ts` | **S8.1**: `describeDialects` plus the row gateway both dialects answer; imported only by tests |
+| `docker-compose.yml` (repository root) | **S8.1**: Postgres 16 on `127.0.0.1:5432` for development and for the Postgres half of the suite |
 | `src/main/errors.ts` | `BackendFailure`, `isBackendFailure`, `notFound()`, `validation()`, `keyUnreadable()` (S7.6) |
 | `drizzle.config.ts` (repository root) | drizzle-kit input for `npm run db:generate`; never connects to a database |
 | `src/main/index.ts` | The only electron-aware part: opens `app.getPath('userData')/witena.db`, logs the path, closes on `before-quit` |
 
 Nothing under `src/main/db/` imports electron. `openDatabase` takes a path,
 `createRepositories` takes a handle, and services take a `Repositories`, so the
-whole layer moves to a Node server by changing only who calls `openDatabase`.
+whole layer moves to a Node server by changing only who calls `openDatabase` —
+which is exactly what `src/server/context.ts` does (S8.1, `../server/backend.md`).
 
 ## The secret formats (S7.6)
 
@@ -118,7 +124,7 @@ names are snake_case, the TypeScript properties camelCase. JSON columns are
 | `title` | text not null | Defaults to `DEFAULT_CHAT_TITLE` |
 | `workdir` | text null | Absolute path of the folder this chat's executor works in; real since S5.2 |
 | `goal` | text json null | `ChatGoal` (S5.10), or null while nobody has said what the chat is for. **Null means "no goal"**, which is what every row written before S5.10 holds, and a chat with no goal behaves exactly as it did. Written as a **whole object** by `chats.update`, never merged: `materials` is a list the user removes from, and a merge could not delete its last entry |
-| `settings` | text json not null | `ChatSettings`, defaulted from `DEFAULT_CHAT_SETTINGS` |
+| `settings` | text json not null | `ChatSettings`, defaulted from `DEFAULT_CHAT_SETTINGS`. Patched **field by field** through `mergeChatSettings`, which since S5.16 also drops a `closingAgentId` the caller sent as `null`: that is the wire word for "clear it", and the stored object keeps the field simply absent. No migration — a row written before S5.16 has no `closingAgentId` and reads as "the first eligible member" |
 
 `updated_at` is bumped by `messages.create` and by `setMembers`, which is what
 makes `chats.list` (ordered `updated_at` descending) show active chats first.
@@ -143,7 +149,7 @@ timestamps: it is a pure join table, scoped through the chat and the agents.
 | `seq` | integer not null | Per-chat monotonic counter assigned in the insert transaction; the ordering key and the paging cursor. Not part of the shared `Message` type |
 | `sender_type` | text not null | `user` / `agent` / `system` |
 | `sender_id` | text not null | `UserId`, agent id, or `system` |
-| `parts` | text json not null | `MessagePart[]` |
+| `parts` | text json not null | `MessagePart[]`. An open union: S5.16's `ConclusionPart` (`{ type: 'conclusion' }`, a flag with no content, stored first on a closing turn's message) needed no migration, and a row written before it simply has none |
 | `status` | text not null | `streaming` / `done` / `error` / `passed` / `skipped` |
 | `round` | integer not null default 0 | 1-based round; 0 outside a run |
 | `mentions` | text json not null | `string[]` of agent ids this message @mentioned |
@@ -184,6 +190,32 @@ Migrations, in order:
 Regenerate with `npm run db:generate` after editing `schema.ts`, and commit
 `migrations/meta/` with it; never edit a file that has already been applied.
 
+### The Postgres migrations (S8.1)
+
+| File | Step | What it does |
+|---|---|---|
+| `postgres/migrations/0000_init.sql` | S8.1 | Creates all seven tables and the two message indexes **in their current shape**, as Postgres DDL |
+
+It does not replay `0001`–`0003`, because those exist to add a column to a
+database already on somebody's laptop and no Postgres database predates this
+file. The bookkeeping is the same `__migrations (name, applied_at)` table, filled
+by `runPostgresMigrations`, which additionally takes `pg_advisory_xact_lock` for
+the whole pass — two server processes can start at once, where SQLite has one
+writer by construction.
+
+Column types differ where the dialects force them to, and only there:
+
+| Value | SQLite | Postgres | Why |
+|---|---|---|---|
+| `created_at`, `updated_at` | `integer` | `bigint` | They hold `Date.now()`. Postgres `integer` is four bytes and stopped being able to hold one in January 1970 |
+| `memory_enabled`, `enabled`, `side_effects` | `integer` (`{ mode: 'boolean' }`) | `boolean` | Postgres has the type |
+| every JSON column | `text` (`{ mode: 'json' }`) | `jsonb` | Indexable and validated; the drizzle mapping is the same on both sides |
+| `seq`, `round`, `position` | `integer` | `integer` | Counters. Four bytes is two billion messages in one chat |
+
+To add a column: edit `schema.ts`, `npm run db:generate`, **and** edit
+`postgres/schema.ts` plus a new `postgres/migrations/000N_*.sql`.
+`postgres/schema-drift.test.ts` fails until both halves exist.
+
 ## IPC handlers
 
 None. This feature registers no channel — it is the layer the S1.3 handler
@@ -215,6 +247,11 @@ after the transaction has committed.
 |---|---|
 | `app.getPath('userData')/witena.db` | The database. `openDatabase` creates the parent directory if needed |
 | `…/witena.db-wal`, `…/witena.db-shm` | WAL sidecar files; checkpointed when `close()` runs on `before-quit` |
+| `$WITENA_DATA_DIR/witena.db` | The same file under the Node host, default `./.witena-data` and gitignored (S8.1, `../server/backend.md`) |
+
+Postgres has no filesystem layout of ours: the compose volume
+`witena-postgres` is the server's own data directory and nothing in this
+repository reads it.
 
 ## External dependencies
 
@@ -225,3 +262,5 @@ after the transaction has committed.
 | `drizzle-kit` | `npm run db:generate` | It bundles `schema.ts` with esbuild, which erases `import type`, so the `@shared/*` alias never has to resolve. It needs `migrations/meta/` to diff against; deleting that directory makes the next generated migration try to recreate every table |
 | Vite `import.meta.glob` | Inlining migration SQL into the bundle | The pattern must be a **literal** relative path — a variable or a computed string is not statically analysable and silently yields an empty object. `vite/client` types are enabled in `tsconfig.node.json` so `import.meta.glob` type-checks outside the renderer |
 | `node:crypto` `randomUUID` | Primary keys | Available in Node and in Electron's main process; not used in the renderer |
+| `pg` (S8.1) | The Postgres driver under drizzle's `node-postgres` dialect | CommonJS: the import is `import pg from 'pg'` and the pool is `new pg.Pool(…)`; a named import of `Pool` does not survive the ESM build. `int8` comes back as a **string** by default, which is why the timestamp columns are `bigint(…, { mode: 'number' })` and why `dialects.test.ts` asserts the type as well as the value. `pool.end()` has to be awaited on shutdown |
+| `drizzle-orm/pg-core`, `drizzle-orm/node-postgres` (S8.1) | The Postgres schema and handle | The query builders are promises with **no synchronous escape**, which is why the repositories cannot run on this dialect yet (`context.md`). `getTableColumns` and `getTableName` are dialect-agnostic and are what the drift test and the row gateway are built on |

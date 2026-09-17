@@ -33,6 +33,7 @@ import {
   NOTICE_TOOLS_UNSUPPORTED,
   diffPartsFrom,
   looksLikeToolRejection,
+  markConclusion,
   runAgentTurn,
   toUsage
 } from './agent-turn'
@@ -493,6 +494,77 @@ describe('runAgentTurn', () => {
 
     expect(createModel).toHaveBeenCalledTimes(1)
     expect(result.status).toBe('done')
+  })
+
+  /* ---------------------------------------------------------------------- */
+  /* S5.16: the flag that marks a closing turn as the group's answer          */
+  /* ---------------------------------------------------------------------- */
+
+  const closingTurn = (model: MockLanguageModelV4) =>
+    runAgentTurn({
+      ctx,
+      chat,
+      agent,
+      members: [agent],
+      round: 2,
+      signal: new AbortController().signal,
+      closing: true,
+      model
+    })
+
+  it('marks a finished closing turn with a conclusion part, first', async () => {
+    const result = await closingTurn(mockModel(textChunks(['We decided to start small.'])))
+
+    expect(result.message.parts).toEqual([
+      { type: 'conclusion' },
+      { type: 'text', text: 'We decided to start small.' }
+    ])
+    // Stored, not only returned: the card is drawn from the row.
+    expect(ctx.repos.messages.get(result.message.id, ctx.userId).parts[0]).toEqual({
+      type: 'conclusion'
+    })
+  })
+
+  it('does not mark an ordinary turn', async () => {
+    const result = await turn(mockModel(textChunks(['Just a reply.'])))
+
+    expect(result.message.parts).toEqual([{ type: 'text', text: 'Just a reply.' }])
+  })
+
+  it('does not mark a closing turn that failed', async () => {
+    const model = new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        throw new Error('provider exploded')
+      }
+    })
+
+    const result = await closingTurn(model)
+
+    // A conclusion that never arrived is not one; the message is still in the
+    // transcript with its error, which is the honest record.
+    expect(result.status).toBe('error')
+    expect(result.message.parts).toEqual([])
+  })
+})
+
+describe('markConclusion', () => {
+  it('puts the flag in front of whatever the turn produced', () => {
+    expect(markConclusion([{ type: 'text', text: 'x' }], true)).toEqual([
+      { type: 'conclusion' },
+      { type: 'text', text: 'x' }
+    ])
+  })
+
+  it('leaves the parts alone when the turn is not a closing one', () => {
+    const parts: MessagePart[] = [{ type: 'text', text: 'x' }]
+    expect(markConclusion(parts, false)).toBe(parts)
+  })
+
+  it('never adds a second flag', () => {
+    const parts: MessagePart[] = [{ type: 'conclusion' }, { type: 'text', text: 'x' }]
+    expect(markConclusion(parts, true)).toBe(parts)
   })
 })
 

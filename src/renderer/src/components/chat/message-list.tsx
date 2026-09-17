@@ -73,9 +73,23 @@ export interface MessageListProps {
   messages: Message[]
   /** The chat's members, passed down so each row can highlight their names. */
   members?: readonly Agent[]
+  /**
+   * A message to scroll to, and the click that asked for it (S5.16).
+   *
+   * The header's "Conclusion" chip is the only caller. `nonce` is what makes a
+   * second click on the **same** message scroll again: without it the effect
+   * below sees identical props and does nothing, which reads as a broken chip
+   * once the user has scrolled away from the row it already found once.
+   */
+  scrollTo?: { messageId: string; nonce: number } | undefined
 }
 
-export function MessageList({ chatId, messages, members }: MessageListProps): React.JSX.Element {
+export function MessageList({
+  chatId,
+  messages,
+  members,
+  scrollTo
+}: MessageListProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const virtuoso = useRef<VirtuosoHandle>(null)
   const [atBottom, setAtBottom] = useState(true)
@@ -102,6 +116,25 @@ export function MessageList({ chatId, messages, members }: MessageListProps): Re
     setUnread(0)
     lastCount.current = 0
   }, [chatId])
+
+  // The header chip's scroll (S5.16). `align: 'center'` rather than `'start'`
+  // because a conclusion is a block of text, not a line: putting its first line
+  // at the top of the viewport hides the fact that there is more of it.
+  //
+  // The rows are read through a ref and are **not** a dependency: the effect
+  // runs when the user clicked, and a list that rebuilds on every streamed token
+  // would otherwise drag the viewport back to the conclusion while the next
+  // answer is still arriving.
+  const latestRows = useRef(rows)
+  latestRows.current = rows
+  useEffect(() => {
+    if (!scrollTo) return
+    const index = latestRows.current.findIndex(
+      (row) => row.kind === 'message' && row.message.id === scrollTo.messageId
+    )
+    if (index === -1) return
+    virtuoso.current?.scrollToIndex({ index, align: 'center', behavior: 'smooth' })
+  }, [scrollTo?.messageId, scrollTo?.nonce])
 
   const jump = (): void => {
     virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
@@ -159,6 +192,7 @@ export function MessageList({ chatId, messages, members }: MessageListProps): Re
               <MessageItem
                 message={row.message}
                 chatId={chatId}
+                conclusion={row.conclusion}
                 {...(members ? { members } : {})}
               />
             </div>

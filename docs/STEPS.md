@@ -2027,6 +2027,132 @@ it — the file's header records the three ways it failed first. Docs: all four
 documents of `orchestration`, `agent-turn`, `agents` and `chats`, plus
 `i18n/backend.md` for the two new notice keys.
 
+### S5.16 The conclusion as a first-class message `[x] (2026-09-17)`
+What: when a discussion closes, the user should see *the answer*, set apart from
+the talk that produced it, and be able to take it somewhere.
+- **A conclusion is marked.** The closing turn's message (S5.14) carries a new
+  `ConclusionPart` (`{ type: 'conclusion' }`, a flag part stored first in
+  `parts`; no migration). `transcript-rows.ts` and `message-item.tsx` render such
+  a message as a distinct card: a "Conclusion" label, the accent edge the design
+  tokens already provide, the closing speaker named underneath, and two actions —
+  **Copy** (the markdown source) and, when the chat's goal is `document` and the
+  hand-off rules of S5.12 allow it, **Write to the deliverable**, which starts the
+  `deliver` hand-off with the conclusion quoted in the instruction. The history
+  converter treats the part as invisible (the model never sees a flag).
+- **The latest conclusion is findable.** The chat header shows a small
+  "Conclusion" chip when the transcript holds one; clicking scrolls to it. The
+  chat list's preview line for such a chat is the conclusion's first line,
+  prefixed by the translated label.
+- **Who closes is a setting.** `ChatSettings.closingAgentId?: string` — Group
+  settings gain a "Closing speaker" select (members only; default "First in
+  speaking order"). The runner uses it when that member is present, available and
+  not an executor; otherwise it falls back to the first eligible member, as S5.14
+  does today.
+- **`mention-only` can close too.** In `mention-only` mode, when a round's
+  speakers all ended with `[AGREED]` and nobody was mentioned, the runner closes
+  exactly as in `roundrobin` (notice + closing turn). A round that mentions
+  someone continues as today.
+- Unit tests: the part added to the closing message and to nothing else; the
+  history converter ignoring it; the closing-speaker rule with its three
+  fallbacks; `mention-only` closing and not closing; the row model for a
+  conclusion; the chat-list preview; the deliverable action's enabled rule. e2e:
+  extend `e2e/closure.spec.ts` — seed a transcript containing a conclusion through
+  the backend client (deterministic, no model needed) and assert the card, the
+  Copy button writing the clipboard, the header chip scrolling to it, and the
+  chat-list preview; keep the existing model-gated case untouched. Run only
+  `e2e/closure.spec.ts` and `e2e/orchestration.spec.ts` (do not run the whole
+  suite; other agents share this machine's Ollama).
+Acceptance: the tests above; a closed discussion shows one visibly different
+conclusion card that can be copied and, for a document goal, written out. Docs:
+`docs/features/orchestration/`, `docs/features/chats/` and
+`docs/features/agent-turn/` (all four each).
+Done: the step is **one part, one setting and one deleted condition**, and the
+part is the piece the other two hang off.
+
+*The part.* `ConclusionPart` is `{ type: 'conclusion' }` — a flag with no content
+— and choosing that shape over a `MessageKind` or a column is what made the rest
+of the step small. `parts` is already the open, migration-free place where a
+message says what it is made of, every reader ignores a part it does not know
+(the history transform included, which is exactly what keeps the mark out of
+every prompt: a model shown it would learn to write one), and a row written
+before today simply has none. It is written by `markConclusion` at the
+**terminal update** rather than seeded before the stream, which costs one beat of
+latency and buys two things: the tool-free retry is gated on `parts.length === 0`
+and a seeded part would silence it, and a closing turn that failed would
+otherwise be labelled as an answer it never produced. Only a `done` turn is
+marked, for the same reason.
+
+*The setting.* `ChatSettings.closingAgentId` is one optional field of the
+existing JSON column, and the interesting half is that it is the first setting a
+control can **unset**. `undefined` cannot carry that across a transport — JSON
+drops the key, and a dropped key is what "leave this alone" already means in a
+field-by-field merge — so `null` is the wire word for "clear it", the shared type
+gained `ChatSettingsPatch` to say so, and `mergeChatSettings` in the chat
+repository is the single place it becomes an absent field again. The stored
+`ChatSettings` therefore still reads `closingAgentId?: string`, and the invariant
+holds for every caller including a future server. `closingSpeaker` is exported
+and pure, with three fallbacks that are three ways a preference goes stale — the
+member left, the member is offline, the member turns out to be the executor — and
+the fallback is **S5.14's rule unchanged**. The asymmetry there is deliberate and
+recorded: the *setting* refuses an executor, because an executor does not vote on
+the consensus and is the wrong voice to state one, while the *fallback* may reach
+one, because a chat that has nobody else available must still hand back an answer
+rather than silently skip the conclusion.
+
+*The deleted condition.* `#agreed` lost `chat.settings.mode !== 'roundrobin'` and
+gained nothing. S5.14 had excluded `mention-only` on the grounds that "everybody
+agreed" is not a statement one named member can make; that reads the rule wrong.
+What closes a chain is that everybody who spoke is finished **and nothing is left
+scheduled**, and in `mention-only` the second half is the stronger statement —
+the speakers were the ones the previous turn asked for, and they asked for
+nobody. A round that does mention somebody is stopped by the `carried.speakers`
+condition that was already there, which is that mode's own way of ending a chain.
+One deleted line, two tests.
+
+Three smaller decisions. **Copy goes through `navigator.clipboard`**, not through
+a new backend method: rule #6 is that the renderer reaches the *backend* only
+through `BackendClient`, and the clipboard is not the backend — a
+`system.copyToClipboard` would have put a desktop capability into a contract the
+server build has to implement. **"Write to the deliverable" is hidden when the
+goal is not a document and disabled with its reason otherwise**, because a
+permanently dead control on a card in a discussion chat explains a feature that
+chat is not using, while the other three refusals are states the user can act on;
+it calls the same `handoffBlocker` the Actions card does, through a one-line
+`deliverableBlocker`, so the two can never disagree. And a `deliver` hand-off now
+**quotes** the chat's latest conclusion as a block quote in the message it
+stores (`conclusionQuote`, capped at 2 000 characters): the transcript is
+budgeted and its oldest messages fall out of a long prompt while the instruction
+never does. Nothing the app wrote is in that quote — the sentence the user reads
+is the `handoffDeliver` notice, which is a key.
+
+The card is a **card around the message**, not a copy pinned to the top of the
+chat: the transcript is the record, in the order things happened, and a floating
+duplicate is a second thing to keep in step with it. The header chip is how it is
+found from the top of a long chat, and it *scrolls to* the card — with a nonce,
+because clicking the chip twice has to scroll twice, and through a ref rather
+than a dependency, because a list that rebuilds on every streamed token would
+otherwise drag the viewport back while the next answer arrives.
+
+Tests: `chat-runner.test.ts` gained a six-case `the conclusion as a message
+(S5.16)` block plus two rewritten `mention-only` cases and two `deliver`-quote
+cases; `agent-turn.test.ts` four (the flag on a closing turn, not on an ordinary
+one, not on a failed one, and `markConclusion`); `history.test.ts` two;
+`conclusion.test.ts` ten (new file); `transcript-rows.test.ts` two;
+`handlers/chats.test.ts` three; `db/chats.test.ts` one. `npm test`: 94 files,
+1617 tests, all passing; `npm run typecheck` clean. `e2e/closure.spec.ts` ran
+after `npm run build`: **1 passed, 2 skipped** — the new S5.16 case passed, and
+the two S5.14 cases skipped because **no Ollama was running on this machine**
+(`http://localhost:11434/v1/models` did not answer at all), so their behaviour is
+unchanged but unverified in this run; the same is true of
+`e2e/orchestration.spec.ts`, whose four cases all skipped for the same reason.
+`e2e/members.spec.ts`, `i18n.spec.ts` and `ui-shell.spec.ts` were re-run for the
+chat-page and chat-list changes: 13 passed. The S5.16 e2e case needs no model —
+it pushes a `message.created` carrying the flag down the app's own event channel,
+because **no backend method creates an agent message** (the only writer is
+`runAgentTurn`) — and asserts the card, the real clipboard, the chip scrolling
+past thirty later messages, and the chat-list preview. Docs: all four documents
+of `orchestration`, `chats`, `agent-turn`, `database` and `i18n`.
+
 ### S5.17 Light-theme review and a theme-aware avatar palette `[x] (2026-09-17)`
 What: S5.8 proved the light theme on a handful of mostly empty screens. This step
 looks at every surface with content on it, in both themes, fixes what it finds,
@@ -2353,19 +2479,46 @@ adds a line here in the same commit.
   transcript either. Whether the closure markers should survive the history
   transform while `[PASS]` does not is an open question in
   `docs/features/orchestration/context.md`.
-- **`mention-only` has no closure rule.** The markers are stripped there and
-  ignored, because "everybody agreed" is not something one named member can say.
-  A chat in that mode still ends only on `maxAutoRounds` or on nothing being
-  mentioned.
-- **The closing turn is always the first member in speaking order.** Not the
-  member the group deferred to, not the one with the largest context window.
-  Choosing better would need either a second model call or a signal the
-  transcript does not carry.
-- **The conclusion is not marked as one.** It is an ordinary agent message with
-  an ordinary round number; nothing in the schema says "this is the answer", so
-  it cannot be linked to, exported, or shown at the top of the chat. A
-  `MessageKind` or a column would be the smallest change, and is worth deciding
-  before anything else wants to find it.
+- ~~**`mention-only` has no closure rule.**~~ **Closed by S5.16**: `#agreed` no
+  longer asks which mode the chat is in. A `mention-only` round whose speakers all
+  wrote `[AGREED]` and mentioned nobody closes exactly as a `roundrobin` one does;
+  a round that mentions somebody carries on, through the rule that mode already
+  had.
+- ~~**The closing turn is always the first member in speaking order.**~~
+  **Closed by S5.16**, as far as a *choice* goes: `ChatSettings.closingAgentId`
+  names the member that closes, and the first eligible one is the fallback.
+  Nothing yet **derives** the speaker from the discussion — the member the group
+  deferred to, or the one with the largest context window — which would still
+  need a second model call or a signal the transcript does not carry.
+- ~~**The conclusion is not marked as one.**~~ **Closed by S5.16**: the closing
+  turn's message carries a `ConclusionPart` — a flag part, not a `MessageKind` and
+  not a column — which the transcript draws as a card, the header chip scrolls to,
+  the chat list previews and a `deliver` hand-off quotes.
+- **What S5.16 left unverified or out of scope.**
+  - The two model-gated cases of `e2e/closure.spec.ts` and all four of
+    `e2e/orchestration.spec.ts` **skipped** in S5.16's run: no Ollama was
+    running on the machine at the time. The S5.16 case itself needs no model and
+    passed.
+  - The e2e seeds its conclusion by pushing a `message.created` down the app's
+    own event channel, because **no backend method creates an agent message**. It
+    is therefore not persisted, and no test reloads the window onto a stored
+    conclusion.
+  - **The chat-list preview only covers loaded transcripts.** It is computed in
+    the renderer from the messages store, so a chat that has not been opened in
+    this session shows the member count it always did. Covering every chat needs a
+    query of its own — the same shape a "conclusions across chats" view would
+    want.
+  - **A chat that agreed twice has one current conclusion.** The header chip, the
+    preview and the quoted `deliver` instruction all mean the latest; the earlier
+    cards stay in the transcript with no way to pin one.
+  - **Copy fails silently** when the window may not write to the clipboard: the
+    button simply does not say "Copied".
+  - **`closingAgentId` is not checked against membership** when it is written.
+    Removing that member leaves the id stored, the select shows the default and
+    the runner falls back to it, so re-adding the member restores the preference.
+  - Exporting a conclusion anywhere other than the clipboard and the chat's own
+    deliverable — a file, a share sheet, a cross-chat list of decisions — was
+    deliberately left out.
 - **A `rounds` cap has no UI of its own.** It is reachable only through "Start a
   vote", which hard-codes `1`. There is no way to say "answer twice and stop" from
   the composer, and no indication in the transcript that a chain was capped until
@@ -2499,12 +2652,50 @@ adds a line here in the same commit.
 
 ### Server and editor
 
-- **Server and multi-user** (PLAN "Reserved server capability"): lift the
-  main-process business logic into a Node server, swap the `BackendClient`
-  implementation for HTTP + WebSocket, real `userId`s, a server-side
-  `SecretStore`, and — only if several server instances or worker processes
-  exist — an `EventBus` / `MessageRepository` implementation over Redis
-  Streams, Postgres LISTEN/NOTIFY or NATS.
+- **Server and multi-user** (PLAN "Reserved server capability"): ~~lift the
+  main-process business logic into a Node server~~ (done, S8.1), swap the
+  `BackendClient` implementation for HTTP + WebSocket (S8.3), real `userId`s
+  (S8.2), a server-side `SecretStore` (S8.4), and — only if several server
+  instances or worker processes exist — an `EventBus` / `MessageRepository`
+  implementation over Redis Streams, Postgres LISTEN/NOTIFY or NATS. Phase 8
+  now owns the scheduled half; what stays here is the last item, which nothing
+  needs until there is more than one process.
+- **Make `Repositories` asynchronous (S8.1).** The blocker between the Postgres
+  dialect and the Postgres *database*: better-sqlite3 is synchronous and drizzle's
+  Postgres driver is not, so the repositories, the handlers that call them,
+  `resolveTimeouts`, the `AgentSupervisor`'s accessors and `probeAgentProvider`
+  all have to return and await promises before Postgres can be more than a
+  tested schema. Every one of those callers is already inside an `async`
+  function, so it looks mechanical; it has not been attempted, and it is a
+  cross-cutting diff that wants a branch to itself. The alternatives that were
+  rejected — a worker-thread synchronous driver, and a duplicated per-dialect
+  repository layer — are in `docs/features/server/context.md`.
+- **The Postgres schema has never run (S8.1).** `docker-compose.yml` and
+  `src/main/db/postgres/migrations/0000_init.sql` are written and reviewed but
+  were authored on a machine with neither Docker nor Postgres, so the Postgres
+  half of `src/main/db/dialects.test.ts` has only ever been skipped. The first
+  `docker compose up -d postgres` followed by
+  `DATABASE_URL=postgres://witena:witena@localhost:5432/witena npm test` is its
+  first real execution and may need a second commit.
+- **CI runs SQLite only (S8.1).** Adding a Postgres `services:` block to
+  `ci.yml` is one change; it is deliberately left until S8.5, when there is a
+  deployment whose migrations are worth gating on. Until then "CI proves
+  Postgres works" is not a claim this repository makes.
+- **The server has no CORS, no TLS, no WebSocket keepalive and no idle timeout
+  (S8.1).** It binds `127.0.0.1` and S8.5 puts an ALB in front of it, but a
+  browser on another origin cannot call it until S8.3 decides what
+  `Access-Control-Allow-Origin` should say, and a dead client that never sent a
+  FIN holds an entry in the fan-out set until the OS notices (S8.4).
+- **stdio MCP servers still spawn child processes on the Node host (S8.1).**
+  PLAN's "Online version" says they must not on a shared one; nothing stops them
+  yet, and the switch belongs with S8.3's capabilities.
+- **`pg` and `ws` ship in the dmg (S8.1).** Nothing in the Electron bundle
+  imports either, but they must be `dependencies` — the server needs them at
+  runtime and `vite.server.config.ts` derives its externals from that list — so
+  electron-builder copies them into every bundle. A few hundred kilobytes, and
+  the fix is the same `files` exclusion the `better-sqlite3` prebuilds want,
+  with `npm run e2e:packaged` run afterwards to prove nothing resolved through
+  them.
 - **VS Code extension** embedding the chat panel over that server backend
   (PLAN "Future extension", point 3, step two). Depends on the item above.
 
@@ -3187,7 +3378,7 @@ not do, in "API keys and the key file (S7.6)" in the Phase 6 backlog.
 
 Ordered so that each step runs end to end on a laptop before AWS is involved.
 
-### S8.1 Server host and Postgres `[ ]`
+### S8.1 Server host and Postgres `[x] (2026-09-17)`
 What: the business logic runs in a plain Node process.
 - `src/server/index.ts`: builds `AppContext` with injected storage, secrets
   and event bus, mounts every `BACKEND_METHODS` entry as `POST /api/<method>`
@@ -3203,6 +3394,101 @@ What: the business logic runs in a plain Node process.
 Acceptance: `npm run server` + the existing renderer over a
 `HttpBackendClient` (S8.3) streams a reply. Docs: new feature `server`
 (`docs/features/server/`), `docs/features/database/`, `backend-client`.
+Done: `src/server/` is the second host and it is genuinely only a host — six
+files (`config.ts`, `context.ts`, `http.ts`, `user.ts`, `index.ts`, and the build
+config beside them) that read the environment instead of asking electron, build
+the **same** `AppContext` through `createAppContext`, and mount the **same**
+`buildHandlers()` map. The route is computed from the path rather than declared
+in a table, exactly as `registerIpc` validates the method name it is handed, so
+there is no second list of methods to fall out of step with `BACKEND_METHODS`.
+The body is the IPC envelope unchanged — `{ ok, value }` / `{ ok, error }` from
+`ipc-protocol.ts`, which imports no electron and was always shared — with a
+status derived from `BackendError.code` by a table that is total over the union,
+because a proxy should see something truthful while the body stays the authority.
+`GET /ws` is one `ws` connection per client and **one** bus subscription for the
+whole process: the event is serialised once and written to each socket, so a
+streaming run does not pay N `JSON.stringify` calls per token. The five
+electron-only methods are mounted like every other one and answer with the
+rejection `handlers/system.ts` already wrote for exactly this case;
+`openInEditor` with a `custom` command actually works here, because that branch
+is `node:child_process`.
+The **HTTP stack is `node:http` + `ws`**, decided rather than defaulted: the
+routing surface is one literal prefix, one table lookup and two fixed paths, with
+no path parameter and no middleware chain, so Fastify or Hono would add a
+dependency (plus a WebSocket plugin that reaches for `ws` anyway) to save about
+thirty lines of `if`. Fastify's schema validation was the one real temptation and
+was refused for a better reason than size: the handlers already validate their
+own input because IPC needs them to, and a second validation layer on one
+transport is how two transports start disagreeing. One new runtime dependency,
+`ws`.
+`npm run server` is a Vite build into `out/server/` and then `node`, not
+`node src/server/index.ts`, because both migrators inline their SQL with
+`import.meta.glob(… '?raw')`; three toolchains now resolve that primitive, so all
+three hosts run the same migration code rather than two of them running it and
+the third approximating it. Verified by running it: `/healthz` answers,
+`system.ping` answers, `chats.get` on a missing id answers 404 with the envelope,
+and `SIGTERM` closes the sockets, the runners, the MCP children and the database.
+**Postgres is beside SQLite, not under the repositories, and that is the
+step's one deliberate deviation.** `Repositories` is a *synchronous* interface —
+better-sqlite3 is, and the handlers, `ChatRunner`, `AgentTurn` and the supervisor
+are all written against that — while drizzle's Postgres driver is asynchronous
+with no synchronous escape. "The same repository interfaces over Postgres" and
+"the repositories' public types must not change" cannot both hold, and the three
+ways out were weighed and written down (`docs/features/server/context.md`,
+"Postgres is not the server's database yet"): making the interface async is the
+right eventual answer and is a cross-cutting refactor this step was told not to
+do; a worker-thread sync driver would block the event loop of a server whose job
+is concurrent streaming; a second repository implementation is ~800 lines of
+duplicated patch semantics on a path nothing runs, which is not coverage but a
+second place to be wrong. So what shipped is the dialect *underneath* the
+repositories, complete: `src/main/db/postgres/` with the schema, the migrations,
+`openPostgresDatabase` and the migrator, `docker-compose.yml` for Postgres 16 on
+loopback, and `DATABASE_URL` selecting it. The server says so at startup when the
+variable is set instead of silently opening SQLite.
+Two sub-decisions inside that. **Two schema files kept in step by a test**, not
+one description emitting both: a generated description cannot carry drizzle's
+`$type<…>()` typing, which is what turns a change in `shared/types.ts` into a
+compile error in the schema, and it would rewrite the file every other open
+branch is editing — while `postgres/schema-drift.test.ts` compares the two
+through drizzle's own metadata (tables, columns, nullability, defaults, primary
+keys, enum values), needs no database, and runs in 400 ms. And **migrations
+generated per dialect**, not neutral SQL, because there is no neutral spelling:
+`created_at` holds `Date.now()`, which fits SQLite's dynamically sized `integer`
+and does not fit Postgres's four-byte one, so it has to be `bigint` — with
+`boolean` against `integer` and `jsonb` against `text` on top. The two dialects
+also have different histories: `0001`–`0003` exist to add a column to a database
+already on somebody's laptop, and nothing predates `postgres/0000_init.sql`.
+Tests: `src/main/db/dialects.ts` is the shared fixture and `dialects.test.ts` the
+suite — one body, SQLite always, Postgres when `DATABASE_URL` is set and
+otherwise a skip whose *name* carries the compose command. It asserts the
+storage contract the repositories stand on: parsed JSON, real booleans, an
+epoch-millisecond timestamp surviving intact (the assertion that would otherwise
+have found `integer` in production), the goal document replaced and cleared,
+ordering by `seq` rather than insertion, both cascades. The fixture is a small
+row gateway rather than `Repositories` for the reason above, and handler tests
+against Postgres are therefore **not** part of this step — they cannot be until
+the interface goes async. `src/server/http.test.ts` is the contract test: a real
+server on an ephemeral port, `providers.create` → `agents.create` →
+`chats.create` → `chat.send` against a `MockLanguageModelV4` injected through
+`runner.createModel` the way `agent-turn.test.ts` does, asserting that
+`message.created`, `message.delta` and `run.finished` arrive over the WebSocket
+and that the deltas reassemble into the model's own text. `no-electron.test.ts`
+walks the whole transitive import closure of `src/server/` — which reaches
+`app-context.ts`, `chat-runner.ts` and the handler registry — and fails on any
+`electron` specifier, with a guard on itself proving the scanner recognises all
+five spellings.
+What is **not** verified: the Postgres path has never executed. This machine has
+neither Docker nor Postgres, so `dialects.test.ts`'s Postgres half is skipped and
+`0000_init.sql` has never been applied — it is checked against the schema it must
+produce by the drift test, and by review. CI keeps running SQLite only, which is
+stated in `docs/features/server/implement.md` under "What CI does not run"; a
+Postgres service there is a one-line `services:` block and is left until S8.5,
+when there is a deployment whose migrations are worth gating on. The acceptance
+criterion's second half — the renderer over an `HttpBackendClient` — is S8.3's by
+construction: S8.1 builds only the server side and drives it with `fetch` and a
+`ws` client. `npm test` 1616 passed / 11 skipped, `npm run typecheck` clean, and
+`e2e/smoke.spec.ts` green so the desktop app still launches over the shared
+`migrate.ts`. Recorded in the Phase 6 backlog under "Server and editor".
 
 ### S8.2 Accounts `[ ]`
 What: sign in, and everything is yours only.

@@ -16,6 +16,18 @@ This is CLAUDE.md rules #5 and #6 working together: because the renderer depends
 on one interface rather than on storage, the same pages run unchanged against a
 server that keeps its rows in Postgres.
 
+The one thing the renderer has to know about a JSON column is how to **clear** a
+field in it: `chats.update` takes `settings.closingAgentId: null` to go back to
+"first in speaking order" (S5.16). That is a contract of the shared types
+(`ChatSettingsPatch`), not of the storage — the renderer sends `null`, the
+repository stores an absent field — and it is the only field in the product with
+that shape.
+
+**S8.1 is the first half of testing that claim.** The Postgres dialect now exists
+(`src/main/db/postgres/`) and a Node host serves the same `BackendApi` over HTTP
+(`../server/`), and neither added, removed or changed one renderer file. The
+second half — pointing the renderer at that host — is S8.3.
+
 | File | Responsibility |
 |---|---|
 | — | This feature owns no renderer file |
@@ -55,6 +67,7 @@ those screens:
 | A provider row can store **no credential at all** (`auth = 'oauth'`, S5.3) | The card says "signed in" instead of "no key", and the editor shows the sign-in panel where the key field was. There is nothing to encrypt: the Anthropic CLI owns the token and this layer never sees one |
 | `chats.goal` is replaced whole, never merged (S5.10) | Removing the last material in the Goal block really removes it. A merged column could not: there is no JSON patch that says "this list is now empty" and also leaves every other field alone |
 | Whether a goal's deliverable **exists** is not stored at all (S5.10) | The header chip reads "delivered" from a query (`chats.goalStatus`) run when the chat is opened and whenever it changes — so a file created outside the app is noticed, and a column nobody refreshed can never be wrong |
+| Which dialect the rows are in (S8.1) | Nothing. The desktop app is SQLite and will stay so; Postgres is the hosted version's storage, and the shared types the renderer receives are identical either way. If that ever stops being true it is a bug in the schema drift test, not a feature |
 
 ## Copy and i18n
 
