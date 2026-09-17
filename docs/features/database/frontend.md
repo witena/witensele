@@ -16,6 +16,13 @@ This is CLAUDE.md rules #5 and #6 working together: because the renderer depends
 on one interface rather than on storage, the same pages run unchanged against a
 server that keeps its rows in Postgres.
 
+The one thing the renderer has to know about a JSON column is how to **clear** a
+field in it: `chats.update` takes `settings.closingAgentId: null` to go back to
+"first in speaking order" (S5.16). That is a contract of the shared types
+(`ChatSettingsPatch`), not of the storage — the renderer sends `null`, the
+repository stores an absent field — and it is the only field in the product with
+that shape.
+
 | File | Responsibility |
 |---|---|
 | — | This feature owns no renderer file |

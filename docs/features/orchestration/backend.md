@@ -11,7 +11,7 @@
 | `src/shared/mentions.ts` | `parseMentions` / `findMentions` / `splitMentions`: the `@Name` rule, shared with the renderer so the composer and the scheduler can never disagree |
 | `src/shared/markers.ts` | `PASS_TOKEN` / `AGREED_TOKEN` / `CONTINUE_TOKEN`, `isPassOnly`, `closureMarker` and `stripTrailingMarkers`: the protocol markers, shared for the same reason. Was `src/shared/pass.ts` until S5.14 |
 | `src/main/orchestration/scheduling.ts` | `planFromUserMessages`, `planFromReplies`, `planFromHandoff`, `planFromReview`, `mergePlans`, `reachedRoundLimit` — the pure "who speaks next" |
-| `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`, and from S4.2 / S4.3 / S5.11 the `contextTruncated` and `materialsTruncated` notices and the automatic title) and `ChatRunnerRegistry` (the map on `AppContext`) |
+| `src/main/orchestration/chat-runner.ts` | `ChatRunner` (one per chat: the round loop, the `AbortController`, the pending list, `RunState`, and from S4.2 / S4.3 / S5.11 the `contextTruncated` and `materialsTruncated` notices and the automatic title) and `ChatRunnerRegistry` (the map on `AppContext`). Two pure exports beside them since S5.16: `closingSpeaker` and `conclusionQuote` |
 | `src/main/agents/title.ts` | `generateChatTitle` and its two pure halves, injected into the runner as `ChatRunnerOptions.generateTitle` so a test can replace it |
 | `src/main/app-context.ts` | Creates the registry and stops every runner in `close()` |
 | `src/main/handlers/chats.ts` | `chat.send` / `chat.stop` / `chat.handoff` delegate to the registry; `chats.delete` calls `remove` first |
@@ -41,7 +41,7 @@ One row per user message:
 | Column | Value |
 |---|---|
 | `sender_type` / `sender_id` | `user` / `ctx.userId` — the click is the user speaking |
-| `parts` | one `system-notice` part: `handoff { agent }`, the executor's name |
+| `parts` | one `system-notice` part: `handoff { agent }`, the executor's name — plus, for `intent: 'deliver'` since S5.16, a second `text` part holding the chat's latest conclusion as a block quote (`conclusionQuote`) |
 | `status` / `round` | `done` / `0` |
 | `mentions` | the executor's id, alone |
 
@@ -176,7 +176,7 @@ that will still be true in a minute. `components/chat/handoff.ts` computes the
 same four from the same facts in the same order, so the disabled button and the
 rejection cannot name different rules.
 
-## Closing a discussion (S5.14)
+## Closing a discussion (S5.14, S5.16)
 
 Two independent reasons a chain now ends, both evaluated at the **end** of a
 round, after `carried` has been computed and after the abort and error checks.
@@ -201,12 +201,15 @@ takes `#takePendingRounds()`'s `null` and the chat's own setting applies again.
 
 ### The agreed chain
 
-`#agreed(chat, members, outcomes, carried, stage)` answers true only when **all**
-of these hold:
+`#agreed(members, outcomes, carried, stage)` answers true only when **all** of
+these hold. It does not ask which **mode** the chat is in: S5.16 removed that
+condition, because a `mention-only` round whose speakers all agreed and mentioned
+nobody is the same statement — the members that were asked are finished and
+asked for nobody — and a round that *does* mention somebody is stopped by the
+`carried.speakers` rule two lines down, which is that mode's own rule anyway.
 
 | Condition | Why |
 |---|---|
-| `chat.settings.mode === 'roundrobin'` | In `mention-only` the round is whoever was named, and "everybody agreed" is not something one named member can say. The markers are still stripped there; they are simply not read |
 | `stage.implementing === null && !stage.reviewing` | A hand-off's two rounds keep their S5.6 behaviour exactly |
 | `carried.speakers.length === 0` | A mention is a question nobody has answered yet |
 | `this.#pending.length === 0` | So is a user message that landed mid-round |
@@ -215,8 +218,8 @@ of these hold:
 
 Then, in order: the `consensus` notice, `#runClosing`, `break`.
 
-`#runClosing` is an ordinary `#runRound` with one speaker — the first member in
-`position` order the supervisor has not taken offline — and `stage.closing`,
+`#runClosing` is an ordinary `#runRound` with one speaker — `closingSpeaker`'s
+answer — and `stage.closing`,
 which is the only thing that sets `AgentTurnOptions.closing`. It increments
 `#round` and emits `run.round` like any round, so the closing message carries a
 round number the UI prints and the presence machinery, the usage accounting and
@@ -226,6 +229,45 @@ leaves the notice standing alone rather than failing.
 
 The cap is checked **before** the agreement, so a vote that also agreed still
 ends as a vote: the user named the number.
+
+### Who writes it (S5.16)
+
+`closingSpeaker(chat, members, isOffline)` is exported and pure, so its four
+branches are a unit test rather than four runs:
+
+| Case | Answer |
+|---|---|
+| `settings.closingAgentId` names a member of this chat that is neither offline nor an executor | That member |
+| It names nobody (removed since), an offline member, or the executor | The first member in `position` order that is not offline — S5.14's rule, unchanged |
+| No `closingAgentId` at all | The same fallback; this is every chat until the setting is used |
+| Every member offline | `undefined`, and `#runClosing` returns without a round: `allOffline` territory, with the `consensus` notice standing alone |
+
+The setting refuses an executor while the fallback may reach one, and that
+asymmetry is deliberate: an executor does not vote on the consensus (`#agreed`
+excludes it), so it is the wrong voice to *state* one — but a chat that has
+nobody else available still has to hand back an answer.
+
+### The conclusion itself (S5.16)
+
+The closing turn's message carries a `ConclusionPart`, written by
+[`agent-turn`](../agent-turn/backend.md)'s `markConclusion`: a flag with no
+content, stored **first** in `parts`, and only when the turn finished `done`. The
+runner neither writes nor reads it during a run; it reads it once, in `handoff`.
+
+`conclusionQuote(transcript)` is the reader: the **latest** agent message
+carrying the flag, its text capped at `MAX_CONCLUSION_QUOTE_CHARS` (2 000) and
+prefixed line by line with `> `. A `deliver` hand-off stores it as a second part
+of its user message, after the `handoffDeliver` notice:
+
+```
+parts: [ { type: 'system-notice', key: 'handoffDeliver', params: … },
+         { type: 'text', text: '> Ship the small one.\n>\n> And say why.' } ]
+```
+
+Nothing the app wrote is in that text — the sentence the user reads is the
+notice, which is a key (rule #4), and the quote is the group's own words. An
+`implement` hand-off stores no quote, and a chat with no conclusion stores none
+either.
 
 ## Three things the runner announces, and why it is the runner (S4.2, S4.3, S5.11)
 

@@ -80,11 +80,13 @@ import type {
 import { translateNotice } from '../../i18n/notices'
 import { messageText, wasStopped } from '../../lib/message-view'
 import { useAgent, useAgentsStore } from '../../stores/agents'
-import { useChatWorkdir } from '../../stores/chats'
+import { useChatGoal, useChatWorkdir } from '../../stores/chats'
 import { useAgentPresence } from '../../stores/presence'
 import { useProvidersStore } from '../../stores/providers'
+import { useIsRunning, useRunStore } from '../../stores/run'
 import { Avatar, Badge } from '../ui'
 import { isExecutor } from '../agents/agent-display'
+import { ConclusionCard } from './conclusion-card'
 import { DiffBlock } from './diff-block'
 import { FileRefChip } from './file-ref-chip'
 import { Markdown } from './markdown'
@@ -199,9 +201,22 @@ export interface MessageItemProps {
   chatId: string
   /** The chat's members; their names are what gets highlighted in the body. */
   members?: readonly Agent[]
+  /**
+   * True when this message is the group's conclusion (S5.16).
+   *
+   * Decided by the row model (`transcript-rows.ts`) and passed in, rather than
+   * re-read from the parts here: the same value drives the list's own decisions,
+   * and one reading of the flag is one place to change.
+   */
+  conclusion?: boolean
 }
 
-export function MessageItem({ message, chatId, members = [] }: MessageItemProps): React.JSX.Element {
+export function MessageItem({
+  message,
+  chatId,
+  members = [],
+  conclusion = false
+}: MessageItemProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   // `null` means "the stream decides"; a boolean means the user has decided.
   const [reasoningOverride, setReasoningOverride] = useState<boolean | null>(null)
@@ -216,6 +231,11 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
   const providers = useProvidersStore((state) => state.providers)
   const presence = useAgentPresence(chatId, message.senderId)
   const workdir = useChatWorkdir(chatId)
+  // Read by the conclusion card's hand-off rule only, and by the same route the
+  // folder already takes: a selector by chat id rather than a prop threaded
+  // through the virtualized list (S5.16).
+  const goal = useChatGoal(chatId)
+  const running = useIsRunning(chatId)
 
   const mentionMembers: MentionMember[] = members.map((member) => ({
     agentId: member.id,
@@ -423,18 +443,40 @@ export function MessageItem({ message, chatId, members = [] }: MessageItemProps)
         ))}
 
         {text.length > 0 && !dimmed ? (
-          <div data-testid="message-text">
-            <Markdown mentions={mentionMembers} workdir={workdir} chatId={chatId}>
-              {text}
-            </Markdown>
-            {message.status === 'streaming' ? (
-              <span
-                data-testid="message-cursor"
-                aria-hidden="true"
-                className="ml-0.5 inline-block h-3.5 w-[7px] -mb-0.5 animate-pulse bg-accent align-text-bottom"
-              />
-            ) : null}
-          </div>
+          conclusion ? (
+            // S5.16: the same body, inside the card that says it is the answer.
+            // The `message-text` node stays exactly where it was, so everything
+            // written against it keeps working.
+            <ConclusionCard
+              chatId={chatId}
+              speaker={name}
+              text={text}
+              members={members}
+              workdir={workdir}
+              goal={goal}
+              running={running}
+              onWriteDeliverable={(id) => void useRunStore.getState().handoff(id, 'deliver')}
+            >
+              <div data-testid="message-text">
+                <Markdown mentions={mentionMembers} workdir={workdir} chatId={chatId}>
+                  {text}
+                </Markdown>
+              </div>
+            </ConclusionCard>
+          ) : (
+            <div data-testid="message-text">
+              <Markdown mentions={mentionMembers} workdir={workdir} chatId={chatId}>
+                {text}
+              </Markdown>
+              {message.status === 'streaming' ? (
+                <span
+                  data-testid="message-cursor"
+                  aria-hidden="true"
+                  className="ml-0.5 inline-block h-3.5 w-[7px] -mb-0.5 animate-pulse bg-accent align-text-bottom"
+                />
+              ) : null}
+            </div>
+          )
         ) : null}
 
         {/* A streaming message with nothing in it yet still needs the cursor, or

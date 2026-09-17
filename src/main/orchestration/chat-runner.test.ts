@@ -843,19 +843,41 @@ describe('ChatRunner (discussion closure)', () => {
       expect(rounds(events)).toHaveLength(1)
     })
 
-    it('mention-only: the markers are stripped but ignored', async () => {
+    it('mention-only: closes when the round agreed and mentioned nobody (S5.16)', async () => {
       await configure({ mode: 'mention-only' })
       events.length = 0
       models.set('Bob', sequence(`On it. ${AGREED_TOKEN}`))
+      models.set('Ada', sequence('We settled it.'))
 
       await handlers['chat.send'](ctx, { chatId: chat.id, text: '@Bob take this one' })
       await settle()
 
-      expect(rounds(events)).toHaveLength(1)
-      expect(noticeKeys(ctx, chat)).toEqual([])
-      // The marker is still in the stored parts — nothing is rewritten — and
-      // still out of the prompt the next turn reads.
+      // The speakers were the ones that were asked for, they answered without
+      // asking anyone else, and every one of them is finished — which is the
+      // same statement `roundrobin` closes on.
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+      expect(rounds(events).map((event) => event.speakers)).toEqual([[bob.id], [ada.id]])
+      // The marker is still in the stored parts — nothing is rewritten.
       expect(firstText(agentMessages()[0] as Message)).toContain(AGREED_TOKEN)
+    })
+
+    it('mention-only: a round that mentions somebody carries on (S5.16)', async () => {
+      await configure({ mode: 'mention-only' })
+      events.length = 0
+      models.set('Bob', sequence(`@Ada what do you think? ${AGREED_TOKEN}`))
+      models.set('Ada', sequence(`Nothing to add. ${AGREED_TOKEN}`, 'We settled it.'))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@Bob take this one' })
+      await settle()
+
+      // Round 1 mentioned Ada, so it could not close; round 2 is Ada alone and
+      // that one does, followed by the closing turn.
+      expect(rounds(events).map((event) => event.speakers)).toEqual([
+        [bob.id],
+        [ada.id],
+        [ada.id]
+      ])
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
     })
 
     it('keeps the marker out of what the next speaker reads', async () => {
@@ -873,6 +895,125 @@ describe('ChatRunner (discussion closure)', () => {
       const history = promptOf('Bob').slice(systemOf('Bob').length)
       expect(history).toContain('Start small.')
       expect(history).not.toContain(AGREED_TOKEN)
+    })
+  })
+
+  describe('the conclusion as a message (S5.16)', () => {
+    const conclusionParts = (message: Message): string[] =>
+      message.parts.map((part) => part.type)
+
+    it('marks the closing message, and only that message', async () => {
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'We settled on starting small.'))
+      models.set('Bob', sequence(`Agreed with Ada. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      const messages = agentMessages()
+      expect(messages).toHaveLength(3)
+      // First in `parts`, and on nothing else in the transcript — the two
+      // discussion replies are ordinary messages.
+      expect(conclusionParts(messages[2] as Message)[0]).toBe('conclusion')
+      expect(conclusionParts(messages[0] as Message)).not.toContain('conclusion')
+      expect(conclusionParts(messages[1] as Message)).not.toContain('conclusion')
+      expect(
+        ctx.repos.messages
+          .listForContext(chat.id, ctx.userId)
+          .filter((message) => message.parts.some((part) => part.type === 'conclusion'))
+      ).toHaveLength(1)
+    })
+
+    it('is invisible to the models: the flag never reaches a prompt', async () => {
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'We settled on starting small.'))
+      models.set('Bob', sequence(`Agreed. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      const conclusion = agentMessages()[2] as Message
+      const transformed = toModelMessages({
+        self: bob,
+        agentsById: { [ada.id]: ada, [bob.id]: bob },
+        messages: ctx.repos.messages.listForContext(chat.id, ctx.userId)
+      })
+      expect(JSON.stringify(transformed)).not.toContain('conclusion')
+      // …while the text of that same message is there, as ordinary prose.
+      expect(JSON.stringify(transformed)).toContain(firstText(conclusion))
+    })
+
+    it('gives the conclusion to the chat’s closing speaker when it can', async () => {
+      await configure({ closingAgentId: bob.id })
+      events.length = 0
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`, 'Bob’s conclusion.'))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      expect(rounds(events).map((event) => event.speakers)).toEqual([
+        [ada.id, bob.id],
+        [bob.id]
+      ])
+      expect(firstText(agentMessages()[2] as Message)).toBe('Bob’s conclusion.')
+    })
+
+    it('falls back to the first member when the closing speaker has left', async () => {
+      await configure({ closingAgentId: 'an-agent-that-is-not-here' })
+      events.length = 0
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'Ada’s conclusion.'))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      expect(rounds(events).map((event) => event.speakers)).toEqual([
+        [ada.id, bob.id],
+        [ada.id]
+      ])
+    })
+
+    it('falls back when the closing speaker is an executor', async () => {
+      const hands = ctx.repos.agents.create(
+        agentInput({
+          name: 'Hands',
+          providerId: ada.providerId,
+          modelId: 'deepseek-chat',
+          role: 'executor'
+        }),
+        ctx.userId
+      )
+      await handlers['chats.members.set'](ctx, {
+        chatId: chat.id,
+        agentIds: [ada.id, bob.id, hands.id]
+      })
+      await configure({ closingAgentId: hands.id })
+      events.length = 0
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'Ada’s conclusion.'))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`))
+      models.set('Hands', sequence('Standing by.'))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      // The executor does not vote on the consensus, so it is not the voice that
+      // states it either; the first member in order writes the conclusion.
+      expect(rounds(events).map((event) => event.speakers)[1]).toEqual([ada.id])
+    })
+
+    it('goes back to "first in speaking order" when the setting is cleared', async () => {
+      await configure({ closingAgentId: bob.id })
+      await configure({ closingAgentId: null })
+      const stored = ctx.repos.chats.get(chat.id, ctx.userId)
+      expect(stored.settings.closingAgentId).toBeUndefined()
+
+      events.length = 0
+      models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, 'Ada’s conclusion.'))
+      models.set('Bob', sequence(`Yes. ${AGREED_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+      await settle()
+
+      expect(rounds(events).map((event) => event.speakers)[1]).toEqual([ada.id])
     })
   })
 
@@ -1317,9 +1458,16 @@ function noticeParams(
 }
 
 /** The text of a message's first part, for the paging assertions. */
+/**
+ * The first **text** part of a message.
+ *
+ * `parts[0]` until S5.16, when a closing turn gained a flag part in front of its
+ * text (`ConclusionPart`). Every caller here means "what did it say", which is
+ * the first text part either way.
+ */
 function firstText(message: Message): string {
-  const part = message.parts[0]
-  return part && part.type === 'text' ? part.text : ''
+  const part = message.parts.find((candidate) => candidate.type === 'text')
+  return part ? part.text : ''
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1942,6 +2090,65 @@ describe('ChatRunner (hand to executor)', () => {
       [hands.id],
       [ada.id, bob.id]
     ])
+  })
+
+  it('quotes the chat’s latest conclusion in a deliver hand-off (S5.16)', async () => {
+    await setDocumentGoal()
+    models.set('Hands', saying('Written.'))
+    // Two conclusions, because a long chat can agree more than once and the
+    // executor is being asked about the one that is current.
+    for (const text of ['The first answer.', 'Ship the small one.\n\nAnd say why.']) {
+      ctx.repos.messages.create(
+        {
+          chatId: chat.id,
+          senderType: 'agent',
+          senderId: ada.id,
+          parts: [{ type: 'conclusion' }, { type: 'text', text }],
+          status: 'done',
+          round: 1,
+          mentions: []
+        },
+        ctx.userId
+      )
+    }
+
+    const message = await handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    await settle()
+
+    // The notice first — it is the sentence the user reads — then the quote, as
+    // a markdown block quote of the group's own words and nothing else.
+    expect(message.parts[0]).toMatchObject({ key: NOTICE_HANDOFF_DELIVER })
+    expect(message.parts[1]).toEqual({
+      type: 'text',
+      text: '> Ship the small one.\n>\n> And say why.'
+    })
+    // …and the executor reads it as part of the request it is answering.
+    expect(promptOf('Hands')).toContain('Ship the small one.')
+  })
+
+  it('quotes nothing when the chat has no conclusion, and never for implement', async () => {
+    await setDocumentGoal()
+    const delivered = await handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    await settle()
+    expect(delivered.parts).toHaveLength(1)
+
+    ctx.repos.messages.create(
+      {
+        chatId: chat.id,
+        senderType: 'agent',
+        senderId: ada.id,
+        parts: [{ type: 'conclusion' }, { type: 'text', text: 'Ship the small one.' }],
+        status: 'done',
+        round: 1,
+        mentions: []
+      },
+      ctx.userId
+    )
+    const implemented = await handlers['chat.handoff'](ctx, { chatId: chat.id })
+    await settle()
+    // An `implement` hand-off is being handed the whole discussion above it;
+    // quoting one message of it would narrow the request.
+    expect(implemented.parts).toHaveLength(1)
   })
 
   it('briefs the executor to write the file, and reaches the reviewers as prose', async () => {

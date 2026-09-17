@@ -115,6 +115,25 @@ instead — the last block of the prompt, and the only one that contradicts the
 rules above: the group has agreed, write the conclusion for the user, no new
 argument, no `@`, no marker.
 
+That same turn is the only one whose **message** is marked (S5.16). At the
+terminal update, and only when the status came out `done`, `markConclusion` puts
+a `ConclusionPart` in front of the parts:
+
+```
+closing: true  →  streamed parts: [text]
+                  status === 'done'
+                  → stored parts: [{ type: 'conclusion' }, text]
+```
+
+Three things are deliberate. It is **first**, because a flag has no content and
+`parts[0]` is where a reader looks for one. It is written **at the end** rather
+than seeded before the stream: the tool-free retry is gated on
+`parts.length === 0`, which a seeded part would silence, and a closing turn that
+failed would otherwise be labelled as an answer it never produced. And it is
+**invisible to every model**, because `partsToText` only reads `text`,
+`tool-result` and `system-notice` — a model shown the mark would learn to write
+one.
+
 Since **S3.3** they take a `memoryEnabled` flag and add one more rule when it is
 set: save durable facts about the user or the project with `memory_save`. It is
 conditional because a prompt that asks for a tool the model was not given is how
@@ -261,7 +280,8 @@ runAgentTurn({
   history?,      // a transcript snapshot; omitted, the turn reads listForContext itself
   handoff?,      // S5.6/S5.12: this turn was handed the work; extends the executor section
   reviewing?,    // S5.12: this round reviews what the executor changed
-  closing?,      // S5.14: this turn writes the group's conclusion; swaps the marker rule
+  closing?,      // S5.14: this turn writes the group's conclusion; swaps the marker
+                 // rule, and (S5.16) marks a `done` message with a ConclusionPart
   model?,        // already built; otherwise createModel builds one
   createModel?,  // default: resolveProvider + createLanguageModel
   onEvent?       // default: ctx.events.emit
@@ -319,6 +339,8 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | `src/shared/markers.test.ts` | `isPassOnly` versus `closureMarker` versus `stripTrailingMarkers`: a bare `[PASS]` is an abstention and survives, a marker after real content is a sign-off and goes, a marker quoted mid-sentence is neither, two trailing markers are both removed, `closureMarker` reads only the very end, is case-sensitive, and answers `null` for `[PASS]` — which is what keeps an abstention out of the consensus test |
 | `src/main/agents/agent-turn.test.ts` (S5.14 cases) | Reasoning deltas **stored** when the agent chose to show its thinking, **dropped** when it chose not to and when it made no choice on an `openai-compatible` provider, and stored again for an agent with no choice on an `anthropic` one — with the answer, the status and the delta kinds asserted in each |
 | `src/main/agents/briefing.test.ts` (S5.14 cases) | Both markers present in the rules in both languages; the closing block absent byte for byte in an ordinary turn, and replacing the marker rule when `closing` is set — the roster, the `[name]:` protocol and `[PASS]` all still there |
+| `src/main/agents/agent-turn.test.ts` (S5.16 cases) | A `closing: true` turn storing the flag first in `parts` and in the row; an ordinary turn storing none; a closing turn that **failed** storing none; and `markConclusion`'s three cases (added in front, the array returned untouched when the turn is not closing, and never a second flag) |
+| `src/main/agents/history.test.ts` (S5.16 cases) | A conclusion's text reaching the prompt with no trace of the flag, and a message that is nothing but the flag dropped entirely |
 | `src/main/handlers/agents.test.ts` (S5.14 block) | The creation default per provider type: hidden for `openai-compatible` and for a local preset, shown for `anthropic` / `openai` / `google`, and an explicit choice left alone in both directions. Plus a non-boolean `reasoning` refused |
 | `src/shared/presets.test.ts` (S5.14 block) | `showsThinkingByDefault` over the open-model route, the three first-party adapters, and every preset flagged `local` |
 | `src/main/agents/default-agent.test.ts` | Creating exactly one agent on the first usable provider, reusing it, preferring a user-created agent, and the `validation` refusal |

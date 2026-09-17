@@ -78,16 +78,22 @@
  *   the paragraph the executor's briefing gains, and nothing else; and the
  *   review round tells its speakers that is what they are doing, so they judge
  *   the diff against the chat's goal instead of guessing why they were woken.
+ *   Since S5.16 a `deliver` hand-off also quotes the chat's latest conclusion in
+ *   the message it stores (`conclusionQuote`), so the executor writes out *that*
+ *   answer even after the transcript it came from has been trimmed.
  *
- * - **A discussion that has agreed stops itself** (S5.14). The briefing asks
- *   every participant to end an automatic reply with `[AGREED]` or
- *   `[CONTINUE]`; a `roundrobin` round in which everybody who spoke wrote
- *   `[AGREED]`, with nothing mentioned and nothing pending, ends the chain: the
- *   `consensus` notice, then **one closing turn** by the first member, briefed
- *   to write the group's conclusion for the user rather than another argument.
- *   Executors do not vote, a hand-off's two rounds are exempt, and a single
- *   `[CONTINUE]` — or no marker at all — carries on under `maxAutoRounds`
- *   exactly as before. See `#agreed`.
+ * - **A discussion that has agreed stops itself** (S5.14, S5.16). The briefing
+ *   asks every participant to end an automatic reply with `[AGREED]` or
+ *   `[CONTINUE]`; a round in which everybody who spoke wrote `[AGREED]`, with
+ *   nothing mentioned and nothing pending, ends the chain: the `consensus`
+ *   notice, then **one closing turn** briefed to write the group's conclusion
+ *   for the user rather than another argument. Executors do not vote, a
+ *   hand-off's two rounds are exempt, and a single `[CONTINUE]` — or no marker
+ *   at all — carries on under `maxAutoRounds` exactly as before. Since S5.16 the
+ *   rule applies in `mention-only` too (a round that mentions somebody carries
+ *   on, which is that mode's own rule), the speaker is the chat's
+ *   `closingAgentId` when it can be (`closingSpeaker`), and the message it
+ *   writes carries a `ConclusionPart`. See `#agreed` and `#runClosing`.
  * - **A message may cap its own chain** (S5.14). `ChatSendInput.rounds`
  *   overrides `maxAutoRounds` for the chain that message starts and nothing
  *   else; the Actions card's "Start a vote" sends `1`, so every member answers
@@ -185,6 +191,18 @@ export const NOTICE_CONSENSUS = 'consensus'
  * while this run ended exactly where the user asked it to.
  */
 export const NOTICE_VOTE_CLOSED = 'voteClosed'
+
+/**
+ * How much of a conclusion a `deliver` hand-off quotes (S5.16).
+ *
+ * A conclusion is a few paragraphs by design — the closing briefing asks for
+ * one — so this is a guard against a model that ignored that, not a budget: the
+ * quote is stored in the transcript and read into every later prompt, and an
+ * essay pasted into the instruction would be paid for on every round of the
+ * hand-off. The same order of magnitude as `MAX_GOAL_DESCRIPTION_CHARS`, for the
+ * same reason.
+ */
+export const MAX_CONCLUSION_QUOTE_CHARS = 2_000
 
 /**
  * Which round of a hand-off `#runRound` is running, if it is one (S5.6, S5.12).
@@ -499,12 +517,22 @@ export class ChatRunner {
           }
         : { type: 'system-notice' as const, key: NOTICE_HANDOFF, params: { agent: executor.name } }
 
+    // S5.16: a `deliver` hand-off quotes the group's conclusion, when the chat
+    // has one, so the executor is told *which* answer to write out rather than
+    // being left to find it in a transcript that may have been trimmed. An
+    // `implement` hand-off does not: what it is being asked for is the whole
+    // discussion above it, and quoting one message would narrow it.
+    const quote =
+      intent === 'deliver'
+        ? conclusionQuote(this.#ctx.repos.messages.listForContext(chat.id, this.#ctx.userId))
+        : null
+
     const message = this.#ctx.repos.messages.create(
       {
         chatId: chat.id,
         senderType: 'user',
         senderId: this.#ctx.userId,
-        parts: [notice],
+        parts: quote === null ? [notice] : [notice, { type: 'text', text: quote }],
         status: 'done',
         round: 0,
         mentions: [executor.id]
@@ -747,7 +775,7 @@ export class ChatRunner {
         }
 
         // …and an *uncapped* discussion ends when the group says it has (S5.14).
-        if (this.#agreed(chat, members, outcomes, carried, stage)) {
+        if (this.#agreed(members, outcomes, carried, stage)) {
           this.#notice(chat, NOTICE_CONSENSUS)
           await this.#runClosing(chat, members, controller.signal)
           reason = controller.signal.aborted ? 'stopped' : 'completed'
@@ -890,10 +918,15 @@ export class ChatRunner {
    * condition below is a way of being conservative — the failure that matters is
    * a discussion cut short, not one that runs a round too long:
    *
-   * - **`roundrobin` only.** In `mention-only` the chain is `@`-driven: the
-   *   markers are still stripped from what the user and the models read, but a
-   *   round there is whoever was named, and "everybody agreed" is not a
-   *   statement one named member can make.
+   * - **Both modes, since S5.16.** `mention-only` used to be excluded on the
+   *   grounds that "everybody agreed" is not a statement one named member can
+   *   make. It is the wrong reading of the rule: what closes a chain is that
+   *   *everybody who spoke this round* is finished **and nothing is left
+   *   scheduled*, and in `mention-only` the second half is the stronger
+   *   statement — the speakers were the ones the previous turn asked for, and
+   *   they answered without asking anyone else. A round that mentions somebody
+   *   still carries on, through the `carried.speakers` rule below, which is
+   *   exactly how that mode already ends a chain.
    * - **Not a hand-off's rounds.** The executor's round and the review round
    *   after it keep their S5.6 behaviour exactly; a reviewer that has nothing to
    *   add is not a discussion reaching a conclusion.
@@ -908,13 +941,11 @@ export class ChatRunner {
    *   answered yet, and closing on top of one would drop it.
    */
   #agreed(
-    chat: Chat,
     members: Agent[],
     outcomes: TurnOutcome[],
     carried: RoundPlan,
     stage: HandoffStage
   ): boolean {
-    if (chat.settings.mode !== 'roundrobin') return false
     if (stage.implementing !== null || stage.reviewing) return false
     if (carried.speakers.length > 0) return false
     if (this.#pending.length > 0) return false
@@ -930,23 +961,26 @@ export class ChatRunner {
   }
 
   /**
-   * The one turn that hands the user the group's conclusion (S5.14).
+   * The one turn that hands the user the group's conclusion (S5.14, S5.16).
    *
-   * **The first member in speaking order** writes it, skipping anyone the
-   * supervisor has taken offline. Not the last speaker, not a vote among them: a
-   * conclusion is one voice, and the chat's member order is the one ordering the
-   * user set by hand, so the same chat closes with the same voice every time.
+   * **Who writes it** is `closingSpeaker` below: the member the chat's
+   * `closingAgentId` names when that member can, and otherwise the first one in
+   * speaking order that is not offline — which is what S5.14 always did. Not the
+   * last speaker, not a vote among them: a conclusion is one voice, and the
+   * chat's member order is the one ordering the user set by hand, so the same
+   * chat closes with the same voice every time.
    *
    * It is an ordinary round of exactly one speaker, so Stop, the barrier, the
    * presence machinery and the usage accounting need no special case; the only
    * thing that differs is `closing`, which swaps the discussion rules in the
-   * briefing for "state the conclusion, add nothing, write no marker". Whatever
-   * it mentions is ignored, because the caller breaks out of the loop
-   * immediately afterwards — that is the point of closing.
+   * briefing for "state the conclusion, add nothing, write no marker" and marks
+   * the message it produces with a `ConclusionPart` (S5.16). Whatever it
+   * mentions is ignored, because the caller breaks out of the loop immediately
+   * afterwards — that is the point of closing.
    */
   async #runClosing(chat: Chat, members: Agent[], signal: AbortSignal): Promise<void> {
     if (signal.aborted) return
-    const speaker = members.find((member) => !this.#ctx.supervisor.isOffline(member.id))
+    const speaker = closingSpeaker(chat, members, (id) => this.#ctx.supervisor.isOffline(id))
     // Every member offline is already the `allOffline` case's territory; there
     // is nobody left to write a conclusion and the notice above stands alone.
     if (!speaker) return
@@ -1164,6 +1198,80 @@ function effectiveMentions(
     }
   }
   return result
+}
+
+/**
+ * Who writes the conclusion of a chat that has agreed (S5.16).
+ *
+ * The chat's `closingAgentId` is a preference, not a promise, and the three
+ * fallbacks are the three ways a preference can go stale between being saved and
+ * being used:
+ *
+ * | The named member… | Why it falls back |
+ * |---|---|
+ * | is no longer in the chat | Membership is edited long after the setting; the id is simply not in `members` any more |
+ * | is offline | The supervisor took it out of the round for a reason, and a turn scheduled for it would time out instead of producing an answer |
+ * | is the executor | It writes files rather than positions: it does not vote on the consensus that got here (`#agreed`), so it is the wrong voice to state what was concluded |
+ *
+ * The fallback is **S5.14's own rule, unchanged**: the first member in speaking
+ * order that is not offline — deliberately including an executor, because a
+ * one-executor chat that agreed must still hand back an answer, and the rule
+ * that was there before this setting existed is the one it should return to.
+ * `undefined` means every member is offline, which is `allOffline` territory.
+ *
+ * Exported and pure so all four branches are a unit test rather than four runs.
+ */
+export function closingSpeaker(
+  chat: Chat,
+  members: Agent[],
+  isOffline: (agentId: string) => boolean
+): Agent | undefined {
+  const wanted = chat.settings.closingAgentId
+  if (typeof wanted === 'string' && wanted.length > 0) {
+    const chosen = members.find((member) => member.id === wanted)
+    if (chosen && chosen.role !== 'executor' && !isOffline(chosen.id)) return chosen
+  }
+  return members.find((member) => !isOffline(member.id))
+}
+
+/**
+ * The latest conclusion in a transcript, quoted for the executor (S5.16).
+ *
+ * "Write the deliverable" on a conclusion card is a `deliver` hand-off like any
+ * other, and this is the one thing that makes it read like an answer to *that*
+ * conclusion: the text of the last message carrying a `ConclusionPart`, as a
+ * markdown block quote, stored as a second part of the hand-off's user message.
+ *
+ * Why quote at all, when the conclusion is already in the transcript the
+ * executor is given: because the transcript is budgeted (`fitHistory`) and the
+ * oldest messages fall out of it first, while the instruction never does — and
+ * because a quote next to the request is what makes "write *this*" unambiguous
+ * in a chat that has since gone on talking.
+ *
+ * The quote is **capped** and the app adds no words of its own: the sentence the
+ * user reads is the `handoffDeliver` notice beside it, which is an i18n key
+ * (rule #4), and everything here is content the group wrote.
+ */
+export function conclusionQuote(transcript: readonly Message[]): string | null {
+  const conclusion = [...transcript]
+    .reverse()
+    .find(
+      (message) =>
+        message.senderType === 'agent' &&
+        message.parts.some((part) => part.type === 'conclusion')
+    )
+  if (!conclusion) return null
+
+  const text = textOf(conclusion)
+  if (text.length === 0) return null
+  const capped =
+    text.length > MAX_CONCLUSION_QUOTE_CHARS
+      ? `${text.slice(0, MAX_CONCLUSION_QUOTE_CHARS)}…`
+      : text
+  return capped
+    .split('\n')
+    .map((line) => (line.length > 0 ? `> ${line}` : '>'))
+    .join('\n')
 }
 
 function describe(error: unknown): string {
