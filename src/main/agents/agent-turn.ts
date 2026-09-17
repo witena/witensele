@@ -81,7 +81,10 @@
  * field inside a tool result nobody expands. `deliveredRef` adds one more part
  * after them when the turn is the one that brought a `document` goal's
  * deliverable into existence (S5.12): a `FileRefPart` the user can click to open
- * the file the chat was for.
+ * the file the chat was for. And a `closing` turn that finished `done` gets one
+ * more, **first** in its parts: the `ConclusionPart` that marks the message as
+ * the group's answer (S5.16, `markConclusion`) — a flag with no content, which
+ * the history transform never shows a model.
  *
  * ## Skills and memory (S3.2, S3.3)
  *
@@ -450,6 +453,31 @@ export function deliveredRef(
   // No `line`: the chip names a file the turn produced, and line 1 of a document
   // nobody has read is not a more precise place to open it at.
   return { type: 'file-ref', path: deliverable }
+}
+
+/**
+ * The flag that marks the closing turn's message as **the conclusion** (S5.16).
+ *
+ * Three decisions, and each one is visible in the two lines below.
+ *
+ * - **First in `parts`.** A flag part carries no text, so its position is free;
+ *   putting it first means every reader that cares about it finds it without
+ *   walking to the end of a long answer, and `parts[0]` is a stable place for a
+ *   future second flag to live beside it.
+ * - **At the end of the turn, not before the stream.** Seeding it into `parts`
+ *   at creation would make the card appear a beat earlier, and would cost two
+ *   real things: the tool-free retry is gated on `parts.length === 0`, which a
+ *   seeded flag would silence, and a closing turn that then failed would be
+ *   labelled as an answer it never produced.
+ * - **Only a `done` turn.** A conclusion that was stopped, timed out or errored
+ *   is not one. The message is still in the transcript with its status and its
+ *   half-written text; what it does not get is the card that says "this is what
+ *   the group decided".
+ */
+export function markConclusion(parts: MessagePart[], isConclusion: boolean): MessagePart[] {
+  if (!isConclusion) return parts
+  if (parts.some((part) => part.type === 'conclusion')) return parts
+  return [{ type: 'conclusion' }, ...parts]
 }
 
 /**
@@ -1231,6 +1259,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
   // only the reason tells them apart, and they end in different statuses.
   const timedOut = isTimeoutAbort(turnSignal.reason)
 
+  // S5.16: the flag that says this message is the group's answer. See
+  // `markConclusion` for why it is added here, at the end, rather than seeded
+  // into `parts` before the stream.
+  const conclusion = options.closing === true
+
   const text = textOf(parts).trim()
   const status: MessageStatus = timedOut
     ? 'skipped'
@@ -1262,7 +1295,7 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     const message = ctx.repos.messages.update(
       created.id,
       {
-        parts: structuredClone(parts),
+        parts: markConclusion(structuredClone(parts), conclusion && status === 'done'),
         status,
         mentions,
         ...(usage ? { usage } : {}),

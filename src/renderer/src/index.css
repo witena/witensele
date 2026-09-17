@@ -23,16 +23,37 @@
   --color-bg-hover: #2a2825;
   --color-bg-muted: #262421;
 
+  /*
+   * The row tint a pointer leaves behind (S5.17): `bg-hover` at 60%, for the
+   * rows whose *selected* state is the full `bg-hover` — the navigation rail,
+   * the chat list, the settings section list, and the three checklists in the
+   * agent editor. Without the weaker step, hovering a list looked exactly like
+   * selecting one.
+   *
+   * It was six copies of `hover:bg-bg-hover/50` and `/60` written into six
+   * components, which meant the app's one translucent surface was also the one
+   * surface no stylesheet could answer for. As a token it is a real alpha value
+   * — so `prefers-reduced-transparency` at the bottom of this file has something
+   * to replace, which is the whole point of naming it.
+   */
+  --color-bg-subtle: #2a282599;
+
   /* Borders */
   --color-border: #262421;
   --color-border-strong: #2e2c28;
 
-  /* Foreground */
+  /*
+   * Foreground steps. `fg-dim` and `fg-faint` were both raised in S5.17: the
+   * old `#8a857b` / `#6f6a62` measured 4.00:1 and 2.74:1 on `bg-hover`, so a
+   * hovered row turned its own timestamps and hints sub-AA. `lib/contrast.ts`
+   * and the matrix in `docs/features/ui-shell/frontend.md` are where those
+   * numbers now come from instead of a colour picker.
+   */
   --color-fg: #e6e2da;
   --color-fg-secondary: #d6d1c8;
   --color-fg-muted: #b9b4aa;
-  --color-fg-dim: #8a857b;
-  --color-fg-faint: #6f6a62;
+  --color-fg-dim: #969189;
+  --color-fg-faint: #7c776e;
 
   /* Accent */
   --color-accent: #d97757;
@@ -52,18 +73,59 @@
   --color-brand-point: #d97757;
 
   /*
-   * The human's monogram tile in the message list and the member panel. The
-   * agents' colours are data (each record stores its own `avatar.color`); the
-   * user has no record, so its pair is a token like every other literal colour.
+   * The monogram palette (S5.17).
+   *
+   * Eight background / foreground pairs, indexed 1–8, plus a neutral pair for a
+   * tile that has no index yet. Until S5.17 these were eight literal hexes in
+   * `components/agents/agent-display.ts`, copied into each agent's stored
+   * `avatar` — so a deep slate tile with a pale monogram was what *both* themes
+   * painted, and on the near-white light panels it read as a sticker rather than
+   * as part of the page.
+   *
+   * They are tokens now, and what an agent stores is the **index**
+   * (`InitialAvatar.palette`). The eight old hexes survive in that module as the
+   * mapping table a legacy record is resolved through at render time; nothing is
+   * rewritten in SQLite. See `docs/features/agents/implement.md`.
+   *
+   * Every pair is at least 5.3:1 in both themes — a monogram is bold but small,
+   * so AA-normal rather than AA-large is the bar it is held to.
    */
-  --color-avatar-user: #2f4a3e;
-  --color-avatar-user-fg: #9fd8b8;
+  --color-avatar-1-bg: #4a2f22;
+  --color-avatar-1-fg: #f0b193;
+  --color-avatar-2-bg: #21384d;
+  --color-avatar-2-fg: #8fc6f0;
+  --color-avatar-3-bg: #382c4e;
+  --color-avatar-3-fg: #c3a9f2;
+  --color-avatar-4-bg: #1e4441;
+  --color-avatar-4-fg: #86ddd0;
+  --color-avatar-5-bg: #24422f;
+  --color-avatar-5-fg: #93d6a5;
+  --color-avatar-6-bg: #4a2933;
+  --color-avatar-6-fg: #f0a2b4;
+  --color-avatar-7-bg: #453c20;
+  --color-avatar-7-fg: #e3c77d;
+  --color-avatar-8-bg: #33343a;
+  --color-avatar-8-fg: #b5b8c0;
+
+  /* The tile an avatar falls back to: a provider with no preset, or a record
+   * whose stored colour cannot be parsed at all. */
+  --color-avatar-neutral-bg: #2f2d29;
+  --color-avatar-neutral-fg: #c2bdb3;
+
+  /*
+   * The human's monogram tile in the message list and the member panel. The
+   * user has no record to store an index in, so its pair stays a token of its
+   * own — and it is kept a step deeper than palette 5's green so the two read
+   * as "you" and "an agent" rather than as the same person twice.
+   */
+  --color-avatar-user: #2b4a3c;
+  --color-avatar-user-fg: #a6dfbe;
 
   /* Presence / status */
   --color-presence-available: #5fbf7a;
   --color-presence-working: #e05c5c;
   --color-presence-away: #e0a040;
-  --color-presence-offline: #6f6a62;
+  --color-presence-offline: #7c776e;
   --color-danger: #e08a8a;
 
   /*
@@ -76,7 +138,8 @@
   --color-status-ok-surface: #1f3a2a;
   --color-status-warn: #e0a040;
   --color-status-warn-surface: #3a2a1f;
-  --color-status-idle: #8a857b;
+  /* Raised with `fg-dim` in S5.17: `#8a857b` was 4.22:1 on its own surface. */
+  --color-status-idle: #969189;
   --color-status-idle-surface: #262421;
 
   /* Typography */
@@ -125,17 +188,19 @@
   --color-bg-elevated: #ffffff;
   --color-bg-hover: #e7e0d4;
   --color-bg-muted: #eee8dd;
+  --color-bg-subtle: #e7e0d499;
 
   /* Borders */
   --color-border: #e3dcd0;
   --color-border-strong: #d2c9ba;
 
-  /* Foreground */
+  /* Foreground — `dim` and `faint` raised in S5.17 for the same reason as the
+   * dark ones: 4.41:1 and 3.39:1 on `bg-hover` were both under their bar. */
   --color-fg: #1f1d1a;
   --color-fg-secondary: #332f2a;
   --color-fg-muted: #4d483f;
-  --color-fg-dim: #6b655a;
-  --color-fg-faint: #7d776b;
+  --color-fg-dim: #665f55;
+  --color-fg-faint: #756f63;
 
   /* Accent */
   --color-accent: #a13917;
@@ -144,24 +209,106 @@
   /* The brand point does not follow the appearance; see the base block. */
   --color-brand-point: #d97757;
 
+  /*
+   * The monogram palette, light (S5.17). Same eight hues, inverted in role: a
+   * pale tint carries a deeply saturated monogram, instead of a deep slab
+   * carrying a pale one. The tints are two steps darker than a first pass made
+   * them, because at 1.02:1 against `bg-panel` the tile had no edge at all and
+   * the monogram appeared to float on the page.
+   */
+  --color-avatar-1-bg: #f2ccb8;
+  --color-avatar-1-fg: #8a3715;
+  --color-avatar-2-bg: #c9dcf1;
+  --color-avatar-2-fg: #1b4a74;
+  --color-avatar-3-bg: #ded0f1;
+  --color-avatar-3-fg: #4b2f7d;
+  --color-avatar-4-bg: #c0e3dd;
+  --color-avatar-4-fg: #13564e;
+  --color-avatar-5-bg: #cce5d1;
+  --color-avatar-5-fg: #1b562e;
+  --color-avatar-6-bg: #f4ccd5;
+  --color-avatar-6-fg: #8a2c3f;
+  --color-avatar-7-bg: #eddcab;
+  --color-avatar-7-fg: #664f10;
+  --color-avatar-8-bg: #d8dade;
+  --color-avatar-8-fg: #3f424a;
+
+  --color-avatar-neutral-bg: #e4ddd0;
+  --color-avatar-neutral-fg: #4d483f;
+
   /* The human's monogram tile: the same green, read as a tint rather than a slab. */
-  --color-avatar-user: #d3e8dc;
-  --color-avatar-user-fg: #1d5a40;
+  --color-avatar-user: #cbe6d7;
+  --color-avatar-user-fg: #1a5539;
 
   /* Presence / status */
   --color-presence-available: #3f9e5c;
   --color-presence-working: #c94a4a;
   --color-presence-away: #b0761c;
   --color-presence-offline: #8a857b;
-  --color-danger: #b23b3b;
+  /* `#b23b3b` was 4.47:1 on `bg-hover` — a hovered row's delete button and the
+   * message error line both landed just under AA (S5.17). */
+  --color-danger: #a93636;
 
   /* Status pills: a darkened foreground on a pale tint of its own hue. */
   --color-status-ok: #1b7040;
   --color-status-ok-surface: #d9efe1;
   --color-status-warn: #8a5a10;
   --color-status-warn-surface: #f8e8cb;
-  --color-status-idle: #665f55;
+  --color-status-idle: #605a50;
   --color-status-idle-surface: #e9e2d6;
+}
+
+/*
+ * Accessibility preferences (S5.17).
+ *
+ * Two media queries, each stated **twice** — once for the base palette and once
+ * for the light one. That repetition is load-bearing: the light block above is
+ * `:root[data-theme='light']` (specificity 0,2,0) and would outrank a plain
+ * `:root` rule no matter how late it appears, so a single unqualified block
+ * would strengthen the dark theme and quietly do nothing in light.
+ *
+ * `prefers-contrast: more` moves the three steps that are *allowed* to be quiet
+ * — `fg-muted`, `fg-dim`, `fg-faint` — up to body-copy contrast, and makes both
+ * border tokens visible as lines rather than as implications (`border` goes from
+ * 1.17:1 to 1.95:1 on `bg-base` in dark, 1.34:1 to 2.21:1 in light). The louder
+ * steps (`fg`, `fg-secondary`) and the hues that carry *meaning* (accent,
+ * presence, status, the avatar palette) are deliberately left alone: they are
+ * already 4.5:1 or better everywhere, and shifting a hue to gain contrast it
+ * does not need would only make the two appearances disagree about what green
+ * means.
+ *
+ * `prefers-reduced-transparency: reduce` has exactly one surface to answer for,
+ * `--color-bg-subtle`, and replaces its 50% alpha with the colour that alpha
+ * composites to over `bg-panel`. Element `opacity` is not touched: a disabled
+ * button and a superseded message are *states*, and the preference is about
+ * see-through materials, not about the interface hiding what it means.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --color-fg-muted: #cfcac0;
+    --color-fg-dim: #b3aea4;
+    --color-fg-faint: #a09b92;
+    --color-border: #4a4741;
+    --color-border-strong: #5d5a53;
+  }
+
+  :root[data-theme='light'] {
+    --color-fg-muted: #35312b;
+    --color-fg-dim: #45403a;
+    --color-fg-faint: #4f4a43;
+    --color-border: #b5ac9c;
+    --color-border-strong: #988f7e;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --color-bg-subtle: #232220;
+  }
+
+  :root[data-theme='light'] {
+    --color-bg-subtle: #f1ece3;
+  }
 }
 
 /*

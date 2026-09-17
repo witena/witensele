@@ -35,7 +35,7 @@ export function Input({
     <div
       className={clsx(
         'flex items-center gap-2 rounded-md border border-border-strong bg-bg-elevated px-2.5 py-1.5 text-xs',
-        'focus-within:border-accent/60',
+        'focus-within:border-accent',
         wrapperClassName
       )}
     >

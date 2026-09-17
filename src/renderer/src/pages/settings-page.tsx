@@ -146,7 +146,7 @@ export function SettingsPage(): React.JSX.Element {
                 'focus-visible:ring-1 focus-visible:ring-accent focus-visible:outline-none',
                 item === section
                   ? 'bg-bg-hover text-fg'
-                  : 'text-fg-muted hover:bg-bg-hover/60 hover:text-fg-secondary'
+                  : 'text-fg-muted hover:bg-bg-subtle hover:text-fg-secondary'
               )}
             >
               {sectionLabel(t, item)}

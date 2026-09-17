@@ -1,6 +1,7 @@
 /**
  * The S5.14 acceptance test: a discussion that agrees stops by itself, and a
- * vote never runs a second round.
+ * vote never runs a second round — plus S5.16's, which is what the user then
+ * sees.
  *
  * Both rules are read from what a **real model wrote**, which is exactly why
  * they cannot be proved by the unit tests alone: `chat-runner.test.ts` asserts
@@ -9,9 +10,23 @@
  * the discussion in the real app. The system prompts push hard in that direction
  * — see `AGREEABLE_PROMPT` for what a 3B model does without them.
  *
- * The file is **skipped when `http://localhost:11434/v1/models` does not answer
- * or does not hold the model**, and the skip is explicit in the report rather
- * than a silent pass, exactly like `orchestration.spec.ts`.
+ * The two closure tests are **skipped when `http://localhost:11434/v1/models`
+ * does not answer or does not hold the model**, and the skip is explicit in the
+ * report rather than a silent pass, exactly like `orchestration.spec.ts`.
+ *
+ * ## The S5.16 block, which needs no model
+ *
+ * What a conclusion *looks like* is not a question about a model, so the last
+ * `describe` does not ask one: it pushes the same `message.created` event the
+ * backend emits when a closing turn finishes, straight down the app's own event
+ * channel, and asserts the card, the Copy button, the header chip and the chat
+ * list against it. The seed goes through the channel rather than a backend
+ * method because **no backend method creates an agent message** — the only
+ * writer is `runAgentTurn` — and asserting the renderer against a real 3B model
+ * agreeing would make a deterministic rule flaky for no reason.
+ *
+ * That is the whole app minus persistence: the event, the stores, the row model,
+ * the card, the clipboard and the virtualized list are all the real ones.
  *
  * Every assertion is on a `data-testid`, a `data-*` value or a notice key, never
  * on rendered copy, so none of them depends on the active language — and no
@@ -22,6 +37,7 @@ import {
   addOllamaProvider,
   createUserDataDir,
   launchWitena,
+  locale,
   openAgents,
   removeUserDataDir
 } from './helpers'
@@ -158,8 +174,11 @@ async function newChatWithBothMembers(): Promise<void> {
 
 test.beforeAll(async () => {
   ready = await probeOllama()
-  if (!ready) return
 
+  // The app is launched **whether or not** Ollama answers: the S5.16 block below
+  // needs a window and no model at all, and the provider and the two agents are
+  // created the same way either way — `addOllamaProvider` types the model names
+  // rather than asking the server for them, so nothing here talks to Ollama.
   userDataDir = createUserDataDir()
   ;({ app, window } = await launchWitena(userDataDir))
 
@@ -235,4 +254,140 @@ test('a vote runs exactly one round', async () => {
   await expect(agentMessages()).toHaveCount(2)
   await expect(notice('consensus')).toHaveCount(0)
   await expect(notice('maxRoundsReached')).toHaveCount(0)
+})
+
+/* -------------------------------------------------------------------------- */
+/* S5.16: the conclusion as a first-class message. No model is involved.       */
+/* -------------------------------------------------------------------------- */
+
+/** The preload bridge's envelope, restated here: `e2e/` may not import preload. */
+type Envelope = { ok: true; value: unknown } | { ok: false; error: { code: string } }
+
+/** Calls a backend method from inside the page; the helper `executor.spec.ts` has. */
+async function call(method: string, input?: unknown): Promise<Envelope> {
+  return (await window.evaluate(
+    async (request) =>
+      await (
+        globalThis as unknown as {
+          witena: { invoke(method: string, input?: unknown): Promise<unknown> }
+        }
+      ).witena.invoke(request.method, request.input),
+    { method, input }
+  )) as Envelope
+}
+
+/** The text of the seeded conclusion; asserted in the card and on the clipboard. */
+const CONCLUSION_TEXT = [
+  '## What we decided',
+  '',
+  'Ship the smallest useful version first, then measure.',
+  '',
+  '- one reason',
+  '- another reason'
+].join('\n')
+
+let seeded = 0
+
+/**
+ * Pushes one agent message into the open chat, exactly as the backend does.
+ *
+ * `witena:event` is the app's own push channel (`src/main/ipc-protocol.ts`), so
+ * this is the same `message.created` the runner emits at the top of a turn: the
+ * event bridge, the messages store and every row the transcript draws are the
+ * real ones. It is not persisted, which nothing here needs — no test in this
+ * block reloads the window.
+ */
+async function seedMessage(
+  chatId: string,
+  senderId: string,
+  parts: unknown[],
+  round: number
+): Promise<string> {
+  seeded += 1
+  const id = `seeded-${seeded}`
+  const createdAt = Date.now()
+  await app?.evaluate(({ BrowserWindow }, payload) => {
+    const [first] = BrowserWindow.getAllWindows()
+    first?.webContents.send('witena:event', payload)
+  }, {
+    type: 'message.created',
+    message: {
+      id,
+      userId: 'local-user',
+      createdAt,
+      updatedAt: createdAt,
+      chatId,
+      senderType: 'agent',
+      senderId,
+      parts,
+      status: 'done',
+      round,
+      mentions: []
+    }
+  })
+  return id
+}
+
+test.describe('the conclusion as a message (S5.16)', () => {
+  const conclusionCard = (): Locator => window.getByTestId('message-conclusion')
+  const conclusionChip = (): Locator => window.getByTestId('chat-conclusion-chip')
+
+  test('is a card of its own, can be copied, and is findable again', async () => {
+    test.setTimeout(TEST_MS)
+
+    await window.getByTestId('nav-chats').click()
+    const before = await window.getByTestId('chat-item').count()
+    await window.getByTestId('chats-new').click()
+    await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
+    await addMember('Agreeable')
+
+    const chats = await call('chats.list')
+    expect(chats.ok).toBe(true)
+    const chatId = ((chats as { value: Array<{ id: string }> }).value[0] as { id: string }).id
+    const agents = await call('agents.list')
+    const agent = ((agents as { value: Array<{ id: string; name: string }> }).value).find(
+      (candidate) => candidate.name === 'Agreeable'
+    )
+    expect(agent).toBeDefined()
+
+    const conclusionId = await seedMessage(
+      chatId,
+      agent?.id ?? '',
+      [{ type: 'conclusion' }, { type: 'text', text: CONCLUSION_TEXT }],
+      2
+    )
+
+    // The card: the label, the speaker and the two controls, drawn instead of an
+    // ordinary message body.
+    await expect(conclusionCard()).toHaveCount(1)
+    await expect(conclusionCard().getByTestId('conclusion-label')).toBeVisible()
+    await expect(conclusionCard().getByTestId('conclusion-speaker')).toContainText('Agreeable')
+    await expect(window.getByTestId('conclusion-copy')).toBeVisible()
+
+    // Copy puts the **markdown source** on the real clipboard — what the model
+    // wrote, headings and list markers included, not what the renderer drew.
+    await window.getByTestId('conclusion-copy').click()
+    await expect(window.getByTestId('conclusion-copy')).toHaveAttribute('data-copied', 'true')
+    const clipboard = await app?.evaluate(({ clipboard: board }) => board.readText())
+    expect(clipboard).toBe(CONCLUSION_TEXT)
+
+    // The header chip names the message it will scroll to.
+    await expect(conclusionChip()).toHaveAttribute('data-message-id', conclusionId)
+
+    // Push the conclusion far above the fold, then find it again with the chip.
+    for (let index = 0; index < 30; index += 1) {
+      await seedMessage(chatId, agent?.id ?? '', [{ type: 'text', text: `Filler ${index}` }], 3)
+    }
+    await expect(window.locator('[data-testid="message-item"]')).not.toHaveCount(1)
+    await expect(conclusionCard()).not.toBeInViewport()
+
+    await conclusionChip().click()
+    await expect(conclusionCard()).toBeInViewport({ timeout: 10_000 })
+
+    // …and the chat list says what this chat concluded, in place of the member
+    // count, with the translated label in front of the group's own first line.
+    const label = locale('en').chat.conclusion
+    await expect(window.getByTestId('chat-item-conclusion').first()).toContainText('What we decided')
+    await expect(window.getByTestId('chat-item-conclusion').first()).toContainText(label)
+  })
 })

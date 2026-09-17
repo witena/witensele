@@ -65,7 +65,7 @@ is the only thing that reads it. See
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` newest first | `validation` on an empty chat id or a non-positive limit; `not_found` for an unknown cursor |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` over the whole transcript | `validation` on an empty id, `not_found` for an unknown chat |
 | `chat.send` | `{ chatId, text, mentions?, rounds? }` | `Message` | `validation` for a non-string or blank text, for a `rounds` that is not an integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` (S5.14), and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
-| `chat.handoff` | `{ chatId }` | `Message` (the stored hand-off row) | `validation` on an empty id; `not_found` for an unknown chat; `validation` plus one of `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details`. The handler checks only the id: the other three are facts about the **run**, and [`orchestration`](../orchestration/backend.md)'s `ChatRunner.handoff` is the only object that holds all of them |
+| `chat.handoff` | `{ chatId, intent? }` | `Message` (the stored hand-off row; for `intent: 'deliver'` it carries the chat's latest conclusion as a quoted second part since S5.16) | `validation` on an empty id; `not_found` for an unknown chat; `validation` plus one of `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details`. The handler checks only the id: the other three are facts about the **run**, and [`orchestration`](../orchestration/backend.md)'s `ChatRunner.handoff` is the only object that holds all of them |
 | `chat.stop` | `{ chatId }` | `void` | `validation` on an empty id; otherwise idempotent |
 
 ### Chat patch validation
@@ -82,7 +82,16 @@ persisted on its own:
 | `settings.mode` | `roundrobin` or `mention-only` |
 | `settings.speaking` | `sequential` or `parallel` |
 | `settings.maxAutoRounds` | An integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` = `[1, 10]` |
+| `settings.closingAgentId` (S5.16) | A non-empty string, or `null` to clear it. **Not** checked against this chat's membership: membership changes after the setting is written, so the runner has to survive an id that names nobody anyway (`closingSpeaker` falls back), and a second check would only let the panel refuse what the runner already handles |
 | `settings.stallTimeoutMs` / `hardTimeoutMs` | A finite number greater than zero |
+
+Since S5.16 the patch type is `ChatSettingsPatch` rather than
+`Partial<ChatSettings>`: `closingAgentId` is the first setting a control can
+**unset**, and `undefined` cannot carry that across a transport (JSON drops the
+key, and a dropped key is what "leave this alone" means in a merge). So `null` is
+the wire word for "clear it", and `mergeChatSettings` in the chat repository is
+the single place it is turned back into an absent field — which is why the
+stored `ChatSettings.closingAgentId` is still `string | undefined`.
 
 ### Who a new chat starts with
 
@@ -117,6 +126,19 @@ through to `ctx.runners.send`, is **not** written to the chat, and applies only 
 the chain that message starts — [`orchestration`](../orchestration/backend.md)
 owns what it then does. Its one caller today is the Actions card's "Start a vote",
 which sends `1`.
+
+### Who closes a discussion (S5.16)
+
+`ChatSettings.closingAgentId` is this feature's whole share of S5.16: one
+optional field of the settings JSON column, no migration, no new method. The
+group settings write it through the same `chats.update` every other control uses,
+and [`orchestration`](../orchestration/backend.md)'s `closingSpeaker` is what
+reads it — including the three fallbacks for a member that has left, gone offline
+or turns out to be the executor.
+
+The **conclusion** the closing turn then writes is a `ConclusionPart` on that
+message: a member of the `MessagePart` union, so the `messages.parts` JSON column
+takes it with no migration and a row written before S5.16 simply has none.
 
 ### The working directory (S5.2)
 

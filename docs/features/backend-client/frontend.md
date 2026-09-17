@@ -22,6 +22,12 @@ Rule (CLAUDE.md #6): components call store actions, stores call `BackendClient`,
 and only `lib/backend.ts` knows a transport exists. A component that imports
 `window.witena` or `ipcRenderer` is a bug regardless of whether it works.
 
+**S8.1 changed no file in this table**, which is the first evidence the rule was
+worth keeping: a second transport now serves the same `BackendApi` over HTTP and
+a WebSocket (`../server/`), and nothing in the renderer knows. The client that
+uses it — `HttpBackendClient`, a sibling of `createElectronBackendClient` in
+`lib/backend.ts` and the only file that would gain a line — is S8.3's.
+
 ### The client
 
 ```ts
@@ -128,6 +134,7 @@ The states the real UI implements:
 | empty | Empty-state copy for no chats, no members, no providers — each with the action that fixes it |
 | error | Rejected `invoke` shows a toast whose text comes from an i18n key chosen by `BackendError.code`; a message with status `error` renders inline with a retry action |
 | stalled / skipped | `away` turns the dot orange with no other change; a `skipped` message renders dimmed alongside the system notice for the skip |
+| disconnected | **Not implemented, and S8.1 is why it now matters.** Over IPC the channel is there for the life of the window; over a WebSocket it can drop and come back. The recovery already documented — re-read with `messages.list` — is the right one, but nothing yet tells the user a run is streaming into a socket that closed. S8.3 |
 
 ## Copy and i18n
 
@@ -138,7 +145,9 @@ the renderer:
   `translateNotice(t, part)`, which resolves `notices.<key>`
   (`src/renderer/src/i18n/notices.ts`). The backend never sends a sentence.
 - `BackendError.code` maps to `errors.<code>` in the locale files, added to both
-  in S1.4; `BackendError.message` is for logs only and is never rendered.
+  in S1.4; `BackendError.message` is for logs only and is never rendered. S8.1
+  relies on that: the HTTP transport sends the same codes and invents none, so
+  the existing copy covers it and neither locale file was touched.
 
 S1.4 removed the last exception: the smoke widgets' literals moved into the
 locale files and the `TODO(S1.4): i18n` comment is gone. S1.5 retired the `smoke`

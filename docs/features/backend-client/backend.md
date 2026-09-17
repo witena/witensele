@@ -30,6 +30,8 @@
 | `src/main/index.ts` | Applies `WITENA_USER_DATA`, builds the secret store and the context on ready, registers IPC and event forwarding **before** the first window, closes the context on `before-quit` |
 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld('witena', { invoke, onEvent })` |
 | `src/preload/index.d.ts` | Ambient `Window['witena']` for the renderer project |
+| `src/server/http.ts` | **S8.1**: `createWitenaServer({ ctx, handlers })` — the second transport. `POST /api/<method>`, `GET /ws`, `GET /healthz`, `ERROR_STATUS`, the body cap, the bus fan-out. Owned by [`server`](../server/backend.md) |
+| `src/server/index.ts` | **S8.1**: the Node host. The sibling of `src/main/index.ts` and, like it, the file that decides where things live — from the environment rather than from electron |
 
 The split is what CLAUDE.md rule #5 asks for: only `src/main/index.ts` and
 `src/main/ipc/` import electron, verified with
@@ -41,6 +43,14 @@ grep -rl "from 'electron'" src/main | grep -v "src/main/index.ts" | grep -v "src
 which must print nothing. Moving the backend to a Node server means replacing
 `src/main/ipc/`, `src/main/index.ts` and the preload bridge — the handlers, the
 context, the bus and the repositories go across untouched.
+
+**S8.1 did exactly that and nothing else.** `src/server/` replaces those three
+and reuses everything else, and the claim is now a test rather than a grep:
+`src/server/no-electron.test.ts` starts at every production file under
+`src/server/`, follows every relative and `@shared` import transitively, and
+fails on an `electron` specifier anywhere in the closure — which reaches
+`app-context.ts`, `chat-runner.ts` and the handler registry, so it is not
+vacuously true.
 
 ### The electron exceptions: the three `pick*` dialogs, `system.applyTheme` and half of `system.openInEditor`
 
@@ -172,6 +182,26 @@ Failure rules the transport enforces:
   the machine do something and could not: `providers.login`, `providers.logout`,
   and saving a provider that authenticates with an account.
 
+### The same handlers over HTTP (S8.1)
+
+`src/server/http.ts` mounts the identical map and enforces the identical rules —
+it catches everything and answers `{ ok: false, error: toBackendError(err) }`,
+and it gates the lookup with `isBackendMethod`. The only things it adds are the
+route, the status and two refusals HTTP has and IPC does not:
+
+| Channel | Direction | Arguments | Reply |
+|---|---|---|---|
+| `POST /api/<method>` | client → server | the method's single argument as the JSON body; empty body = `undefined` | `InvokeResponse` as JSON, at `ERROR_STATUS[code]` on failure |
+| `GET /ws` | server → client | — | one `BackendEvent` JSON frame per event |
+| `GET /healthz` | client → server | — | `{ "status": "ok" }` |
+
+| Extra refusal | Answer |
+|---|---|
+| A name outside `BACKEND_METHODS` | 404 `not_found` — `validation` over IPC, because there the name is an argument and here it is a path |
+| A verb other than `POST` on `/api/…` | 400 `validation`, with `Allow: POST` |
+| A body over 8 MB, or not valid JSON | 400 `validation` |
+| An upgrade on any path but `/ws` | a raw `404`, and the socket destroyed |
+
 ## Events emitted
 
 `forwardEvents(ctx.events, () => BrowserWindow.getAllWindows())` subscribes once
@@ -188,6 +218,13 @@ unsubscribe function, which `before-quit` calls before closing the database.
 Every other member of `BackendEvent` is emitted by the feature that owns it
 (`../orchestration/`, `../agent-turn/`, `../presence/`, `../chats/`); the table in
 `implement.md` lists them all.
+
+The HTTP transport does the same thing with one difference worth copying rather
+than diverging from: it takes **one** bus subscription for the whole process and
+writes the already-serialised frame to each open socket, instead of subscribing
+per client. A streaming run emits a delta per token, and N subscriptions would be
+N `JSON.stringify` calls where one will do — and the frames would no longer be
+guaranteed byte-identical between clients.
 
 ## Secrets
 
@@ -229,6 +266,11 @@ field:
 | `skillsDir(ctx)` | `<userData>/skills/` | [`skills`](../skills/backend.md) |
 | `memoryDir(ctx)` → `ctx.memory` | `<userData>/memory/` | [`memory`](../memory/backend.md) |
 
+Since S8.1 there is a second answer to "where is `<userData>`": the Node host
+reads `WITENA_DATA_DIR` (default `./.witena-data`) and passes it to the same
+`createAppContext`, so every accessor above resolves inside it unchanged. That
+is the whole reason the field is injected rather than asked for.
+
 That is the same injection rule the database already followed, and it is what
 lets the skills loader and the memory store be driven from vitest against a
 temporary directory. `SkillMeta.path` and `MemoryEntry.path` are declared in
@@ -250,3 +292,5 @@ temporary directory. `SkillMeta.path` and `MemoryEntry.path` are declared in
 | `@playwright/test` (`_electron`) | The end-to-end harness | Needs the built output in `out/`, launches with `args: ['.']` from the repository root, and needs no downloaded browsers. Config lives in `playwright.config.ts` with `testDir: 'e2e'`; vitest excludes `e2e/` so `npm test` stays unit-only |
 | TypeScript 5.9 | The contract itself | `exactOptionalPropertyTypes` is on: `baseUrl?: string` will not accept an explicit `undefined`, so build the object without the key. `verbatimModuleSyntax` is on: type-only imports must say `import type`. A `.d.ts` next to an `.ts` of the same name is excluded from the project that contains the `.ts`, which is why `src/preload/index.d.ts` restates the envelope instead of importing it |
 | vitest `expectTypeOf` | Type-level assertions in `contracts.test.ts` | They are erased at runtime, so they only fail under `npm run typecheck`, never under `npm test`. Both commands are part of the gate for that reason |
+| `ws` (S8.1) | The push channel on the Node host | `noServer: true` plus `node:http`'s own `upgrade` event, so this code decides which paths are upgradable; a refused path must have its socket **destroyed by hand** or the client waits forever. `socket.readyState` is checked before `send` rather than caught, because a throw there would surface inside the event bus's delivery loop |
+| `node:http` (S8.1) | The request/response channel on the Node host | `server.close()` alone waits for keep-alive connections, so `closeAllConnections()` is called beside it or a test's teardown hangs. `request.url` is a path, not a URL, so it is parsed against a dummy origin. There is no `undefined`-preserving structured clone here: JSON drops `undefined` keys, which is the behaviour the contract has always been written for |

@@ -42,7 +42,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatTokens } from '@shared/pricing'
 import type { Agent, AgentPresence, PresenceState, Provider } from '@shared/types'
-import { agentModelLabel, hasExecutor, isExecutor } from '../agents/agent-display'
+import { agentModelLabel, avatarStyle, hasExecutor, isExecutor } from '../agents/agent-display'
 import { useIsRetrying, usePresence, usePresenceStore } from '../../stores/presence'
 import { useChatUsage } from '../../stores/usage'
 import { Avatar, Badge, Button, EmptyState, IconButton, SectionTitle } from '../ui'
@@ -197,8 +197,7 @@ export function MemberPanel({
                 >
                   <Avatar
                     text={agent.avatar.text}
-                    color={agent.avatar.color}
-                    textColor={agent.avatar.textColor}
+                    {...avatarStyle(agent.avatar)}
                     size="md"
                   />
                   <span className="flex min-w-0 flex-col gap-px">
@@ -319,8 +318,7 @@ function MemberRow({
     >
       <Avatar
         text={agent.avatar.text}
-        color={agent.avatar.color}
-        textColor={agent.avatar.textColor}
+        {...avatarStyle(agent.avatar)}
         size="md"
         presence={presence}
         presenceLabel={presenceLabel(t, presence)}

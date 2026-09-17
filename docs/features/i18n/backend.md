@@ -164,6 +164,12 @@ The plan for S1.7, recorded here so it is not rediscovered:
   Chinese-speaking user wants replies in Chinese. The briefing language is the
   cheapest lever on both.
 - The agent's own `systemPrompt` is user data and is never translated.
+- Since **S5.16** one more backend-authored fact carries no text at all: the
+  `ConclusionPart` on a closing turn's message. It is neither a sentence nor a
+  key — it is a flag the renderer turns into `chat.conclusion*` copy in whatever
+  language is on screen — and the `deliver` hand-off's quoted conclusion beside
+  the `handoffDeliver` notice is the group's **own** words, quoted verbatim, not
+  copy the app wrote.
 - Since **S5.10** the same line runs through the chat's **goal**: the briefing's
   sentences about it are written in both `briefing.en.ts` and `briefing.zh-CN.ts`
   and follow the same setting, while the user's own `description` and the

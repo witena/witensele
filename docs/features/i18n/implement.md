@@ -152,6 +152,19 @@ sentence, and these are two different sentences — one says "implement what the
 group decided", the other names a file. The error key follows the S5.2 shape
 exactly, so the disabled tooltip and the backend's rejection are one string.
 
+S5.16 added ten `chat.*` keys and no notice key at all, which is the interesting
+part. Eight of them are the conclusion — `conclusion`, `conclusionBy`,
+`conclusionCopy` / `conclusionCopied`, `conclusionDeliver` /
+`conclusionDeliverTitle`, `conclusionChipTitle` and `conclusionPreview` — and two
+are the "Closing speaker" select (`closingSpeaker`, `closingSpeakerFirst`). The
+`conclusionPreview` key is the one worth reading: the chat list shows a label in
+front of the group's own sentence, and the label is interpolated **around** the
+sentence (`"Conclusion: {{text}}"`) rather than concatenated as two nodes, so a
+language that puts the label last can. What is *not* here: the thing that marks a
+conclusion is a `ConclusionPart`, a flag with no text, so it needs no key and no
+notice — the backend says "this message is the answer" and the renderer chooses
+every word around it.
+
 S7.5 added three groups and one rule worth repeating. `chat.onboarding.*` is the
 first-run card; `agents.templates.*` is described above; `settings.about.*` plus
 `settings.sections.about` is the About screen, whose only interpolation is

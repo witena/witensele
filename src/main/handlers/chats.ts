@@ -41,7 +41,7 @@ import type {
   ChatGoalStatus,
   ChatMode,
   ChatPatch,
-  ChatSettings,
+  ChatSettingsPatch,
   HandoffIntent,
   SpeakingMode,
   ValidationReason
@@ -340,11 +340,23 @@ function assertOneExecutor(ctx: AppContext, agentIds: string[]): void {
  * caller (the server build, a script) cannot store a chat that `ChatRunner`
  * would then have to defend itself against every round.
  */
-function assertChatSettings(value: unknown): asserts value is Partial<ChatSettings> {
+function assertChatSettings(value: unknown): asserts value is ChatSettingsPatch {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw validation('chat settings must be an object')
   }
-  const settings = value as Partial<ChatSettings>
+  const settings = value as ChatSettingsPatch
+
+  // S5.16. The id is not checked against this chat's membership here, and that
+  // is deliberate: membership changes after the setting is written, so the
+  // runner has to survive an id that names nobody anyway (it falls back to the
+  // first eligible member). Validating it twice would only mean the panel could
+  // refuse what the runner already handles. `null` is how the select goes back
+  // to "first in speaking order"; see `mergeChatSettings`.
+  if (settings.closingAgentId !== undefined && settings.closingAgentId !== null) {
+    if (typeof settings.closingAgentId !== 'string' || settings.closingAgentId.length === 0) {
+      throw validation('closingAgentId must be an agent id, or null')
+    }
+  }
 
   if (settings.mode !== undefined && !CHAT_MODES.includes(settings.mode)) {
     throw validation('unknown chat mode')

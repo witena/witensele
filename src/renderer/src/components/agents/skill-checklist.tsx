@@ -54,7 +54,7 @@ export function SkillChecklist({
             data-testid="agent-skill-item"
             data-skill={skill.name}
             data-missing="false"
-            className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-bg-hover/50"
+            className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-bg-subtle"
           >
             <input
               type="checkbox"

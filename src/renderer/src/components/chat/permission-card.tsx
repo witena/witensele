@@ -98,7 +98,7 @@ export function PermissionCard({ request, autoFocus = false }: PermissionCardPro
       data-request-id={request.requestId}
       data-tool={request.toolName}
       data-agent-id={request.agentId}
-      className="flex flex-col gap-2 rounded-[10px] border border-accent/60 bg-bg-elevated px-3 py-2.5 focus:outline-none"
+      className="flex flex-col gap-2 rounded-[10px] border border-accent bg-bg-elevated px-3 py-2.5 focus:outline-none"
       onKeyDown={(event) => {
         if (replying) return
         if (event.key === 'Enter') {

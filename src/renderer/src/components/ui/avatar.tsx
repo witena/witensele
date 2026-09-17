@@ -2,11 +2,12 @@
  * A monogram avatar: one or two characters on a solid colour, matching
  * `InitialAvatar` in `@shared/types`.
  *
- * The colour arrives as a CSS colour string because it is *data* — each agent
- * stores its own `avatar.color` — and data cannot be a Tailwind class (the
- * scanner would never see it). Everything that is not data still comes from
- * tokens: `DEFAULT_AVATAR_COLOR` is the neutral surface an agent falls back to
- * before it has picked one.
+ * The colour arrives as a CSS colour string rather than as a Tailwind class
+ * because the tile is chosen at runtime and the class scanner would never see
+ * it. Since S5.17 that string is a `var(--color-avatar-…)` reference produced by
+ * `avatarStyle` in `components/agents/agent-display.ts` (or by `providerLogo`),
+ * not a hex out of a record — which is what makes a tile follow the appearance.
+ * `DEFAULT_AVATAR_COLOR` is the neutral slot a caller falls back to.
  *
  * `presence` renders the overlaid dot from `PresenceDot`, which is why the
  * wrapper is `relative`.
@@ -23,18 +24,18 @@ const SIZE_CLASS: Record<AvatarSize, string> = {
   lg: 'h-8 w-8 rounded-lg text-[13px]'
 }
 
-/** Neutral fallback, used until an agent record supplies its own colour. */
-export const DEFAULT_AVATAR_COLOR = '#3a3a3a'
+/** Neutral fallback, used until a caller supplies a palette slot of its own. */
+export const DEFAULT_AVATAR_COLOR = 'var(--color-avatar-neutral-bg)'
 
 /** Fallback foreground, paired with `DEFAULT_AVATAR_COLOR`. */
-export const DEFAULT_AVATAR_TEXT_COLOR = '#b0aca4'
+export const DEFAULT_AVATAR_TEXT_COLOR = 'var(--color-avatar-neutral-fg)'
 
 export interface AvatarProps {
   /** One or two characters. Comes from `InitialAvatar.text`, never translated. */
   text: string
-  /** Background, a CSS colour from the agent record. */
+  /** Background, normally a `var(--color-avatar-N-bg)` from `avatarStyle`. */
   color?: string | undefined
-  /** Foreground, a CSS colour from the agent record. */
+  /** Foreground, normally a `var(--color-avatar-N-fg)` from `avatarStyle`. */
   textColor?: string | undefined
   size?: AvatarSize | undefined
   /** When given, an overlaid presence dot is rendered on the bottom-right. */

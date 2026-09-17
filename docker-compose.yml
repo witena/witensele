@@ -1,0 +1,43 @@
+# Postgres for local development of the online version (S8.1).
+#
+#   docker compose up -d postgres
+#   DATABASE_URL=postgres://witena:witena@localhost:5432/witena npm test
+#
+# Only the database. The server itself runs from the checkout with
+# `npm run server`, because the whole point of developing it locally is a fast
+# edit-run loop and an image rebuild is not one. The container image belongs to
+# S8.5, with the rest of the deployment.
+#
+# The credentials are deliberately trivial and the port is published on
+# localhost only: this file is for a laptop, never for a host anything else can
+# reach.
+
+services:
+  postgres:
+    # 16 is the version RDS is targeted at in PLAN.md's "Online version" table.
+    # Pinned to the minor line rather than `:16` so two developers do not silently
+    # test against two servers.
+    image: postgres:16.4-alpine
+    container_name: witena-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: witena
+      POSTGRES_PASSWORD: witena
+      POSTGRES_DB: witena
+    ports:
+      # Bound to the loopback interface explicitly. `5432:5432` would publish it
+      # on every interface the machine has, which on a laptop in a café is an
+      # open database.
+      - '127.0.0.1:5432:5432'
+    # `npm test` connects the moment compose returns, so "started" is not good
+    # enough — the first suite would race the server's own initialisation.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U witena -d witena']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - witena-postgres:/var/lib/postgresql/data
+
+volumes:
+  witena-postgres:

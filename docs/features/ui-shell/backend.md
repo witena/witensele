@@ -40,6 +40,22 @@ and one handler module:
 uses the same function against `matchMedia`, which is what keeps the window's
 first frame and the page's first frame the same colour.
 
+**S5.17 added no main-process code either**, and that is the point of how the
+monogram palette was built. An avatar could have been themed by migrating
+`agents.avatar` to new hexes, which would have made the appearance a *database*
+concern: a migration to write, a downgrade to think about, and a half-converted
+table if the app were killed during it. Storing an index instead keeps the whole
+change inside the stylesheet and one pure renderer function. The only thing the
+main process knows about it is that `defaultAgentInput` now writes
+`palette: DEFAULT_AGENT_AVATAR_PALETTE` beside the colour it already wrote —
+one field on one record, with no validation of its own, because `agents.create`
+has never inspected the inside of an avatar.
+
+One thing the main process must **keep** doing: accepting an `avatar` object it
+does not fully understand. `handlers/agents.ts` checks that it is an object and
+nothing more, and the repository stores it as JSON. That is what let `palette`
+appear without a migration, and it is the reason to leave that check alone.
+
 ## The build step Settings → About depends on (S7.5)
 
 About renders a list this feature does not write by hand, and the file it reads

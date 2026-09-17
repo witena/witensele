@@ -10,7 +10,9 @@
 > terminal status. **S5.6** added the second way a run can start: "Hand to
 > executor", which schedules the executor alone and then one review round.
 > **S5.14** added the two ways a chain now ends on its own: the group writing
-> `[AGREED]`, and a message that carried its own round cap.
+> `[AGREED]`, and a message that carried its own round cap. **S5.16** made what
+> that produces a *thing*: the closing message carries a `ConclusionPart`, the
+> chat says who writes it, and `mention-only` closes as well.
 
 ## Problem
 
@@ -52,9 +54,14 @@ that owns the `AbortController` the Stop button reaches.
   changing.
 - **The automatic chat title** (S4.3): after the first run that produced a
   finished reply, and only while the title is still the default.
-- **Discussion closure** (S5.14): reading `[AGREED]` / `[CONTINUE]` off the round
-  that just ended, the `consensus` notice, the single **closing turn**, and
-  `ChatSendInput.rounds` with its `voteClosed` notice.
+- **Discussion closure** (S5.14, S5.16): reading `[AGREED]` / `[CONTINUE]` off
+  the round that just ended, in **both** modes; the `consensus` notice; the
+  single **closing turn**, given to `ChatSettings.closingAgentId` when it can be
+  and to the first eligible member otherwise; and `ChatSendInput.rounds` with its
+  `voteClosed` notice.
+- **The conclusion quote** (S5.16): a `deliver` hand-off stores the chat's latest
+  conclusion as a block quote beside its notice, so the executor is told which
+  answer to write out.
 
 ## What S2.4 added
 
@@ -106,6 +113,21 @@ The scheduling is again **untouched**: `scheduling.ts` has no new function, no
 plan is built differently, and the closing turn is an ordinary round with one
 speaker. What changed is the set of reasons the loop may `break`.
 
+## What S5.16 added
+
+S5.14 produced a conclusion and then drew it as one more reply. This step makes
+it a first-class message, and fixes two things the same rule got wrong.
+
+| Change | Where |
+|---|---|
+| **`ConclusionPart`**, a flag part stored first on the closing turn's message when it finished `done` | [`agent-turn`](../agent-turn/context.md), `markConclusion` |
+| **`closingSpeaker`**: `ChatSettings.closingAgentId` when that member is present, available and not an executor; the first non-offline member otherwise, which is S5.14's rule unchanged | `chat-runner.ts`, [`chats`](../chats/context.md) |
+| **`mention-only` closes too.** `#agreed` no longer asks which mode the chat is in: a round whose speakers all agreed and mentioned nobody ends the chain in either mode | `#agreed` |
+| **`conclusionQuote`**: a `deliver` hand-off's user message gains a second part — the latest conclusion as a markdown block quote — so the instruction names the answer even after `fitHistory` has trimmed it away | `chat-runner.ts` |
+
+No new notice key, no new backend method, no migration: a part is a member of an
+open union, and a setting is one field of a JSON column.
+
 ## Out of scope (permanently, for this feature)
 
 | Not here | Owned by |
@@ -151,7 +173,10 @@ speaker. What changed is the set of reasons the loop may `break`.
 | **Agreement is read from a marker the model writes, not inferred** (S5.14) | Ask a model "has the group agreed?" after each round; compare replies for similarity | An extra model call per round costs a round-trip and can be wrong in both directions, and similarity is not agreement — two members can restate the same position while one of them still objects. A marker is the group's own answer, it costs nothing, and the briefing already teaches one token of exactly this shape (`[PASS]`) |
 | **No marker at all means "carry on"**, and so does a single `[CONTINUE]` | Treat a missing marker as agreement; require every member to have spoken | The failure that matters is a discussion cut short, not one that runs a round too long. A model that ignored the protocol has said nothing about whether the group is finished, and reading silence as consent would end chats the moment a member forgot the rule |
 | **Executors do not vote**, and a hand-off's two rounds are exempt entirely | Count every speaker | An executor writes files rather than positions; a chat with one would otherwise need it to agree before the participants could finish. A reviewer with nothing to add is not a discussion reaching a conclusion either, so S5.6's rounds keep their own behaviour |
-| **One closing turn by the first member in speaking order** | The last speaker; every member; no closing turn, only the notice | A conclusion is one voice, and the member order is the ordering the user set by hand, so the same chat closes with the same voice every time. Without the turn the user is left to read four replies and work out what was decided, which is the thing the product exists to do for them |
+| **One closing turn by one member** — the chat's `closingAgentId` since S5.16, and the first in speaking order when it has none | The last speaker; every member; no closing turn, only the notice | A conclusion is one voice, and the member order is the ordering the user set by hand, so a chat that has chosen nobody closes with the same voice every time. Without the turn the user is left to read four replies and work out what was decided, which is the thing the product exists to do for them |
+| **The setting may not name an executor, but the fallback may reach one** (S5.16) | Exclude executors from both; allow one to be chosen | Choosing the executor as the group's voice is choosing the member that did not vote on the consensus, so the control refuses it. The fallback is S5.14's rule untouched, and a chat whose only available member is an executor must still hand back an answer rather than silently skip the conclusion |
+| **`mention-only` closes on the same rule as `roundrobin`** (S5.16) | Leave it `roundrobin`-only, as S5.14 had it | What ends a chain is that everybody who spoke is finished **and** nothing is left scheduled, and in `mention-only` the second half is the stronger statement: the speakers were the ones that were asked for and they asked for nobody. A round that mentions somebody still carries on, which is that mode's own rule and needed no code |
+| **A `deliver` hand-off quotes the conclusion; an `implement` one does not** (S5.16) | Quote in both; quote in neither and rely on the transcript | "Write the deliverable" names one answer, and the transcript it is in is budgeted — the oldest messages fall out of a long prompt while the instruction never does. An `implement` hand-off is handed the whole discussion above it, and quoting one message of it would narrow the request |
 | **The closing briefing replaces the marker rule rather than adding to it** | Append "this is the closing turn" to the existing rules | A turn told both "end with a marker" and "write no marker" writes one. The block is last, and the rule it contradicts is simply absent |
 | **`rounds` travels on the message, not on the chat** | A `maxAutoRounds` write before the send and another after it | Two writes with a run between them is a setting the user never chose, visible in the member panel, and wrong for ever if the app is closed in between. The cap belongs to one request and dies with its chain |
 | **A capped chain is checked again at the end of a round** | Only at the top of the next round, like `maxAutoRounds` | A vote whose answers mention nobody schedules nothing, so the loop would exit through the empty-plan branch in silence and the user would never be told the vote was the point |
@@ -171,12 +196,14 @@ speaker. What changed is the set of reasons the loop may `break`.
   from. Today it simply speaks in the next one.
 - Whether `parallel` should also snapshot the *member list* per round, so a
   removal during a round cannot change the roster the briefing prints mid-round.
-- Whether `mention-only` should have a closure rule of its own. Today the markers
-  are stripped there and ignored, because "everybody agreed" is not a statement
-  one named member can make.
-- Whether the closing turn should be given to the member the group deferred to
-  rather than to the first in speaking order, and how that would be decided
-  without a second model call.
+- Whether the closing speaker should be **derived** rather than configured — the
+  member the group deferred to, or the one with the largest context window —
+  and how that would be decided without a second model call. S5.16 answered the
+  "who" with a setting, which is a choice the user makes once, not one the
+  transcript makes per discussion.
+- Whether a chat should be able to hold **more than one** current conclusion, for
+  a discussion that agreed on two separable questions. Today the latest one wins
+  everywhere: the header chip, the chat-list preview and the `deliver` quote.
 - Whether `[AGREED]` should survive into the history transform, so a later
   speaker can see who has already agreed. Today it is stripped like `[PASS]`,
   which also means a small model cannot learn the protocol from the transcript.

@@ -46,6 +46,15 @@ jobs:
           node-version: '24'
           cache: npm
 
+      # The lock file is written by whatever npm the developer runs. npm 11.5
+      # omits the optional subtree of a package it does not install on macOS
+      # (electron-winstaller's), and a newer npm's `npm ci` refuses such a lock
+      # ("Missing: @electron/windows-sign from lock file"). Every PR that added
+      # a dependency failed here first. Pin the runner to the developer's npm so
+      # the two agree; bump this together with the local toolchain.
+      - name: Use the same npm as the lock file's author
+        run: npm install -g npm@11.5.1
+
       # `npm ci` runs the `postinstall` electron-rebuild, which downloads the
       # Electron binary for this platform. That is the slow step of the job and
       # the reason `cache: npm` is on.
