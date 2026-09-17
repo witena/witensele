@@ -156,7 +156,7 @@ when that leaves nobody. Two new handlers (`presence.list`, `presence.retry`),
 `stores/presence.ts` seeding from the first and the member panel's "Retry" button
 calling the second, `away · Ns` counted in the renderer, and Settings → Timeouts
 & heartbeat with the three budgets and the colour legend. `e2e/presence.spec.ts`
-drives a real Ollama member beside a provider pointing at a non-routable address.
+drives a real Ollama member beside a provider pointing at a loopback listener that never answers (originally a non-routable address, which some networks refuse instantly).
 Docs in `docs/features/presence/`.
 
 ### S2.5 Message rendering and composer polish `[x]` (2026-09-13)
