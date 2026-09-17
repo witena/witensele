@@ -10,7 +10,8 @@
 | `build/icon.png` | The 1024 px rasterisation of it, and the only input to the iconset |
 | `build/icon.icns` | What `mac.icon` points at. Binary, committed, regenerated only when the mark changes |
 | `build/icon.iconset/` | The ten intermediate PNGs `iconutil` reads. **Gitignored** — derived and reproducible in one loop |
-| `src/main/index.ts` | `bundledSkillsDir()`: the only runtime code that behaves differently in a packaged build |
+| `build/entitlements.mac.plist` | **S7.3.** The hardened runtime's exceptions, for the app and (through `entitlementsInherit`) its helpers. Two keys, each justified in the file itself |
+| `src/main/index.ts` | `bundledSkillsDir()` and `signedBuild()`: the only runtime code that behaves differently in a packaged build |
 | `playwright.packaged.config.ts` | Runs `e2e/packaged.spec.ts` and nothing else |
 | `e2e/packaged.spec.ts` | The acceptance test against the shipped bundle |
 | `playwright.demo.config.ts`, `e2e/demo.record.ts` | The tour recording that produces `docs/assets/` |
@@ -39,8 +40,11 @@ kind of thing that goes stale.
 | `mac.target` | `dmg`, `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The zip target exists for auto-update, which does not exist yet (S7.4) |
 | `mac.category` | `public.app-category.developer-tools` | `LSApplicationCategoryType` in the Info.plist |
 | `mac.icon` | `build/icon.icns` | Copied to `Contents/Resources/icon.icns` |
-| `mac.hardenedRuntime` | `false` | The hardened runtime is a notarization requirement; without a signature it only adds restrictions for nothing |
-| `mac.identity` | `null` | No Developer ID signing. Explicit rather than omitted: without it electron-builder picks up whatever identity is in the building machine's keychain, which makes the artifact depend on who built it. See "The unsigned caveat" |
+| `mac.hardenedRuntime` | `true` (S7.3) | Notarization refuses a bundle that is not hardened. It costs an unsigned build nothing, because the flag is only ever written by `codesign`, which does not run without an identity |
+| `mac.identity` | **absent** (S7.3) | Not `null` and not a name. Its absence is what makes one configuration produce both builds: electron-builder looks for a Developer ID Application certificate in the keychain, signs with it if there is one, and logs `skipped macOS application code signing` if there is not. `null` would mean "never sign"; a name would tie the file to one developer's keychain |
+| `mac.entitlements`, `mac.entitlementsInherit` | `build/entitlements.mac.plist` | The hardened runtime's two exceptions, for the app and for its helper processes. See "The entitlements" |
+| `mac.gatekeeperAssess` | `false` | electron-builder's default, spelled out because the alternative is a trap: `spctl --assess` **during** packaging fails on a bundle that is correctly signed but not yet notarized, which is every bundle at the moment it is built. Gatekeeper is checked afterwards instead |
+| `mac.notarize` | `true` | A boolean in electron-builder 26 — there is no sub-object. It means "do not disable the built-in @electron/notarize integration"; the credentials are environment variables and never live in this repository. With none of them set the build logs `skipped macOS notarization` and succeeds |
 | `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` and `Witena-0.1.0-x64.dmg` — `${arch}` is what keeps two builds of one version from overwriting each other in `dist/` and in the Release |
 | `publish.provider` | `github` | electron-builder uploads the artifacts itself and writes the `latest-mac.yml` feed S7.4 will read. `owner` / `repo` are deliberately absent: they are inferred from the checkout's git remote, so a tag pushed on a fork publishes to that fork |
 | `publish.releaseType` | `draft` | The review step. CI packages; a human reads the artifacts and presses Publish |
@@ -113,31 +117,91 @@ Outside it, unchanged: the app still writes only to `app.getPath('userData')` �
 `WITENA_USER_DATA` override still works in a packaged build, which is what lets
 `e2e/packaged.spec.ts` run against a throwaway directory.
 
-## The unsigned caveat
+## Signing and notarization
 
-The dmg is **not signed with a Developer ID and not notarized**. There is no
-Apple Developer certificate behind this repository, and a signature cannot be
-faked.
+Since S7.3 **one configuration produces two builds**, and which one you get
+depends entirely on what the machine has, never on an edit here.
 
-To be exact about what `identity: null` does: electron-builder skips its own
-signing step ("skipped macOS code signing — reason=identity explicitly is set to
-null"), and the bundle keeps the **ad-hoc, linker-signed** signature the Electron
-binary already carries — `codesign -dv` reports `Identifier=Electron`,
-`flags=0x20002(adhoc,linker-signed)`. That satisfies the arm64 loader, which
-refuses an entirely unsigned Mach-O, and it does **not** satisfy Gatekeeper,
-which wants a Developer ID and a notarization ticket.
+| The machine has | What electron-builder does | What `codesign -dv` reports |
+|---|---|---|
+| A Developer ID Application certificate **and** notarization credentials | Signs, hardens, notarizes, staples | `Authority=Developer ID Application: …`, `flags=0x10000(runtime)` |
+| A certificate but no credentials | Signs and hardens; logs `skipped macOS notarization` | The same, without a ticket — Gatekeeper still refuses it |
+| Neither | Logs `skipped macOS application code signing … 0 identities found`; the bundle keeps the **ad-hoc, linker-signed** signature the Electron binary already carries | `Identifier=Electron`, `flags=0x20002(adhoc,linker-signed)`, `TeamIdentifier=not set` |
 
-What a user sees: macOS refuses the first double-click ("Witena is damaged", or
-"cannot be opened because the developer cannot be verified", depending on the
-version). The way through is **right-click → Open**, then confirm in the dialog.
-That records an exception for the bundle and every later launch is ordinary.
-`xattr -dr com.apple.quarantine /Applications/Witena.app` does the same thing
-from a terminal. Both are in the README, because a user who does not know this
-concludes the app is broken.
+The third row is what this repository produces today and is unchanged from
+S4.4 — verified by building it. That matters more than it sounds: removing
+`identity: null` could have made an unsigned build *fail* rather than skip, and
+it does not. Two independent reasons it cannot:
 
-Removing the caveat is a purchase, not a code change: a Developer ID certificate,
-`hardenedRuntime: true`, `identity` set to the certificate name, and the
-`notarize` block with an App Store Connect key.
+- `findSigningIdentity` reports "no identity" as a **warning** and returns null
+  unless `forceCodeSigning` is set, which this project never sets.
+- `notarizeIfProvided` is only reached **after** a successful signature, and it
+  skips itself again when no credential variable is set. Notarization therefore
+  cannot fire on a build that was not signed, whatever is in the environment.
+
+The ad-hoc signature satisfies the arm64 loader, which refuses an entirely
+unsigned Mach-O, and does **not** satisfy Gatekeeper, which wants a Developer ID
+and a notarization ticket.
+
+What a user sees when they build their own dmg: macOS refuses the first
+double-click ("Witena is damaged", or "cannot be opened because the developer
+cannot be verified", depending on the version). The way through is **right-click
+→ Open**, then confirm in the dialog; that records an exception for the bundle
+and every later launch is ordinary. `xattr -dr com.apple.quarantine
+/Applications/Witena.app` does the same from a terminal. Both are in the README,
+because a user who does not know this concludes the app is broken. A user who
+downloads a **released** dmg sees none of it.
+
+### The entitlements
+
+`build/entitlements.mac.plist`, used for the app and — through
+`entitlementsInherit` — for every helper process. It grants two things:
+
+| Entitlement | Why |
+|---|---|
+| `com.apple.security.cs.allow-jit` | V8 compiles JavaScript to machine code at runtime. Without it the renderer cannot allocate MAP_JIT pages and Electron does not start on arm64 |
+| `com.apple.security.cs.allow-unsigned-executable-memory` | The other half of the same requirement, named by @electron/notarize's prerequisites: V8 writes into pages it then executes |
+
+It is **shorter than both defaults it replaces**. @electron/osx-sign's
+`default.darwin.plist` also asks for the camera, the microphone, Bluetooth, USB,
+the printer and the user's location — Witena touches none of them, and an
+entitlement that is requested but unused is a permission prompt waiting to
+surprise somebody. app-builder-lib's own template, which is what a build with no
+`entitlements` option gets, carries a third key:
+
+**`com.apple.security.cs.disable-library-validation` is deliberately absent.**
+Library validation only rejects code signed by a *different* team. The one native
+library Witena `dlopen`s — `better_sqlite3.node`, unpacked out of the asar
+because `dlopen` takes a filesystem path — is signed by this build with this
+project's own identity, because @electron/osx-sign walks `Contents/` and signs
+every Mach-O file it finds there, `.node` bundles included, before the outer
+bundle is sealed. Same team, so validation passes and the exception would buy
+nothing while widening what the app is allowed to load.
+
+That is **reasoning, not an observation**, and it is the one claim on this page
+that a certificate could overturn. If the first signed build fails to open its
+database on launch — a `Library not loaded` or `code signature` error naming
+`better_sqlite3.node` — the fix is to add the key to the plist and rebuild.
+Nothing else about the configuration changes. The file says so in its own
+comment, so whoever hits it does not have to find this page first.
+
+### Notarization credentials
+
+electron-builder's built-in @electron/notarize integration reads them from the
+environment, in this order, and never from a file:
+
+| Form | Variables | Used by |
+|---|---|---|
+| Keychain profile | `APPLE_KEYCHAIN_PROFILE` (plus `APPLE_KEYCHAIN` for a non-default keychain) | The local signed build. The profile is created once with `xcrun notarytool store-credentials` and the password never leaves the Keychain |
+| Apple ID | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | CI, from GitHub secrets |
+| App Store Connect key | `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | Neither today. It is the form electron-builder recommends, and the upgrade path if the app-specific password becomes awkward |
+
+A partial set is an **error**, not a skip: setting `APPLE_ID` without
+`APPLE_APP_SPECIFIC_PASSWORD` fails the build with `APPLE_APP_SPECIFIC_PASSWORD
+env var needs to be set`. That is the right behaviour — a release that quietly
+skipped notarization would be discovered by a user, not by the build.
+
+### What being unsigned does to the stored secrets (S7.6)
 
 ### What being unsigned does to the stored secrets (S7.6)
 
@@ -164,27 +228,72 @@ for — and it buys the property the Keychain could not give: the keys survive t
 next build. It is a deliberate trade, not an oversight, and it is documented in
 `docs/features/providers/context.md` as well as here.
 
-**The S7.3 hand-off: signing turns the wrapper on.** When the release workflow
-sets `WITENA_SIGNED_BUILD` (any non-empty value other than `0` / `false`), the
-key file is stored **wrapped** by `safeStorage` instead of plain — the Keychain
-protects the key file, and because the build is signed the identity it is granted
-to stops changing between releases. Nothing else about the secret path changes:
-the same `fk1:` ciphertext, the same column, the same migration. Wrapping is off
-by default precisely because doing it on an unsigned build would recreate the
-bug S7.6 fixed.
+**Signing turns the wrapper on (S7.3).** On a signed build the key file is stored
+**wrapped** by `safeStorage` instead of plain — the Keychain protects the key
+file, and because the build is signed the identity it is granted to stops
+changing between releases. Nothing else about the secret path changes: the same
+`fk1:` ciphertext, the same column, the same migration. Wrapping stays off
+otherwise, precisely because doing it on an unsigned build would recreate the bug
+S7.6 fixed.
 
-Two things S7.3 has to remember:
+S7.6 left two things for S7.3 to finish, and S7.3 did both:
 
-- **Set the variable for the packaged app, not only for the build.** It is read
-  by the running process (`isSignedBuild`, `src/main/secrets.ts`), so exporting
-  it in the workflow shell protects nothing by itself; it has to reach the
-  launched application — the simplest honest way being a signed-build constant
-  injected at build time, which is a change to make *with* S7.3, not before it.
-- **Existing key files are not re-wrapped.** A machine that has been running
-  unsigned builds keeps its plain `secrets.key` after the first signed build;
-  only a file created afterwards is wrapped. Rewriting the user's stored secrets
-  silently on launch is not something to do as a side effect of an update —
-  whether to offer it as an action is in the Phase 6 backlog.
+**1. The flag now reaches the packaged app.** S7.6 read the environment variable
+`WITENA_SIGNED_BUILD`, and recorded in its own `Done:` paragraph that this could
+not work: a variable exported while the dmg is being built is not in the
+environment of the app a user double-clicks three days later, so the flag was
+false exactly where it had to be true. It is now a field in the application's own
+manifest:
+
+```
+electron-builder  -c.extraMetadata.witenaSignedBuild=true
+                    ↓  writes it into the package.json inside the bundle
+src/main/index.ts   signedBuild()  reads app.getAppPath()/package.json
+                    ↓  a boolean
+src/main/secrets.ts createFileKeySecretStore({ wrap })   (Electron-free)
+```
+
+`isSignedBuild` takes the **parsed manifest**, not a path and not an environment:
+it stays a pure function that a test calls with a literal, and the one file
+allowed to ask electron where the bundle is does the asking. In a checkout
+`app.getAppPath()` is the repository root, whose `package.json` has no such
+field, so development and the end-to-end harness are correctly "not signed". Any
+failure to read it is also "not signed", because the cost of guessing wrong in
+the other direction is a key file wrapped by a Keychain item granted to an
+identity nothing vouches for.
+
+The flag is passed by `npm run dist:signed` and by the release workflow **only
+when the certificate exists**; `npm run dist` and `npm run dist:dir` never pass
+it, and `src/main/packaging.test.ts` asserts that.
+
+**2. An existing plain key file is re-wrapped, once.** `rewrapKeyFile`
+(`src/main/secrets.ts`, called from `index.ts` before the store is built) takes a
+`fkkey1:` file on a signed build and rewrites it as `fkkey1w:`. The distinction
+that makes doing it silently defensible is that it **rewrites the container, not
+the contents**: the same 32 bytes go back in, so every `fk1:` ciphertext in the
+database stays readable and no provider key is re-encrypted or touched. What S7.6
+declined to do without asking — re-encrypting the user's secrets — is still not
+done.
+
+| Case | Result |
+|---|---|
+| Unsigned build | No-op. Wrapping there is the original bug |
+| No key file yet | No-op; the store creates one already wrapped |
+| Already `fkkey1w:` | No-op — every launch after the first |
+| `fkkey1:`, wrapper succeeds | Rewritten atomically: temp file in the same directory, `fsync`, `rename`, mode `0600` |
+| Wrapper refuses, or the file is not ours | The plain file stands, one warning is logged, the temp file is removed |
+
+The atomicity is not decoration. The interruption this has to survive is the one
+that would be catastrophic — a half-written key file is every API key the user
+has, gone — so the `rename` is the only moment anything observable changes, and
+POSIX makes that indivisible within a filesystem. The failure path is equally
+deliberate: `safeStorage` can refuse (a locked keychain, a user who clicked Deny)
+and the honest answer is to keep the plain file, which still works, rather than
+leave the user with a key nobody can read.
+
+**Not yet observed on a real signed build.** The three cases are unit-tested with
+a fake wrapper; the real `safeStorage` on a real Developer ID bundle has never
+run. See STEPS.md S7.3.
 
 ## Building the icon
 

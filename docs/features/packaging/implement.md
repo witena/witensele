@@ -198,6 +198,117 @@ other one, ask for it explicitly:
 npm run build && npx electron-builder --mac --dir --x64   # → dist/mac/Witena.app
 ```
 
+Either way the result is **unsigned** unless the machine has a Developer ID
+certificate — see the next section.
+
+### Building a signed release locally (S7.3)
+
+Three things have to exist first, and none of them is in this repository:
+
+**1. A Developer ID Application certificate in the login keychain.** Xcode →
+Settings → Accounts → the Apple Developer account → Manage Certificates → **+** →
+*Developer ID Application*. It has to be the Developer ID variant: an *Apple
+Development* certificate signs for your own machines and Gatekeeper does not
+accept it on anyone else's. Check what is there with
+
+```sh
+security find-identity -v -p codesigning
+```
+
+which should list one `Developer ID Application: <name> (<TEAMID>)`. **Zero
+identities is the state this repository has been developed in** and is why
+everything below is untried.
+
+**2. An app-specific password**, created at appleid.apple.com → Sign-In and
+Security → App-Specific Passwords. Not the Apple ID password; Apple rejects that.
+
+**3. A notarization keychain profile**, stored once so nothing ever types the
+password again:
+
+```sh
+xcrun notarytool store-credentials witena-notary \
+  --apple-id <your-apple-id> --team-id <TEAMID>
+```
+
+It prompts for the app-specific password and writes the credentials into the
+login keychain under the name `witena-notary`. **Run it yourself in your own
+terminal.** The password must never reach a file in this repository, a shell
+history shared with anyone, or a build log.
+
+Then the build itself:
+
+```sh
+APPLE_KEYCHAIN_PROFILE=witena-notary npm run dist:signed
+```
+
+`dist:signed` is `npm run dist` plus
+`-c.extraMetadata.witenaSignedBuild=true`, which is what tells the *running* app
+it may let the Keychain wrap its secrets key file (backend.md, "What being
+unsigned does to the stored secrets"). Notarization takes minutes and
+electron-builder waits for it; the log ends with `notarization successful`.
+
+Verify the artifact rather than the log:
+
+```sh
+hdiutil attach dist/Witena-<version>-arm64.dmg -mountpoint /tmp/witena-dmg -nobrowse
+
+codesign --verify --deep --strict --verbose=2 /tmp/witena-dmg/Witena.app
+spctl -a -vv /tmp/witena-dmg/Witena.app        # want: source=Notarized Developer ID
+xcrun stapler validate /tmp/witena-dmg/Witena.app
+
+hdiutil detach /tmp/witena-dmg
+```
+
+The three answer different questions and none replaces another: `codesign` that
+the bundle and everything nested in it is intact and signed, `spctl` that
+**Gatekeeper** accepts it, and `stapler` that the ticket was stapled into the
+bundle — without which the first launch on a machine with no network is refused
+even though the app is notarized.
+
+Two failures worth recognising:
+
+- `spctl` says `rejected` and `source=Unnotarized Developer ID` — signed, not
+  notarized. The credentials were missing, so notarization skipped itself.
+  Check the build log for `skipped macOS notarization`.
+- The app is accepted but **does not open its database**, with a
+  `Library not loaded` or `code signature` error naming `better_sqlite3.node`.
+  That is library validation, and the fix is one key in
+  `build/entitlements.mac.plist`; the file's own comment says which and why it
+  was left out. This is the one thing about S7.3 that a certificate could prove
+  wrong.
+
+### The CI secrets
+
+The release workflow signs when `CSC_LINK` exists and not otherwise, so adding
+these five repository secrets is the whole of turning it on. Nothing in the
+workflow changes.
+
+| Secret | What it is |
+|---|---|
+| `CSC_LINK` | The Developer ID certificate **and its private key** as a base64 `.p12` — see below |
+| `CSC_KEY_PASSWORD` | The password set when exporting that `.p12` |
+| `APPLE_ID` | The Apple ID of the developer account |
+| `APPLE_APP_SPECIFIC_PASSWORD` | The app-specific password. CI cannot use a keychain profile: `APPLE_KEYCHAIN_PROFILE` needs a keychain a runner does not have |
+| `APPLE_TEAM_ID` | The ten-character team identifier, the same one in the certificate's name |
+
+Exporting the `.p12`: in **Keychain Access**, find the *Developer ID
+Application* certificate, expand it so the private key is selected **with** it,
+right-click → Export 2 items → `.p12`, and set a password. A certificate exported
+without its key signs nothing. Then
+
+```sh
+base64 -i Certificates.p12 | pbcopy
+```
+
+and paste that into the `CSC_LINK` secret. The `.p12` and the password are two
+halves of a signing identity: keep the file out of the repository, off shared
+drives, and delete it once the secret is set.
+
+A partial set fails the build rather than skipping quietly — `APPLE_ID` without
+`APPLE_APP_SPECIFIC_PASSWORD` stops with `APPLE_APP_SPECIFIC_PASSWORD env var
+needs to be set`. That is deliberate: a release that silently skipped
+notarization would be discovered by a user rather than by CI.
+
 ## What CI does not run
 
 `ci.yml` runs `npm ci`, `npm run typecheck`, `npm test` and `npm run build` on
@@ -281,7 +392,8 @@ channel and no event. The only runtime symbol it touches is the private
 | File | Covers |
 |---|---|
 | `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran) |
-| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg for both architectures, an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and the still-unsigned `identity: null` that the README's Gatekeeper note depends on. Also that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
+| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg for both architectures, an `artifactName` carrying `${arch}` so the two cannot collide, and `publish: github` / `releaseType: draft`. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
+| `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
 | `actionlint` (a CI job, not a file here) | Both workflow files: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |
 
 Run with `npm run e2e:packaged` and `WITENA_APP_PATH` pointing at a copy of
@@ -301,9 +413,32 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
 
 ## Known limitations and TODOs
 
-- **Unsigned.** Gatekeeper refuses a double-click on the first launch; the user
-  has to right-click → Open once. Documented in the README and in
+- **Signing is configured but has never run** (S7.3). There is no Developer ID
+  certificate on the machine — `security find-identity -v -p codesigning` reports
+  `0 valid identities found` — and no GitHub secrets, so everything the hardened
+  runtime, the entitlements and notarization do is reasoning checked against
+  electron-builder's source rather than against an artifact. What remains
+  unproven, exactly: that a signature is accepted, that notarization returns and
+  staples a ticket, that `better_sqlite3.node` loads under the hardened runtime
+  **without** `disable-library-validation`, and that the key file is re-wrapped
+  on the first signed launch. Listed in STEPS.md, S7.3.
+- **A build you make yourself is unsigned**, and Gatekeeper refuses its first
+  double-click; right-click → Open once. Verified to still be true after S7.3:
+  `npm run dist:dir` with no identity logs `skipped macOS application code
+  signing … 0 identities found` and produces a bundle `codesign -dv` reports as
+  `flags=0x20002(adhoc,linker-signed)`, `TeamIdentifier=not set` — byte-for-byte
+  the situation S4.4 documented. Documented in the README and in
   [`backend.md`](./backend.md).
+- **A local `npm run dist` exits 1 after writing both dmgs.** The artifacts and
+  blockmaps are complete and correct; the failure is a `TypeError: Cannot read
+  properties of null (reading 'channel')` inside app-builder-lib's
+  `computeChannelNames` while it builds `latest-mac.yml`, because a local run has
+  no publish configuration to name a channel from. **Pre-existing, not S7.3**:
+  the identical crash and exit code reproduce with the pre-S7.3
+  `electron-builder.yml`. It dates from S7.2, which added the `publish:` block
+  but only ever verified `dist:dir` locally. `npm run dist:dir` is unaffected,
+  and the release workflow passes `--publish always` with a token, which probably
+  is too — but the workflows have never run, so that is inference.
 - **The workflows have never executed.** They are validated by `actionlint`
   1.7.12 and by reading; GitHub has never run either of them. The first `v*`
   tag is the first execution, and the likely stumbles are known: whether

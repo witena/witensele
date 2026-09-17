@@ -137,6 +137,16 @@ places for different reasons — the first is advice on a screen where the fix i
 one field away, the second is the translation of a `BackendErrorCode` that can
 reach the user from the middle of a chat turn.
 
+**S7.3 added none, deliberately.** Signing decides whether the Keychain wraps
+`secrets.key`, and the key file being wrapped or plain changes nothing the user
+can see: the same providers, the same keys, the same "a key is stored" hint. The
+re-wrap on the first signed launch is silent for the same reason it is safe to do
+unasked — it rewrites the container, not the contents, so there is no outcome to
+report. A string for it would be a notice about a storage format, which is not a
+thing a user should have to hold an opinion about. The one case that *is* worth
+saying — a key this build cannot decrypt — already has its line, above, and is
+reached the same way whatever wrapped the file.
+
 S5.13 split `authSignIn` into `authSignInAnthropic` / `authSignInGoogle` — the
 user is about to hand an account to a named company and the control should say
 which — and added `gcloudMissing`, `signedOutGoogle` and the five

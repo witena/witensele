@@ -11,10 +11,13 @@
 # step would have to reproduce that feed by hand, and S7.4's `electron-updater`
 # reads exactly it. See docs/features/packaging/backend.md, "Publishing".
 #
-# Signing and notarization (S7.3) are already wired: the steps below read the
-# `CSC_*` / `APPLE_*` secrets and a gate step decides whether they exist. Adding
-# the secrets and flipping `identity` / `hardenedRuntime` / `notarize` in
-# `electron-builder.yml` is all S7.3 has to do here — this file does not change.
+# Signing and notarization (S7.3) are configured in `electron-builder.yml` and
+# gated here: the steps below read the `CSC_*` / `APPLE_*` secrets and a gate
+# step decides whether they exist. With the secrets absent every one of them
+# arrives empty, electron-builder finds no identity and produces the unsigned
+# dmg this repository produced before; with them present the same commands sign,
+# notarize and verify. The secrets to add are listed in
+# docs/features/packaging/implement.md, "The CI secrets".
 name: Release
 
 on:
@@ -72,6 +75,16 @@ jobs:
       # CSC_IDENTITY_AUTO_DISCOVERY is the unsigned build's safety catch: with
       # it false, electron-builder cannot quietly sign with whatever identity a
       # runner's keychain happens to hold.
+      #
+      # `-c.extraMetadata.witenaSignedBuild=true` (S7.3) is added only on a
+      # signed build. It writes that field into the `package.json` **inside** the
+      # bundle, which is the only copy the launched application can read, and
+      # `src/main/index.ts` reads it back to decide whether the Keychain may wrap
+      # the secrets key file. Passing it on an unsigned build would tell the app
+      # to wrap its key with a Keychain item granted to an identity that changes
+      # every time it is packaged — the bug S7.6 exists to fix. It is a shell
+      # conditional rather than a step-level `if:` because the two branches
+      # differ by one argument to the same command.
       - name: Package both architectures and upload them to a draft Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,12 +94,27 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.enabled }}
-        run: npm run dist -- --publish always
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
+        run: |
+          set -euo pipefail
+          if [ "${SIGNING_ENABLED:-false}" = 'true' ]; then
+            npm run dist -- --publish always -c.extraMetadata.witenaSignedBuild=true
+          else
+            npm run dist -- --publish always
+          fi
 
       # Only meaningful once a certificate exists; an unsigned bundle keeps the
       # ad-hoc, linker-signed signature the Electron binary already carries and
       # `spctl` rejects it by design (packaging/backend.md, "The unsigned
       # caveat").
+      #
+      # The three checks answer three different questions, which is why none of
+      # them replaces another: `codesign --verify` that the bundle and everything
+      # nested in it is intact and signed, `spctl --assess` that **Gatekeeper**
+      # accepts it (the line to look for is `source=Notarized Developer ID`), and
+      # `stapler validate` that the notarization ticket was stapled into the
+      # bundle — without which the first launch on a machine with no network is
+      # refused even though the app is notarized.
       - name: Verify the signature and the notarization ticket
         if: steps.signing.outputs.enabled == 'true'
         run: |
@@ -95,6 +123,7 @@ jobs:
             echo "== $app"
             codesign --verify --deep --strict --verbose=2 "$app"
             spctl --assess --type execute -vv "$app"
+            xcrun stapler validate "$app"
           done
 
       - name: Show what the draft Release received

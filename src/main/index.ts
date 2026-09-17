@@ -2,7 +2,7 @@
 // Only this file and `src/main/ipc/` may import electron. All other main process
 // business logic must stay Electron-free so it can be lifted into a Node server
 // later on (CLAUDE.md rule #5).
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
 import { resolveTheme, WINDOW_BACKGROUND } from '@shared/theme'
@@ -13,7 +13,7 @@ import { buildHandlers } from './handlers'
 import { createSafeStorageStore } from './ipc/secret-store'
 import { forwardEvents, registerIpc } from './ipc/register'
 import { migrateProviderSecrets } from './providers/migrate-secrets'
-import { createFileKeySecretStore, SECRETS_KEY_FILE } from './secrets'
+import { createFileKeySecretStore, isSignedBuild, rewrapKeyFile, SECRETS_KEY_FILE } from './secrets'
 import { seedSkills } from './skills/loader'
 
 const isDev = !app.isPackaged
@@ -49,6 +49,38 @@ function bundledSkillsDir(): string {
     ? join(process.resourcesPath, RESOURCES_DIR)
     : join(app.getAppPath(), RESOURCES_DIR)
   return join(root, BUNDLED_SKILLS)
+}
+
+/**
+ * Whether this bundle was signed with a Developer ID (S7.3).
+ *
+ * The answer is a field in the application's own `package.json`, written there
+ * at packaging time by electron-builder's `extraMetadata`
+ * (`-c.extraMetadata.witenaSignedBuild=true`, passed by `npm run dist:signed`
+ * and by the release workflow when a certificate exists). S7.6 used an
+ * environment variable and recorded that as a known gap: a variable exported in
+ * the build shell is not in the environment of the app the user double-clicks
+ * weeks later, so it was false exactly where it had to be true.
+ *
+ * `app.getAppPath()` is the asar in a packaged build and the repository root in
+ * development and in the end-to-end harness — and the repository's own manifest
+ * has no such field, so a checkout is correctly "not signed". Reading it lives
+ * here because this file is the only one allowed to ask electron where anything
+ * is (CLAUDE.md rule #5); `isSignedBuild` itself takes the parsed object and
+ * stays a pure, Electron-free function.
+ *
+ * Any failure is "not signed". The consequence of guessing wrong in the other
+ * direction is a key file wrapped by a Keychain item that is granted to an
+ * identity nothing vouches for — which is the bug S7.6 exists to fix.
+ */
+function signedBuild(): boolean {
+  try {
+    const manifest = readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')
+    return isSignedBuild(JSON.parse(manifest))
+  } catch (cause) {
+    console.warn(`[witena] could not read the bundle manifest, assuming unsigned: ${String(cause)}`)
+    return false
+  }
 }
 
 /**
@@ -169,14 +201,38 @@ void app.whenReady().then(() => {
   // S7.6: provider keys are encrypted with a key held in `userData`, not with a
   // Keychain item the next unsigned rebuild would lose. `safeStorage` is still
   // constructed — it reads the rows written before S7.6, and on a signed build
-  // (S7.3, `WITENA_SIGNED_BUILD`) it wraps the key file. This file is the only
-  // one allowed to know where either of them lives.
+  // (S7.3) it wraps the key file. This file is the only one allowed to know
+  // where either of them lives.
   const legacySecrets = createSafeStorageStore()
   if (!legacySecrets) {
     console.warn('[witena] safeStorage reports no encryption backend on this machine')
   }
+
+  const keyPath = join(userDataDir, SECRETS_KEY_FILE)
+  const wrap = signedBuild()
+
+  // S7.3: the first signed build takes a key file the unsigned ones left plain
+  // and puts it under the Keychain. Same 32 bytes, different container, so every
+  // stored ciphertext stays readable; a refusal keeps the plain file and says so
+  // once rather than leaving a key nobody can read. Before the store, because
+  // the store reads this file on first use.
+  const rewrapped = rewrapKeyFile({
+    keyPath,
+    wrap,
+    ...(legacySecrets ? { wrapper: legacySecrets } : {})
+  })
+  if (rewrapped === 'wrapped') {
+    console.log('[witena] the secrets key file is now wrapped by the Keychain (signed build)')
+  } else if (rewrapped === 'failed') {
+    console.warn(
+      '[witena] the secrets key file could not be wrapped by the Keychain; ' +
+        'it stays readable as before and every stored key still works'
+    )
+  }
+
   const secrets = createFileKeySecretStore({
-    keyPath: join(userDataDir, SECRETS_KEY_FILE),
+    keyPath,
+    wrap,
     ...(legacySecrets ? { wrapper: legacySecrets } : {})
   })
 

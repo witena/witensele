@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,7 +10,8 @@ import {
   isInsecureSecret,
   isLegacySecret,
   isSafeStorageSecret,
-  isSignedBuild
+  isSignedBuild,
+  rewrapKeyFile
 } from './secrets'
 import { fakeSafeStorage } from './testing'
 
@@ -211,22 +212,153 @@ describe('secrets/file key store', () => {
     )
   })
 
-  it('takes the wrapping decision from WITENA_SIGNED_BUILD when it is not given', () => {
+  it('does not wrap unless it is told to', () => {
+    // The store never discovers whether the build is signed: finding that out
+    // means asking electron where the bundle is, which this module may not do
+    // (CLAUDE.md rule #5). `src/main/index.ts` reads the flag and passes it.
+    const wrapper = fakeSafeStorage()
+    createFileKeySecretStore({ keyPath: keyPath(), wrapper }).encrypt('sk-default')
+
+    expect(readFileSync(keyPath(), 'utf8').startsWith('fkkey1:')).toBe(true)
+  })
+})
+
+describe('secrets/the signed-build flag', () => {
+  it('reads the field electron-builder writes into the packaged manifest', () => {
+    // S7.6 read an environment variable, which the launched app never sees.
+    // S7.3 replaced it with `extraMetadata`, so the answer travels inside the
+    // bundle: `-c.extraMetadata.witenaSignedBuild=true` at packaging time.
+    expect(isSignedBuild({ witenaSignedBuild: true })).toBe(true)
+
+    // A command-line value may arrive as a string rather than a boolean
+    // depending on how the argument is coerced, and a flag that is quietly
+    // false because it was spelled `'true'` is the exact failure this field
+    // replaced.
+    expect(isSignedBuild({ witenaSignedBuild: 'true' })).toBe(true)
+    expect(isSignedBuild({ witenaSignedBuild: '1' })).toBe(true)
+
+    expect(isSignedBuild({ witenaSignedBuild: false })).toBe(false)
+    expect(isSignedBuild({ witenaSignedBuild: '' })).toBe(false)
+    expect(isSignedBuild({ witenaSignedBuild: '0' })).toBe(false)
+    expect(isSignedBuild({ witenaSignedBuild: 'false' })).toBe(false)
+  })
+
+  it('answers "not signed" for anything that is not a manifest saying so', () => {
+    // A development run and the end-to-end harness both land here: the
+    // repository's own package.json has no such field. Wrapping the key file on
+    // a build that is not signed is the bug S7.6 fixed, so every uncertain
+    // answer has to be this one.
+    expect(isSignedBuild({ name: 'witena', version: '0.1.0' })).toBe(false)
     expect(isSignedBuild({})).toBe(false)
-    expect(isSignedBuild({ WITENA_SIGNED_BUILD: '' })).toBe(false)
-    expect(isSignedBuild({ WITENA_SIGNED_BUILD: '0' })).toBe(false)
-    expect(isSignedBuild({ WITENA_SIGNED_BUILD: 'false' })).toBe(false)
-    expect(isSignedBuild({ WITENA_SIGNED_BUILD: '1' })).toBe(true)
+    expect(isSignedBuild(null)).toBe(false)
+    expect(isSignedBuild(undefined)).toBe(false)
+    expect(isSignedBuild('witenaSignedBuild')).toBe(false)
+    expect(isSignedBuild({ witenaSignedBuild: 1 })).toBe(false)
+  })
+})
+
+describe('secrets/re-wrapping the key file on a signed build', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'witena-rewrap-'))
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function keyPath(): string {
+    return join(dir, 'secrets.key')
+  }
+
+  it('moves a plain key file under the wrapper, keeping every stored value readable', () => {
+    // The machine has been running unsigned builds: a plain key file and keys
+    // encrypted under it.
+    const unsigned = createFileKeySecretStore({ keyPath: keyPath(), wrap: false })
+    const cipher = unsigned.encrypt('sk-from-the-unsigned-build')
+    const before = readFileSync(keyPath(), 'utf8')
 
     const wrapper = fakeSafeStorage()
-    const store = createFileKeySecretStore({
-      keyPath: keyPath(),
-      wrapper,
-      env: { WITENA_SIGNED_BUILD: '1' }
-    })
-    store.encrypt('sk-from-the-environment')
+    expect(rewrapKeyFile({ keyPath: keyPath(), wrapper, wrap: true })).toBe('wrapped')
 
-    expect(readFileSync(keyPath(), 'utf8').startsWith('fkkey1w:')).toBe(true)
+    const after = readFileSync(keyPath(), 'utf8')
+    expect(after.startsWith('fkkey1w:')).toBe(true)
+    // The container changed; the key did not. That is what makes doing this
+    // without asking defensible — no provider key is re-encrypted or touched.
+    expect(wrapper.decrypt(after.slice('fkkey1w:'.length))).toBe(before.slice('fkkey1:'.length))
+
+    // The point of the whole exercise: the ciphertext written before still reads.
+    const signed = createFileKeySecretStore({ keyPath: keyPath(), wrapper, wrap: true })
+    expect(signed.decrypt(cipher)).toBe('sk-from-the-unsigned-build')
+
+    expect(statSync(keyPath()).mode & 0o777).toBe(0o600)
+  })
+
+  it('leaves an already wrapped file alone, which is every launch after the first', () => {
+    const wrapper = fakeSafeStorage()
+    createFileKeySecretStore({ keyPath: keyPath(), wrapper, wrap: true }).encrypt('sk-signed')
+    const before = readFileSync(keyPath(), 'utf8')
+
+    expect(rewrapKeyFile({ keyPath: keyPath(), wrapper, wrap: true })).toBe('already-wrapped')
+    expect(readFileSync(keyPath(), 'utf8')).toBe(before)
+  })
+
+  it('keeps the plain file when the wrapper refuses', () => {
+    const unsigned = createFileKeySecretStore({ keyPath: keyPath(), wrap: false })
+    const cipher = unsigned.encrypt('sk-still-needed')
+    const before = readFileSync(keyPath(), 'utf8')
+
+    // A locked keychain, or a user who clicked Deny.
+    const denied = {
+      isAvailable: () => true,
+      encrypt: (): string => {
+        throw new Error('User denied access to the keychain')
+      },
+      decrypt: (): string => {
+        throw new Error('User denied access to the keychain')
+      }
+    }
+
+    expect(rewrapKeyFile({ keyPath: keyPath(), wrapper: denied, wrap: true })).toBe('failed')
+
+    // Untouched, and nothing left behind: a half-written key file would be every
+    // API key the user has, gone.
+    expect(readFileSync(keyPath(), 'utf8')).toBe(before)
+    expect(readdirSync(dir)).toEqual(['secrets.key'])
+    expect(
+      createFileKeySecretStore({ keyPath: keyPath(), wrap: false }).decrypt(cipher)
+    ).toBe('sk-still-needed')
+  })
+
+  it('does nothing on an unsigned build, with no file, or with no key store', () => {
+    const wrapper = fakeSafeStorage()
+
+    // An unsigned build must never wrap: the Keychain item is granted to an
+    // identity that changes with every package, which is the original bug.
+    createFileKeySecretStore({ keyPath: keyPath(), wrap: false }).encrypt('sk-a')
+    expect(rewrapKeyFile({ keyPath: keyPath(), wrapper, wrap: false })).toBe('unsigned')
+    expect(readFileSync(keyPath(), 'utf8').startsWith('fkkey1:')).toBe(true)
+
+    // A first launch has no file yet; the store creates one already wrapped.
+    expect(rewrapKeyFile({ keyPath: join(dir, 'absent.key'), wrapper, wrap: true })).toBe('absent')
+
+    // A signed build on a machine with no key storage has nothing to wrap with.
+    expect(rewrapKeyFile({ keyPath: keyPath(), wrap: true })).toBe('failed')
+  })
+
+  it('refuses to rewrite a file it does not recognise', () => {
+    const wrapper = fakeSafeStorage()
+
+    writeFileSync(keyPath(), 'hello', { mode: 0o600 })
+    expect(rewrapKeyFile({ keyPath: keyPath(), wrapper, wrap: true })).toBe('failed')
+    expect(readFileSync(keyPath(), 'utf8')).toBe('hello')
+
+    // Right marker, wrong number of bytes behind it. Rewriting a key we could
+    // not decode would turn "a key we can read" into "a key nobody can".
+    const short = join(dir, 'short.key')
+    writeFileSync(short, `fkkey1:${Buffer.alloc(16).toString('base64')}`, { mode: 0o600 })
+    expect(rewrapKeyFile({ keyPath: short, wrapper, wrap: true })).toBe('failed')
   })
 })
 

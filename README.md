@@ -84,14 +84,20 @@ Ollama. A `v*` tag builds both dmgs and uploads them to a draft GitHub Release
 for a human to publish — see
 [`docs/features/packaging/implement.md`](docs/features/packaging/implement.md).
 
-The dmg is **unsigned and not notarized** — there is no Apple Developer
-certificate behind this repository. macOS will refuse the first double-click.
+A **released** dmg is signed with a Developer ID and notarized by Apple, so it
+opens on a double-click like any other app. A dmg **you build yourself** is not:
+signing needs a certificate, which is not in this repository and cannot be, so
+`npm run dist` produces an unsigned bundle and macOS refuses its first launch.
 Right-click `Witena.app` → **Open**, then confirm once; every launch after that
 is normal. The same thing from a terminal:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Witena.app
 ```
+
+Building a signed one, if you have a Developer ID of your own:
+[`docs/features/packaging/implement.md`](docs/features/packaging/implement.md),
+"Building a signed release locally".
 
 ## How it works
 
