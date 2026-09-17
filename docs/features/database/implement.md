@@ -14,6 +14,10 @@ importing electron:
 | `repositories/*.ts` | Shared-type-in, shared-type-out persistence for each domain, plus `createRepositories(db, { encrypt })` |
 | `../errors.ts` | `BackendFailure`, `notFound()`, `validation()` |
 | `testing.ts` | Temporary-file fixtures for the tests; imported by no production module |
+| `postgres/schema.ts` | **S8.1**: the same seven tables in `drizzle-orm/pg-core` |
+| `postgres/migrations/0000_init.sql` | **S8.1**: the current shape as Postgres DDL |
+| `postgres/database.ts` | **S8.1**: `openPostgresDatabase(url)`, `runPostgresMigrations(pool)`, `truncateAll(db)` |
+| `dialects.ts` | **S8.1**: `describeDialects` and the row gateway both dialects answer; test-only, like `testing.ts` |
 
 The seam is deliberate: `openDatabase` takes a **path**, `createRepositories`
 takes a **handle**, and services take a `Repositories`. Only `src/main/index.ts`
@@ -73,6 +77,40 @@ through `optional()` to an absent field, and the shared type's documented
 default (`providerAuth()` reads an absent `auth` as `apiKey`) supplies the
 meaning. A `NOT NULL DEFAULT` would rewrite the table *and* put the default in
 two places.
+
+### The second dialect (S8.1)
+
+`postgres/` is the same four layers again, and deliberately shaped the same way:
+a connection string in, a drizzle handle and a `close()` out, migrations applied
+on the way. `runPostgresMigrations` reuses `splitStatements` from `migrate.ts`
+and the same `__migrations (name, applied_at)` bookkeeping, so a reader who has
+understood one migrator has understood the other. Two things differ, and both are
+consequences of Postgres rather than choices:
+
+- The whole pass runs inside `pg_advisory_xact_lock`, because two server
+  processes can start at once. SQLite has one writer and needs no lock.
+- `migrations/0000_init.sql` is the **current** shape rather than a replay of the
+  four SQLite files. There is no Postgres database anywhere that predates it, so
+  there is no history to preserve; `0001`–`0003` exist to add a column to a
+  database already on somebody's laptop.
+
+There is no dialect-neutral SQL, and the reason is one column:
+`created_at` holds `Date.now()`, SQLite's `integer` is dynamically sized and
+Postgres's is four bytes. Add `boolean` against `integer` and `jsonb` against
+`text`, and "write the DDL once" stops being available. What is kept identical is
+the *structure*, and `postgres/schema-drift.test.ts` is what keeps it so: it
+compares the two schemas through drizzle's own `getTableColumns` / `getTableName`
+and fails on a table, column, nullability, default, primary key or enum that
+appears in one and not the other. It needs no database, so it runs on every
+machine.
+
+To add a column now: edit `schema.ts`, run `npm run db:generate`, **and** edit
+`postgres/schema.ts` plus a new `postgres/migrations/000N_*.sql`. The drift test
+fails until you have.
+
+The repositories are **not** part of this: they are synchronous and drizzle's
+Postgres driver is not. See [context.md](./context.md), "One synchronous
+repository interface, two dialects".
 
 ### Repositories
 
@@ -156,6 +194,9 @@ Types worth naming:
 |---|---|---|
 | `DrizzleDb` | `database.ts` | `BetterSQLite3Database<typeof schema>`, what every repository takes |
 | `DatabaseHandle` | `database.ts` | `{ db, sqlite, close() }` |
+| `PostgresDb` | `postgres/database.ts` | `NodePgDatabase<typeof schema>` — the asynchronous twin of `DrizzleDb` (S8.1) |
+| `PostgresHandle` | `postgres/database.ts` | `{ db, pool, close() }`, `close()` awaited because `pool.end()` is (S8.1) |
+| `DialectFixture` / `DialectStore` | `dialects.ts` | The dual-dialect fixture and the small row gateway its suites use (S8.1) |
 | `Repositories` | `repositories/index.ts` | All six, the object services receive by injection |
 | `RepositoryOptions` | `repositories/index.ts` | `{ encrypt }` — the only crypto this layer knows about |
 | `MessageCreateInput` | `repositories/messages.ts` | `Omit<Message, keyof EntityBase>`; `seq` is assigned, not supplied |
@@ -185,13 +226,30 @@ Patch semantics, identical in every repository:
 | `src/main/db/chats.test.ts` | Defaults on create (title, `DEFAULT_CHAT_SETTINGS`, `workdir: null`, `goal: null`); the goal replaced wholesale rather than merged, surviving a reopen, cleared with `null`, and left alone by a patch that does not mention it (S5.10); partial settings merge; list ordered by `updatedAt` descending; delete cascades to members and messages while leaving the agents and other chats alone; `setMembers` replaces the list and numbers positions by array index; duplicate or unknown agent ids are rejected without changing the stored membership; scoping and `not_found` |
 | `src/main/db/messages.test.ts` | Create and read back across a reopen; `seq` monotonic per chat and restarting per chat; ordering holds for messages written in the same millisecond; `list` newest first with `before` as an exclusive cursor over three pages; `listForContext` oldest first; patching parts / status / usage / mentions / error and clearing an error with `''`; the parent chat's `updatedAt` is bumped on create; `not_found` for an unknown chat, message or cursor; scoping |
 | `src/main/db/settings.test.ts` | Defaults when nothing is stored; shallow merge persisted across a reopen; `timeouts` merged field by field; a stored row missing newer fields is filled in from the defaults; one row per user |
+| `src/main/db/postgres/schema-drift.test.ts` | **S8.1**: the SQLite and Postgres schemas declare the same seven tables, and each table the same columns, nullability, defaults, primary keys and enum values. Needs no database, so it runs everywhere; includes a guard on itself (a table with a column removed must compare unequal) |
+| `src/main/db/dialects.test.ts` | **S8.1**: the storage contract, against SQLite always and Postgres when `DATABASE_URL` is set. JSON arrays and objects come back parsed; a boolean is a boolean; an epoch-millisecond timestamp survives intact (the assertion that Postgres needs `bigint`); the settings blob; a chat goal replaced and cleared with `null`; ordering by `seq` rather than insertion; filtering by a column; a chat delete cascading to members and messages but not to agents; an agent delete cascading to memberships only; an update touching one row |
 
 Each test file opens its own database in a fresh `fs.mkdtempSync` directory under
 `os.tmpdir()` and removes it afterwards — a real file rather than `':memory:'`,
 because half the point is that a close and reopen behaves correctly.
 
+The Postgres half of `dialects.test.ts` is **skipped** when `DATABASE_URL` is
+unset, with the compose command in the skipped suite's own name, so a machine
+without Docker reports honestly instead of pretending. CI runs SQLite only; see
+[`../server/implement.md`](../server/implement.md), "What CI does not run".
+
 ## Known limitations and TODOs
 
+- **The repositories run on SQLite only** (S8.1). The Postgres dialect exists and
+  is tested, but `Repositories` is a synchronous interface and drizzle's Postgres
+  driver is asynchronous, so nothing above the schema runs on it yet. Making the
+  interface async is the work that unblocks it; the reasoning and the rejected
+  alternatives are in `context.md` and in `../server/context.md`.
+- **The Postgres migration SQL has not been applied on the machine that wrote
+  it** (S8.1) — it has neither Docker nor Postgres. It is verified against the
+  schema it must produce by the drift test, and by review. The first
+  `docker compose up -d postgres` followed by `DATABASE_URL=… npm test` is its
+  first real execution.
 - **No zod validation.** The repositories check existence, ownership and duplicate
   members; everything else is trusted. The S1.3 handlers validate their payloads.
 - **`nextSeq` is `max(seq) + 1`** inside the insert transaction. Correct for one

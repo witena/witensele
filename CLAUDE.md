@@ -36,6 +36,8 @@ src/
     mcp/            # MCPManager: connection pool, tool discovery, execution
     skills/         # SKILL.md scanning and parsing
     memory/         # Per-agent markdown memory and its built-in tools
+  server/           # The Node host for the online version: the same handlers
+                    # over POST /api/<method> and the event bus over a WebSocket
   preload/
     index.ts        # contextBridge, exposes the typed api as window.witena
     index.d.ts      # Ambient declaration of that api
@@ -124,6 +126,7 @@ are worked around:
 | Command | What it does |
 |---|---|
 | `npm run dev` | Start the Vite dev server and launch Electron with HMR |
+| `npm run server` | Build `src/server/` into `out/server/` and run the Node host (`PORT`, `HOST`, `WITENA_DATA_DIR`, `WITENA_SECRETS_KEY`). `docker compose up -d postgres` starts the database the Postgres tests want; see `docs/features/server/` |
 | `npm run build` | Build main, preload and renderer into `out/` |
 | `npm run typecheck` | Type-check both projects (`tsconfig.node.json`, `tsconfig.web.json`) |
 | `npm test` | Run the vitest suite once |
