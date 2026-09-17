@@ -8,6 +8,11 @@ dist
 test-results
 playwright-report
 
+# The Node server's data directory (`WITENA_DATA_DIR`): the SQLite file, the
+# encryption key, skills and memory. The default is deliberately inside the
+# checkout so `npm run server` needs no setup; nothing in it belongs to git.
+.witena-data
+
 # Local-only Chinese copies of committed English docs
 *.zh.md
 CLAUDE.local.md

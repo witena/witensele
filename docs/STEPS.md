@@ -2353,12 +2353,50 @@ adds a line here in the same commit.
 
 ### Server and editor
 
-- **Server and multi-user** (PLAN "Reserved server capability"): lift the
-  main-process business logic into a Node server, swap the `BackendClient`
-  implementation for HTTP + WebSocket, real `userId`s, a server-side
-  `SecretStore`, and — only if several server instances or worker processes
-  exist — an `EventBus` / `MessageRepository` implementation over Redis
-  Streams, Postgres LISTEN/NOTIFY or NATS.
+- **Server and multi-user** (PLAN "Reserved server capability"): ~~lift the
+  main-process business logic into a Node server~~ (done, S8.1), swap the
+  `BackendClient` implementation for HTTP + WebSocket (S8.3), real `userId`s
+  (S8.2), a server-side `SecretStore` (S8.4), and — only if several server
+  instances or worker processes exist — an `EventBus` / `MessageRepository`
+  implementation over Redis Streams, Postgres LISTEN/NOTIFY or NATS. Phase 8
+  now owns the scheduled half; what stays here is the last item, which nothing
+  needs until there is more than one process.
+- **Make `Repositories` asynchronous (S8.1).** The blocker between the Postgres
+  dialect and the Postgres *database*: better-sqlite3 is synchronous and drizzle's
+  Postgres driver is not, so the repositories, the handlers that call them,
+  `resolveTimeouts`, the `AgentSupervisor`'s accessors and `probeAgentProvider`
+  all have to return and await promises before Postgres can be more than a
+  tested schema. Every one of those callers is already inside an `async`
+  function, so it looks mechanical; it has not been attempted, and it is a
+  cross-cutting diff that wants a branch to itself. The alternatives that were
+  rejected — a worker-thread synchronous driver, and a duplicated per-dialect
+  repository layer — are in `docs/features/server/context.md`.
+- **The Postgres schema has never run (S8.1).** `docker-compose.yml` and
+  `src/main/db/postgres/migrations/0000_init.sql` are written and reviewed but
+  were authored on a machine with neither Docker nor Postgres, so the Postgres
+  half of `src/main/db/dialects.test.ts` has only ever been skipped. The first
+  `docker compose up -d postgres` followed by
+  `DATABASE_URL=postgres://witena:witena@localhost:5432/witena npm test` is its
+  first real execution and may need a second commit.
+- **CI runs SQLite only (S8.1).** Adding a Postgres `services:` block to
+  `ci.yml` is one change; it is deliberately left until S8.5, when there is a
+  deployment whose migrations are worth gating on. Until then "CI proves
+  Postgres works" is not a claim this repository makes.
+- **The server has no CORS, no TLS, no WebSocket keepalive and no idle timeout
+  (S8.1).** It binds `127.0.0.1` and S8.5 puts an ALB in front of it, but a
+  browser on another origin cannot call it until S8.3 decides what
+  `Access-Control-Allow-Origin` should say, and a dead client that never sent a
+  FIN holds an entry in the fan-out set until the OS notices (S8.4).
+- **stdio MCP servers still spawn child processes on the Node host (S8.1).**
+  PLAN's "Online version" says they must not on a shared one; nothing stops them
+  yet, and the switch belongs with S8.3's capabilities.
+- **`pg` and `ws` ship in the dmg (S8.1).** Nothing in the Electron bundle
+  imports either, but they must be `dependencies` — the server needs them at
+  runtime and `vite.server.config.ts` derives its externals from that list — so
+  electron-builder copies them into every bundle. A few hundred kilobytes, and
+  the fix is the same `files` exclusion the `better-sqlite3` prebuilds want,
+  with `npm run e2e:packaged` run afterwards to prove nothing resolved through
+  them.
 - **VS Code extension** embedding the chat panel over that server backend
   (PLAN "Future extension", point 3, step two). Depends on the item above.
 
@@ -3041,7 +3079,7 @@ not do, in "API keys and the key file (S7.6)" in the Phase 6 backlog.
 
 Ordered so that each step runs end to end on a laptop before AWS is involved.
 
-### S8.1 Server host and Postgres `[ ]`
+### S8.1 Server host and Postgres `[x] (2026-09-17)`
 What: the business logic runs in a plain Node process.
 - `src/server/index.ts`: builds `AppContext` with injected storage, secrets
   and event bus, mounts every `BACKEND_METHODS` entry as `POST /api/<method>`
@@ -3057,6 +3095,101 @@ What: the business logic runs in a plain Node process.
 Acceptance: `npm run server` + the existing renderer over a
 `HttpBackendClient` (S8.3) streams a reply. Docs: new feature `server`
 (`docs/features/server/`), `docs/features/database/`, `backend-client`.
+Done: `src/server/` is the second host and it is genuinely only a host — six
+files (`config.ts`, `context.ts`, `http.ts`, `user.ts`, `index.ts`, and the build
+config beside them) that read the environment instead of asking electron, build
+the **same** `AppContext` through `createAppContext`, and mount the **same**
+`buildHandlers()` map. The route is computed from the path rather than declared
+in a table, exactly as `registerIpc` validates the method name it is handed, so
+there is no second list of methods to fall out of step with `BACKEND_METHODS`.
+The body is the IPC envelope unchanged — `{ ok, value }` / `{ ok, error }` from
+`ipc-protocol.ts`, which imports no electron and was always shared — with a
+status derived from `BackendError.code` by a table that is total over the union,
+because a proxy should see something truthful while the body stays the authority.
+`GET /ws` is one `ws` connection per client and **one** bus subscription for the
+whole process: the event is serialised once and written to each socket, so a
+streaming run does not pay N `JSON.stringify` calls per token. The five
+electron-only methods are mounted like every other one and answer with the
+rejection `handlers/system.ts` already wrote for exactly this case;
+`openInEditor` with a `custom` command actually works here, because that branch
+is `node:child_process`.
+The **HTTP stack is `node:http` + `ws`**, decided rather than defaulted: the
+routing surface is one literal prefix, one table lookup and two fixed paths, with
+no path parameter and no middleware chain, so Fastify or Hono would add a
+dependency (plus a WebSocket plugin that reaches for `ws` anyway) to save about
+thirty lines of `if`. Fastify's schema validation was the one real temptation and
+was refused for a better reason than size: the handlers already validate their
+own input because IPC needs them to, and a second validation layer on one
+transport is how two transports start disagreeing. One new runtime dependency,
+`ws`.
+`npm run server` is a Vite build into `out/server/` and then `node`, not
+`node src/server/index.ts`, because both migrators inline their SQL with
+`import.meta.glob(… '?raw')`; three toolchains now resolve that primitive, so all
+three hosts run the same migration code rather than two of them running it and
+the third approximating it. Verified by running it: `/healthz` answers,
+`system.ping` answers, `chats.get` on a missing id answers 404 with the envelope,
+and `SIGTERM` closes the sockets, the runners, the MCP children and the database.
+**Postgres is beside SQLite, not under the repositories, and that is the
+step's one deliberate deviation.** `Repositories` is a *synchronous* interface —
+better-sqlite3 is, and the handlers, `ChatRunner`, `AgentTurn` and the supervisor
+are all written against that — while drizzle's Postgres driver is asynchronous
+with no synchronous escape. "The same repository interfaces over Postgres" and
+"the repositories' public types must not change" cannot both hold, and the three
+ways out were weighed and written down (`docs/features/server/context.md`,
+"Postgres is not the server's database yet"): making the interface async is the
+right eventual answer and is a cross-cutting refactor this step was told not to
+do; a worker-thread sync driver would block the event loop of a server whose job
+is concurrent streaming; a second repository implementation is ~800 lines of
+duplicated patch semantics on a path nothing runs, which is not coverage but a
+second place to be wrong. So what shipped is the dialect *underneath* the
+repositories, complete: `src/main/db/postgres/` with the schema, the migrations,
+`openPostgresDatabase` and the migrator, `docker-compose.yml` for Postgres 16 on
+loopback, and `DATABASE_URL` selecting it. The server says so at startup when the
+variable is set instead of silently opening SQLite.
+Two sub-decisions inside that. **Two schema files kept in step by a test**, not
+one description emitting both: a generated description cannot carry drizzle's
+`$type<…>()` typing, which is what turns a change in `shared/types.ts` into a
+compile error in the schema, and it would rewrite the file every other open
+branch is editing — while `postgres/schema-drift.test.ts` compares the two
+through drizzle's own metadata (tables, columns, nullability, defaults, primary
+keys, enum values), needs no database, and runs in 400 ms. And **migrations
+generated per dialect**, not neutral SQL, because there is no neutral spelling:
+`created_at` holds `Date.now()`, which fits SQLite's dynamically sized `integer`
+and does not fit Postgres's four-byte one, so it has to be `bigint` — with
+`boolean` against `integer` and `jsonb` against `text` on top. The two dialects
+also have different histories: `0001`–`0003` exist to add a column to a database
+already on somebody's laptop, and nothing predates `postgres/0000_init.sql`.
+Tests: `src/main/db/dialects.ts` is the shared fixture and `dialects.test.ts` the
+suite — one body, SQLite always, Postgres when `DATABASE_URL` is set and
+otherwise a skip whose *name* carries the compose command. It asserts the
+storage contract the repositories stand on: parsed JSON, real booleans, an
+epoch-millisecond timestamp surviving intact (the assertion that would otherwise
+have found `integer` in production), the goal document replaced and cleared,
+ordering by `seq` rather than insertion, both cascades. The fixture is a small
+row gateway rather than `Repositories` for the reason above, and handler tests
+against Postgres are therefore **not** part of this step — they cannot be until
+the interface goes async. `src/server/http.test.ts` is the contract test: a real
+server on an ephemeral port, `providers.create` → `agents.create` →
+`chats.create` → `chat.send` against a `MockLanguageModelV4` injected through
+`runner.createModel` the way `agent-turn.test.ts` does, asserting that
+`message.created`, `message.delta` and `run.finished` arrive over the WebSocket
+and that the deltas reassemble into the model's own text. `no-electron.test.ts`
+walks the whole transitive import closure of `src/server/` — which reaches
+`app-context.ts`, `chat-runner.ts` and the handler registry — and fails on any
+`electron` specifier, with a guard on itself proving the scanner recognises all
+five spellings.
+What is **not** verified: the Postgres path has never executed. This machine has
+neither Docker nor Postgres, so `dialects.test.ts`'s Postgres half is skipped and
+`0000_init.sql` has never been applied — it is checked against the schema it must
+produce by the drift test, and by review. CI keeps running SQLite only, which is
+stated in `docs/features/server/implement.md` under "What CI does not run"; a
+Postgres service there is a one-line `services:` block and is left until S8.5,
+when there is a deployment whose migrations are worth gating on. The acceptance
+criterion's second half — the renderer over an `HttpBackendClient` — is S8.3's by
+construction: S8.1 builds only the server side and drives it with `fetch` and a
+`ws` client. `npm test` 1616 passed / 11 skipped, `npm run typecheck` clean, and
+`e2e/smoke.spec.ts` green so the desktop app still launches over the shared
+`migrate.ts`. Recorded in the Phase 6 backlog under "Server and editor".
 
 ### S8.2 Accounts `[ ]`
 What: sign in, and everything is yours only.
