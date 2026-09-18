@@ -193,7 +193,7 @@ Further reading: [`docs/PLAN.md`](docs/PLAN.md) for the target architecture, [`d
 
 ## Developing
 
-Requirements: macOS and Node 24. [Ollama](https://ollama.com) is optional for the app and required for the end-to-end suite.
+Requirements: macOS and Node 24 (`.nvmrc` pins it, so `nvm use` picks it up). [Ollama](https://ollama.com) is optional for the app and required for the end-to-end suite.
 
 ```bash
 npm install

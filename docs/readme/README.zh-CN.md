@@ -193,7 +193,7 @@ npm run server
 
 ## 参与开发
 
-环境要求：macOS 和 Node 24。[Ollama](https://ollama.com) 对应用本身是可选的，但端到端测试需要它。
+环境要求：macOS 和 Node 24（`.nvmrc` 已固定版本，`nvm use` 会自动选用）。[Ollama](https://ollama.com) 对应用本身是可选的，但端到端测试需要它。
 
 ```bash
 npm install

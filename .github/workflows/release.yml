@@ -38,7 +38,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
           cache: npm
 
       # The lock file is written by whatever npm the developer runs. npm 11.5
