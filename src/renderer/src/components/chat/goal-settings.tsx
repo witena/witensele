@@ -40,13 +40,32 @@ import { X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatGoal, GoalKind } from '@shared/types'
-import { Button, Field, IconButton, Input, SectionTitle, SegmentedControl, TextArea } from '../ui'
+import {
+  Button,
+  Field,
+  IconButton,
+  Input,
+  SectionTitle,
+  SegmentedControl,
+  TextArea,
+  Toggle
+} from '../ui'
 import { useChatsStore } from '../../stores/chats'
 
 export interface GoalSettingsProps {
   chatId: string | null
   workdir: string | null
   goal: ChatGoal | null
+  /**
+   * Whether a closed discussion writes the deliverable by itself (S5.18).
+   *
+   * Already resolved from `ChatSettings.autoDeliver` by the caller, because
+   * "absent means on" is a rule about the stored settings and this block should
+   * not have to know it twice.
+   */
+  autoDeliver: boolean
+  /** Persists that switch. A `ChatSettings` patch, not part of the goal draft. */
+  onAutoDeliverChange: (autoDeliver: boolean) => void
 }
 
 /** Everything the block edits before it is persisted. */
@@ -87,7 +106,13 @@ export function composeGoal(draft: GoalDraft): ChatGoal | null {
   }
 }
 
-export function GoalSettings({ chatId, workdir, goal }: GoalSettingsProps): React.JSX.Element {
+export function GoalSettings({
+  chatId,
+  workdir,
+  goal,
+  autoDeliver,
+  onAutoDeliverChange
+}: GoalSettingsProps): React.JSX.Element {
   const { t } = useTranslation()
   const [draft, setDraft] = useState<GoalDraft>(() => draftOf(goal))
 
@@ -216,6 +241,31 @@ export function GoalSettings({ chatId, workdir, goal }: GoalSettingsProps): Reac
             </Button>
           </div>
         </Field>
+      ) : null}
+
+      {/*
+        S5.18: the deliverable is written the moment the discussion closes,
+        unless the user says otherwise. Shown only for a `document` goal, which
+        is the only kind the setting does anything on — a switch with nothing
+        behind it explains a feature this chat is not using. The wrapper carries
+        the test id and the state, and the switch inside it is what is clicked;
+        that is the shape `mcp-side-effects` and `agent-memory-toggle` already
+        established, so `Toggle` stays a primitive with no test id of its own.
+      */}
+      {draft.kind === 'document' ? (
+        <div
+          data-testid="goal-auto-deliver"
+          data-enabled={autoDeliver}
+          className="flex items-center justify-between gap-3"
+        >
+          <span className="text-xs text-fg-muted">{t('chat.goalAutoDeliver')}</span>
+          <Toggle
+            label={t('chat.goalAutoDeliver')}
+            checked={autoDeliver}
+            disabled={disabled}
+            onChange={onAutoDeliverChange}
+          />
+        </div>
       ) : null}
 
       <Field label={t('chat.goalMaterials')} layout="column">

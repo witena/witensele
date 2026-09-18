@@ -64,6 +64,13 @@ does not throw, it just makes every answer slightly worse.
   `ConclusionPart` in front of the parts of a `closing` turn that finished
   `done`. The turn is where the stored parts are, so it is where the flag is
   written; what the flag *looks like* is [`chats`](../chats/frontend.md)'s.
+- **The closing block knows the goal** (S5.18): in a `document` chat it names
+  the deliverable, says the executor writes it from this very message, and asks
+  for the file's **content** rather than a summary — and forbids addressing the
+  executor, naming a file or asking anyone to save anything, which is exactly
+  what the closing turn that motivated the step did. A `codebase` chat gets the
+  matching sentence without a file; a `discussion` chat, and a chat with no
+  goal, get the S5.14 block unchanged and never hear the word "executor".
 
 ## Out of scope
 

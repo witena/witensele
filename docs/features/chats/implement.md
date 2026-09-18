@@ -202,6 +202,26 @@ the description of a chat that has a goal removes the goal. The way out is the
 same gesture as the way in, rather than a second control that exists only to
 undo the first.
 
+### Switching automatic delivery off (S5.18)
+
+```
+the Goal block, kind === 'document'
+  → <Toggle> inside goal-auto-deliver (data-enabled = the resolved value)
+  → onAutoDeliverChange(false)
+  → patchSettings({ autoDeliver: false })            // the page, not the draft
+  → chats.update { patch: { settings: { autoDeliver: false } } }
+  → mergeChatSettings writes the field; absent stays absent when nobody touched it
+  → the page resolves `settings.autoDeliver !== false` and hands the block a boolean
+```
+
+It is **not part of the goal draft**: a goal is what the chat produces, and this
+is what the runner does about it, which is a `ChatSettings` field like
+`closingAgentId`. The block receives the resolved boolean from the page rather
+than the raw setting, so "absent means on" is decided in one place — where the
+settings are — and the block never has to know the rule. The switch persists
+immediately, like a material and unlike the text fields, because there is no
+free text to wait for.
+
 ### Picking a deliverable or a material (S5.10)
 
 ```

@@ -2417,6 +2417,96 @@ attached, which is `e2e/presence.spec.ts`'s job. Docs in
 `docs/features/{ui-shell,agents}/` (all four each) and
 `docs/features/providers/frontend.md`.
 
+### S5.18 The conclusion respects the goal and is delivered automatically `[x] (2026-09-17)`
+What: a bug from real use. A `document` chat with a folder, an executor and a
+deliverable configured in the Goal block discussed, agreed, and closed with a
+conclusion that ended "please have the executor write the text above to
+`conclusion.md`" — a file name the model invented — and then nothing happened:
+no executor ran, the configured deliverable was never written, and the user had
+to notice the card's button. Two halves:
+- **The closing turn knows the deliverable.** `closingSection` takes the goal.
+  For a `document` it names `goal.deliverable`, says the executor writes that
+  file from this message as soon as it is finished, asks for the file's
+  **content** in full rather than a summary or a plan, and forbids the three
+  things the failing turn did — addressing the executor, naming a file, asking
+  anyone to save anything. A `codebase` goal gets the matching sentence without
+  a file. A `discussion` goal and a chat with no goal get the S5.14 block
+  unchanged, and never the word "executor". Both languages.
+- **A closed discussion delivers itself.** When the closing turn finished `done`
+  and the chat is one S5.12's "Write the deliverable" would be offered on — a
+  `document` goal naming a file, a folder, an executor member that is not offline
+  — the runner starts the `deliver` hand-off in the same run: the same stored
+  request (`handoffDeliver` notice plus the quoted conclusion, through a
+  `#storeHandoff` extracted from `handoff()`), the executor's turn with its
+  `write_file` permission prompt, the review round after it. Nothing is
+  bypassed and nothing is clicked. `ChatSettings.autoDeliver?: boolean` turns it
+  off per chat; **absent means on**, so no migration and every existing chat
+  gets the behaviour. The Goal block shows the switch for a `document` goal only.
+  `DELIVER_BRIEFING` and the `handoffDeliver` rendering stop saying the user
+  asked, point at the quoted conclusion, and ask for the path alone in reply.
+- Unit tests: the closing block per goal kind in both languages; the deliver
+  briefing's new wording; `autoDeliver` stored, defaulted and refused; and an
+  eleven-case runner block — the whole chain in one run, the two briefings, the
+  flag on the closing message and not on the executor's, the four "nothing
+  happens" conditions, the switch turned back on, a closing turn that produced
+  nothing, a single remaining reviewer, and the manual hand-off unchanged. e2e:
+  `e2e/closure.spec.ts` gains a document chat that agrees and, with nothing
+  clicked but Allow, writes its deliverable.
+Acceptance: in a `document` chat with a folder and an executor, a discussion
+that agrees ends with the conclusion card and, without a click, the deliverable
+on disk containing the group's words; the conclusion never invents a file name;
+the switch stops it. Docs: `docs/features/{orchestration,agent-turn,chats,executor}/`
+(all four each).
+Done: the step was executed by a subagent and finished by hand after the agent
+stalled inside a fifteen-minute end-to-end run; every line of code is the
+agent's, the docs and the verification below are not.
+
+*Why one function stores both hand-offs.* `handoff()` could not simply be called
+from inside the run: its `handoff_run_active` refusal is right for a button and
+wrong for the run that has just produced the thing to deliver. Rather than a
+second storing path — a second place for the notice key, the quote and the
+mention to drift apart — the storing half became `#storeHandoff`, and
+`#autoDeliver` runs the two rounds inline with the same `implementing` /
+`reviewing` stages `#loop` would have used. A reader of the transcript, a later
+prompt built from it, and the executor answering it cannot tell whether the
+user clicked, which is the whole claim the step makes.
+
+*Why `#runClosing` answers a boolean.* An executor handed a `deliver` request
+after a closing turn that errored, was stopped or was skipped would write a
+document from nothing — a file the user never agreed to, in their folder. So
+delivery is gated on a `done` closing outcome, which is also the only outcome
+`markConclusion` flags.
+
+*Why absent means on.* The field joined a JSON column every stored chat lacks.
+`true` in `DEFAULT_CHAT_SETTINGS` would have needed either a migration or a
+merge that invents a value; `autoDeliver?: boolean` read as `!== false` needs
+neither, and a chat written before the step delivers exactly like one created
+after it. The user's only way to say no is a literal `false`, which is what the
+switch writes.
+
+Tests: `briefing.test.ts` gained a `buildGroupBriefing (closing, per goal)` block
+in both languages plus two English-wording cases; `tools.test.ts`'s deliver case
+was rewritten for the new paragraph; `handlers/chats.test.ts` one case;
+`chat-runner.test.ts` an eleven-case `delivery when the discussion closes
+(S5.18)` block; `agent-turn.test.ts` adjusted for the new deliver wording.
+`npm test`: 108 files, 1896 tests passing (11 skipped); `npm run typecheck`
+clean. e2e: `e2e/closure.spec.ts` ran after `npm run build` with Ollama and
+`qwen2.5:3b` present: **4 passed (4.2 m)** — the two S5.14 cases, the S5.16
+card, and the new S5.18 case, whose single attempt agreed, concluded, prompted
+for `write_file` on `notes/conclusion.md`, and after Allow left the file on disk
+containing the group's sentence with the header chip reading Delivered. Two
+things worth knowing about that run. The case has a fifteen-minute budget and
+three attempts because a 3B model writes `[AGREED]` about three runs in four and
+reaches for a tool with about the same reliability; the subagent's own first run
+spent two attempts without a consensus (one member called `read_file` on the
+not-yet-existing deliverable instead of answering — the workspace tools S5.11
+gives every participant are a real distraction for a small model), and the case
+was widened to three attempts and given a trace of what each one reached. And
+the S5.16 case broke once the delivery case ran before it: it read the chat
+list's **first** `chat-item-conclusion`, which since S5.18 belongs to whichever
+document chat concluded last; it now reads the selected chat's row, which is
+what it meant.
+
 
 ## Phase 6: Backlog (decided, not yet scheduled)
 

@@ -92,8 +92,14 @@ export interface GroupBriefingInput {
    * is not part of the discussion, it is the answer handed back to the user, so
    * it states the conclusion in a few lines, adds no new argument and writes no
    * marker at all. The runner gives it to one member — the first in speaking
-   * order — immediately after the `consensus` notice, and nothing is scheduled
-   * after it.
+   * order — immediately after the `consensus` notice.
+   *
+   * Since S5.18 the block also carries the **goal**, because what a conclusion
+   * has to *be* depends on it: in a `document` chat the conclusion is the
+   * deliverable's content, which the executor writes to the configured file
+   * straight afterwards, so the speaker must write that content in full and must
+   * not address the executor or name a file of its own. See `closingSection` in
+   * either language module for the failure that rule was written against.
    *
    * Never set together with `reviewing`: a review round is a hand-off's, and a
    * hand-off's rounds are not what the consensus rule looks at.

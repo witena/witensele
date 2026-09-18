@@ -9,7 +9,10 @@ composer and the Actions card's "Write the deliverable" — are **not** here: bo
 start a run, so they belong to
 [`orchestration`](../orchestration/frontend.md) and are drawn on
 [`chats`](../chats/frontend.md)'s page. The only thing this feature contributes
-to them is the executor's own briefing, which nobody sees.
+to them is the executor's own briefing, which nobody sees. The same is true of
+S5.18's automatic delivery: the executor's turn, its permission card, its diff
+block and its delivered chip are drawn exactly as after a click — the only
+difference on screen is that nobody clicked.
 
 What S5.12 does add here is a chip that is finally **authored by the backend**: a
 `FileRefPart` naming the deliverable, appended to the executor turn that produced

@@ -61,15 +61,26 @@ function reviewSection(goal: ChatGoal | null): string[] {
   ]
 }
 
-/** The closing block (S5.14); says the same things in the same order as `briefing.en.ts`. */
-function closingSection(): string[] {
-  return [
+/** The closing block (S5.14, S5.18); says the same things in the same order as `briefing.en.ts`. */
+function closingSection(goal: ChatGoal | null): string[] {
+  const lines = [
     '',
     '这是收尾发言:',
     '- 大家已经达成一致,讨论到此结束。你现在写的是交给用户看的答案,不是又一轮辩论。',
-    '- 用几行话说清楚大家得出的结论:定下来的是什么,站得住的理由是什么;如果还有没定的地方,说明是哪一点。',
-    '- 不要提出新的论点,不要用 @ 点名其他成员,也不要在结尾写任何标记。'
+    '- 用几行话说清楚大家得出的结论:定下来的是什么,站得住的理由是什么;如果还有没定的地方,说明是哪一点。'
   ]
+  if (goal?.kind === 'document' && goal.deliverable) {
+    lines.push(
+      `- 本群要产出的文件是 ${goal.deliverable};你写完之后,本群的 executor 会直接拿这条消息写进那个文件。所以这里要写出产出文件的**正文本身**,写全,按它在文件里应有的样子写,而不是写一份摘要或者写作计划。`,
+      `- 不要对 executor 说话,不要请任何人保存或写入什么,更不要自己起一个文件名:本群唯一要产出的文件就是 ${goal.deliverable},而且不用你来写。`
+    )
+  } else if (goal?.kind === 'codebase') {
+    lines.push(
+      '- 讨论结束后,本群的 executor 会按这条消息去改代码。所以要说清楚该改什么、为什么改,具体到能照着做;不要对 executor 说话,也不要请任何人去做什么。'
+    )
+  }
+  lines.push('- 不要提出新的论点,不要用 @ 点名其他成员,也不要在结尾写任何标记。')
+  return lines
 }
 
 export const buildChineseBriefing: BriefingBuilder = ({
@@ -119,7 +130,8 @@ export const buildChineseBriefing: BriefingBuilder = ({
     ...(goal ? goalSection(goal) : []),
     // S5.12: after the goal, for the same reason as in `briefing.en.ts`.
     ...(reviewing ? reviewSection(goal) : []),
-    // S5.14: last of all, for the same reason as in `briefing.en.ts`.
-    ...(closing ? closingSection() : [])
+    // S5.14: last of all, for the same reason as in `briefing.en.ts`. It takes
+    // the goal too (S5.18), for the same reason.
+    ...(closing ? closingSection(goal) : [])
   ].join('\n')
 }

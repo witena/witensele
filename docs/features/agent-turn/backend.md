@@ -11,7 +11,7 @@
 | `src/main/agents/title.ts` | `sanitizeTitle`, `fallbackTitle` and `generateChatTitle` — the automatic chat title (S4.3). `ChatRunner` is what calls it; see [`orchestration`](../orchestration/backend.md) |
 | `src/shared/markers.ts` | `PASS_TOKEN`, `AGREED_TOKEN`, `CONTINUE_TOKEN`, `isPassOnly`, `closureMarker` and `stripTrailingMarkers`: shared, because the status decision here, the scheduling decision in `orchestration` and the rendering in the transcript have to read the identical rule. It was `src/shared/pass.ts` until S5.14, when the second pair of markers made the name wrong; every import was updated rather than aliased |
 | `src/main/agents/briefing.ts` | `buildGroupBriefing` (picks the language) and `resolveMainLanguage` |
-| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3), the `Goal of this chat` section (S5.10), the `[AGREED]` / `[CONTINUE]` rule and the `This is the closing turn` block (S5.14) |
+| `src/main/agents/briefing.en.ts` | The English wording, including the conditional `memory_save` rule (S3.3), the `Goal of this chat` section (S5.10), the `[AGREED]` / `[CONTINUE]` rule and the `This is the closing turn` block (S5.14) — which since S5.18 takes the goal (`closingSection(goal)`) and, for a `document`, names the deliverable and asks for its content |
 | `src/main/agents/briefing.zh-CN.ts` | The Chinese wording, same rules in the same order. **The only `.ts` file in the repository that may contain Chinese** — see below |
 | `src/main/agents/default-agent.ts` | `ensureDefaultAgent`, documented under [`chats`](../chats/backend.md) |
 

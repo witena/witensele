@@ -83,6 +83,7 @@ persisted on its own:
 | `settings.speaking` | `sequential` or `parallel` |
 | `settings.maxAutoRounds` | An integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` = `[1, 10]` |
 | `settings.closingAgentId` (S5.16) | A non-empty string, or `null` to clear it. **Not** checked against this chat's membership: membership changes after the setting is written, so the runner has to survive an id that names nobody anyway (`closingSpeaker` falls back), and a second check would only let the panel refuse what the runner already handles |
+| `settings.autoDeliver` (S5.18) | A boolean, or absent. There is no `null` here because there is nothing to clear: `false` is the only value that changes anything, and a chat that never had the field is a chat with it on |
 | `settings.stallTimeoutMs` / `hardTimeoutMs` | A finite number greater than zero |
 
 Since S5.16 the patch type is `ChatSettingsPatch` rather than
@@ -139,6 +140,19 @@ or turns out to be the executor.
 The **conclusion** the closing turn then writes is a `ConclusionPart` on that
 message: a member of the `MessagePart` union, so the `messages.parts` JSON column
 takes it with no migration and a row written before S5.16 simply has none.
+
+### Whether the conclusion is delivered by itself (S5.18)
+
+`ChatSettings.autoDeliver?: boolean` is this feature's whole share of S5.18, and
+it follows `closingAgentId` in every respect but one: it is never cleared, only
+set. Absent **means on** — the field joined a JSON column every stored chat
+lacks, and a chat written before the step must deliver exactly like one created
+after it — so the handler accepts a boolean or nothing, `mergeChatSettings`
+writes whatever arrives, and the one reader,
+[`orchestration`](../orchestration/backend.md)'s `autoDeliverExecutor`, asks
+`!== false`. `handlers/chats.test.ts` has the case: stored as `false`, stored
+back as `true`, refused when it is not a boolean, and an untouched chat
+answering with no field at all.
 
 ### The working directory (S5.2)
 

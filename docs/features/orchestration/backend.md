@@ -269,6 +269,36 @@ notice, which is a key (rule #4), and the quote is the group's own words. An
 `implement` hand-off stores no quote, and a chat with no conclusion stores none
 either.
 
+### Delivering it without being asked (S5.18)
+
+`#runClosing` now returns whether any outcome of the closing round finished
+`done`, and when it did `#loop` calls `#autoDeliver` before breaking. That method
+is the `deliver` hand-off run from inside the run:
+
+| Step | What happens |
+|---|---|
+| `autoDeliverExecutor(chat, members)` | `null` — and nothing else happens — unless `settings.autoDeliver !== false`, `chat.workdir` is set, the goal is a `document` naming a file, and a member has `role: 'executor'` (the first in `position` order, `executorWorkdir`'s rule). Exported and pure, so each condition is a unit test |
+| `supervisor.isOffline(executor.id)` | The fifth condition, at the call site because it needs the supervisor: an offline executor would time out instead of writing |
+| `#storeHandoff(chat, executor, 'deliver', deliverable)` | The **same** method `handoff()` calls: a `user` message carrying the `handoffDeliver` notice `{ agent, path }` and the `conclusionQuote`, `mentions: [executor.id]`, `message.created` emitted |
+| Round `n+1`: `[executor]` | `planFromHandoff`, `implementing: executor.id`, `intent: 'deliver'` — the executor's prompt carries `DELIVER_BRIEFING` and `goalHandoffLine`, exactly as after a click |
+| Round `n+2`: the other members that are not offline | `planFromReview`, `reviewing: true`. Skipped entirely when nobody is left, which is a chat whose only other member is the executor |
+
+`autoDeliver` is read as **`!== false`** rather than `=== true`: the field was
+added to a JSON column every existing chat lacks, so absence has to be the
+default, and the default is on — a chat that names a file, a folder and a writer
+has already said what to do when the talking stops. The manual `handoff()` is
+untouched; after an automatic delivery the conclusion card's own button still
+works and stores the identical rows again.
+
+The tests, in `chat-runner.test.ts`'s `delivery when the discussion closes
+(S5.18)` block: the whole chain in one run ending with the review; the closing
+turn briefed with the file and the executor briefed to write it; the conclusion
+flag on the closing message and **not** on the executor's reply; nothing
+happening without an executor, without a folder, for a non-document goal, and
+with the switch off; delivery again once it is on; no delivery when the closing
+turn produced nothing; the review with a single remaining participant; and the
+manual hand-off unchanged.
+
 ## Three things the runner announces, and why it is the runner (S4.2, S4.3, S5.11)
 
 Both are facts about a **run**, and `AgentTurn` does not know one is happening.

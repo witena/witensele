@@ -233,20 +233,30 @@ export const HANDOFF_BRIEFING = [
  * since before anybody spoke — a model told to implement a conclusion about a
  * report tends to write the report into the transcript.
  *
- * Three things it has to say, and each of them is a failure that really happens
- * with a small model: write the **file** (not a message about the file), create
- * the parent folders (S5.10 lets a deliverable name a folder that does not exist
- * yet, which is the common case), and end with a summary of exactly **two
- * lines** — the path, then one sentence — because the review round that follows
- * needs the path and does not need the document pasted in underneath it.
+ * Four things it has to say, and each of them is a failure that really happens
+ * with a small model: write the **file** (not a message about the file), write
+ * it from the **conclusion the request quotes** rather than from the argument
+ * above it, create the parent folders (S5.10 lets a deliverable name a folder
+ * that does not exist yet, which is the common case), and then **reply with the
+ * path and nothing else** — the review round that follows needs the path and
+ * does not need the document pasted in underneath it.
+ *
+ * The quote is the S5.18 half. The request the executor answers already carries
+ * the conclusion as a block quote (`conclusionQuote`, S5.16), and pointing at it
+ * is what stops a model from writing its own digest of the whole transcript into
+ * the file: the group has already agreed what the document says, and the
+ * executor's job is transcription, not authorship. "The user has asked you" also
+ * left with S5.18, because since then the hand-off may be automatic — nobody
+ * clicked anything, and a prompt that says somebody did is simply wrong.
  *
  * The path itself is not here: `goalHandoffLine` names it, and it is appended to
  * whichever of the two paragraphs applies.
  */
 export const DELIVER_BRIEFING = [
-  'The discussion above has finished and the user has asked you to write the deliverable of this chat now.',
-  'Write the file itself, creating any parent folder that does not exist yet, from the conclusion the group reached above: do not re-open the debate, do not ask which option to take, and do not reply with the document in the chat instead of writing it.',
-  'When the file is written, finish your message with a summary of exactly two lines: the first the path you wrote, the second one sentence saying what it now contains.'
+  'The discussion above has finished and it is time to write the deliverable of this chat now.',
+  'The request you are answering quotes the conclusion the group reached; that conclusion is what the file must contain.',
+  'Write the file itself, creating any parent folder that does not exist yet: do not re-open the debate, do not ask which option to take, do not summarise the conclusion into something shorter, and do not reply with the document in the chat instead of writing it.',
+  'When the file is written, reply with the path you wrote and nothing else.'
 ].join(' ')
 
 /** The briefing paragraph for one hand-off intent (S5.6, S5.12). */

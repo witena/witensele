@@ -74,7 +74,7 @@ function reviewSection(goal: ChatGoal | null): string[] {
 }
 
 /**
- * The `This is the closing turn` block (S5.14), or nothing.
+ * The `This is the closing turn` block (S5.14, S5.18), or nothing.
  *
  * It is the one block that **replaces** the discussion rules rather than adding
  * to them, so it is written last and says so in its first line: the group has
@@ -83,15 +83,42 @@ function reviewSection(goal: ChatGoal | null): string[] {
  * end with a marker — are all wrong for it. Saying "no marker" explicitly is not
  * redundant: a model that has just written `[AGREED]` twice will write it a
  * third time unless it is told not to.
+ *
+ * S5.18 added the **goal's half**, and it exists because of a failure a user hit:
+ * a closing turn in a `document` chat wrote a summary and ended with "please
+ * have the executor write the text above to conclusion.md" — a file name the
+ * model invented, ignoring the deliverable the chat was configured with. The
+ * goal *is* in the prompt (`goalSection` above), but a closing turn told only
+ * "state the conclusion" treats the deliverable as somebody else's business. So
+ * this block names the file, says who writes it and when, and forbids each of
+ * the three things that closing turn did: address the executor, invent a file
+ * name, ask anybody to save anything. For a `codebase` goal the same sentence
+ * without a file: the executor implements this afterwards, so it has to be
+ * written to be built from. A `discussion` goal — and a chat with no goal at all
+ * — gets neither, and a test asserts the word `executor` never reaches it: there
+ * is nobody to hand it to, and naming one would invent a step.
  */
-function closingSection(): string[] {
-  return [
+function closingSection(goal: ChatGoal | null): string[] {
+  const lines = [
     '',
     'This is the closing turn:',
     '- The group has agreed and the discussion is over. You are writing the answer the human reads, not another turn of the debate.',
-    '- State the conclusion the group reached, in a few lines. Say what was decided and the reasons that survived; if something was left open, say what it is.',
-    '- Do not introduce a new argument, do not mention another member with @, and do not end with a marker of any kind.'
+    '- State the conclusion the group reached, in a few lines. Say what was decided and the reasons that survived; if something was left open, say what it is.'
   ]
+  if (goal?.kind === 'document' && goal.deliverable) {
+    lines.push(
+      `- This chat produces the file ${goal.deliverable}, and the executor of this chat writes that file from this message as soon as you have finished. So write the **content** of the deliverable here, in full, as it should read in the file — not a summary of it and not a plan for writing it.`,
+      `- Do not address the executor, do not ask anyone to save or write anything, and never name a file of your own: the only file this chat produces is ${goal.deliverable}, and it is written for you.`
+    )
+  } else if (goal?.kind === 'codebase') {
+    lines.push(
+      '- The executor of this chat makes the change afterwards, from this message. So say what should change and why, precisely enough to be built from, and do not address the executor or ask anyone to do anything.'
+    )
+  }
+  lines.push(
+    '- Do not introduce a new argument, do not mention another member with @, and do not end with a marker of any kind.'
+  )
+  return lines
 }
 
 export const buildEnglishBriefing: BriefingBuilder = ({
@@ -150,7 +177,9 @@ export const buildEnglishBriefing: BriefingBuilder = ({
     // it is the last thing the model reads before the transcript.
     ...(reviewing ? reviewSection(goal) : []),
     // S5.14, last of all: it is the only block that contradicts the rules above,
-    // and the instruction a model follows is the one it read most recently.
-    ...(closing ? closingSection() : [])
+    // and the instruction a model follows is the one it read most recently. It
+    // takes the goal too (S5.18): the conclusion of a `document` chat *is* the
+    // deliverable's content, and saying so is the last thing the model reads.
+    ...(closing ? closingSection(goal) : [])
   ].join('\n')
 }

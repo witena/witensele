@@ -1843,7 +1843,9 @@ describe('runAgentTurn and a document goal', () => {
 
     const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
     expect(prompt).toMatch(/write the deliverable of this chat now/)
-    expect(prompt).toMatch(/exactly two lines/)
+    // S5.18: from the conclusion the request quotes, answering with the path.
+    expect(prompt).toMatch(/quotes the conclusion the group reached/)
+    expect(prompt).toMatch(/reply with the path you wrote and nothing else/)
     expect(prompt).toContain(DELIVERABLE)
     // The other intent's paragraph is not also in there: one instruction, once.
     expect(prompt).not.toMatch(/Implement the conclusion the group reached/)

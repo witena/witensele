@@ -27,7 +27,10 @@
  *        plan = mentions of the round that just ended
  *        this message's own `rounds` spent  → finish `max-rounds` (+ voteClosed)
  *        everybody wrote `[AGREED]`         → consensus notice, one closing
- *                                             turn, finish `completed`
+ *                                             turn, then — for a document goal
+ *                                             with an executor and a folder —
+ *                                             the deliver hand-off and its
+ *                                             review round, finish `completed`
  *      title the chat, if it is still called `New chat`
  *      emit run.finished { reason }
  * ```
@@ -94,6 +97,15 @@
  *   on, which is that mode's own rule), the speaker is the chat's
  *   `closingAgentId` when it can be (`closingSpeaker`), and the message it
  *   writes carries a `ConclusionPart`. See `#agreed` and `#runClosing`.
+ *
+ * - **A closed discussion delivers its own document** (S5.18). When the closing
+ *   turn produced a conclusion and the chat is one S5.12's "Write the
+ *   deliverable" would have been offered on — a `document` goal with a
+ *   deliverable, a working directory, an executor member, and `autoDeliver` not
+ *   switched off — the runner starts that very hand-off itself, in the same run:
+ *   the same notice, the same quoted conclusion, the same permission prompt, the
+ *   same review round. Nothing is clicked. See `#autoDeliver` for the bug that
+ *   argument comes from and `autoDeliverExecutor` for the conditions.
  * - **A message may cap its own chain** (S5.14). `ChatSendInput.rounds`
  *   overrides `maxAutoRounds` for the chain that message starts and nothing
  *   else; the Actions card's "Start a vote" sends `1`, so every member answers
@@ -508,12 +520,36 @@ export class ChatRunner {
       throw validation('a run is already active in this chat', { reason: 'handoff_run_active' })
     }
 
+    const message = this.#storeHandoff(chat, executor, intent, deliverable ?? null)
+
+    this.#handoff = { agentId: executor.id, intent }
+    this.#start()
+    return message
+  }
+
+  /**
+   * The `user` message a hand-off is: its notice key, and — for `deliver` — the
+   * conclusion quoted beside it (S5.6, S5.12, S5.16).
+   *
+   * Extracted from `handoff()` in S5.18, because the automatic delivery below
+   * stores exactly the same row from inside a run that `handoff()` refuses to
+   * join. Everything a reader of the transcript sees, everything a later prompt
+   * is built from, and everything the executor is answering is identical whether
+   * the user clicked or the discussion closed by itself — which is the whole
+   * claim S5.18 makes, so there is one function that produces it.
+   */
+  #storeHandoff(
+    chat: Chat,
+    executor: Agent,
+    intent: HandoffIntent,
+    deliverable: string | null
+  ): Message {
     const notice =
       intent === 'deliver'
         ? {
             type: 'system-notice' as const,
             key: NOTICE_HANDOFF_DELIVER,
-            params: { agent: executor.name, path: deliverable as string }
+            params: { agent: executor.name, path: deliverable ?? '' }
           }
         : { type: 'system-notice' as const, key: NOTICE_HANDOFF, params: { agent: executor.name } }
 
@@ -540,9 +576,6 @@ export class ChatRunner {
       this.#ctx.userId
     )
     this.#emit({ type: 'message.created', message })
-
-    this.#handoff = { agentId: executor.id, intent }
-    this.#start()
     return message
   }
 
@@ -777,7 +810,9 @@ export class ChatRunner {
         // …and an *uncapped* discussion ends when the group says it has (S5.14).
         if (this.#agreed(members, outcomes, carried, stage)) {
           this.#notice(chat, NOTICE_CONSENSUS)
-          await this.#runClosing(chat, members, controller.signal)
+          const concluded = await this.#runClosing(chat, members, controller.signal)
+          // S5.18: and a chat whose goal is a file writes it, in the same run.
+          if (concluded) await this.#autoDeliver(chat, members, controller.signal)
           reason = controller.signal.aborted ? 'stopped' : 'completed'
           break
         }
@@ -977,20 +1012,104 @@ export class ChatRunner {
    * the message it produces with a `ConclusionPart` (S5.16). Whatever it
    * mentions is ignored, because the caller breaks out of the loop immediately
    * afterwards — that is the point of closing.
+   *
+   * Answers **whether a conclusion was actually written**, which is what S5.18's
+   * automatic delivery is gated on: a closing turn that errored, was skipped or
+   * was stopped produced no answer, and handing an executor a file to write from
+   * nothing would put an invented document on the user's disk.
    */
-  async #runClosing(chat: Chat, members: Agent[], signal: AbortSignal): Promise<void> {
-    if (signal.aborted) return
+  async #runClosing(chat: Chat, members: Agent[], signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return false
     const speaker = closingSpeaker(chat, members, (id) => this.#ctx.supervisor.isOffline(id))
     // Every member offline is already the `allOffline` case's territory; there
     // is nobody left to write a conclusion and the notice above stands alone.
-    if (!speaker) return
+    if (!speaker) return false
 
     this.#round += 1
     this.#speakers = [speaker.id]
     this.#emit({ type: 'run.round', chatId: chat.id, round: this.#round, speakers: [speaker.id] })
-    await this.#runRound(chat, members, [speaker], EMPTY_PLAN, signal, {
+    const outcomes = await this.#runRound(chat, members, [speaker], EMPTY_PLAN, signal, {
       ...ORDINARY_STAGE,
       closing: true
+    })
+    return outcomes.some((outcome) => outcome.result.status === 'done')
+  }
+
+  /**
+   * The deliverable, written without being asked for a second time (S5.18).
+   *
+   * The bug this closes is the whole argument for it. A chat configured with a
+   * `document` goal, an executor and a folder discussed, agreed, and closed with
+   * a conclusion that ended "please have the executor write the text above to
+   * `conclusion.md`" — a file name the model invented — and then **nothing
+   * happened**: the product had everything it needed to write the real
+   * deliverable and waited for a click instead. The briefing half of the fix is
+   * in `closingSection`; this is the other half. A chat that says what it
+   * produces, in a folder, with a member whose job is writing files, has already
+   * said what to do when the discussion ends.
+   *
+   * It is the **same hand-off** S5.12's button starts, deliberately and in every
+   * detail: the same `#storeHandoff` row with the same notice key and the same
+   * quoted conclusion, the same `deliver` briefing, the same permission prompt
+   * in front of `write_file`, and the same review round afterwards. What it is
+   * not is a second path through delivery — `handoff()` cannot be reused only
+   * because it refuses to join a run, which is right for a button and wrong for
+   * the run that just produced the thing being delivered.
+   *
+   * Five conditions, four of them S5.12's own and the fifth the user's switch:
+   *
+   * | Condition | Why it is checked here |
+   * |---|---|
+   * | The goal is a `document` with a deliverable | There is no file to write otherwise; `handoff_no_deliverable` is the same refusal the button gives |
+   * | The chat has a working directory | Nothing outside one can be written, and the deliverable's path is relative to it |
+   * | The chat has an executor member | Participants never get a writing tool, whatever the goal says (PLAN's one-writer rule) |
+   * | `settings.autoDeliver` is not `false` | The user turned it off for this chat; the conclusion card's manual action is still there |
+   * | The executor is not offline | The supervisor already dropped it from rounds; a turn scheduled for it would time out instead of writing |
+   *
+   * When any of them fails, nothing at all happens — no notice, no round, no
+   * half-stored request — and the chat is exactly what S5.16 left behind: a
+   * conclusion card with **Write to the deliverable** on it.
+   */
+  async #autoDeliver(chat: Chat, members: Agent[], signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return
+    const executor = autoDeliverExecutor(chat, members)
+    if (!executor) return
+    if (this.#ctx.supervisor.isOffline(executor.id)) return
+    const deliverable = chat.goal?.deliverable ?? null
+
+    this.#storeHandoff(chat, executor, 'deliver', deliverable)
+
+    const memberIds = members.map((member) => member.id)
+    const writing = planFromHandoff(memberIds, executor.id)
+    this.#round += 1
+    this.#speakers = [executor.id]
+    this.#emit({ type: 'run.round', chatId: chat.id, round: this.#round, speakers: [executor.id] })
+    await this.#runRound(chat, members, [executor], writing, signal, {
+      implementing: executor.id,
+      intent: 'deliver',
+      reviewing: false
+    })
+    if (signal.aborted) return
+
+    // …and then the review round, for the same reason S5.6 runs one: a file
+    // nobody read is not a delivered document. Offline members are dropped from
+    // it exactly as the main loop drops them, and a chat whose only other member
+    // is the executor simply has nobody to review.
+    const review = planFromReview(memberIds, executor.id)
+    const speaking = review.speakers.filter((id) => !this.#ctx.supervisor.isOffline(id))
+    if (speaking.length === 0) return
+    const reviewers = speaking
+      .map((id) => members.find((member) => member.id === id))
+      .filter((member): member is Agent => member !== undefined)
+    if (reviewers.length === 0) return
+
+    this.#round += 1
+    this.#speakers = speaking
+    this.#emit({ type: 'run.round', chatId: chat.id, round: this.#round, speakers: speaking })
+    await this.#runRound(chat, members, reviewers, { ...review, speakers: speaking }, signal, {
+      implementing: null,
+      intent: 'deliver',
+      reviewing: true
     })
   }
 
@@ -1232,6 +1351,33 @@ export function closingSpeaker(
     if (chosen && chosen.role !== 'executor' && !isOffline(chosen.id)) return chosen
   }
   return members.find((member) => !isOffline(member.id))
+}
+
+/**
+ * The executor that writes this chat's deliverable when the discussion closes,
+ * or `null` when nothing should happen (S5.18).
+ *
+ * Four of the five conditions in `#autoDeliver`'s table, in one pure function,
+ * so each of them is a unit test rather than a run: the fifth — the executor
+ * being offline — needs the supervisor and stays at the call site.
+ *
+ * The rule is **`autoDeliver !== false`**, not `=== true`. The setting was added
+ * to a JSON column that every existing chat lacks, so "absent" has to mean the
+ * default, and the default is on: a chat that names a file, a folder and a
+ * writer has already said what to do when the talking stops (see
+ * `ChatSettings.autoDeliver`).
+ *
+ * The executor is chosen by `executorWorkdir`'s rule — the first `executor` in
+ * `position` order — because the agent that gets the turn has to be the agent
+ * that has the tools, which is the same sentence `handoff()` is written around.
+ */
+export function autoDeliverExecutor(chat: Chat, members: readonly Agent[]): Agent | null {
+  if (chat.settings.autoDeliver === false) return null
+  if (typeof chat.workdir !== 'string' || chat.workdir.trim().length === 0) return null
+  const goal = chat.goal
+  if (!goal || goal.kind !== 'document') return null
+  if (typeof goal.deliverable !== 'string' || goal.deliverable.trim().length === 0) return null
+  return members.find((member) => member.role === 'executor') ?? null
 }
 
 /**

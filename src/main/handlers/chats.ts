@@ -358,6 +358,14 @@ function assertChatSettings(value: unknown): asserts value is ChatSettingsPatch 
     }
   }
 
+  // S5.18. Only the value `false` turns automatic delivery off, so the check is
+  // simply "a boolean or nothing": `undefined` leaves the field alone in the
+  // merge, and an absent field is what "on" has always looked like on a chat
+  // stored before this setting existed.
+  if (settings.autoDeliver !== undefined && typeof settings.autoDeliver !== 'boolean') {
+    throw validation('autoDeliver must be a boolean')
+  }
+
   if (settings.mode !== undefined && !CHAT_MODES.includes(settings.mode)) {
     throw validation('unknown chat mode')
   }
