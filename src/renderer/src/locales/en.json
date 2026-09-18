@@ -92,6 +92,7 @@
     "goalDeliverable": "Deliverable",
     "goalDeliverablePlaceholder": "docs/report.md",
     "goalDeliverableChoose": "Choose…",
+    "goalAutoDeliver": "Write the deliverable automatically when the discussion concludes",
     "goalMaterials": "Materials",
     "goalMaterialsAdd": "Add…",
     "goalMaterialsNone": "None",

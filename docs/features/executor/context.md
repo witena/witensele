@@ -96,7 +96,7 @@ approved command runs with its writes confined to the folder.
   | Intent | Paragraph | Says |
   |---|---|---|
   | `implement` | `HANDOFF_BRIEFING` | implement the conclusion above, do not re-open the debate, report the paths you touched |
-  | `deliver` | `DELIVER_BRIEFING` | write the file itself, create its parent folders, finish with a summary of exactly two lines — the path, then one sentence |
+  | `deliver` | `DELIVER_BRIEFING` | the request you are answering quotes the conclusion and that is what the file must contain; write the file itself, create its parent folders, do not shorten it, and reply with the path and nothing else (reworded in S5.18 — until then it said the user had asked, which stopped being true the day a closed discussion started delivering itself, and asked for a two-line summary) |
 
   They are alternatives, never both: a model given the same instruction twice in
   two wordings follows neither reliably. Whichever applies, `goalHandoffLine` is

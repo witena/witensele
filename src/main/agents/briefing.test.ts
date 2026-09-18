@@ -264,6 +264,84 @@ describe('buildGroupBriefing (closing)', () => {
   })
 })
 
+/**
+ * S5.18: the closing block, per goal kind.
+ *
+ * The bug it was written against is the whole reason the goal is in this block
+ * at all: a closing turn in a `document` chat wrote a summary and asked for it
+ * to be saved to a file it had invented, with the real deliverable one screen
+ * up in the same prompt. So the assertions are about the three facts that answer
+ * it — the file is named, its content is what this turn writes, and nobody is
+ * addressed — and about the kind that must have none of them.
+ */
+describe('buildGroupBriefing (closing, per goal)', () => {
+  const documentGoal: ChatGoal = {
+    kind: 'document',
+    description: 'Write the quarterly report',
+    deliverable: 'notes/conclusion.md',
+    materials: []
+  }
+  const discussionGoal: ChatGoal = {
+    kind: 'discussion',
+    description: 'Decide how to begin',
+    materials: []
+  }
+  const codebaseGoal: ChatGoal = {
+    kind: 'codebase',
+    description: 'Split the runner in two',
+    materials: []
+  }
+
+  const brief = (language: Language, goal: ChatGoal | null): string =>
+    buildGroupBriefing({
+      language,
+      self: architect,
+      members: [architect, reviewer],
+      goal,
+      closing: true
+    })
+
+  for (const language of LANGUAGES) {
+    describe(language, () => {
+      it('names the deliverable in the closing block of a document chat', () => {
+        const closing = brief(language, documentGoal)
+        // Twice: once in the goal section, once in the closing block — the
+        // second is the one that says the file is written *from this message*.
+        expect(closing.split('notes/conclusion.md').length - 1).toBeGreaterThanOrEqual(2)
+      })
+
+      it('says the executor writes it, for both kinds that have one', () => {
+        expect(brief(language, documentGoal)).toContain('executor')
+        expect(brief(language, codebaseGoal)).toContain('executor')
+      })
+
+      it('never names an executor in a discussion chat, or in one with no goal', () => {
+        // There is nobody to hand a discussion to, and a closing turn told to
+        // address one invents a step the product does not have.
+        expect(brief(language, discussionGoal)).not.toContain('executor')
+        expect(brief(language, null)).not.toContain('executor')
+      })
+
+      it('adds nothing when a document goal names no file yet', () => {
+        const { deliverable: _unused, ...withoutFile } = documentGoal
+        expect(brief(language, { ...withoutFile, kind: 'document' })).not.toContain('executor')
+      })
+    })
+  }
+
+  it('spells the document rule out in English', () => {
+    const closing = brief('en', documentGoal)
+    expect(closing).toMatch(/write the \*\*content\*\* of the deliverable here, in full/)
+    expect(closing).toMatch(/Do not address the executor/)
+    expect(closing).toMatch(/never name a file of your own/)
+  })
+
+  it('leaves the ordinary closing block alone for a discussion', () => {
+    expect(brief('en', discussionGoal)).toMatch(/State the conclusion the group reached/)
+    expect(brief('en', discussionGoal)).toMatch(/do not end with a marker/)
+  })
+})
+
 describe('toBriefingMember', () => {
   it('keeps only the name and the description', () => {
     expect(

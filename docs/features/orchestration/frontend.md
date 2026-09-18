@@ -99,6 +99,7 @@ them language-independent.
 | hand-off unavailable | The same button, **disabled**, with the missing rule in its `title` — no folder, no executor, or a run in flight. Disabled rather than hidden: a control that vanishes teaches nothing |
 | handed over | The transcript gains a user row reading "Handed to X…", the executor answers alone, and every other member reviews in the next round. Nothing else about the screen is special |
 | agreed | The dimmed consensus line, then one more agent message with the group's conclusion, then the composer back to Send (S5.14). The user's next message starts a new chain as usual |
+| agreed, in a `document` chat with a folder and an executor | The same, and then — with nobody clicking — the dimmed `handoffDeliver` line with the conclusion quoted under it, the executor's turn with its `write_file` permission card, the diff block and the delivered chip, and the other members' review (S5.18). Turned off per chat by the Goal block's "Write the deliverable automatically" switch ([`chats`](../chats/frontend.md)) |
 | voted | "Start a vote" sends `@all` plus its prompt with `rounds: 1`: every member answers once and the dimmed `voteClosed` line ends it, whatever the chat's Max automatic rounds says (S5.14) |
 
 Sending while a run is active is **not** blocked: the message appears

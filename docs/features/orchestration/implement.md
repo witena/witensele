@@ -199,7 +199,7 @@ chat can satisfy in the runner, which is the same split the other three follow:
 the handler knows what a well-formed request looks like, the runner is the only
 object that holds the chat, its members and whether a run is going.
 
-### Closing a discussion (S5.14, S5.16)
+### Closing a discussion (S5.14, S5.16, S5.18)
 
 ```
 round ends
@@ -207,14 +207,33 @@ round ends
   ├─ roundsCap spent?      → notice('voteClosed')  → max-rounds
   │
   └─ agreed()?             → notice('consensus')
-         │                    runClosing():
+         │                    concluded = runClosing():
          │                      round += 1
          │                      emit run.round { round, speakers: [closingSpeaker()] }
          │                      runAgentTurn({ …, closing: true })
          │                      → its message gains a ConclusionPart (S5.16)
+         │                      → true when that turn finished `done`
+         │                    concluded && autoDeliverExecutor(chat, members)
+         │                      && !isOffline(executor)?            (S5.18)
+         │                      → #storeHandoff(chat, executor, 'deliver', path)
+         │                        (the same row the button stores: notice + quote)
+         │                      → round += 1: [executor]   handoff: 'deliver'
+         │                      → round += 1: [everyone else not offline]  reviewing
          │                    → completed
          └─ otherwise       → next iteration
 ```
+
+The automatic delivery (S5.18) is **not a third way to schedule a hand-off**: it
+is `handoff()` minus the parts that only make sense for a button. `handoff()`
+refuses to join a run (`handoff_run_active`), which is right for a click and
+wrong for the run that has just produced the thing to deliver, so the storing
+half was extracted into `#storeHandoff` and the two rounds are run inline with
+the same `implementing` / `reviewing` stages `#loop` would have used. Nothing is
+bypassed: the `write_file` permission prompt still stands in front of the file,
+Stop aborts the executor's turn like any other, and an executor that is offline
+gets no turn (the supervisor already dropped it from rounds). When any of the
+conditions fails nothing at all happens — no notice, no round — and the chat is
+what S5.16 left: a conclusion card with **Write to the deliverable** on it.
 
 `agreed()` is five conditions, every one of them a way of being conservative —
 not a hand-off's rounds, nothing mentioned, nothing pending, at least one

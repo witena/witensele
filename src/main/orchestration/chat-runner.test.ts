@@ -2270,3 +2270,306 @@ describe('ChatRunner (hand to executor)', () => {
     await settle()
   })
 })
+
+/* -------------------------------------------------------------------------- */
+/* S5.18: the conclusion is delivered without a second click                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The step's whole claim, driven through the handlers: a chat that says what it
+ * produces writes it when the discussion ends.
+ *
+ * The chat is the one the bug report described — two participants, an executor,
+ * a folder and a `document` goal — and the tests are of two kinds. One asserts
+ * the **chain**: agreement, the consensus notice, the closing turn, the
+ * `handoffDeliver` request, the executor's round and the review round, in that
+ * order, inside a single run. The rest take one condition away at a time and
+ * assert that **nothing at all** happens — no notice, no round, no half-stored
+ * request — because the fallback is not a degraded delivery, it is S5.16's
+ * conclusion card with its manual action still on it.
+ */
+describe('ChatRunner (delivery when the discussion closes, S5.18)', () => {
+  const handlers = buildHandlers()
+
+  let database: TestDatabase
+  let ctx: AppContext
+  let events: BackendEvent[]
+  let ada: Agent
+  let bob: Agent
+  let hands: Agent
+  let chat: Chat
+  let workdir: string
+  let models: Map<string, MockLanguageModelV4>
+
+  /** A model whose successive calls answer with successive texts. */
+  const sequence = (...texts: string[]): MockLanguageModelV4 => {
+    let index = 0
+    return new MockLanguageModelV4({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        const text = texts[Math.min(index, texts.length - 1)] ?? ''
+        index += 1
+        return {
+          stream: simulateReadableStream({
+            chunks: textChunks([text]),
+            initialDelayInMs: null,
+            chunkDelayInMs: null
+          })
+        }
+      }
+    })
+  }
+
+  const GOAL = {
+    kind: 'document' as const,
+    description: 'Write down what we decide',
+    deliverable: 'notes/conclusion.md',
+    materials: [] as string[]
+  }
+
+  beforeEach(async () => {
+    database = createTestDatabase()
+    models = new Map()
+    const created = createTestAppContext(database, {
+      runner: {
+        createModel: (_ctx, agent) => models.get(agent.name) ?? saying('nothing to add')
+      }
+    })
+    ctx = created.ctx
+    events = created.events
+    workdir = mkdtempSync(join(tmpdir(), 'witena-autodeliver-'))
+
+    const provider = ctx.repos.providers.create(providerInput(), ctx.userId)
+    ada = ctx.repos.agents.create(
+      agentInput({ name: 'Ada', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    bob = ctx.repos.agents.create(
+      agentInput({ name: 'Bob', providerId: provider.id, modelId: 'deepseek-chat' }),
+      ctx.userId
+    )
+    hands = ctx.repos.agents.create(
+      agentInput({
+        name: 'Hands',
+        providerId: provider.id,
+        modelId: 'deepseek-chat',
+        role: 'executor'
+      }),
+      ctx.userId
+    )
+    chat = await handlers['chats.create'](ctx, {
+      input: { title: 'Report', workdir, memberAgentIds: [ada.id, bob.id, hands.id] }
+    })
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { goal: GOAL } })
+    events.length = 0
+  })
+
+  afterEach(() => {
+    ctx.close()
+    rmSync(workdir, { recursive: true, force: true })
+  })
+
+  const settle = () => ctx.runners.for(chat.id).whenIdle()
+  const promptOf = (name: string, index = 0): string =>
+    JSON.stringify(models.get(name)?.doStreamCalls[index]?.prompt ?? null)
+  const agentMessages = (): Message[] =>
+    ctx.repos.messages
+      .listForContext(chat.id, ctx.userId)
+      .filter((message) => message.senderType === 'agent')
+
+  /** Both participants agree at once; Ada then writes the conclusion. */
+  const agreeAndConclude = (conclusion = 'Ship the small one, and say why.'): void => {
+    models.set('Ada', sequence(`Start small. ${AGREED_TOKEN}`, conclusion, 'Reads right.'))
+    models.set('Bob', sequence(`Agreed. ${AGREED_TOKEN}`, 'Same here.'))
+    models.set('Hands', sequence('notes/conclusion.md'))
+  }
+
+  const discuss = async (): Promise<void> => {
+    await handlers['chat.send'](ctx, { chatId: chat.id, text: 'How do we begin?' })
+    await settle()
+  }
+
+  it('runs the whole chain in one run, ending with the review of the file', async () => {
+    agreeAndConclude()
+    await discuss()
+
+    // Round 1 the discussion, round 2 the conclusion, round 3 the executor
+    // alone, round 4 everybody else reviewing it — and one `run.finished`.
+    expect(rounds(events).map((event) => event.speakers)).toEqual([
+      [ada.id, bob.id, hands.id],
+      [ada.id],
+      [hands.id],
+      [ada.id, bob.id]
+    ])
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS, NOTICE_HANDOFF_DELIVER])
+    expect(finishedIn(events)).toHaveLength(1)
+    expect(finishedIn(events)[0]).toMatchObject({ reason: 'completed' })
+
+    // The request is the same row the button stores: a user message mentioning
+    // the executor alone, carrying the notice and the conclusion as a quote.
+    const request = ctx.repos.messages
+      .listForContext(chat.id, ctx.userId)
+      .find((message) =>
+        message.parts.some(
+          (part) => part.type === 'system-notice' && part.key === NOTICE_HANDOFF_DELIVER
+        )
+      )
+    expect(request).toMatchObject({ senderType: 'user', mentions: [hands.id] })
+    expect(request?.parts[0]).toMatchObject({
+      params: { agent: 'Hands', path: 'notes/conclusion.md' }
+    })
+    expect(request?.parts[1]).toEqual({
+      type: 'text',
+      text: '> Ship the small one, and say why.'
+    })
+  })
+
+  it('briefs the closing turn with the file, and the executor to write it', async () => {
+    agreeAndConclude()
+    await discuss()
+
+    // The closing turn is told what it is producing (S5.18's briefing half)…
+    const closing = promptOf('Ada', 1)
+    expect(closing).toContain('notes/conclusion.md')
+    expect(closing).toContain('This is the closing turn')
+    // …and the executor gets S5.12's deliver briefing plus the quoted answer on
+    // its **second** call: its first was the discussion round, where it took the
+    // floor like any other member and was told none of this.
+    expect(promptOf('Hands', 0)).not.toContain('write the deliverable of this chat now')
+    expect(promptOf('Hands', 1)).toContain('write the deliverable of this chat now')
+    expect(promptOf('Hands', 1)).toContain('Ship the small one')
+    // …and the reviewers are told they are reviewing, as after any hand-off.
+    expect(promptOf('Bob', 1)).toContain('This round is a review')
+  })
+
+  it('marks the conclusion, and the executor’s reply is not a second one', async () => {
+    agreeAndConclude()
+    await discuss()
+
+    const conclusions = agentMessages().filter((message) =>
+      message.parts.some((part) => part.type === 'conclusion')
+    )
+    expect(conclusions).toHaveLength(1)
+    expect(firstText(conclusions[0] as Message)).toBe('Ship the small one, and say why.')
+  })
+
+  it('does nothing when the chat has no executor', async () => {
+    await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, bob.id] })
+    events.length = 0
+    agreeAndConclude()
+    await discuss()
+
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+    expect(rounds(events)).toHaveLength(2)
+  })
+
+  it('does nothing when the chat is bound to no folder', async () => {
+    // The goal goes with it: `chats.update` refuses a document goal on a chat
+    // with no folder, which is the same rule stated one layer down.
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { goal: null, workdir: null } })
+    events.length = 0
+    agreeAndConclude()
+    await discuss()
+
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+    expect(rounds(events)).toHaveLength(2)
+  })
+
+  it('does nothing when the goal is not a document', async () => {
+    await handlers['chats.update'](ctx, {
+      id: chat.id,
+      patch: { goal: { kind: 'codebase', description: 'Split the runner', materials: [] } }
+    })
+    events.length = 0
+    agreeAndConclude()
+    await discuss()
+
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+    expect(rounds(events)).toHaveLength(2)
+  })
+
+  it('does nothing when the user switched automatic delivery off', async () => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { settings: { autoDeliver: false } } })
+    events.length = 0
+    agreeAndConclude()
+    await discuss()
+
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+    expect(rounds(events)).toHaveLength(2)
+    // The setting really is stored, and really is the only thing that changed.
+    expect(ctx.repos.chats.get(chat.id, ctx.userId).settings.autoDeliver).toBe(false)
+  })
+
+  it('delivers again once the switch is turned back on', async () => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { settings: { autoDeliver: false } } })
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { settings: { autoDeliver: true } } })
+    events.length = 0
+    agreeAndConclude()
+    await discuss()
+
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS, NOTICE_HANDOFF_DELIVER])
+  })
+
+  it('does not deliver when the closing turn produced nothing', async () => {
+    // Ada agrees and then its provider dies before the conclusion exists. There
+    // is nothing to write the file from, and writing one anyway would put an
+    // invented document on the user's disk.
+    let call = 0
+    models.set(
+      'Ada',
+      new MockLanguageModelV4({
+        provider: 'mock',
+        modelId: 'mock-model',
+        doStream: async () => {
+          call += 1
+          if (call > 1) throw new Error('provider exploded')
+          return {
+            stream: simulateReadableStream({
+              chunks: textChunks([`Start small. ${AGREED_TOKEN}`]),
+              initialDelayInMs: null,
+              chunkDelayInMs: null
+            })
+          }
+        }
+      })
+    )
+    models.set('Bob', sequence(`Agreed. ${AGREED_TOKEN}`))
+
+    await discuss()
+
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS])
+    expect(rounds(events)).toHaveLength(2)
+  })
+
+  it('reviews with whoever is left when there is only one participant', async () => {
+    await handlers['chats.members.set'](ctx, { chatId: chat.id, agentIds: [ada.id, hands.id] })
+    events.length = 0
+    agreeAndConclude()
+    await discuss()
+
+    // The same member writes the conclusion and then reviews the file written
+    // from it, which is S5.6's review rule unchanged: everybody except the
+    // executor. A chat with *no* participant never gets here at all — an
+    // executor does not vote, so `#agreed` never fires (see that method).
+    expect(rounds(events).map((event) => event.speakers)).toEqual([
+      [ada.id, hands.id],
+      [ada.id],
+      [hands.id],
+      [ada.id]
+    ])
+    expect(noticeKeys(ctx, chat)).toEqual([NOTICE_CONSENSUS, NOTICE_HANDOFF_DELIVER])
+  })
+
+  it('leaves the manual hand-off working exactly as before', async () => {
+    await handlers['chats.update'](ctx, { id: chat.id, patch: { settings: { autoDeliver: false } } })
+    events.length = 0
+    models.set('Hands', sequence('notes/conclusion.md'))
+
+    const message = await handlers['chat.handoff'](ctx, { chatId: chat.id, intent: 'deliver' })
+    await settle()
+
+    expect(message.parts[0]).toMatchObject({ key: NOTICE_HANDOFF_DELIVER })
+    expect(rounds(events).map((event) => event.speakers)).toEqual([[hands.id], [ada.id, bob.id]])
+  })
+})

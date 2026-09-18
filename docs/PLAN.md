@@ -134,7 +134,7 @@ A chat may be bound to a folder (`chats.workdir`, S5.2) and, from S5.10, to a
 | `goal.kind` | What it means | Who reads, who writes |
 |---|---|---|
 | `discussion` | Reach a conclusion in the transcript (today's default) | Nobody touches the folder unless an executor is handed the conclusion |
-| `document` | Produce one file, `goal.deliverable` (a path relative to `workdir`) | Participants read the folder; the executor writes the deliverable |
+| `document` | Produce one file, `goal.deliverable` (a path relative to `workdir`) | Participants read the folder; the executor writes the deliverable — by itself, the moment the discussion closes with a conclusion, unless the chat's `settings.autoDeliver` is off (S5.18); the closing turn writes the file's content, not a summary of it |
 | `codebase` | Change the code in `workdir` as `goal.description` says | Participants read the code and `git` state; the executor edits, the group reviews the diff (S5.6) |
 
 `goal.materials` lists files or folders under `workdir` the group must start

@@ -351,6 +351,22 @@ export interface ChatSettings {
    * else.
    */
   closingAgentId?: string
+  /**
+   * Whether a closed discussion writes the `document` goal's deliverable by
+   * itself (S5.18).
+   *
+   * **Absent means on**, which is why the field is optional rather than a
+   * `boolean` with `true` in `DEFAULT_CHAT_SETTINGS`: the setting was added to a
+   * JSON column that thousands of stored rows already lack, and a chat written
+   * before this step must behave exactly like one created after it. Only a
+   * literal `false` — the user turning the switch off — stops the hand-off.
+   *
+   * It is read only where all of S5.12's other conditions already hold: a
+   * `document` goal with a deliverable, a working directory and an executor
+   * member. On any other chat it is a switch with nothing behind it, which is
+   * why the Goal panel only shows it for a `document`.
+   */
+  autoDeliver?: boolean
   /** Per-chat override in milliseconds; absent means use the global setting. */
   stallTimeoutMs?: number
   /** Per-chat override in milliseconds; absent means use the global setting. */

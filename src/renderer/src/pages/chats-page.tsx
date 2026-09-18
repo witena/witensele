@@ -692,6 +692,10 @@ export function ChatsPage(): React.JSX.Element {
               chatId={selectedId}
               workdir={selected?.workdir ?? null}
               goal={selected?.goal ?? null}
+              // S5.18: absent means on, which is resolved here rather than in
+              // the block, so the "no migration" rule lives with the settings.
+              autoDeliver={settings.autoDeliver !== false}
+              onAutoDeliverChange={(autoDeliver) => patchSettings({ autoDeliver })}
             />
 
             {/* "Always allowed" (S5.15), last in the block because it is the

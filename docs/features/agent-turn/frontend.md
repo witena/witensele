@@ -74,6 +74,14 @@ stopped or failed is not one. Everything else about that row — the avatar, the
 round label, the presence dot — is unchanged, and the card wraps the body rather
 than replacing it. The card itself is [`chats`](../chats/frontend.md)'s.
 
+S5.18 changes nothing the renderer draws from a turn; what it changes is the
+**text** of that conclusion in a `document` chat — the file's content rather
+than a summary with a request attached — and the rows that follow it, which
+[`orchestration`](../orchestration/frontend.md) now stores without a click: the
+`handoffDeliver` line, the executor's turn and the review. The executor's reply
+to an automatic delivery carries no `ConclusionPart`: only the `closing` turn is
+flagged, whatever comes after it.
+
 The group briefing and the system prompt never reach the renderer at all: they
 are model-facing text, which is exactly why `briefing.zh-CN.ts` is a `.ts` file
 rather than a locale entry (see [`backend.md`](./backend.md)). Neither do the

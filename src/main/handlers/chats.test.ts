@@ -576,8 +576,31 @@ describe('handlers/chats members and settings', () => {
       expect('closingAgentId' in cleared.settings).toBe(false)
     })
 
+    it('stores the automatic-delivery switch, whose default is an absent field (S5.18)', async () => {
+      const chat = await handlers['chats.create'](ctx, { input: {} })
+
+      // A fresh chat carries nothing: "absent means on" is what makes every row
+      // written before this setting existed behave like one written after it,
+      // with no migration and no second spelling of the default.
+      expect('autoDeliver' in chat.settings).toBe(false)
+
+      const off = await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: { settings: { autoDeliver: false } }
+      })
+      expect(off.settings.autoDeliver).toBe(false)
+      expect(off.settings).toEqual({ ...DEFAULT_CHAT_SETTINGS, autoDeliver: false })
+
+      const on = await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: { settings: { autoDeliver: true } }
+      })
+      expect(on.settings.autoDeliver).toBe(true)
+    })
+
     it.each([
       ['an unknown mode', { mode: 'freeforall' as never }],
+      ['a non-boolean automatic delivery', { autoDeliver: 'yes' as never }],
       ['an unknown speaking mode', { speaking: 'shouting' as never }],
       ['zero rounds', { maxAutoRounds: 0 }],
       ['more rounds than the cap', { maxAutoRounds: 11 }],

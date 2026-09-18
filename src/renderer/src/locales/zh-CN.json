@@ -92,6 +92,7 @@
     "goalDeliverable": "产出文件",
     "goalDeliverablePlaceholder": "docs/report.md",
     "goalDeliverableChoose": "选择…",
+    "goalAutoDeliver": "讨论结束时自动写出产出文件",
     "goalMaterials": "参考材料",
     "goalMaterialsAdd": "添加…",
     "goalMaterialsNone": "暂无",

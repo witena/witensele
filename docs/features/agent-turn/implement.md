@@ -111,10 +111,28 @@ from the materials, and reads an unmarked file when asked" started failing
 because the model reached for `read_file` instead of the context it had been
 given. A briefing is a budget.
 
-The line is **absent** for the closing turn, which gets `closingSection()`
+The line is **absent** for the closing turn, which gets `closingSection(goal)`
 instead — the last block of the prompt, and the only one that contradicts the
 rules above: the group has agreed, write the conclusion for the user, no new
 argument, no `@`, no marker.
+
+Since **S5.18** that block takes the goal, because what a conclusion has to *be*
+depends on it. The failure it was written against: a `document` chat closed with
+a summary that ended "please have the executor write the text above to
+`conclusion.md`" — a file the model invented, in a chat whose deliverable was
+configured one panel over — and the goal *was* in the prompt (`goalSection`),
+but a closing turn told only "state the conclusion" treats the deliverable as
+somebody else's business. So for a `document` goal the block adds two lines:
+this chat produces `<deliverable>`, the executor writes that file from this
+message as soon as you finish, so write the **content** of the file here in full
+— and do not address the executor, do not ask anyone to save anything, never name
+a file of your own. A `codebase` goal gets one line — the executor makes the
+change afterwards from this message, so say what should change precisely enough
+to build from. A `discussion` goal and a chat with no goal get the S5.14 block
+unchanged, and `briefing.test.ts` asserts the word "executor" never reaches
+them: there is nobody to hand the answer to, and naming one would invent a step.
+Both languages say the same things in the same order, as everywhere else in the
+briefing.
 
 That same turn is the only one whose **message** is marked (S5.16). At the
 terminal update, and only when the status came out `done`, `markConclusion` puts

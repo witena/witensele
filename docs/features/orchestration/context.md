@@ -62,6 +62,33 @@ that owns the `AbortController` the Stop button reaches.
 - **The conclusion quote** (S5.16): a `deliver` hand-off stores the chat's latest
   conclusion as a block quote beside its notice, so the executor is told which
   answer to write out.
+- **Automatic delivery** (S5.18): when the closing turn of a `document` chat
+  that has a folder and an executor produced a conclusion, the runner starts the
+  `deliver` hand-off itself, in the same run — the same stored request, the same
+  permission prompt, the same review round — unless `ChatSettings.autoDeliver`
+  is `false`. `autoDeliverExecutor` is the pure rule.
+
+## What S5.18 added
+
+The bug: a `document` chat with an executor and a folder closed with a
+conclusion that ended "please have the executor write the text above to
+`conclusion.md`" — a file name the model invented, ignoring the deliverable the
+chat was configured with — and then **nothing happened**. Half of the fix is
+[`agent-turn`](../agent-turn/context.md)'s closing block, which now names the
+deliverable and forbids addressing the executor; this feature's half is that the
+product stops waiting for a click it already has every reason to skip.
+
+| Change | Where |
+|---|---|
+| **`#autoDeliver`**, run right after `#runClosing` when it reports a `done` closing turn: stores the `handoffDeliver` request through the same `#storeHandoff` the button uses, runs the executor's `deliver` turn and the review round after it | `chat-runner.ts` |
+| **`autoDeliverExecutor(chat, members)`**: the four static conditions — `settings.autoDeliver !== false`, a folder, a `document` goal naming a file, an executor member — as one pure export; the fifth (the executor is offline) needs the supervisor and stays at the call site | `chat-runner.ts` |
+| **`#storeHandoff`**, extracted from `handoff()` so the user-clicked and the automatic hand-off store identical rows | `chat-runner.ts` |
+| **`#runClosing` answers a boolean** — whether a conclusion was actually written — because an executor handed nothing to write from would put an invented document on disk | `chat-runner.ts` |
+| `ChatSettings.autoDeliver?: boolean`, absent meaning **on**, and its switch in the Goal block | [`chats`](../chats/context.md) |
+| The `handoffDeliver` notice no longer says the user asked, and `DELIVER_BRIEFING` points at the quoted conclusion and asks for the path alone in reply | `agents/history.ts`, [`executor`](../executor/context.md) |
+
+No new notice key, no new backend method, no migration — the automatic path is
+the manual path started from inside the run instead of from a button.
 
 ## What S2.4 added
 

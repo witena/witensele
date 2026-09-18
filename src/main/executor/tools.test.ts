@@ -545,7 +545,7 @@ describe('buildExecutorSection (deliver)', () => {
     materials: []
   }
 
-  it('asks for the file, its parent folders and a two-line summary', () => {
+  it('asks for the file, its parent folders, the quoted conclusion and the path alone', () => {
     const section = buildExecutorSection({
       workdir: '/tmp/project',
       handoff: 'deliver',
@@ -554,7 +554,13 @@ describe('buildExecutorSection (deliver)', () => {
 
     expect(section).toMatch(/write the deliverable of this chat now/)
     expect(section).toMatch(/creating any parent folder/)
-    expect(section).toMatch(/exactly two lines/)
+    // S5.18: what to write is the conclusion the request quotes, and what to
+    // answer with is the path — not a summary of a document nobody asked for.
+    expect(section).toMatch(/quotes the conclusion the group reached/)
+    expect(section).toMatch(/reply with the path you wrote and nothing else/)
+    // …and the sentence that claimed a human had clicked is gone, because since
+    // S5.18 a closed discussion may have delivered itself.
+    expect(section).not.toMatch(/the user has asked you/)
     // …and the path itself, which comes from `goalHandoffLine` rather than from
     // the paragraph, so the two really are composed.
     expect(section).toContain('docs/REPORT.md')
@@ -569,7 +575,7 @@ describe('buildExecutorSection (deliver)', () => {
     })
 
     expect(section).toMatch(/Implement the conclusion the group reached/)
-    expect(section).not.toMatch(/exactly two lines/)
+    expect(section).not.toMatch(/reply with the path you wrote and nothing else/)
   })
 
   it('leaves the folder and the tool list identical in all three shapes', () => {

@@ -83,10 +83,16 @@ const NOTICE_TEXT: Record<string, (params: Record<string, string | number>) => s
   // The same request for the other hand-off intent (S5.12), and needed here for
   // exactly the same reason: it is the whole content of the message the executor
   // is replying to, so a key with no rendering would hand it an empty turn.
+  //
+  // Since S5.18 it points at the **conclusion quoted with it** — the message
+  // this notice is the first part of carries it as a block quote (S5.16) — and
+  // asks for the path alone in reply; and it no longer says the user asked,
+  // because a closed discussion now delivers itself without anybody clicking.
   handoffDeliver: (params) =>
-    `The user asked ${String(params['agent'] ?? 'the executor')} to write the deliverable of ` +
+    `${String(params['agent'] ?? 'The executor')} is to write the deliverable of ` +
     `this chat, ${String(params['path'] ?? 'the goal file')}, now: write the file itself from ` +
-    'the conclusion reached above, then report the path.',
+    'the conclusion the group reached, creating any parent folder that does not exist, ' +
+    'and reply with the path and nothing else.',
   // Both closure notices (S5.14) are rendered for the same reason as the
   // hand-off ones: the closing turn that follows `consensus` may belong to the
   // member who spoke last, and without this line its history would end with
