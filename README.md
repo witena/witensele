@@ -65,10 +65,10 @@ connection test that says how long the endpoint took to answer.
 
 ## Getting started
 
-Requirements: macOS, Node 24, and — optionally —
-[Ollama](https://ollama.com) if you want to run models locally. Apple silicon is
-what the app is developed and tested on; an Intel dmg is built from the same
-source but has not been run on Intel hardware.
+Requirements: macOS, Node 24 (`.nvmrc` pins it, so `nvm use` picks it up), and —
+optionally — [Ollama](https://ollama.com) if you want to run models locally.
+Apple silicon is what the app is developed and tested on; an Intel dmg is built
+from the same source but has not been run on Intel hardware.
 
 ```sh
 npm install          # rebuilds better-sqlite3 for Electron via postinstall

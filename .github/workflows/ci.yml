@@ -42,8 +42,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Node 24 is what the README asks a contributor to install.
-          node-version: '24'
+          # .nvmrc pins the Node the README asks a contributor to install, so
+          # `nvm use` on a developer machine and this job cannot drift apart.
+          node-version-file: .nvmrc
           cache: npm
 
       # The lock file is written by whatever npm the developer runs. npm 11.5
