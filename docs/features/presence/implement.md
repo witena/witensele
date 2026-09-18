@@ -122,7 +122,7 @@ Main-process types worth knowing:
 | `src/renderer/src/stores/presence.test.ts` | Seeding from `presence.list`, a later event overriding the seed, other chats surviving a seed, the retry action and its pending flag, and `chat.deleted` dropping only that chat |
 | `src/shared/contracts.test.ts` | `presence.list` / `presence.retry` are in `BACKEND_METHODS` and in the namespace list |
 | `src/main/handlers/handlers.test.ts` | Both methods are implemented rather than stubs |
-| `e2e/presence.spec.ts` | The real thing: a provider pointing at a non-routable address goes orange then grey, its message is `skipped`, the notice appears, the member on Ollama answers `done`, the run finishes, and Retry against the same dead endpoint leaves it offline. Captures `test-results/shots/presence.png` |
+| `e2e/presence.spec.ts` | The real thing: a provider pointing at a loopback listener that accepts the connection and never answers goes orange then grey, its message is `skipped`, the notice appears, the member on Ollama answers `done`, the run finishes, and Retry against the same dead endpoint leaves it offline. Captures `test-results/shots/presence.png` The listener replaced a non-routable address, which some networks refuse instantly, turning the timeout into a plain provider error |
 
 ## Known limitations and TODOs
 

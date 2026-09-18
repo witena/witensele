@@ -7,9 +7,9 @@
  *
  * `chat-runner.test.ts` already proves the state machine against a mock model.
  * What only an end-to-end run can prove is that the abort reaches a **real socket
- * that is hanging**: `BLACK_HOLE_URL` points at a non-routable address, so the TCP
- * handshake is never answered and the request sits there until something gives
- * up. That is exactly what a dead provider looks like, and it is the case the
+ * that is hanging**: `BLACK_HOLE_URL` points at a loopback listener that accepts
+ * the connection and never answers, so the request sits there until something
+ * gives up. That is exactly what a dead provider looks like, and it is the case the
  * hard timeout exists for.
  *
  * The chat's own `stallTimeoutMs` / `hardTimeoutMs` are set to 2 s / 6 s through
@@ -37,6 +37,7 @@
  * in this file (CLAUDE.md rule #1).
  */
 import { mkdirSync } from 'node:fs'
+import { createServer, type AddressInfo, type Server } from 'node:net'
 import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import {
@@ -65,18 +66,37 @@ const OLLAMA_MODELS_URL = `${OLLAMA_BASE_URL}/models`
 const REVIEWER_MODEL = 'qwen2.5:1.5b'
 
 /**
- * A non-routable address on a high port: the TCP handshake is never answered and
- * never refused, which is the only way to simulate a provider that took the
- * request and then went silent.
+ * A provider that takes the request and then goes silent.
  *
- * The port matters. `9` (discard) is on the WHATWG fetch **bad-port list**, so
- * `fetch` refuses it in 15 ms with `bad port` instead of hanging — the AI SDK's
- * two retries would then burn their backoff and fail the turn at about six
- * seconds, racing the hard timeout it is supposed to demonstrate. A port outside
- * that list hangs for undici's own connect timeout (~10 s), which is comfortably
- * longer than the 6 s budget under test.
+ * It used to be a non-routable address (`10.255.255.1:9999`), on the theory that
+ * a TCP handshake nobody answers hangs for undici's connect timeout. That is
+ * true on some networks and false on others: a gateway that answers with an
+ * ICMP "unreachable" or a RST makes `fetch` fail in milliseconds, the turn ends
+ * as an ordinary provider error, and the member goes back to *available*
+ * instead of *offline* — which is how this spec broke the first time it ran on
+ * a different Wi-Fi. So the black hole is now a real listener on the loopback
+ * interface that accepts every connection and never writes a byte: deterministic
+ * on every network, and torn down with the app.
+ *
+ * The port still matters — see the WHATWG fetch bad-port list — which is why
+ * the listener takes whatever free port the OS assigns rather than a fixed low
+ * one.
  */
-const BLACK_HOLE_URL = 'http://10.255.255.1:9999/v1'
+let blackHole: Server | undefined
+let BLACK_HOLE_URL = ''
+
+async function startBlackHole(): Promise<string> {
+  const server = createServer((socket) => {
+    // Hold the connection open and say nothing; the client is left waiting for
+    // a response that never comes, exactly like a provider that hung.
+    socket.on('error', () => {})
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  blackHole = server
+  const address = server.address() as AddressInfo
+  return `http://127.0.0.1:${address.port}/v1`
+}
+
 const GHOST_MODEL = 'ghost-model'
 
 /** The per-chat overrides this spec runs under, in milliseconds. */
@@ -214,6 +234,7 @@ test.beforeAll(async () => {
   if (!ready) return
   await warmUpOllama()
 
+  BLACK_HOLE_URL = await startBlackHole()
   userDataDir = createUserDataDir()
   ;({ app, window } = await launchWitena(userDataDir))
   mkdirSync(SHOTS_DIR, { recursive: true })
@@ -250,6 +271,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await app?.close()
   if (userDataDir) removeUserDataDir(userDataDir)
+  blackHole?.close()
 })
 
 test('a silent member turns orange, then grey, and its message is skipped', async () => {
