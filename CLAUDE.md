@@ -61,7 +61,9 @@ These are not style preferences. A change that breaks one of them is not done.
    comments, identifiers, commit messages and PR text. A Chinese version of a
    document uses the `.zh.md` suffix (`docs/README.zh.md`) and is gitignored;
    `CLAUDE.local.md` is the Chinese copy of this file. The only Chinese that is
-   committed is product content in `src/renderer/src/locales/zh-CN.json`.
+   committed is product content in `src/renderer/src/locales/zh-CN.json` and the
+   README's translation, `docs/readme/README.zh-CN.md`, which GitHub visitors
+   reach from a link at the top of `README.md` — keep the two in step.
 
 2. **Every feature keeps four documents in sync.** Any change to a feature must
    update `docs/features/<feature>/context.md`, `implement.md`, `frontend.md` and
@@ -135,7 +137,7 @@ are worked around:
 | `npm run dist` | Build, then package a macOS arm64 dmg into `dist/` with electron-builder |
 | `npm run dist:dir` | The same without the dmg — `dist/mac-arm64/Witena.app` only, for iterating on the packaging config |
 | `npm run e2e:packaged` | Run `e2e/packaged.spec.ts` against a copy of the shipped `Witena.app` named by `WITENA_APP_PATH`. Not part of `npm run e2e` |
-| `npm run demo` | Record the README's product tour into `test-results/demo/`. Not part of `npm run e2e`; needs Ollama |
+| `npm run demo` | Film the README's product tour into `test-results/demo/`. Not part of `npm run e2e`; needs Ollama. `node scripts/render-demo.mjs` (needs ffmpeg) then renders `docs/assets/demo.mp4`, `demo.gif` and `features/*.gif` from it |
 | `npm install` | Install dependencies; `postinstall` rebuilds better-sqlite3 for Electron |
 
 `e2e/packaged.spec.ts` and `e2e/demo.record.ts` are named in
