@@ -200,6 +200,17 @@ macOS app writes inside its own bundle on first launch. `hdiutil info` afterward
 should list nothing of ours — a left-behind volume is the usual way a second run
 picks up the previous build.
 
+### Nightly builds
+
+`npm run nightly:tag` (add `-- --dry-run` to see the decision without acting on
+it) tags `origin/main` as `v<next patch>-nightly.<yyyymmdd>` when it has moved
+since the last release and pushes the tag; the release workflow then produces a
+signed draft flagged as a pre-release. A scheduler on the owner's machine runs it
+daily — the repository holds the script, not the schedule. Publishing stays a
+human step: open the draft, check it, publish it **leaving "Set as a
+pre-release" ticked**. The reasoning is in [`backend.md`](./backend.md),
+"Nightly builds".
+
 ### Building by hand
 
 `npm run dist` still does the whole local build — both architectures, both dmgs,
@@ -459,6 +470,7 @@ channel and no event. The only runtime symbol it touches is the private
 |---|---|
 | `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran) |
 | `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `release.yml`'s unsigned branch runs `unset CSC_LINK CSC_KEY_PASSWORD` before `npm run dist` (an empty secret is not an absent one to electron-builder), and that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
+| `src/main/nightly-tag.test.ts` | `scripts/nightly-tag.mjs`'s pure half: the version is the next patch with a UTC date stamp; `decide` tags only when no `v*` tag points at `main` and today's nightly does not exist; `staleNightlyDrafts` keeps the newest three and never names a published or a stable release. And that `release.yml` agrees with it — its bash pattern matches the version the script produces and not a stable one, a mismatched stable tag is refused, and a nightly draft is flagged `--prerelease` |
 | `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
 | `src/main/packaging.test.ts` (second half) | `auto-merge.yml`'s guards, because they are what stands between a public repository and a self-merging pull request from a stranger: the event is `pull_request` and `pull_request_target` appears nowhere, the `if:` still carries all three conditions (same repository, not a draft, the owner's login) joined by `&&`, `permissions:` is exactly the two write scopes, and the job checks nothing out and uses no action. `actionlint` proves the file is a valid workflow; only this proves it still says who may merge |
 | `actionlint` (a CI job, not a file here) | Every workflow file: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |

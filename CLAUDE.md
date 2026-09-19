@@ -137,6 +137,7 @@ are worked around:
 | `npm run dist` | Build, then package a macOS arm64 dmg into `dist/` with electron-builder |
 | `npm run dist:dir` | The same without the dmg — `dist/mac-arm64/Witena.app` only, for iterating on the packaging config |
 | `npm run e2e:packaged` | Run `e2e/packaged.spec.ts` against a copy of the shipped `Witena.app` named by `WITENA_APP_PATH`. Not part of `npm run e2e` |
+| `npm run nightly:tag` | Tag `origin/main` as `v<next patch>-nightly.<date>` and push it if no release points at it; the release workflow builds the draft. Run daily by a scheduler on the owner's machine; `-- --dry-run` only reports. See `docs/features/packaging/backend.md`, "Nightly builds" |
 | `npm run demo` | Film the README's product tour into `test-results/demo/`. Not part of `npm run e2e`; needs Ollama. `node scripts/render-demo.mjs` (needs ffmpeg) then renders `docs/assets/demo.mp4`, `demo.gif` and `features/*.gif` from it |
 | `npm install` | Install dependencies; `postinstall` rebuilds better-sqlite3 for Electron |
 
