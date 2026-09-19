@@ -52,6 +52,31 @@ jobs:
 
       - run: npm ci
 
+      # The tag names the version. A stable tag (`v1.2.3`) must already equal
+      # `package.json` — `npm version` made both in one commit — and a tag that
+      # does not is refused rather than shipped under the wrong number. A
+      # nightly tag (`v1.2.4-nightly.20260920`, pushed by
+      # `scripts/nightly-tag.mjs`) is never committed anywhere, so it is written
+      # into the checkout here: `--ignore-scripts` skips the `preversion` gate
+      # (the next two steps are that gate) and the `version` script's `git add`,
+      # and `sync-version.mjs` is run by hand so `APP_VERSION` follows and
+      # `packaging.test.ts` still finds the two equal.
+      - name: Take the version from the tag
+        run: |
+          set -euo pipefail
+          tagged="${GITHUB_REF_NAME#v}"
+          manifest="$(node -p "require('./package.json').version")"
+          if [ "$tagged" = "$manifest" ]; then
+            echo "Releasing $manifest." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$tagged" =~ -nightly\.[0-9]{8}$ ]]; then
+            npm version "$tagged" --no-git-tag-version --ignore-scripts
+            node scripts/sync-version.mjs
+            echo "Nightly $tagged (package.json says $manifest)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json ($manifest). Bump with \`npm version\`, which makes the commit and the tag together."
+            exit 1
+          fi
+
       - run: npm run typecheck
 
       - run: npm test
@@ -142,5 +167,18 @@ jobs:
             xcrun stapler validate "$app"
           done
 
+      # A pre-release version puts the feed on its own channel, so a nightly
+      # writes `nightly-mac.yml` where a stable build writes `latest-mac.yml`.
       - name: Show what the draft Release received
-        run: ls -lh dist/*.dmg dist/*.blockmap dist/latest-mac.yml
+        run: ls -lh dist/*.dmg dist/*.blockmap dist/*-mac.yml
+
+      # electron-builder creates the draft without the pre-release flag. If a
+      # nightly were published that way GitHub would call it the **latest**
+      # release, and every stable install asks `releases/latest` for a
+      # `latest-mac.yml` a nightly does not have. Flag it while it is still a
+      # draft, so publishing it cannot make that mistake.
+      - name: Mark a nightly draft as a pre-release
+        if: contains(github.ref_name, '-nightly.')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --prerelease

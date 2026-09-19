@@ -33,6 +33,7 @@
     "dist:dir": "npm run build && electron-builder --mac --dir",
     "preversion": "npm run typecheck && npm test",
     "version": "node scripts/sync-version.mjs && git add src/shared/version.ts",
+    "nightly:tag": "node scripts/nightly-tag.mjs",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {

@@ -656,6 +656,39 @@ Then `git push --follow-tags`, wait for the draft, publish it. The full
 procedure, including verifying the uploaded dmg with `npm run e2e:packaged`, is
 in [`implement.md`](./implement.md), "Making a release".
 
+## Nightly builds
+
+`scripts/nightly-tag.mjs` (`npm run nightly:tag`) is run once a day by a
+scheduler on the owner's machine. It builds nothing: it decides whether
+`origin/main` deserves a tag, pushes one, and `release.yml` does what it does for
+any `v*` tag — sign, notarize, upload to a **draft**.
+
+| Question | Answer |
+|---|---|
+| When does it tag? | When no `v*` tag — stable or nightly — points at `origin/main`'s commit, and today's nightly tag does not exist yet. Otherwise it prints why and exits 0 |
+| What is the version? | `<next patch>-nightly.<yyyymmdd>` (UTC), from `package.json` **as it is on `origin/main`**: `0.1.0` → `0.1.1-nightly.20260920`. Semver puts that above 0.1.0 and below 0.1.1 |
+| What does it commit? | Nothing. `main` is protected, and a bump commit a day is noise. The number exists only in the tag name; `release.yml`'s "Take the version from the tag" step runs `npm version <tag> --no-git-tag-version --ignore-scripts` and `node scripts/sync-version.mjs` in the runner's checkout, so `package.json` and `APP_VERSION` agree when the tests run |
+| Does it touch the working tree? | No — `git fetch`, `git show origin/main:package.json`, `git tag <name> <sha>`. It is safe with any branch checked out and uncommitted work present |
+| Why a machine and not a `schedule:` workflow? | A tag pushed with `GITHUB_TOKEN` triggers no workflow (the same rule that leaves `main` without a `push` run after an auto-merge), so a cron job inside Actions could not start `release.yml` this way. A person's credentials can |
+| What about the drafts nobody publishes? | After pushing, it deletes nightly **drafts** beyond the newest three (`KEPT_NIGHTLY_DRAFTS`), with their tags. It never deletes a published release or a stable draft — `staleNightlyDrafts` filters on `isDraft` and the `-nightly.<8 digits>` suffix, and `src/main/nightly-tag.test.ts` pins both |
+
+**The channel.** A pre-release version makes electron-builder write
+`nightly-mac.yml` instead of `latest-mac.yml`, and `electron-updater` reads the
+channel of the version it is running: a stable install never sees a nightly, and
+a nightly install follows nightlies until a stable release with a higher version
+arrives. Nothing in `src/main/updates/` had to change for that.
+
+**The pre-release flag.** electron-builder creates the draft unflagged. Published
+like that, GitHub would call a nightly the **latest** release, and every stable
+install asks `releases/latest` for a `latest-mac.yml` that a nightly does not
+contain — a broken update check for everyone. `release.yml` therefore runs
+`gh release edit "$GITHUB_REF_NAME" --prerelease` on a nightly draft, so the
+human who publishes it cannot make that mistake.
+
+**A stable tag that disagrees with `package.json` is now refused.** Before this
+step a hand-made `v0.2.0` on a `0.1.0` manifest would have shipped 0.1.0 under
+the wrong name; only the nightly shape may differ from the manifest.
+
 ## External dependencies
 
 | Dependency | Used for | Pitfalls |

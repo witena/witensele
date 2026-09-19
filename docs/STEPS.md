@@ -2940,6 +2940,19 @@ adds a line here in the same commit.
 
 ### Release workflow (S7.2)
 
+- **Nightly builds (2026-09-19).** `scripts/nightly-tag.mjs`, run daily by a
+  scheduler on the owner's machine, tags `origin/main` as
+  `v<next patch>-nightly.<yyyymmdd>` when no release points at it and pushes the
+  tag; `release.yml` takes the version from the tag (nothing is committed to
+  `main`), builds a signed draft on the `nightly` update channel and flags it as
+  a pre-release so publishing it cannot become `releases/latest`. A stable tag
+  that disagrees with `package.json` is now refused. Unpublished nightly drafts
+  beyond the newest three are deleted with their tags. **Not yet exercised end
+  to end**: at the time of writing no release run has succeeded at all (the
+  second `v0.1.0` attempt failed importing the `.p12` — wrong
+  `CSC_KEY_PASSWORD`), so the first nightly is also the first test of the version
+  step and the pre-release flag on a real runner. Details in
+  `packaging/backend.md`, "Nightly builds".
 - **A pull request the owner opens now merges itself.**
   `.github/workflows/auto-merge.yml` runs `gh pr merge --auto --merge` on
   `opened` / `reopened` / `ready_for_review`, so GitHub merges the pull request
