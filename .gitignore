@@ -25,3 +25,8 @@ build/icon.iconset
 # node_modules, so it is produced by the pretypecheck / pretest / prebuild hooks
 # rather than committed.
 src/renderer/src/generated
+
+# Downloaded by scripts/fetch-ant.mjs: the Anthropic CLI shipped inside the app,
+# pinned by version and SHA-256 in build/ant-release.json. A binary derived from
+# a pinned release is fetched, never committed.
+vendor

@@ -33,6 +33,17 @@
  * the shape of what it prints. `WITENA_ANT_BIN` overrides the whole search with
  * one absolute path, for an install somewhere else — and for the end-to-end
  * spec, which needs a run where `ant` is definitively absent.
+ *
+ * ## The copy shipped with the app
+ *
+ * The build carries its own `ant` (`scripts/fetch-ant.mjs`, pinned in
+ * `build/ant-release.json`), so that Sign in opens a browser on a machine that
+ * never installed the CLI instead of showing a `brew install` line. The host
+ * passes its folder as `bundledDir` and it is searched **last**: an `ant` the
+ * user installed themselves is theirs to upgrade and is the one that wrote the
+ * profile on disk, so a newer CLI's credentials are never read by an older
+ * bundled one. `not-installed` remains a real state — a checkout that never
+ * fetched the binary, the Node server — it is just no longer the common one.
  */
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -125,6 +136,8 @@ export interface AnthropicCliOptions {
   env?: Record<string, string | undefined>
   /** Searched after `PATH`. Defaults to the three macOS install locations. */
   fallbackDirs?: readonly string[]
+  /** Folder of the `ant` shipped with the app, searched after everything else. */
+  bundledDir?: string
   /** Defaults to `Date.now`; a test moves it to expire the cached token. */
   now?: () => number
   commandTimeoutMs?: number
@@ -172,7 +185,10 @@ function readCredentialFields(payload: unknown): AntCredentials {
 export function createAnthropicCli(options: AnthropicCliOptions = {}): AnthropicCli {
   const spawnImpl = options.spawn ?? defaultSpawn
   const env = options.env ?? (process.env as Record<string, string | undefined>)
-  const fallbackDirs = options.fallbackDirs ?? defaultFallbackDirs()
+  const fallbackDirs = [
+    ...(options.fallbackDirs ?? defaultFallbackDirs()),
+    ...(options.bundledDir === undefined ? [] : [options.bundledDir])
+  ]
   const clock = options.now ?? Date.now
   const commandTimeoutMs = options.commandTimeoutMs ?? ANT_COMMAND_TIMEOUT_MS
   const loginTimeoutMs = options.loginTimeoutMs ?? ANT_LOGIN_TIMEOUT_MS

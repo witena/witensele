@@ -14,11 +14,13 @@
 | `src/main/index.ts` | `bundledSkillsDir()` and `signedBuild()`: the only runtime code that behaves differently in a packaged build |
 | `playwright.packaged.config.ts` | Runs `e2e/packaged.spec.ts` and nothing else |
 | `e2e/packaged.spec.ts` | The acceptance test against the shipped bundle |
-| `playwright.demo.config.ts`, `e2e/demo.record.ts` | The tour recording that produces `docs/assets/` |
+| `playwright.demo.config.ts`, `e2e/demo.record.ts` | The tour recording: films the built app over CDP `Page.startScreencast` into `test-results/demo/` |
+| `scripts/render-demo.mjs` | Renders those frames into `docs/assets/demo.mp4`, `demo.gif` and `features/*.gif` with ffmpeg |
 | `.github/workflows/ci.yml` | The gate on every push and pull request, plus the `actionlint` job that lints both workflow files |
 | `.github/workflows/release.yml` | A `v*` tag → checks → both dmgs → a draft GitHub Release |
 | `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
 | `scripts/generate-licenses.mjs` | **S7.5.** Writes `src/renderer/src/generated/licenses.json` (gitignored) from the production dependency tree, for Settings → About. Run by the `pretypecheck` / `pretest` / `predev` / `prebuild` hooks, so it happens before anything that reads the file — including `npm ci && npm run typecheck` on CI. Owned by [`../ui-shell/backend.md`](../ui-shell/backend.md); listed here because it is part of every build |
+| `scripts/fetch-ant.mjs`, `build/ant-release.json` | Downloads the Anthropic CLI the bundle ships, for both architectures, into the gitignored `vendor/ant/<arch>/`; refuses an archive whose SHA-256 is not the pinned one. `npm run ant:fetch`. `predev` / `prebuild` pass `--optional` (a failure is a warning, the app falls back to an installed `ant`); `predist`, `predist:signed` and `predist:dir` do not, so a dmg cannot be built without it. Upgrading `ant` is an edit to the JSON: version, two file names, two checksums, all from the release's Homebrew cask |
 | `src/main/packaging.test.ts` | The unit test over `electron-builder.yml` and the two copies of the version number |
 | `src/renderer/src/components/ui/brand-mark.test.ts` | The other half of the icon's gate: it proves `build/icon.svg` and the rail's inlined mark are the same drawing. Owned by [`../ui-shell/implement.md`](../ui-shell/implement.md); listed here because it is the only test that looks at `build/` at all |
 
@@ -37,6 +39,7 @@ kind of thing that goes stale.
 | `files` | `out/**`, `package.json`, minus `*.map` and `.DS_Store` | Everything electron-vite produced, plus the manifest that carries `main` and the dependency list. **`node_modules` is deliberately absent**: electron-builder appends the production dependency tree itself, and a second hand-written copy of that fact would drift |
 | `asarUnpack` | `**/node_modules/better-sqlite3/**` | `dlopen` takes a filesystem path. A `.node` binary inside an asar archive is not at one, and the app would fail to open its database on the first launch |
 | `extraResources` | `resources` → `resources` | Ships `resources/skills/`. See the path note below |
+| `extraResources` (second entry) | `vendor/ant/${arch}` → `bin`, filtered to `ant`; plus `build/ant.LICENSE` → `bin/ant.LICENSE` | The Anthropic CLI, so Sign in opens a browser on a machine that never installed it. `${arch}` gives each dmg its own architecture's binary. `src/main/index.ts` hands `process.resourcesPath/bin` to the CLI wrapper, which searches it last — see [`../providers/backend.md`](../providers/backend.md) |
 | `mac.target` | `dmg` and `zip`, both `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The **zip is S7.4's** and is not a second download offered to anyone: macOS's `Squirrel.Mac` replaces a bundle from a zip and nothing else, and `latest-mac.yml` lists whatever targets were built — a release with only a dmg is a feed the updater downloads and then cannot apply |
 | `mac.category` | `public.app-category.developer-tools` | `LSApplicationCategoryType` in the Info.plist |
 | `mac.icon` | `build/icon.icns` | Copied to `Contents/Resources/icon.icns` |
@@ -77,6 +80,18 @@ which is why this lives there and not in `skills/loader.ts`. The loader takes a
 directory; see [`../skills/backend.md`](../skills/backend.md),
 "First-launch seeding".
 
+### The shipped `ant` and the signature
+
+`bin/ant` is a Mach-O executable inside `Contents/`, so `@electron/osx-sign`
+signs it with the app's identity, hardened runtime and entitlements, replacing
+whatever signature the release archive carried; notarization then covers it
+with the rest of the bundle. It is fetched with Node's `fetch`, which sets no
+`com.apple.quarantine` attribute, so the `xattr -d` step a Homebrew install
+needs does not apply. **Not yet verified on a signed, notarized build**: that a
+Go binary launches under the app's entitlements, and that `codesign --verify
+--deep --strict` still passes. Check both the first time `npm run dist:signed`
+runs with this entry.
+
 ## Database
 
 None. Packaging reads and writes no table and adds no migration. It does decide
@@ -109,6 +124,8 @@ Witena.app/Contents/
     app.asar.unpacked/
       node_modules/better-sqlite3/**            the native module, dlopen-able
     resources/skills/architecture-review/       extraResources
+    bin/ant                                     extraResources, this arch's Anthropic CLI
+    bin/ant.LICENSE                             its MIT notice; committed as build/ant.LICENSE, the archive has none
     icon.icns
 ```
 
@@ -567,8 +584,9 @@ in [`implement.md`](./implement.md), "Making a release".
 | `electron-builder` | The whole build | It runs `@electron/rebuild` itself before packaging, and warns that the project's own `@electron/rebuild` devDependency is redundant — **it is not**: `npm install`'s `postinstall` needs it to make `npm run dev` and `npm run e2e` work, long before any packaging happens. It also warns about a missing `author` in `package.json`; harmless for an unsigned local build. An `npm install --ignore-scripts` skips the `postinstall` rebuild, and electron-builder's own rebuild then fixes the module for the *bundle* but not for the checkout — run `npx electron-rebuild -f -w better-sqlite3` if `npm run dev` stops loading the database afterwards |
 | `dmgbuild` (vendored by electron-builder) | The disk image | Downloaded on the first `--mac` run, so the first build is several minutes slower than the rest and needs the network |
 | `sips`, `iconutil` (macOS) | PNG scaling and the icns | `sips -z H W` takes **height first**. `iconutil` refuses an iconset that is missing any of the ten expected names, and the names are exact: `icon_16x16@2x.png`, not `icon_32x32.png` under a different name |
-| `ffmpeg` | The demo GIF | `palettegen` / `paletteuse` must be two passes over the *same* filtered frames, or the palette describes footage that is not what gets encoded. This build of ffmpeg has no `drawtext` filter, so frame-timestamp overlays are not available while inspecting a recording — use `tile` contact sheets and arithmetic instead |
+| `ffmpeg` | The demo MP4 and GIFs, through `scripts/render-demo.mjs` | `palettegen` / `paletteuse` must be two passes over the *same* filtered frames, or the palette describes footage that is not what gets encoded. The concat demuxer ignores the last entry's `duration` unless that file is listed once more after it. This build of ffmpeg has no `drawtext` filter, so frame-timestamp overlays are not available while inspecting a recording — use `tile` contact sheets and arithmetic instead |
+| Playwright `recordVideo` | Nothing any more | Under Electron 44 a context launched with it never loads the renderer: the first window's URL stays empty and every locator times out. The recorder uses a CDP screencast instead |
 | GitHub Actions (`actions/checkout@v4`, `actions/setup-node@v4`) | CI and release | Pinned to major tags. `setup-node`'s `cache: npm` needs `package-lock.json`, which is committed. `npm ci` runs the `postinstall` electron-rebuild, which downloads the Electron binary — the slow step of every job |
 | `actionlint` 1.7.12 | Linting the workflows | Pinned by version and SHA-256 of the release tarball. On a runner with `shellcheck` installed — the Ubuntu images have it — it also lints every `run:` block, so findings can appear in CI that a local run without shellcheck does not report |
 | `electron-updater` 6 (S7.4) | Reading the feed, downloading the zip, handing it to Squirrel.Mac | It is **CommonJS** while this project is ESM, so `import { autoUpdater } from 'electron-updater'` type-checks and then fails at runtime with "Named export 'autoUpdater' not found" — the default import plus a destructure is the documented interop and is what `src/main/ipc/updater.ts` does. It reads `app.getVersion()`, `app-update.yml` and the code signature of what it downloaded, so it is electron in everything but the package name and may only be imported from `src/main/ipc/` (CLAUDE.md rule #5). Its `error` event is an EventEmitter `error` event: with no listener it is re-thrown and takes the main process with it |
-| Playwright `_electron.launch` | Both extra specs | `executablePath` plus an empty `args` is how a *packaged* app is launched; the `args: ['.']` every other spec uses points electron at a project directory and is wrong for a bundle. `recordVideo` on the launch options records the window, and `page.video().path()` only resolves after the context has closed |
+| Playwright `_electron.launch` | Both extra specs | `executablePath` plus an empty `args` is how a *packaged* app is launched; the `args: ['.']` every other spec uses points electron at a project directory and is wrong for a bundle. |

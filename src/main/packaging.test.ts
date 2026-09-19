@@ -71,6 +71,30 @@ describe('electron-builder.yml', () => {
     expect(dmg.artifactName).toContain('${version}')
   })
 
+  it('ships each architecture its own Anthropic CLI, where the main process looks for it', () => {
+    // `src/main/index.ts` hands `process.resourcesPath/bin` to the CLI wrapper,
+    // and `scripts/fetch-ant.mjs` fills `vendor/ant/<arch>`. Both strings are
+    // promises this entry keeps; without `${arch}` the x64 dmg would carry an
+    // arm64 binary and sign-in would fail only on the machines nobody tests on.
+    const resources = config['extraResources'] as { from: string; to: string; filter: string[] }[]
+    const ant = resources.find((entry) => entry.to === 'bin')
+    expect(ant?.from).toBe('vendor/ant/${arch}')
+    expect(ant?.filter).toContain('ant')
+
+    const pin = JSON.parse(readFileSync(join(repoRoot, 'build', 'ant-release.json'), 'utf8')) as {
+      assets: Record<string, { file: string; sha256: string }>
+    }
+    expect(Object.keys(pin.assets).sort()).toEqual(['arm64', 'x64'])
+    for (const asset of Object.values(pin.assets)) expect(asset.sha256).toMatch(/^[0-9a-f]{64}$/)
+
+    // A dmg must never be built without the binary; a checkout must still run.
+    const scripts = manifest()['scripts'] as Record<string, string>
+    for (const hook of ['predist', 'predist:signed', 'predist:dir']) {
+      expect(scripts[hook]).toBe('npm run ant:fetch')
+    }
+    expect(scripts['prebuild']).toContain('ant:fetch -- --optional')
+  })
+
   it('publishes draft GitHub Releases', () => {
     // A draft is what makes a tag safe: CI packages, a human publishes.
     const publish = config['publish'] as { provider: string; releaseType: string }

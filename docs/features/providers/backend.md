@@ -249,6 +249,7 @@ locations, its error codes and the shape of what it prints.
 | Binary | `ant` | `gcloud` |
 | Override | `WITENA_ANT_BIN` | `WITENA_GCLOUD_BIN` |
 | Fallback dirs | `/opt/homebrew/bin`, `/usr/local/bin`, `$HOME/go/bin` | `/opt/homebrew/bin`, `/usr/local/bin`, `$HOME/google-cloud-sdk/bin` |
+| Shipped with the app | Yes — searched last, see below | No |
 | Read timeout | 30 s | 60 s — with no ADC, `gcloud` probes the Compute Engine metadata server three times first, ~10 s on a laptop |
 | Missing | `ant_missing` | `gcloud_missing` |
 | Signed out | `ant_not_logged_in` | `gcloud_not_logged_in` |
@@ -285,6 +286,20 @@ Things that will bite anyone changing this file:
   and `$HOME/go/bin`. `WITENA_ANT_BIN` replaces the whole search with one
   absolute path — an escape hatch for an unusual install, and what the
   end-to-end spec uses to produce a machine where `ant` is definitively absent.
+- **The app ships its own `ant`, and it is searched last.** `createAnthropicCli`
+  takes a `bundledDir` and appends it after the fallback directories, so the
+  order is: `WITENA_ANT_BIN`, `PATH`, the three install locations, the bundle.
+  An `ant` the user installed wins because it is the one they upgrade and the
+  one that wrote the profile on disk — an older bundled binary must never be
+  the reader of a newer CLI's credentials. `src/main/index.ts` is the only
+  caller that knows the folder (`process.resourcesPath/bin` packaged,
+  `vendor/ant/<arch>` from a checkout) and passes it through
+  `AppContextOptions.bundledAntDir`; the Node server passes none. The binary
+  comes from `scripts/fetch-ant.mjs`, pinned by version and SHA-256 in
+  `build/ant-release.json` — see `docs/features/packaging/backend.md`.
+  `not-installed` therefore still exists (a checkout that never fetched, the
+  server, an override pointing at nothing) but is no longer what a user of the
+  dmg sees.
 - **`stdout` is a credential.** It is parsed and dropped; only `stderr` is ever
   quoted into an error message, trimmed to 200 characters. A test asserts that a
   command which prints a token *and* fails leaks nothing.

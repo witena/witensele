@@ -36,6 +36,12 @@ seventh:
    licence list Settings → About renders. It reads `node_modules`, which a
    packaged app does not have, which is exactly why it runs at build time. See
    [`../ui-shell/implement.md`](../ui-shell/implement.md).
+9. **`scripts/fetch-ant.mjs`**, which also runs from `prebuild` (optionally)
+   and from the three `predist*` hooks (strictly). It fills `vendor/ant/<arch>/`
+   from the release pinned in `build/ant-release.json`, and the second
+   `extraResources` entry copies this architecture's folder to
+   `Contents/Resources/bin`. Build time rather than run time, so the binary is
+   inside the signature and there is no download to fail on a user's machine.
 
 ## Data flow
 
@@ -43,6 +49,7 @@ There is no user action here; the flow is the build.
 
 ```
 npm run dist
+  └─ predist                          scripts/fetch-ant.mjs → vendor/ant/{arm64,x64}/ant (sha256-checked)
   └─ npm run build
        ├─ prebuild                      scripts/generate-licenses.mjs → licenses.json
        └─ electron-vite build           → out/{main,preload,renderer}
@@ -337,49 +344,52 @@ minutes per push, or an honest local gate; the third is the one that keeps
 `e2e/demo.record.ts` is in `e2e/` for its helpers but is not a test; both it and
 `packaged.spec.ts` are named in `playwright.config.ts`'s `testIgnore`. It drives
 the **built dev app** through a scripted tour with 600–1200 ms pauses and
-`delay: 25` typing, filming it with `recordVideo` on the Electron context, and
-leaves a `.webm` plus four screenshots in `test-results/demo/`.
+`delay: 25` typing, and leaves its frames, a `recording.json` and four
+screenshots in `test-results/demo/`.
 
-The GIF is made from the `.webm` with ffmpeg, two-pass so the palette is built
-from the frames that actually appear:
+It films itself over the DevTools protocol rather than with Playwright's
+`recordVideo`. Under Electron 44 a context launched with `recordVideo` never
+loads the renderer — `firstWindow()` resolves to a page whose URL stays empty —
+so the tour opens a CDP session on the window and calls `Page.startScreencast`.
+Chromium then delivers a JPEG each time the picture changes, stamped with the
+compositor's clock. The recorder writes every frame to `frames/NNNNN.jpg` and
+wraps each part of the tour in `mark(name, …)`, which records where that part
+starts and ends on the same clock. `recording.json` is both lists.
 
-```sh
-PRE="trim=start=0.8,setpts=PTS-STARTPTS,fps=12,scale=1120:-1:flags=lanczos"
-ffmpeg -i test-results/demo/demo.webm \
-  -vf "${PRE},palettegen=max_colors=48:stats_mode=diff" -y palette.png
-ffmpeg -i test-results/demo/demo.webm -i palette.png \
-  -lavfi "${PRE}[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
-  -y docs/assets/demo.gif
-```
+`node scripts/render-demo.mjs` turns that into the README's media. It replays
+the frames through ffmpeg's concat demuxer, each held for as long as it was on
+screen, and writes `docs/assets/demo.mp4`, `docs/assets/demo.gif` and one
+`docs/assets/features/<section>.gif` per `mark()`ed section — the six clips of
+the README's feature wall (`providers`, `agents`, `discussion`, `parallel`,
+`mcp`, `summary`).
 
-`stats_mode=diff` weights the palette toward what changes between frames rather
-than the large flat dark background, and `dither=bayer:bayer_scale=5` keeps the
-dithering pattern stable from frame to frame, which is what makes the delta
-frames small. The `trim` drops the eight-tenths of a second before the tour's
-first click.
+Two things in that script are decisions rather than plumbing:
 
-### Hitting the 8 MB budget
+- **No frame is held longer than 1.2 s** (`MAX_HOLD`). The screencast only
+  delivers a frame when something changes, so a long hold is a model thinking or
+  a probe waiting. Capping it removes the dead air without touching anything
+  that moves, which is most of why the GIF is half the size it used to be.
+- **Every GIF is two-pass** (`palettegen`, then `paletteuse`) over the *same*
+  filtered frames, so the palette describes what is actually encoded.
+  `stats_mode=diff` weights the palette toward what changes between frames
+  rather than the large flat background, and `dither=bayer:bayer_scale=5` keeps
+  the dithering pattern stable from frame to frame, which is what makes the
+  delta frames small.
 
-The first attempt — the full 63 s at 12 fps and 1200 px with a default 256-colour
-palette — came out at **10.4 MB**. Three levers, measured rather than guessed:
+### The size budget
 
-| Change | Result |
-|---|---|
-| 12 fps, 1200 px, 256 colours | 10.4 MB |
-| 10 fps, 1120 px, 256 colours | 9.8 MB |
-| 12 fps, 1000 px, 256 colours | 7.6 MB |
-| 12 fps, 1200 px, **48 colours** | 7.7 MB |
-| **12 fps, 1120 px, 48 colours** | **6.8 MiB / 7.2 MB** ← shipped |
+| File | Size | Settings |
+|---|---|---|
+| `demo.gif` | 3.5 MB, 84 s | 1120 px, 12 fps, 48 colours |
+| `demo.mp4` | 3.3 MB | 1440 x 900, H.264, CRF 24 |
+| `features/*.gif` | 0.06–1.2 MB each, 2.6 MB together | 800 px, 10 fps, 48 colours |
 
-The interesting result is the fourth row: capping the palette at 48 colours cost
-less picture than dropping 200 px of width did. The app's palette is a dark
-near-monochrome plus one accent, so 48 entries describe it almost exactly — the
-extracted frames show no banding and every line of the transcript is still
-readable. Cutting frame rate was the worst trade of the three: it buys little
-size and it is the one thing that makes streaming text look broken.
-
-The MCP section was **not** cut in the end, but it nearly had to be — see
-"Recording pitfalls" below.
+The 48-colour cap dates from the first recording, where it was measured against
+the alternatives: on a 63 s tour it cost less picture than dropping 200 px of
+width did (7.7 MB against 7.6 MB, from 10.4 MB), and cutting the frame rate was
+the worst trade of the three — it buys little size and it is the one thing that
+makes streaming text look broken. The app's palette is a near-monochrome ground
+plus one accent, so 48 entries describe it almost exactly.
 
 ## Key types and contracts
 
