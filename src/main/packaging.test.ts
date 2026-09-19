@@ -220,3 +220,19 @@ describe('the released version number', () => {
     expect(APP_VERSION).toBe(manifest()['version'])
   })
 })
+
+describe('the release workflow’s unsigned branch', () => {
+  it('unsets the empty signing variables before packaging', () => {
+    // A missing secret reaches the step as '' rather than unset, and
+    // electron-builder only tests `cscLink == null`: it resolves '' against the
+    // project directory and fails with "<project dir> not a file". The first
+    // `v*` tag died this way, so the `else` branch has to clear them.
+    const workflow = readFileSync(join(repoRoot, '.github/workflows/release.yml'), 'utf8')
+    const unsigned = workflow.slice(workflow.indexOf("if [ \"${SIGNING_ENABLED:-false}\" = 'true' ]"))
+    const elseBranch = unsigned.slice(unsigned.indexOf('else'), unsigned.indexOf('fi\n'))
+
+    const unset = elseBranch.indexOf('unset CSC_LINK CSC_KEY_PASSWORD')
+    expect(unset).toBeGreaterThan(-1)
+    expect(elseBranch.indexOf('npm run dist')).toBeGreaterThan(unset)
+  })
+})

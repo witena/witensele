@@ -467,7 +467,14 @@ that is allowed to see it and publishes the *answer* as a step output:
 `CSC_IDENTITY_AUTO_DISCOVERY` is set to — false on an unsigned build, so
 electron-builder cannot quietly sign with whatever identity a runner's keychain
 happens to hold. The `CSC_*` and `APPLE_*` secrets are passed to the packaging
-step unconditionally; absent, they arrive as empty strings and are ignored.
+step unconditionally; absent, they arrive as **empty strings**, and that is not
+the same as absent. electron-builder tests `cscLink == null`, so an empty
+`CSC_LINK` is resolved as a path against the project directory and the build
+dies with `<project dir> not a file` before anything is packaged — which is what
+the first `v*` tag did on 2026-09-19, when the `CSC_LINK` secret had been created
+empty. The unsigned branch of the packaging step therefore runs
+`unset CSC_LINK CSC_KEY_PASSWORD` first, and `src/main/packaging.test.ts`
+asserts that it does.
 
 What S7.3 still has to change is `electron-builder.yml` — `identity`,
 `hardenedRuntime: true`, an entitlements file and a `notarize` block — the

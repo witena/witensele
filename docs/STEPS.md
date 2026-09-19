@@ -2995,8 +2995,11 @@ adds a line here in the same commit.
   is **public as of 2026-09-19**, so `provider: github` is now correct with no
   edit. What remains between S7.4 and a user who never downloads a dmg again:
   (1) the five signing secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`,
-  `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) are not set on the repository,
-  so a `v*` tag would build unsigned dmgs — the owner has to enter them; (2) a
+  `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) exist since 2026-09-19 but
+  `CSC_LINK` was created **empty**, so the first `v0.1.0` tag took the unsigned
+  branch, which then died on the empty variable (`<project dir> not a file` —
+  fixed by unsetting it; `packaging/backend.md`, "The signing gate"). The owner
+  has to set `CSC_LINK` again from a `.p12` that exists; (2) a
   `v*` tag and a human publishing the draft, since a draft is invisible to the
   unauthenticated request. Until then a check ends in `state: 'error'` with
   GitHub's own 404 sentence under it in Settings → About. A `token:` in
