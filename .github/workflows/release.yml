@@ -109,6 +109,13 @@ jobs:
           if [ "${SIGNING_ENABLED:-false}" = 'true' ]; then
             npm run dist -- --publish always -c.extraMetadata.witenaSignedBuild=true
           else
+            # An absent secret arrives as an **empty string**, not as an unset
+            # variable, and electron-builder only asks `cscLink == null`: it
+            # resolves '' against the project directory and dies with
+            # "<project dir> not a file" before packaging anything. The first
+            # `v*` tag (2026-09-19) found this. Unset them so the unsigned build
+            # is the unsigned build.
+            unset CSC_LINK CSC_KEY_PASSWORD
             npm run dist -- --publish always
           fi
 

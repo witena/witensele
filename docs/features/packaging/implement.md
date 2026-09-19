@@ -312,10 +312,15 @@ right-click → Export 2 items → `.p12`, and set a password. A certificate exp
 without its key signs nothing. Then
 
 ```sh
-base64 -i Certificates.p12 | pbcopy
+base64 -i Certificates.p12 | gh secret set CSC_LINK
 ```
 
-and paste that into the `CSC_LINK` secret. The `.p12` and the password are two
+which never puts the certificate on the clipboard or the screen. **Check the
+path first**: if `base64` cannot read the file it prints an error, the pipe
+carries nothing, and `gh` creates the secret **empty** — `gh secret list` shows
+it all the same. That is what happened before the first `v*` tag (2026-09-19):
+the run logged `CSC_LINK:` with nothing after it where the other four showed
+`***`, and built unsigned. The `.p12` and the password are two
 halves of a signing identity: keep the file out of the repository, off shared
 drives, and delete it once the secret is set.
 
@@ -410,7 +415,7 @@ channel and no event. The only runtime symbol it touches is the private
 | File | Covers |
 |---|---|
 | `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran) |
-| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
+| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `release.yml`'s unsigned branch runs `unset CSC_LINK CSC_KEY_PASSWORD` before `npm run dist` (an empty secret is not an absent one to electron-builder), and that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
 | `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
 | `actionlint` (a CI job, not a file here) | Both workflow files: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |
 
@@ -434,9 +439,12 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
 - **Signing runs locally but not in CI** (S7.3). The first signed and notarized
   build was produced and verified on 2026-09-17 — see [`backend.md`](./backend.md),
   "What the first signed build measured" — and S7.4 used the same certificate
-  again for its two update bundles. What is still unproven is the *runner*: none
-  of the five `CSC_*` / `APPLE_*` secrets is set on GitHub, so `release.yml`
-  would still produce unsigned dmgs. Listed in STEPS.md, Phase 6.
+  again for its two update bundles. What is still unproven is the *runner*: the five
+  `CSC_*` / `APPLE_*` secrets were created on 2026-09-19, but `CSC_LINK` was
+  created empty, so the first `v*` tag took the unsigned branch — and that branch
+  then failed on the empty variable (fixed; see [`backend.md`](./backend.md),
+  "The signing gate"). No runner has signed or notarized anything yet. Listed in
+  STEPS.md, Phase 6.
 - **A build you make yourself is unsigned**, and Gatekeeper refuses its first
   double-click; right-click → Open once. Verified to still be true after S7.3:
   `npm run dist:dir` with no identity logs `skipped macOS application code
