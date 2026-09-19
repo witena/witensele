@@ -53,6 +53,21 @@ function bundledSkillsDir(): string {
 }
 
 /**
+ * Where the `ant` shipped with the build lives.
+ *
+ * Packaged, `electron-builder.yml` copies this architecture's binary into
+ * `Contents/Resources/bin`. In development and in the end-to-end harness it is
+ * where `scripts/fetch-ant.mjs` left it, `vendor/ant/<arch>`; a checkout that
+ * never fetched it has no such folder, which the CLI wrapper's search treats
+ * like any other directory without an `ant` in it.
+ */
+function bundledAntDir(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'bin')
+    : join(app.getAppPath(), 'vendor', 'ant', process.arch)
+}
+
+/**
  * Whether this bundle was signed with a Developer ID (S7.3).
  *
  * The answer is a field in the application's own `package.json`, written there
@@ -247,7 +262,13 @@ void app.whenReady().then(() => {
     ...(process.env[UPDATE_FEED_ENV] ? { feedUrl: process.env[UPDATE_FEED_ENV] } : {})
   })
 
-  context = createAppContext({ databasePath, userDataDir, secrets, updates: updater })
+  context = createAppContext({
+    databasePath,
+    userDataDir,
+    secrets,
+    updates: updater,
+    bundledAntDir: bundledAntDir()
+  })
   console.log(`[witena] database: ${databasePath}`)
   if (updater.updater) {
     console.log('[witena] auto-update is on; checking now and every six hours')

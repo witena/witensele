@@ -19,6 +19,7 @@
 | `.github/workflows/release.yml` | A `v*` tag → checks → both dmgs → a draft GitHub Release |
 | `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
 | `scripts/generate-licenses.mjs` | **S7.5.** Writes `src/renderer/src/generated/licenses.json` (gitignored) from the production dependency tree, for Settings → About. Run by the `pretypecheck` / `pretest` / `predev` / `prebuild` hooks, so it happens before anything that reads the file — including `npm ci && npm run typecheck` on CI. Owned by [`../ui-shell/backend.md`](../ui-shell/backend.md); listed here because it is part of every build |
+| `scripts/fetch-ant.mjs`, `build/ant-release.json` | Downloads the Anthropic CLI the bundle ships, for both architectures, into the gitignored `vendor/ant/<arch>/`; refuses an archive whose SHA-256 is not the pinned one. `npm run ant:fetch`. `predev` / `prebuild` pass `--optional` (a failure is a warning, the app falls back to an installed `ant`); `predist`, `predist:signed` and `predist:dir` do not, so a dmg cannot be built without it. Upgrading `ant` is an edit to the JSON: version, two file names, two checksums, all from the release's Homebrew cask |
 | `src/main/packaging.test.ts` | The unit test over `electron-builder.yml` and the two copies of the version number |
 | `src/renderer/src/components/ui/brand-mark.test.ts` | The other half of the icon's gate: it proves `build/icon.svg` and the rail's inlined mark are the same drawing. Owned by [`../ui-shell/implement.md`](../ui-shell/implement.md); listed here because it is the only test that looks at `build/` at all |
 
@@ -37,6 +38,7 @@ kind of thing that goes stale.
 | `files` | `out/**`, `package.json`, minus `*.map` and `.DS_Store` | Everything electron-vite produced, plus the manifest that carries `main` and the dependency list. **`node_modules` is deliberately absent**: electron-builder appends the production dependency tree itself, and a second hand-written copy of that fact would drift |
 | `asarUnpack` | `**/node_modules/better-sqlite3/**` | `dlopen` takes a filesystem path. A `.node` binary inside an asar archive is not at one, and the app would fail to open its database on the first launch |
 | `extraResources` | `resources` → `resources` | Ships `resources/skills/`. See the path note below |
+| `extraResources` (second entry) | `vendor/ant/${arch}` → `bin`, filtered to `ant`; plus `build/ant.LICENSE` → `bin/ant.LICENSE` | The Anthropic CLI, so Sign in opens a browser on a machine that never installed it. `${arch}` gives each dmg its own architecture's binary. `src/main/index.ts` hands `process.resourcesPath/bin` to the CLI wrapper, which searches it last — see [`../providers/backend.md`](../providers/backend.md) |
 | `mac.target` | `dmg` and `zip`, both `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The **zip is S7.4's** and is not a second download offered to anyone: macOS's `Squirrel.Mac` replaces a bundle from a zip and nothing else, and `latest-mac.yml` lists whatever targets were built — a release with only a dmg is a feed the updater downloads and then cannot apply |
 | `mac.category` | `public.app-category.developer-tools` | `LSApplicationCategoryType` in the Info.plist |
 | `mac.icon` | `build/icon.icns` | Copied to `Contents/Resources/icon.icns` |
@@ -77,6 +79,18 @@ which is why this lives there and not in `skills/loader.ts`. The loader takes a
 directory; see [`../skills/backend.md`](../skills/backend.md),
 "First-launch seeding".
 
+### The shipped `ant` and the signature
+
+`bin/ant` is a Mach-O executable inside `Contents/`, so `@electron/osx-sign`
+signs it with the app's identity, hardened runtime and entitlements, replacing
+whatever signature the release archive carried; notarization then covers it
+with the rest of the bundle. It is fetched with Node's `fetch`, which sets no
+`com.apple.quarantine` attribute, so the `xattr -d` step a Homebrew install
+needs does not apply. **Not yet verified on a signed, notarized build**: that a
+Go binary launches under the app's entitlements, and that `codesign --verify
+--deep --strict` still passes. Check both the first time `npm run dist:signed`
+runs with this entry.
+
 ## Database
 
 None. Packaging reads and writes no table and adds no migration. It does decide
@@ -109,6 +123,8 @@ Witena.app/Contents/
     app.asar.unpacked/
       node_modules/better-sqlite3/**            the native module, dlopen-able
     resources/skills/architecture-review/       extraResources
+    bin/ant                                     extraResources, this arch's Anthropic CLI
+    bin/ant.LICENSE                             its MIT notice; committed as build/ant.LICENSE, the archive has none
     icon.icns
 ```
 

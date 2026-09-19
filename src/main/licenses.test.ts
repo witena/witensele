@@ -164,4 +164,18 @@ describe('the generated file the renderer imports', () => {
     expect(packages.some((item) => item.name === 'react')).toBe(true)
     for (const item of packages) expect(item.license, item.name).not.toBe('')
   })
+
+  it('lists the Anthropic CLI shipped in the bundle, at the version the download pins', () => {
+    const generated = join(repoRoot, 'src', 'renderer', 'src', 'generated', 'licenses.json')
+    const { packages } = JSON.parse(readFileSync(generated, 'utf8')) as {
+      packages: LicenseEntry[]
+    }
+    const pin = JSON.parse(readFileSync(join(repoRoot, 'build', 'ant-release.json'), 'utf8')) as {
+      version: string
+    }
+    expect(packages.find((item) => item.name === 'ant')).toMatchObject({
+      version: pin.version,
+      license: 'MIT'
+    })
+  })
 })

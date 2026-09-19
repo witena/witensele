@@ -138,6 +138,21 @@ if (missing.length > 0) {
   console.warn(`[licenses] not installed, so not listed: ${missing.join(', ')}`)
 }
 
+// The one thing in the bundle that `node_modules` does not know about: the
+// Anthropic CLI `scripts/fetch-ant.mjs` downloads (MIT, so its notice has to be
+// shown like any dependency's). Read from the same pin the download uses, and
+// only for the real project — a fixture tree ships no such binary.
+if (root === repoRoot) {
+  const ant = JSON.parse(readFileSync(join(repoRoot, 'build', 'ant-release.json'), 'utf8'))
+  packages.push({
+    name: ant.name,
+    version: ant.version,
+    license: ant.license,
+    homepage: ant.homepage
+  })
+  packages.sort((a, b) => a.name.localeCompare(b.name))
+}
+
 mkdirSync(dirname(out), { recursive: true })
 writeFileSync(out, `${JSON.stringify({ packages }, null, 2)}\n`)
 console.log(`[licenses] ${packages.length} packages -> ${out}`)

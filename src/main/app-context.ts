@@ -281,6 +281,12 @@ export interface AppContextOptions {
   anthropicCli?: AnthropicCli
   /** Injectable Google CLI; omitted, the real `gcloud`-spawning implementation. */
   googleCli?: GoogleCli
+  /**
+   * Folder of the `ant` binary shipped with the app, handed to the real
+   * Anthropic CLI as its last resort. Only `src/main/index.ts` knows where the
+   * bundle put it; omitted, sign-in finds an installed `ant` or none.
+   */
+  bundledAntDir?: string
   /** Passed through to every `ChatRunner`; a test injects its own `createModel`. */
   runner?: ChatRunnerOptions
   /** Clock, intervals and provider probe of the `AgentSupervisor`. */
@@ -378,7 +384,11 @@ export function createAppContext(options: AppContextOptions): AppContext {
       // applies to the next card rather than to the next launch.
       timeoutMs: () => repos.settings.get(options.userId ?? LOCAL_USER_ID).timeouts.permissionTimeoutMs
     }),
-    anthropicCli: options.anthropicCli ?? createAnthropicCli(),
+    anthropicCli:
+      options.anthropicCli ??
+      createAnthropicCli(
+        options.bundledAntDir === undefined ? {} : { bundledDir: options.bundledAntDir }
+      ),
     googleCli: options.googleCli ?? createGoogleCli(),
     // Constructed but never started: `start()` is called by `src/main/index.ts`
     // once the window exists, so building a context in a test can never open a

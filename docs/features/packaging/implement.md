@@ -36,6 +36,12 @@ seventh:
    licence list Settings → About renders. It reads `node_modules`, which a
    packaged app does not have, which is exactly why it runs at build time. See
    [`../ui-shell/implement.md`](../ui-shell/implement.md).
+9. **`scripts/fetch-ant.mjs`**, which also runs from `prebuild` (optionally)
+   and from the three `predist*` hooks (strictly). It fills `vendor/ant/<arch>/`
+   from the release pinned in `build/ant-release.json`, and the second
+   `extraResources` entry copies this architecture's folder to
+   `Contents/Resources/bin`. Build time rather than run time, so the binary is
+   inside the signature and there is no download to fail on a user's machine.
 
 ## Data flow
 
@@ -43,6 +49,7 @@ There is no user action here; the flow is the build.
 
 ```
 npm run dist
+  └─ predist                          scripts/fetch-ant.mjs → vendor/ant/{arm64,x64}/ant (sha256-checked)
   └─ npm run build
        ├─ prebuild                      scripts/generate-licenses.mjs → licenses.json
        └─ electron-vite build           → out/{main,preload,renderer}

@@ -42,6 +42,13 @@ database that opens on the first launch.
   the licence list Settings → About renders is derived from `node_modules`,
   which a packaged app does not carry, so it has to be turned into data before
   the bundle is made.
+- The Anthropic CLI (`ant`) shipped inside the bundle: `scripts/fetch-ant.mjs`,
+  the pin in `build/ant-release.json` and the second `extraResources` entry.
+  Why the app ships it at all is a providers decision and is recorded in
+  [`../providers/context.md`](../providers/context.md); what this feature owns
+  is that the right architecture's binary, checksummed, ends up signed inside
+  each dmg. `gcloud` is not shipped — it is hundreds of megabytes and a Python
+  runtime, not one static binary.
 
 ## Out of scope
 

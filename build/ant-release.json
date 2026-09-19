@@ -1,0 +1,16 @@
+{
+  "name": "ant",
+  "version": "1.33.0",
+  "license": "MIT",
+  "homepage": "https://github.com/anthropics/anthropic-cli",
+  "assets": {
+    "arm64": {
+      "file": "ant_1.33.0_macos_arm64.zip",
+      "sha256": "608f2d766417356d863bc4bae662b9c4f08fd1f6d44cba7599b4ec4ad05f2f60"
+    },
+    "x64": {
+      "file": "ant_1.33.0_macos_amd64.zip",
+      "sha256": "8436449b228b3b4ea1ed553109ec7a345de30765a235a0165ea20ce7c124366e"
+    }
+  }
+}

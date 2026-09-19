@@ -117,6 +117,46 @@ describe('resolveAntBinary', () => {
   })
 })
 
+describe('the ant shipped with the app', () => {
+  it('signs in with the bundled binary on a machine that has no ant', async () => {
+    const bundled = fakeAntDir(`echo '${credentials()}'`)
+    const cli = cliWith(emptyDir(), { bundledDir: bundled })
+
+    await expect(cli.status()).resolves.toMatchObject({
+      state: 'signed-in',
+      account: 'person@example.com'
+    })
+  })
+
+  it('leaves an ant the user installed in charge, on PATH or in an install location', async () => {
+    const bundled = fakeAntDir('exit 1')
+    const installed = `echo '${credentials({ account_email: 'installed@example.com' })}'`
+
+    const onPath = cliWith(fakeAntDir(installed), { bundledDir: bundled })
+    await expect(onPath.status()).resolves.toMatchObject({ account: 'installed@example.com' })
+
+    const inFallback = cliWith(emptyDir(), {
+      fallbackDirs: [fakeAntDir(installed)],
+      bundledDir: bundled
+    })
+    await expect(inFallback.status()).resolves.toMatchObject({ account: 'installed@example.com' })
+  })
+
+  it('is still not-installed when the bundle has no binary either', async () => {
+    const cli = cliWith(emptyDir(), { bundledDir: join(emptyDir(), 'never-fetched') })
+    await expect(cli.status()).resolves.toEqual({ state: 'not-installed' })
+  })
+
+  it(`does not rescue a ${ANT_BINARY_ENV} that points at nothing`, async () => {
+    const cli = createAnthropicCli({
+      env: { [ANT_BINARY_ENV]: join(emptyDir(), 'nope'), PATH: emptyDir() },
+      fallbackDirs: [],
+      bundledDir: fakeAntDir(`echo '${credentials()}'`)
+    })
+    await expect(cli.status()).resolves.toEqual({ state: 'not-installed' })
+  })
+})
+
 describe('status', () => {
   it('reports not-installed rather than failing when there is no binary', async () => {
     await expect(cliWith(emptyDir()).status()).resolves.toEqual({ state: 'not-installed' })

@@ -15,6 +15,12 @@ The screen itself, the notice bar and the store belong to
 [`../ui-shell/frontend.md`](../ui-shell/frontend.md); what this feature owns is
 the fact the two of them render.
 
+Shipping the Anthropic CLI added no renderer code either. Its only visible
+effects are one more row in Settings → About's licence list (`ant`, MIT, written
+by `scripts/generate-licenses.mjs` from the same pin the download uses) and a
+state the sign-in panel stops reaching on a packaged build — see
+[`../providers/frontend.md`](../providers/frontend.md).
+
 S7.3 is worth one sentence here because it introduced the first runtime fact
 that *could* have reached the UI and deliberately does not. Whether the build was
 signed decides whether the Keychain wraps the secrets key file, and the key file

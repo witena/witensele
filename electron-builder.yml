@@ -53,6 +53,20 @@ extraResources:
     filter:
       - '**/*'
       - '!**/.DS_Store'
+  # The Anthropic CLI (`ant`), so Sign in works on a machine that never
+  # installed it. `scripts/fetch-ant.mjs` fills `vendor/ant/<arch>` from the
+  # release pinned in `build/ant-release.json`; `${arch}` makes each dmg carry
+  # its own architecture's binary. It lands in `Contents/Resources/bin`, where
+  # `src/main/index.ts` points the CLI wrapper, and is signed with the rest of
+  # the bundle because osx-sign walks every Mach-O file under `Contents`.
+  - from: vendor/ant/${arch}
+    to: bin
+    filter:
+      - 'ant'
+  # Its MIT notice, which the licence requires to travel with every copy. The
+  # release archive does not carry one, so the text is committed beside the pin.
+  - from: build/ant.LICENSE
+    to: bin/ant.LICENSE
 
 # S7.4 added the **zip** beside the dmg. It is not a second download offered to
 # anyone: `electron-updater`'s macOS updater can only apply a zip — it unpacks
