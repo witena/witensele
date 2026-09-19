@@ -467,6 +467,14 @@ check that no longer reports.
 the file is a valid workflow and cannot prove that the guards still say what
 they said.
 
+**A `pull_request` workflow runs from the head branch**, so a pull request that
+edits `auto-merge.yml` runs its edited copy — the pull request that introduced
+the file enabled auto-merge on itself as soon as it was opened, and it had to
+be turned off by hand for review. This is not a way in: a fork's run of an
+edited copy still gets a read-only token and still fails the guards before the
+step executes. It is worth knowing about when changing the file, because the
+change takes effect on the pull request proposing it.
+
 **What this costs: `main` gets no `push` run of its own.** A merge performed
 with `GITHUB_TOKEN` does not trigger further workflow runs, so the `ci.yml`
 build an ordinary push to `main` produces does not happen for a merge this

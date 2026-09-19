@@ -16,6 +16,15 @@
 # gets a read-only token, and the first guard below means the job does not
 # start for one at all.
 #
+# **A `pull_request` workflow runs from the head branch**, so a pull request
+# that edits this file runs the edited version — including the one that added
+# it, which enabled auto-merge on itself the moment it was opened. That is not
+# a hole, and it is the second reason the event matters: a fork's run of its
+# own edited copy gets a read-only token and cannot enable anything, and the
+# guards refuse it before the step runs. It does mean a change *to this file*
+# from a branch in this repository takes effect on the pull request proposing
+# it, which is the one case worth turning auto-merge off by hand for.
+#
 # Three guards, all of which must hold, because merging is the one action in
 # this repository that otherwise needs a human:
 #
