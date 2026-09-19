@@ -410,7 +410,7 @@ channel and no event. The only runtime symbol it touches is the private
 | File | Covers |
 |---|---|
 | `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran) |
-| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there to reach the private repository's release assets would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
+| `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
 | `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
 | `actionlint` (a CI job, not a file here) | Both workflow files: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |
 
@@ -470,14 +470,15 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
 - **The dmg is ~150 MB.** Mostly the Electron runtime. The production dependency
   tree is shipped whole even though the renderer's share of it is already bundled
   into `out/renderer`, which is the obvious place to look if it ever matters.
-- **The GitHub feed cannot be read while the repository is private** (S7.4).
-  `latest-mac.yml`, the zips and the blockmaps are all uploaded to the Release
-  and are exactly what `electron-updater` wants; GitHub simply will not serve a
-  private repository's release assets to an unauthenticated request, and the only
-  token that would fix it would ship inside the dmg. A check therefore ends in
-  `state: 'error'` with GitHub's 404 under it until the repository is public. The
-  mechanism itself was proven against a local generic feed — procedure in
-  [`backend.md`](./backend.md), "Auto-update".
+- **The GitHub feed has never been read, because no Release has been
+  published** (S7.4). The repository is public as of 2026-09-19, so GitHub will
+  serve `latest-mac.yml`, the zips and the blockmaps to `electron-updater`'s
+  unauthenticated request once they exist; until the first Release is published
+  (a draft is not visible to that request) a check ends in `state: 'error'` with
+  GitHub's 404 under it. The release workflow also has no signing secrets yet, so
+  a tag pushed today would produce unsigned dmgs. The mechanism itself was proven
+  against a local generic feed — procedure in [`backend.md`](./backend.md),
+  "Auto-update".
 - **A local `npm run dist` now writes four artifacts instead of two** (S7.4): a
   dmg and a zip per architecture, roughly 150 MB each. The zip is not a second
   download for a human — it is the only form the updater can apply — but it does
