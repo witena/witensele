@@ -20,7 +20,9 @@ seventh:
    against the shipped binary the three things a checkout cannot vouch for.
 5. **`.github/workflows/`** (S7.2): `ci.yml` runs the delivery gate on every
    push and pull request; `release.yml` turns a `v*` tag into a draft GitHub
-   Release carrying both dmgs.
+   Release carrying both dmgs. `auto-merge.yml` joined them later: it sets
+   GitHub's auto-merge flag on a pull request the owner opens, so the merge
+   happens when `ci.yml`'s two jobs pass instead of when somebody remembers.
 6. **`scripts/sync-version.mjs`** (S7.2), the one line of glue that makes
    `npm version` enough to cut a release: it rewrites `APP_VERSION` from the
    manifest between npm's bump and npm's commit.
@@ -332,7 +334,7 @@ notarization would be discovered by a user rather than by CI.
 ## What CI does not run
 
 `ci.yml` runs `npm ci`, `npm run typecheck`, `npm test` and `npm run build` on
-`macos-latest`, and lints both workflow files with `actionlint` on a Linux
+`macos-latest`, and lints every workflow file with `actionlint` on a Linux
 runner. It does **not** run `npm run e2e`.
 
 That is deliberate. The Playwright specs launch the real Electron binary, and
@@ -343,6 +345,47 @@ assertions on every run, a runner that installs and warms a model for several
 minutes per push, or an honest local gate; the third is the one that keeps
 `npm run e2e` meaningful. It stays step 1 of "Making a release" above, and
 `npm run e2e:packaged` stays step 5.
+
+## Self-merging pull requests
+
+The maintainer's own pull requests sat waiting for a human to come back and
+press the button after CI had already answered. `auto-merge.yml` removes that
+wait without removing the gate: on `opened`, `reopened` and `ready_for_review`
+it runs one command,
+
+```sh
+gh pr merge --auto --merge "$PR_URL"
+```
+
+which sets GitHub's auto-merge flag. GitHub then merges the pull request when
+`main`'s required status checks pass, and does nothing at all if they fail.
+Everything that decides *whether* a merge is allowed is branch protection —
+[`backend.md`](./backend.md), "Merging a pull request", lists the exact
+settings, because they live in GitHub's configuration and nothing in the
+repository can assert them.
+
+Four things about the file are deliberate and worth not undoing:
+
+- **`pull_request`, not `pull_request_target`.** The second is what most
+  recipes on the internet use, and on a public repository it runs this
+  workflow with a writable token for pull requests opened from **any fork**.
+- **A job-level `if:` with three conditions** — same repository, not a draft,
+  author is the owner's hard-coded login.
+- **`permissions: contents: write` + `pull-requests: write`** and nothing else.
+- **No `actions/checkout` and no third-party action.** `gh pr merge` takes a
+  URL, so there is no code to fetch and no action version to pin; the job's
+  supply chain is the `gh` the runner already carries.
+
+`synchronize` is absent from the event list on purpose: auto-merge is a flag
+that survives later pushes, so setting it once is enough, and `ready_for_review`
+is what picks up a pull request that was opened as a draft.
+
+**It does not close the loop on `main`.** A merge performed with `GITHUB_TOKEN`
+triggers no further workflow run, so the `push` build of `main` never happens
+for a merge this workflow queued — and with `strict: false`, the pull request's
+own run tested the merge candidate only while the branch was up to date. Both
+halves of that are recorded in the workflow file itself and in
+[`backend.md`](./backend.md).
 
 ## The demo recording
 
@@ -417,7 +460,8 @@ channel and no event. The only runtime symbol it touches is the private
 | `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran) |
 | `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `release.yml`'s unsigned branch runs `unset CSC_LINK CSC_KEY_PASSWORD` before `npm run dist` (an empty secret is not an absent one to electron-builder), and that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
 | `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
-| `actionlint` (a CI job, not a file here) | Both workflow files: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |
+| `src/main/packaging.test.ts` (second half) | `auto-merge.yml`'s guards, because they are what stands between a public repository and a self-merging pull request from a stranger: the event is `pull_request` and `pull_request_target` appears nowhere, the `if:` still carries all three conditions (same repository, not a draft, the owner's login) joined by `&&`, `permissions:` is exactly the two write scopes, and the job checks nothing out and uses no action. `actionlint` proves the file is a valid workflow; only this proves it still says who may merge |
+| `actionlint` (a CI job, not a file here) | Every workflow file: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |
 
 Run with `npm run e2e:packaged` and `WITENA_APP_PATH` pointing at a copy of
 `Witena.app`. It is skipped — explicitly, in the report — when that variable is
@@ -462,8 +506,20 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
   but only ever verified `dist:dir` locally. `npm run dist:dir` is unaffected,
   and the release workflow passes `--publish always` with a token, which probably
   is too — but the workflows have never run, so that is inference.
-- **The workflows have never executed.** They are validated by `actionlint`
-  1.7.12 and by reading; GitHub has never run either of them. The first `v*`
+- **An auto-merged pull request leaves `main` with no run of its own**, because
+  a merge performed with `GITHUB_TOKEN` triggers no workflow. `main` is proven
+  by the pull request's run — which, under `strict: false`, tested the merge
+  candidate only while the branch was up to date — and then by the next pull
+  request. See "Self-merging pull requests" above.
+- **Half of auto-merge is repository configuration, which no test can see.**
+  Auto-merge enabled, branch deletion on merge, and a branch protection rule on
+  `main` naming `check` and `actionlint`: all of it lives in GitHub's settings.
+  Rename a job in `ci.yml` without renaming it in the protection rule and every
+  pull request waits forever for a check that no longer reports. The values are
+  written out in [`backend.md`](./backend.md), "Merging a pull request".
+- **`release.yml` has never executed.** It is validated by `actionlint` 1.7.12
+  and by reading; GitHub has never run it. (`ci.yml` has, on every push and
+  pull request since the repository went public.) The first `v*`
   tag is the first execution, and the likely stumbles are known: whether
   `npm ci`'s `postinstall` rebuild finishes inside the runner's patience,
   whether electron-builder infers `owner`/`repo` from the checkout's git remote

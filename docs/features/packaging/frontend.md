@@ -3,6 +3,9 @@
 **This feature has almost no renderer code.** S4.4 added no page, no component,
 no store field, no `BackendClient` call and no translation key; S7.2 — the CI
 and release workflows — added none either, and neither did S7.3.
+`auto-merge.yml`, which merges the maintainer's own pull requests once CI
+passes, is the same kind of change: a workflow file, a unit test over its
+guards and the four documents, with **no renderer change at all**.
 
 **S7.4 is the first exception, and a narrow one.** A packaged build still
 renders exactly what `npm run dev` renders, but it is now the first time the UI

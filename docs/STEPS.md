@@ -2940,6 +2940,25 @@ adds a line here in the same commit.
 
 ### Release workflow (S7.2)
 
+- **A pull request the owner opens now merges itself.**
+  `.github/workflows/auto-merge.yml` runs `gh pr merge --auto --merge` on
+  `opened` / `reopened` / `ready_for_review`, so GitHub merges the pull request
+  when `main`'s required checks (`check` and `actionlint`) pass. It is
+  `pull_request`, never `pull_request_target`, and a job-level `if:` requires
+  all of: the head branch is in this repository, the pull request is not a
+  draft, and the author is the owner's hard-coded login — the repository is
+  public, so a fork's or a stranger's pull request must never reach it.
+  `src/main/packaging.test.ts` asserts those guards. **Two things it does not
+  do.** A merge performed with `GITHUB_TOKEN` triggers no further workflow run,
+  so `main` gets no `push` build of its own after an auto-merge; what tested the
+  code is the pull request's own run, and because branch protection is
+  `strict: false` that run covered the merge candidate only while the branch was
+  up to date with `main`. And half the mechanism is repository configuration
+  that no test can see — auto-merge enabled, `delete_branch_on_merge`, and the
+  protection rule naming `ci.yml`'s two job names — so renaming a CI job without
+  renaming it there leaves every pull request waiting for a check that no longer
+  reports. Settings written out in `docs/features/packaging/backend.md`,
+  "Merging a pull request".
 - **CI does not sign yet (S7.3).** The Developer ID certificate lives only in
   the developer's login keychain. `release.yml` signs and notarizes as soon as
   `CSC_LINK` (the exported `.p12`, base64), `CSC_KEY_PASSWORD`, `APPLE_ID`,
@@ -2947,10 +2966,11 @@ adds a line here in the same commit.
   secrets; until then a tag still produces unsigned dmgs and signed releases
   are built locally with `npm run dist:signed`.
 
-- **Neither workflow has executed.** `ci.yml` and `release.yml` are validated by
-  `actionlint` and by reading only; GitHub has never run them. The first push
-  and the first `v*` tag are the first executions, and three things are most
-  likely to need a second commit: whether `npm ci`'s `postinstall` Electron
+- **`release.yml` has never executed.** It is validated by `actionlint` and by
+  reading only; GitHub has never run it. (`ci.yml` has, on every push and pull
+  request since the repository went public, and both its jobs are now required
+  by branch protection on `main`.) The first `v*` tag is its first execution,
+  and three things are most likely to need a second commit: whether `npm ci`'s `postinstall` Electron
   rebuild fits the runner's patience, whether electron-builder infers
   `owner`/`repo` from the checkout's git remote as expected, and whether the
   draft Release created by the first artifact upload is reused by the rest.
