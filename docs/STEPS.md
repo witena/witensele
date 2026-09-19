@@ -2989,19 +2989,20 @@ adds a line here in the same commit.
 
 ### Auto-update (S7.4)
 
-- **The GitHub feed has never been read, because the repository is private.**
-  This is the one thing standing between S7.4 and a user who never downloads a
-  dmg again. `electron-updater`'s GitHub provider fetches
-  `releases/download/<tag>/latest-mac.yml` unauthenticated, and GitHub answers
-  404 for a private repository's release assets whether or not they exist. The
-  fix is to **make the repository public**, which is what the owner intends and
-  what `provider: github` is already correct for. It is explicitly *not* to put
-  a `token:` in `electron-builder.yml`'s publish block: that block is copied
-  verbatim into `app-update.yml` inside every dmg, so the token would ship to
-  everyone who downloads the app — `src/main/packaging.test.ts` asserts the
-  block holds nothing but `provider` and `releaseType`. Until then a check ends
-  in `state: 'error'` with GitHub's own 404 sentence under it in Settings →
-  About, which is honest but is not a feature.
+- **The GitHub feed has never been read, because no Release has been
+  published.** The repository was private when S7.4 landed, and GitHub answers
+  404 for a private repository's release assets whether or not they exist; it
+  is **public as of 2026-09-19**, so `provider: github` is now correct with no
+  edit. What remains between S7.4 and a user who never downloads a dmg again:
+  (1) the five signing secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`,
+  `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) are not set on the repository,
+  so a `v*` tag would build unsigned dmgs — the owner has to enter them; (2) a
+  `v*` tag and a human publishing the draft, since a draft is invisible to the
+  unauthenticated request. Until then a check ends in `state: 'error'` with
+  GitHub's own 404 sentence under it in Settings → About. A `token:` in
+  `electron-builder.yml`'s publish block was never the fix: that block is copied
+  verbatim into `app-update.yml` inside every dmg — `src/main/packaging.test.ts`
+  asserts it holds nothing but `provider` and `releaseType`.
 - **The whole path was proven locally, and only locally.** Two signed bundles,
   0.1.0 and 0.2.0, a static local feed, download, `Squirrel.Mac` validation,
   "Restart to update", relaunch into 0.2.0 — all of it on this machine on

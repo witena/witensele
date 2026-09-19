@@ -490,24 +490,26 @@ The build produces three things, and all three come from the `publish:` block:
 | `Witena-<version>-<arch>-mac.zip` (+ `.blockmap`) | Beside the dmgs in the Release | `Squirrel.Mac`, which is the only thing that can replace a running `.app`. The blockmap is what makes the *next* update a differential download |
 | `latest-mac.yml` | Beside them | `electron-updater`, to compare versions and to check the zip's sha512 |
 
-### Why the GitHub feed does not work yet
+### Why the GitHub feed has nothing to serve yet
 
 `provider: github` means `electron-updater` asks
-`https://github.com/<owner>/<repo>/releases/download/…/latest-mac.yml`. **This
-repository is private**, and GitHub serves a private repository's release assets
-only to an authenticated request. `electron-updater` supports a `token` in the
-publish configuration — and that configuration is copied verbatim into
-`app-update.yml` **inside the dmg**, so a token there is a token handed to
-everyone who downloads the app. There is no scope that makes that acceptable, so
-none is shipped; `src/main/packaging.test.ts` asserts the `publish` block holds
-nothing but `provider` and `releaseType`.
+`https://github.com/<owner>/<repo>/releases/download/…/latest-mac.yml`
+unauthenticated. While the repository was private GitHub answered 404 to that
+whatever the Release held; **the repository is public as of 2026-09-19**, so that
+obstacle is gone and nothing in the configuration had to change. What is still
+missing is a Release: none has been published, so
+`releases/latest/download/latest-mac.yml` still answers 404 and a check still
+ends in `state: 'error'` with the provider's own sentence under it ("Please
+double check that your authentication token is correct. Due to security reasons,
+actual status maybe not reported, but 404") in Settings → About. A **draft**
+Release does not change that — drafts are invisible to an unauthenticated
+request — so the feed starts working when a human publishes the first one.
 
-The answer is to make the repository public, which is what the owner intends and
-what `provider: github` is already correct for. Until then a check ends in
-`state: 'error'` with GitHub's own 404 under it — the provider says so in as many
-words ("Please double check that your authentication token is correct. Due to
-security reasons, actual status maybe not reported, but 404"), and that sentence
-is what Settings → About prints.
+`electron-updater` supports a `token` in the publish configuration, and that was
+never the way around the private phase: the configuration is copied verbatim
+into `app-update.yml` **inside the dmg**, so a token there is a token handed to
+everyone who downloads the app. `src/main/packaging.test.ts` still asserts the
+`publish` block holds nothing but `provider` and `releaseType`.
 
 ### `WITENA_UPDATE_FEED`
 
