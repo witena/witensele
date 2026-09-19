@@ -16,8 +16,9 @@
 | `e2e/packaged.spec.ts` | The acceptance test against the shipped bundle |
 | `playwright.demo.config.ts`, `e2e/demo.record.ts` | The tour recording: films the built app over CDP `Page.startScreencast` into `test-results/demo/` |
 | `scripts/render-demo.mjs` | Renders those frames into `docs/assets/demo.mp4`, `demo.gif` and `features/*.gif` with ffmpeg |
-| `.github/workflows/ci.yml` | The gate on every push and pull request, plus the `actionlint` job that lints both workflow files |
+| `.github/workflows/ci.yml` | The gate on every push and pull request, plus the `actionlint` job that lints every workflow file |
 | `.github/workflows/release.yml` | A `v*` tag → checks → both dmgs → a draft GitHub Release |
+| `.github/workflows/auto-merge.yml` | A pull request the owner opens → GitHub's auto-merge flag → merged when the required checks pass. Guarded to same-repository, non-draft, owner-authored pull requests |
 | `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
 | `scripts/generate-licenses.mjs` | **S7.5.** Writes `src/renderer/src/generated/licenses.json` (gitignored) from the production dependency tree, for Settings → About. Run by the `pretypecheck` / `pretest` / `predev` / `prebuild` hooks, so it happens before anything that reads the file — including `npm ci && npm run typecheck` on CI. Owned by [`../ui-shell/backend.md`](../ui-shell/backend.md); listed here because it is part of every build |
 | `scripts/fetch-ant.mjs`, `build/ant-release.json` | Downloads the Anthropic CLI the bundle ships, for both architectures, into the gitignored `vendor/ant/<arch>/`; refuses an archive whose SHA-256 is not the pinned one. `npm run ant:fetch`. `predev` / `prebuild` pass `--optional` (a failure is a warning, the app falls back to an installed `ant`); `predist`, `predist:signed` and `predist:dir` do not, so a dmg cannot be built without it. Upgrading `ant` is an edit to the JSON: version, two file names, two checksums, all from the release's Homebrew cask |
@@ -415,6 +416,67 @@ platform Witena is not shipped on.
 step. An npm devDependency would put a workflow linter in the product's
 dependency tree; a third-party action pinned by tag would trust a pointer
 someone else can move.
+
+## Merging a pull request
+
+`.github/workflows/auto-merge.yml` turns on GitHub's **auto-merge** for a pull
+request the owner opens (`opened`, `reopened`, `ready_for_review`), with one
+step:
+
+```sh
+gh pr merge --auto --merge "$PR_URL"
+```
+
+That is a flag, not a merge: GitHub performs the merge when `main`'s required
+status checks have passed, and leaves the pull request open when they have not.
+The workflow waits for nothing, reads no run and re-runs no check — everything
+about *which* checks matter lives in the branch protection settings, not in the
+file.
+
+Half of this feature is therefore repository configuration rather than code,
+and it is written down here because nothing in the repository can assert it:
+
+| Setting | Value | Why |
+|---|---|---|
+| `allow_auto_merge` | `true` | `gh pr merge --auto` fails outright without it |
+| `delete_branch_on_merge` | `true` | The merged branch is cleaned up by GitHub instead of by hand |
+| Merge methods | Unchanged (merge, squash and rebase all allowed) | This history is made of merge commits, which is why the workflow passes `--merge` |
+| Branch protection on `main` | Required status checks `check` and `actionlint`, `strict: false`, `enforce_admins: false`, no required reviews, no push restrictions, force pushes and deletions refused | The required checks are what hold a queued merge back; without protection auto-merge has nothing to wait for. Admins are exempt so the maintainer can still push a fix directly, and reviews are not required on a repository with one maintainer |
+
+The two job names in that list are the jobs in `ci.yml` — rename a job there and
+the protection rule has to be renamed with it, or every pull request waits for a
+check that no longer reports.
+
+**Security.** The repository is public, so the guards are the point:
+
+- The workflow runs on `pull_request`, never `pull_request_target`. The latter
+  would run this file from the base branch with a **writable** token for a pull
+  request opened from any fork, which for a workflow whose job is to merge is
+  the whole farm given away. Under `pull_request` a fork's run gets a read-only
+  token.
+- A job-level `if:` requires all three of: the head branch is in this repository
+  (not a fork), the pull request is not a draft, and the author is the owner's
+  login. The login is hard-coded because `github.repository_owner` is the
+  organisation name, not a person, and no expression context answers "may this
+  account merge here".
+- `permissions:` is `contents: write` and `pull-requests: write`, nothing else,
+  and the job checks nothing out and uses no third-party action — its whole
+  supply chain is the `gh` CLI preinstalled on the runner.
+
+`src/main/packaging.test.ts` asserts each of those, because `actionlint` proves
+the file is a valid workflow and cannot prove that the guards still say what
+they said.
+
+**What this costs: `main` gets no `push` run of its own.** A merge performed
+with `GITHUB_TOKEN` does not trigger further workflow runs, so the `ci.yml`
+build an ordinary push to `main` produces does not happen for a merge this
+workflow queued. What was tested is the pull request's own run — and with
+`strict: false`, that run tested the merge candidate only while the branch was
+up to date with `main`; a branch that has fallen behind is merged on the
+strength of a run that never saw the commits it is merged with. `strict: true`
+would fix it by making every pull request rebase and re-run the macOS gate each
+time `main` moved, which on a single-maintainer repository buys serialisation
+nobody needs. The next pull request's run is what notices a bad interaction.
 
 ## Publishing
 

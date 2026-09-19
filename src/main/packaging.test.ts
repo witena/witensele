@@ -1,6 +1,8 @@
 /**
  * The release manifest: what `.github/workflows/release.yml` will build when a
- * `v*` tag is pushed (S7.2).
+ * `v*` tag is pushed (S7.2), and — at the end of the file — the guards in
+ * `.github/workflows/auto-merge.yml` that decide whose pull requests may merge
+ * themselves.
  *
  * The subject is a YAML file rather than a module, so this asserts only the
  * facts something else depends on and a careless edit could silently drop: both
@@ -210,6 +212,56 @@ describe('the signed-build flag', () => {
 
   it('is absent from the repository manifest, so a checkout is never signed', () => {
     expect(manifest()).not.toHaveProperty(SIGNED_BUILD_FIELD)
+  })
+})
+
+describe('.github/workflows/auto-merge.yml', () => {
+  // The only workflow file with a unit test of its own, because it is the only
+  // one that can do something irreversible without a human: it merges the
+  // owner's pull requests. `actionlint` proves the file is a valid workflow;
+  // what it cannot prove is that the guards which decide *whose* pull requests
+  // are merged are still there. Every assertion below is one way that answer
+  // could silently become "anyone's".
+  const workflow = readYaml('.github/workflows/auto-merge.yml')
+  const events = workflow['on'] as Record<string, { types?: string[] }>
+  const job = (workflow['jobs'] as Record<string, Record<string, unknown>>)['enable-auto-merge']
+  const guard = job['if'] as string
+
+  it('runs on `pull_request`, never `pull_request_target`', () => {
+    // The repository is public. `pull_request_target` would run this file with
+    // a writable token for a pull request opened from any fork; `pull_request`
+    // hands a fork's run a read-only token. The distinction is the whole
+    // security argument of the file and it is one word wide.
+    expect(workflow).not.toHaveProperty('on.pull_request_target')
+    expect(Object.keys(events)).toEqual(['pull_request'])
+    expect(events['pull_request']?.types).toEqual(['opened', 'reopened', 'ready_for_review'])
+  })
+
+  it('merges only the owner’s own non-draft branches', () => {
+    // Three conditions, `&&`-ed: a head branch in this repository (not a
+    // fork), a pull request that is not a draft, and the owner's login. Losing
+    // any one of them makes a stranger's pull request self-merging.
+    expect(guard).toContain('github.event.pull_request.head.repo.full_name == github.repository')
+    expect(guard).toContain('github.event.pull_request.draft == false')
+    expect(guard).toMatch(/github\.event\.pull_request\.user\.login == '[^']+'/)
+    expect(guard).not.toContain('||')
+  })
+
+  it('asks for the two permissions it needs and no others', () => {
+    // `contents: write` for the merge, `pull-requests: write` to set the
+    // auto-merge flag. A `permissions:` block that grew a third entry would be
+    // a token handed to a `run:` step that has no use for it.
+    expect(workflow['permissions']).toEqual({ contents: 'write', 'pull-requests': 'write' })
+  })
+
+  it('checks nothing out and runs no third-party action', () => {
+    // `gh pr merge` needs the pull request's URL, not its code. Skipping the
+    // checkout is both faster and the reason there is no action version to pin
+    // here: the job's entire supply chain is the runner's preinstalled `gh`.
+    const steps = job['steps'] as Record<string, string>[]
+    expect(steps).toHaveLength(1)
+    expect(steps[0]).not.toHaveProperty('uses')
+    expect(steps[0]?.['run']).toContain('gh pr merge --auto --merge')
   })
 })
 

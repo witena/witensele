@@ -1,0 +1,81 @@
+# A pull request the owner opens merges itself once CI is green.
+#
+# It turns on GitHub's **auto-merge** rather than merging anything itself: the
+# merge is queued and GitHub performs it when `main`'s required status checks
+# (`check` and `actionlint`, both from ci.yml) have passed. Nothing here waits
+# for, reads or re-runs CI. Branch protection on `main` is what holds the merge
+# back, so a red run leaves the pull request sitting open rather than merging
+# it, and this file has no opinion about which checks matter — the branch
+# protection settings do.
+#
+# `pull_request`, never `pull_request_target`. The repository is public, so
+# anyone can open a pull request from a fork. `pull_request_target` runs the
+# workflow from the **base** branch with a writable token and the fork's head
+# checked out, which for a workflow whose whole job is "merge this" would be
+# handing the merge button to a stranger. Under `pull_request` a fork's run
+# gets a read-only token, and the first guard below means the job does not
+# start for one at all.
+#
+# Three guards, all of which must hold, because merging is the one action in
+# this repository that otherwise needs a human:
+#
+#   - the head branch lives in this repository, not in a fork;
+#   - the pull request is not a draft — a draft is still being written;
+#   - the author is the owner's login, hard-coded. `github.repository_owner` is
+#     the organisation name (`witena`), not a person, and no expression context
+#     answers "may this account merge here". A login is the honest version of
+#     that question; it is one line to change if the repository ever gains a
+#     second maintainer.
+#
+# **Known limitation: `main` gets no `push` run of its own.** A merge performed
+# with `GITHUB_TOKEN` does not trigger further workflow runs, so the ci.yml
+# build that an ordinary push to `main` produces does not happen for a merge
+# this file queued. What was tested is the pull request's own run — and because
+# branch protection is configured with `strict: false`, that run tested the
+# merge *candidate* only while the branch was up to date with `main`. A branch
+# that has fallen behind is merged on the strength of a run that never saw the
+# commits it is merged with. The trade is deliberate: `strict: true` would make
+# every pull request rebase and re-run the macOS gate whenever `main` moved,
+# which on a single-maintainer repository buys serialisation nobody needs. The
+# next pull request's run is what notices a bad interaction.
+name: Auto-merge
+
+on:
+  # `synchronize` is deliberately absent: auto-merge is a flag on the pull
+  # request, it only has to be set once, and it survives the pushes that
+  # follow. `ready_for_review` is what picks up a pull request that was opened
+  # as a draft and therefore refused by the guard below.
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+
+# Enabling auto-merge writes to the pull request, and the merge GitHub later
+# performs on this token's behalf writes to the branch. Nothing else is needed:
+# this workflow reads no code, publishes nothing and touches no other API.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login == 'jayhuang508'
+    runs-on: ubuntu-latest
+    steps:
+      # No `actions/checkout` and no third-party action: `gh pr merge` takes the
+      # pull request's URL and talks to the API, so the repository's contents
+      # are never needed, and the `gh` CLI is preinstalled on the GitHub-hosted
+      # runners. That leaves nothing here to pin — the smallest supply chain
+      # this repository has.
+      #
+      # `--merge` rather than `--squash` or `--rebase`: this history is made of
+      # merge commits, and the repository's merge methods are unchanged.
+      - name: Ask GitHub to merge this pull request once the checks pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --merge "$PR_URL"

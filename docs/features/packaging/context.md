@@ -36,9 +36,15 @@ database that opens on the first launch.
   `src/main/updates/` and `src/main/ipc/updater.ts` — belongs to
   [`backend-client`](../backend-client/context.md); this feature owns what the
   build has to produce for it.
-- **Since S7.2**, the two GitHub Actions workflows: `ci.yml` (the gate on every
+- **Since S7.2**, the GitHub Actions workflows: `ci.yml` (the gate on every
   push and pull request) and `release.yml` (a `v*` tag → two dmgs in a draft
-  Release), plus the version bump that produces such a tag —
+  Release), joined later by `auto-merge.yml` (a pull request the owner opens
+  merges itself once the required checks pass) and by the repository
+  configuration that workflow depends on — auto-merge enabled, branch
+  protection on `main` naming `ci.yml`'s two jobs. That configuration lives in
+  GitHub's settings rather than in the repository, so
+  [`backend.md`](./backend.md), "Merging a pull request", is the only record of
+  it. Also the version bump that produces a release tag —
   `scripts/sync-version.mjs` behind npm's `version` lifecycle. S7.5 added a
   second build-time script, `scripts/generate-licenses.mjs`, behind `prebuild`:
   the licence list Settings → About renders is derived from `node_modules`,
@@ -64,6 +70,8 @@ database that opens on the first launch.
 | Windows and Linux in CI | Same reason as the targets themselves. `ci.yml` runs on `macos-latest` only |
 | e2e in CI | `npm run e2e` drives the real Electron binary and the specs that matter talk to a local Ollama. A hosted runner has neither, and a suite that skips its own assertions is worse than one that is honestly local |
 | Publishing the Release | Deliberate: the workflow uploads a **draft**. A human reads the artifacts and presses Publish |
+| Auto-merging anybody else's pull request | Deliberate, and the reason the guards are asserted by a unit test. A contributor's pull request is read and merged by a human; `auto-merge.yml` only takes the wait out of the maintainer's own branches |
+| A `push` run of `main` after an auto-merge | Not possible with `GITHUB_TOKEN`, which does not trigger further workflow runs. What `main` is proven by is written out in [`backend.md`](./backend.md), "Merging a pull request" |
 
 ## Dependencies
 
@@ -99,6 +107,9 @@ Nothing depends on packaging in return: no runtime code branches on it except
 | electron-builder publishes the Release itself (`--publish always`) | `softprops/action-gh-release` uploading `dist/*` | electron-builder is what writes `latest-mac.yml` and the `.blockmap` files, and it writes them knowing which release and which files they describe. A generic upload step would carry the same bytes but leave the update feed a hand-maintained copy of a fact the builder already knows — and S7.4's `electron-updater` reads exactly that feed. The cost is a `GH_TOKEN` env var and less obvious logs |
 | A **draft** Release, never a published one | Publishing straight from the tag | A tag is cheap to push and a published release is not cheap to retract. The draft is the review step: the artifacts exist, the notes can be written, and nothing is offered to a user until someone clicks |
 | Both architectures in one `electron-builder` invocation | A `strategy.matrix` of two jobs | `latest-mac.yml` describes a *release*, not an architecture. Two jobs would each write one listing only their own dmg and the second upload would overwrite the first, leaving an updater feed that knows about half the release |
+| **Auto-merge is a flag the workflow sets, not a merge it performs** | A workflow that polls the check runs and merges when they are green; a merge queue; `--admin` to merge past the checks | `gh pr merge --auto` hands the decision to GitHub: branch protection holds the merge until the required checks pass and drops it if they fail, so the workflow has no loop to get wrong, no token that merges a red branch, and nothing to re-implement when the set of checks changes. A merge queue is the right answer for a repository with contention; this one has one maintainer |
+| **The auto-merge guard hard-codes the owner's login** | `github.repository_owner`; an `author_association` check; a team or a `CODEOWNERS` file | The repository is public, so the guard is the whole security story and it has to be exact. `github.repository_owner` is the *organisation* (`witena`), which every fork's pull request also targets; `author_association == 'OWNER'` is a property GitHub computes and would be a second thing to trust. A login is checkable by reading, and a second maintainer is a one-line diff and a code review |
+| **`pull_request`, never `pull_request_target`** | `pull_request_target`, which is what most auto-merge recipes use because it gets a writable token | `pull_request_target` runs the base branch's workflow with a **writable** token for pull requests opened from **any fork**. For a workflow whose only action is "merge this", that is the merge button handed to a stranger, guarded only by an `if:` — one editing mistake from a public repository merging arbitrary code. `pull_request` gives a fork's run a read-only token, so the guard is the second line of defence rather than the only one. The cost is nothing: an owner's own branch is not a fork |
 | `actionlint` as a pinned, checksummed release binary | An npm devDependency; `rhysd/actionlint@v1` | Nothing in the product needs a workflow linter in `node_modules`, and pinning a third-party action by tag trusts a pointer somebody else can move. A version plus a SHA-256 is the strongest pin available without vendoring the binary |
 | `npm version` bumps, and a `version` lifecycle script rewrites `APP_VERSION` | Reading `package.json` from `src/shared/`; bumping the constant by hand | `src/shared/` is imported by all three processes, so pulling the manifest in to read one field would put it in every bundle. A hand-edited constant is the classic thing to forget in a release, so the bump is scripted and `src/main/packaging.test.ts` fails if the two ever disagree |
 
