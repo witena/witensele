@@ -5,7 +5,9 @@ no store field, no `BackendClient` call and no translation key; S7.2 — the CI
 and release workflows — added none either, and neither did S7.3.
 `auto-merge.yml`, which merges the maintainer's own pull requests once CI
 passes, is the same kind of change: a workflow file, a unit test over its
-guards and the four documents, with **no renderer change at all**. The nightly
+guards and the four documents, with **no renderer change at all**.
+`sweep-merged-branches.yml`, which deletes the branch such a merge leaves
+behind, is one more of the same. The nightly
 tag script and the workflow's version step are the same again: a nightly shows
 its `-nightly.<date>` version in Settings → About through the existing
 `APP_VERSION`, and nothing was added to render it. Moving the certificate

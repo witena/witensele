@@ -1,0 +1,88 @@
+# Deletes the head branch of a pull request that has been merged.
+#
+# The repository has `delete_branch_on_merge` turned on, and for a merge a
+# person performs GitHub honours it. For a merge that auto-merge.yml queued it
+# does not: that merge is performed with `GITHUB_TOKEN`, and the branches of
+# #36, #39 and #40 were all still there the next day. Nothing can react to the
+# merge either — an event caused by `GITHUB_TOKEN` starts no workflow run, so
+# an `on: pull_request: types: [closed]` job would never start (the same rule
+# that leaves `main` without a `push` run after an auto-merge), and
+# `gh pr merge --auto --delete-branch` ignores the second flag because the
+# merge has not happened when the command returns.
+#
+# So this is a sweep on a timer rather than a reaction: once an hour it looks at
+# every branch and deletes the ones a merged pull request left behind. A
+# schedule runs this file from the default branch with no pull request in
+# sight, which is why it needs none of auto-merge.yml's guards — there is no
+# fork, no author and no head branch's copy of the file to worry about.
+#
+# A branch is deleted only when **all** of these hold:
+#
+#   - it is not the default branch and is not protected;
+#   - a merged pull request in this repository had it as its head, and the
+#     branch still points at the commit that pull request merged. A branch that
+#     was pushed to again after the merge carries work `main` does not have,
+#     and is left alone;
+#   - no open pull request uses it as its head.
+#
+# Deleting such a branch loses nothing: its tip is an ancestor of `main`, and
+# the pull request page offers "Restore branch" for the ref itself.
+name: Sweep merged branches
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  # For the impatient, and for trying a change to this file.
+  workflow_dispatch:
+
+# `contents: write` deletes the ref; `pull-requests: read` is what lets
+# `gh pr list` answer for a repository that might one day be private again.
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      # No checkout and no third-party action, for auto-merge.yml's reason: the
+      # job talks to the API through the runner's preinstalled `gh` and never
+      # needs the repository's contents.
+      - name: Delete branches whose pull request was merged
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          # Asked for rather than read from the event: a `schedule` payload is
+          # not a pull request's, and the default branch is protected anyway, so
+          # this is the second of two reasons it is never deleted.
+          default_branch="$(gh api "repos/$REPO" --jq .default_branch)"
+
+          gh api "repos/$REPO/branches" --paginate \
+            --jq '.[] | select(.protected == false) | "\(.commit.sha) \(.name)"' |
+          while read -r sha name; do
+            if [[ "$name" == "$default_branch" ]]; then
+              continue
+            fi
+
+            # `--head` matches by branch name only, so a fork's branch of the
+            # same name would match too: the owner and the commit are compared
+            # here. `$sha` and `$OWNER` are a hex string and a login, neither of
+            # which can carry a quote into the jq program.
+            merged="$(gh pr list --repo "$REPO" --state merged --head "$name" \
+              --json headRefOid,headRepositoryOwner \
+              --jq "[.[] | select(.headRefOid == \"$sha\" and .headRepositoryOwner.login == \"$OWNER\")] | length")"
+            open="$(gh pr list --repo "$REPO" --state open --head "$name" \
+              --json headRepositoryOwner \
+              --jq "[.[] | select(.headRepositoryOwner.login == \"$OWNER\")] | length")"
+
+            if [[ "$merged" -gt 0 && "$open" -eq 0 ]]; then
+              echo "Deleting $name ($sha): its pull request was merged."
+              gh api -X DELETE "repos/$REPO/git/refs/heads/$name"
+            else
+              echo "Keeping $name ($sha): merged=$merged open=$open."
+            fi
+          done

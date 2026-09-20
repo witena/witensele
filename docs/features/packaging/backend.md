@@ -19,6 +19,7 @@
 | `.github/workflows/ci.yml` | The gate on every push and pull request, plus the `actionlint` job that lints every workflow file |
 | `.github/workflows/release.yml` | A `v*` tag → checks → both dmgs → a draft GitHub Release |
 | `.github/workflows/auto-merge.yml` | A pull request the owner opens → GitHub's auto-merge flag → merged when the required checks pass. Guarded to same-repository, non-draft, owner-authored pull requests |
+| `.github/workflows/sweep-merged-branches.yml` | Hourly, or by hand: deletes a branch whose merged pull request left it behind. Needed because `delete_branch_on_merge` does not fire for a merge `GITHUB_TOKEN` performs |
 | `scripts/sync-version.mjs` | Rewrites `APP_VERSION` from `package.json`; run by npm's `version` lifecycle during `npm version` |
 | `scripts/generate-licenses.mjs` | **S7.5.** Writes `src/renderer/src/generated/licenses.json` (gitignored) from the production dependency tree, for Settings → About. Run by the `pretypecheck` / `pretest` / `predev` / `prebuild` hooks, so it happens before anything that reads the file — including `npm ci && npm run typecheck` on CI. Owned by [`../ui-shell/backend.md`](../ui-shell/backend.md); listed here because it is part of every build |
 | `scripts/fetch-ant.mjs`, `build/ant-release.json` | Downloads the Anthropic CLI the bundle ships, for both architectures, into the gitignored `vendor/ant/<arch>/`; refuses an archive whose SHA-256 is not the pinned one. `npm run ant:fetch`. `predev` / `prebuild` pass `--optional` (a failure is a warning, the app falls back to an installed `ant`); `predist`, `predist:signed` and `predist:dir` do not, so a dmg cannot be built without it. Upgrading `ant` is an edit to the JSON: version, two file names, two checksums, all from the release's Homebrew cask |
@@ -439,7 +440,7 @@ and it is written down here because nothing in the repository can assert it:
 | Setting | Value | Why |
 |---|---|---|
 | `allow_auto_merge` | `true` | `gh pr merge --auto` fails outright without it |
-| `delete_branch_on_merge` | `true` | The merged branch is cleaned up by GitHub instead of by hand |
+| `delete_branch_on_merge` | `true` | The merged branch is cleaned up by GitHub instead of by hand — **for a merge a person performs only**; see "Deleting the merged branch" below |
 | Merge methods | Unchanged (merge, squash and rebase all allowed) | This history is made of merge commits, which is why the workflow passes `--merge` |
 | Branch protection on `main` | Required status checks `check` and `actionlint`, `strict: false`, `enforce_admins: false`, no required reviews, no push restrictions, force pushes and deletions refused | The required checks are what hold a queued merge back; without protection auto-merge has nothing to wait for. Admins are exempt so the maintainer can still push a fix directly, and reviews are not required on a repository with one maintainer |
 
@@ -485,6 +486,31 @@ strength of a run that never saw the commits it is merged with. `strict: true`
 would fix it by making every pull request rebase and re-run the macOS gate each
 time `main` moved, which on a single-maintainer repository buys serialisation
 nobody needs. The next pull request's run is what notices a bad interaction.
+
+### Deleting the merged branch
+
+`delete_branch_on_merge` does not fire when the merge was performed with
+`GITHUB_TOKEN`, which is every merge `auto-merge.yml` queues, and no workflow
+can react to such a merge (the rule above). `.github/workflows/sweep-merged-branches.yml`
+runs on `schedule` (`17 * * * *`) and `workflow_dispatch` instead, with
+`contents: write` and `pull-requests: read`, no checkout and no action:
+
+```sh
+gh api "repos/$REPO/branches" --paginate   # unprotected, not the default branch
+gh pr list --state merged --head "$name"   # headRefOid == the branch's sha, owner == this repository's
+gh pr list --state open   --head "$name"   # must be empty
+gh api -X DELETE "repos/$REPO/git/refs/heads/$name"
+```
+
+| Condition | Why |
+|---|---|
+| Unprotected and not the default branch | `main` is both; either alone would do |
+| A merged pull request had this head, **at this commit**, from this repository's owner | `--head` matches by name, so a fork's branch of the same name would match; and a branch pushed to after its merge holds commits `main` does not |
+| No open pull request from it | A branch reused for a second pull request is still in use |
+
+Both triggers run the default branch's copy of the file, so nothing a pull
+request contains can change what the sweep does until that pull request has
+merged. To run it now: `gh workflow run sweep-merged-branches.yml`.
 
 ## Publishing
 

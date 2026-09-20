@@ -23,6 +23,8 @@ seventh:
    Release carrying both dmgs. `auto-merge.yml` joined them later: it sets
    GitHub's auto-merge flag on a pull request the owner opens, so the merge
    happens when `ci.yml`'s two jobs pass instead of when somebody remembers.
+   `sweep-merged-branches.yml` followed, because such a merge leaves its branch
+   behind.
 6. **`scripts/sync-version.mjs`** (S7.2), the one line of glue that makes
    `npm version` enough to cut a release: it rewrites `APP_VERSION` from the
    manifest between npm's bump and npm's commit.
@@ -398,6 +400,25 @@ own run tested the merge candidate only while the branch was up to date. Both
 halves of that are recorded in the workflow file itself and in
 [`backend.md`](./backend.md).
 
+**Nor does it delete the branch.** The repository has `delete_branch_on_merge`
+on, and GitHub honours it for a merge a person performs; for a merge performed
+with `GITHUB_TOKEN` it does not, and the branches of #36, #39 and #40 were
+still there a day later. The two obvious fixes both fail for reasons already
+on this page: an `on: pull_request: types: [closed]` job never starts, because
+an event `GITHUB_TOKEN` caused triggers no run, and
+`gh pr merge --auto --delete-branch` ignores its second flag because the merge
+has not happened when the command returns.
+
+So `sweep-merged-branches.yml` is a timer, not a reaction. Hourly (and on
+`workflow_dispatch`) it lists the unprotected branches and deletes one only
+when a **merged** pull request from this repository had it as its head, the
+branch **still points at the commit that pull request merged**, and no open
+pull request uses it. A branch pushed to again after its merge carries work
+`main` does not have and is kept. Because a `schedule` runs the default
+branch's copy of the file, there is no fork, author or edited copy to guard
+against, which is why this lives in its own file rather than as a second job
+in `auto-merge.yml`, whose trigger list is part of its security argument.
+
 ## The demo recording
 
 `e2e/demo.record.ts` is in `e2e/` for its helpers but is not a test; both it and
@@ -473,6 +494,7 @@ channel and no event. The only runtime symbol it touches is the private
 | `src/main/nightly-tag.test.ts` | `scripts/nightly-tag.mjs`'s pure half: the version is the next patch with a UTC date stamp; `decide` tags only when no `v*` tag points at `main` and today's nightly does not exist; `staleNightlyDrafts` keeps the newest three and never names a published or a stable release. And that `release.yml` agrees with it — its bash pattern matches the version the script produces and not a stable one, a mismatched stable tag is refused, and a nightly draft is flagged `--prerelease` |
 | `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
 | `src/main/packaging.test.ts` (second half) | `auto-merge.yml`'s guards, because they are what stands between a public repository and a self-merging pull request from a stranger: the event is `pull_request` and `pull_request_target` appears nowhere, the `if:` still carries all three conditions (same repository, not a draft, the owner's login) joined by `&&`, `permissions:` is exactly the two write scopes, and the job checks nothing out and uses no action. `actionlint` proves the file is a valid workflow; only this proves it still says who may merge |
+| `src/main/packaging.test.ts` (the sweep) | `sweep-merged-branches.yml` triggers on `schedule` and `workflow_dispatch` only, asks for `contents: write` and `pull-requests: read` and nothing else, checks nothing out, and its script still carries every condition — unprotected, not the default branch, merged pull request with the same head commit and this repository's owner, no open pull request — with the single `DELETE` after them |
 | `actionlint` (a CI job, not a file here) | Every workflow file: expression syntax, context availability — it is what catches `secrets.X` used in an `if:`, which looks right and never matches — action input names, and the shell in every `run:` block |
 
 Run with `npm run e2e:packaged` and `WITENA_APP_PATH` pointing at a copy of
@@ -530,8 +552,14 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
   by the pull request's run — which, under `strict: false`, tested the merge
   candidate only while the branch was up to date — and then by the next pull
   request. See "Self-merging pull requests" above.
+- **`sweep-merged-branches.yml` has not run yet.** Its queries were tried by
+  hand against the merged #36 and answered as expected; the first scheduled run
+  after it merges is its first on a runner, and its own branch is the first
+  thing it should delete. GitHub also pauses a `schedule` after 60 days without
+  repository activity.
 - **Half of auto-merge is repository configuration, which no test can see.**
-  Auto-merge enabled, branch deletion on merge, and a branch protection rule on
+  Auto-merge enabled, branch deletion on merge (which only covers merges a
+  person performs — the sweep covers the rest), and a branch protection rule on
   `main` naming `check` and `actionlint`: all of it lives in GitHub's settings.
   Rename a job in `ci.yml` without renaming it in the protection rule and every
   pull request waits forever for a check that no longer reports. The values are
