@@ -10,7 +10,7 @@ tag script and the workflow's version step are the same again: a nightly shows
 its `-nightly.<date>` version in Settings → About through the existing
 `APP_VERSION`, and nothing was added to render it. Moving the certificate
 import out of electron-builder and into `release.yml` is a workflow-only fix
-with no renderer side.
+with no renderer side, and so is having the workflow create the draft Release.
 
 **S7.4 is the first exception, and a narrow one.** A packaged build still
 renders exactly what `npm run dev` renders, but it is now the first time the UI

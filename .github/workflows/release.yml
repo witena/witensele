@@ -176,6 +176,28 @@ jobs:
               ;;
           esac
 
+      # electron-builder uploads its artifacts in parallel, and each uploader
+      # that finds no Release for the tag creates one. The first run that got as
+      # far as uploading (2026-09-20) ended with **two** drafts named 0.1.0,
+      # created in the same second: eight files in one, the arm64 zip's
+      # blockmap alone in the other. Created here, the draft already exists when
+      # the first uploader looks, and they all find the same one. A nightly is
+      # born flagged as a pre-release for the reason given at the last step.
+      - name: Create the draft Release the artifacts will be uploaded to
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "A Release for $GITHUB_REF_NAME already exists; uploading into it."
+            exit 0
+          fi
+          flags=(--draft --verify-tag --title "${GITHUB_REF_NAME#v}" --notes '')
+          if [[ "$GITHUB_REF_NAME" == *-nightly.* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}"
+
       # `npm run dist` is `npm run build && electron-builder --mac`; npm appends
       # the arguments after `--` to the end of that string, so `--publish
       # always` lands on electron-builder. Both architectures come from
