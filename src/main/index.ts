@@ -30,6 +30,14 @@ const RESOURCES_DIR = 'resources'
 const BUNDLED_SKILLS = 'skills'
 
 /**
+ * The MCP launcher's file name inside `Contents/Resources/bin` (S10.3).
+ *
+ * `build/witena-mcp` in the repository, copied there by `electron-builder.yml`;
+ * `src/main/packaging.test.ts` pins this spelling to that entry's `to`.
+ */
+const MCP_LAUNCHER = 'witena-mcp'
+
+/**
  * Where the skills bundled with the build live.
  *
  * Two answers, because electron moves them: in development and in the
@@ -66,6 +74,28 @@ function bundledAntDir(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'bin')
     : join(app.getAppPath(), 'vendor', 'ant', process.arch)
+}
+
+/**
+ * The MCP launcher shipped with this build, or `null` when there is none (S10.3).
+ *
+ * `build/witena-mcp` is copied into `Contents/Resources/bin` by the
+ * `extraResources` entry beside `ant`'s, and this absolute path is what an IDE's
+ * MCP configuration ends up holding: it is what Settings → Integrations
+ * registers, and what "the registered command is not this installation's
+ * launcher" is compared against.
+ *
+ * `null` in development and in the end-to-end harness, and that is the honest
+ * answer rather than a missing feature: a checkout has no bundle, so it has no
+ * stable command to hand a client — the shim is reached there as
+ * `node <repo>/out/mcp-shim/witena-mcp.cjs`, which only the person who built it
+ * can know. The Integrations section shows that as a copyable snippet instead.
+ *
+ * Resolved here for the same reason as the two above: this file is the only one
+ * allowed to ask electron where anything is (CLAUDE.md rule #5).
+ */
+function mcpLauncherPath(): string | null {
+  return app.isPackaged ? join(process.resourcesPath, 'bin', MCP_LAUNCHER) : null
 }
 
 /**
@@ -388,6 +418,18 @@ void app.whenReady().then(() => {
   // endpoint's tools call it. One map, so a discussion started by a coding agent
   // and one typed in the window go through exactly the same handlers (S10.3).
   const handlers = buildHandlers()
+
+  // S10.3: where an IDE would point its MCP configuration. WP-11 passes it into
+  // `createAppContext` as `mcpLauncherPath`, so that the Integrations section can
+  // register it and can tell a stale registration from a current one; until then
+  // it is computed and logged, which is also how a user reports the path they
+  // should have been given when a client refuses to start it.
+  const launcherPath = mcpLauncherPath()
+  console.log(
+    launcherPath === null
+      ? '[witena] MCP launcher: none (not a packaged build)'
+      : `[witena] MCP launcher: ${launcherPath}`
+  )
 
   context = createAppContext({
     databasePath,

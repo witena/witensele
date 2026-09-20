@@ -124,6 +124,15 @@ PLAN's level are recorded here as work packages land.
 | A `start()` that fails is logged by `settings.update`, not raised | Rejecting the update; rolling the row back | The row is the user's intent and `host.state` is the truth about this launch, and WP-11's `integrations.status` already reports the two separately. A rejection would leave the row saying "on" while the UI — which reverts a switch on a rejected update — showed "off", which is the one outcome that tells the user nothing useful |
 | `start()` and `stop()` are serialised through one promise chain | Guarding with a boolean; trusting the caller not to overlap | The switch, the launch and `before-quit` can all reach the host, and two of those can arrive in the same tick. A boolean guard makes the second caller return before the first has a socket; a chain makes "asked twice" mean "the second answer is about the first one's result", which is the only reading that cannot leave a socket with nothing pointing at it |
 
+### Packaging the shim (WP-9)
+
+| Decision | Alternatives considered | Why this one |
+|---|---|---|
+| The launcher is a **shell script inside the bundle**, not a command installed anywhere | A `witena-mcp` in `/usr/local/bin`; a package on npm; telling the user to write `node <path>` by hand | What a client stores is an absolute path, and the path of an application dragged into `/Applications` is one macOS keeps stable. Anything outside the bundle is a second artifact to version, to sign and to leave behind when the app is deleted — and the only thing it buys is a shorter command in a file nobody types twice |
+| It `exec`s `Contents/MacOS/Witena` with `ELECTRON_RUN_AS_NODE=1` | `#!/usr/bin/env node`; shipping a Node binary beside the shim | A double-clicked application cannot assume a `node`, and `bundlePathFor` derives the app to wake from `process.execPath`: a foreign `node` would answer every call that arrived while Witena was running and silently lose the lazy launch. WP-0a measured run-as-node from a notarized, hardened bundle — unbuffered stdio, no Dock tile, 0.07 s of startup |
+| The packaged test is the **`initialize` round trip**, not a forwarded tool call | Assert a real `list_chats` through the bundled launcher; assert nothing beyond the file existing | `initialize` and `tools/list` are the shim's offline half, so they start no app — which is what makes them runnable unattended. WP-0a measured that launching a second signed copy with a fresh `WITENA_USER_DATA` raises a Keychain prompt `whenReady` blocks on, so a case that waited for a discussion would be waiting for a dialog on somebody's screen. The forwarded half is covered against a running app by `e2e/mcp-endpoint.spec.ts` |
+| `src/main/index.ts` computes the launcher's path; `app-context.ts` exports nothing new for it | A `launcherPath` on `AppContext` now; deriving it in the Integrations handler from `process.resourcesPath` | Only `src/main/index.ts` may ask electron where anything is (rule 5), and WP-11 is what gives the value a consumer — an `AppContextOptions.mcpLauncherPath` it adds itself. Until then it is computed and logged, which costs one line and keeps two packages out of the same file |
+
 ### Provenance (WP-13)
 
 | Decision | Alternatives considered | Why this one |
@@ -455,6 +464,13 @@ restored byte-for-byte because the Codex app was running and owns that file.
 ## Open questions
 
 - The real names of Phase 9's handlers and types (WP-14 reads them, never guesses).
+- **Nothing has woken a quit Witena yet** (WP-9). The launcher runs the shim out
+  of a signed bundle, and `launch()` is unit-tested with an injected `spawn`, but
+  the two have never met: proving it needs a second signed copy launched with a
+  fresh `WITENA_USER_DATA`, which is the Keychain prompt WP-0a measured. It is
+  the acceptance criterion of STEPS.md S10.3 and the first thing S10.7's README
+  procedure will exercise by hand — on the *installed* app, where the prompt does
+  not arise.
 - ~~Whether Codex surfaces MCP resources or prompts at all (WP-0b); S10.6 drops
   whatever no client shows.~~ Answered by WP-0b: Codex reads resources (through
   its own `list_mcp_resources` / `read_mcp_resource` tools) and ignores prompts

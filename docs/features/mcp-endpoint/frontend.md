@@ -203,3 +203,25 @@ Two things WP-12 will want when it writes Settings → Integrations:
   build that ships none (development) the honest command is
   `node <repo>/out/mcp-shim/witena-mcp.cjs` — which `npm run build` and
   `npm run mcp-shim:build` both produce.
+
+## Packaging the launcher (WP-9)
+
+Still nothing in the renderer: no page, no store field, no event, no key, and the
+table above is unchanged. What WP-9 produces that will reach a screen is **one
+string**, and WP-12 is what prints it:
+
+| Fact | Value | Where it comes from |
+|---|---|---|
+| The command a client registers, in a packaged build | `<bundle>/Contents/Resources/bin/witena-mcp` | `mcpLauncherPath()` in `src/main/index.ts`, handed to the context by WP-11 and reported by `integrations.status` as `launcherPath` |
+| The same in a checkout | `null` | There is no bundle, so there is no stable command. WP-12 shows `node <repo>/out/mcp-shim/witena-mcp.cjs` and says why |
+
+Two consequences for the section WP-12 writes:
+
+- **The path is data, not copy.** It goes into the snippet block verbatim, like
+  the version string in Settings → About and the `ant` install command; the
+  sentence *around* it goes through `t()`. A path is the same in both languages,
+  and a translated one would be wrong in both.
+- **`null` is a state the section has to render, not an error.** A developer
+  running `npm run dev` sees the fallback snippet and a note; nothing is
+  disabled, because the endpoint itself works there — it is only the *command*
+  that has no stable spelling.

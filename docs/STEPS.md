@@ -4138,7 +4138,7 @@ question and receives the mock group's conclusion through MCP; `npm test` and
 (nothing changes — say so in one line if the watcher leans on an ordering
 guarantee of `run.finished`).
 
-### S10.2 The shim `[~]`
+### S10.2 The shim `[x]` (2026-09-20)
 What: `witena-mcp`, the command an IDE runs.
 - [x] (2026-09-20, WP-5) `src/mcp-shim/`: a low-level SDK `Server` on `StdioServerTransport`.
   `initialize` and `tools/list` answered locally from `@shared/mcp-tools`;
@@ -4180,7 +4180,7 @@ Acceptance: `node out/mcp-shim/witena-mcp.cjs`, registered by hand in Claude Cod
 against `npm run dev`, lists the tools and completes a `start_discussion`. Docs:
 `mcp-endpoint` (all four).
 
-### S10.3 Hosting it in the desktop app `[ ]`
+### S10.3 Hosting it in the desktop app `[x]` (2026-09-20)
 What: the app listens, can start in the background, and ships the shim.
 - [x] `AppSettings.mcpEndpoint: { enabled: boolean }` (default `false`).
   `src/main/index.ts`: when enabled, a `node:http` server on `127.0.0.1:0`
@@ -4208,10 +4208,20 @@ What: the app listens, can start in the background, and ships the shim.
   window's `did-finish-load`, and the chats store holds an id that arrives
   before `chats.list` answers. An id the list does not have is ignored with no
   error.)
-- [ ] Packaging: `out/mcp-shim/witena-mcp.cjs` → `Contents/Resources/mcp/`, and a
-  `Contents/Resources/bin/witena-mcp` POSIX launcher that resolves the bundle
-  from its own path and `exec`s the app binary with `ELECTRON_RUN_AS_NODE=1`.
-  `packaging.test.ts` asserts both entries.
+- [x] (2026-09-20, WP-9) Packaging: `out/mcp-shim/witena-mcp.cjs` →
+  `Contents/Resources/mcp/`, and a `Contents/Resources/bin/witena-mcp` POSIX
+  launcher that resolves the bundle from its own path and `exec`s the app binary
+  with `ELECTRON_RUN_AS_NODE=1`. `packaging.test.ts` asserts both entries.
+  (`build/witena-mcp`, mode 755 **in git** — asserted from the index, because a
+  local `chmod` does not travel. `src/main/index.ts` also computes
+  `mcpLauncherPath()` — `process.resourcesPath/bin/witena-mcp` when packaged,
+  `null` otherwise — which S10.4's Integrations section registers. Verified
+  against a Developer ID signed `dist:dir` bundle: the launcher answers
+  `initialize` and `tools/list` from the ordinary path, from a path containing a
+  space and through a symlink, and registers nothing with LaunchServices. The
+  **acceptance** below is still unproven: waking a quit app means launching a
+  second signed copy, which with a fresh `WITENA_USER_DATA` raises the Keychain
+  prompt WP-0a measured, and that cannot be exercised unattended.)
 - Tests: unit — the settings default and toggle, the discovery file's mode and
   removal, deep-link parsing. e2e — `e2e/mcp-endpoint.spec.ts`: launch with the
   switch on, run the built shim with `node`, `list_chats` answers, a
@@ -4221,8 +4231,11 @@ What: the app listens, can start in the background, and ships the shim.
   through `settings.update` because there is no launch-time override, the shim
   is spawned with plain `node` so it can never launch a second app, and the
   switched-off case asserts `SHIM_ERROR_TEXT['endpoint-off']` exactly, which is
-  the sentence an unpackaged app's `SingletonLock` earns. The
-  `e2e/packaged.spec.ts` case is WP-9's.)
+  the sentence an unpackaged app's `SingletonLock` earns. 2026-09-20, WP-9: the
+  `e2e/packaged.spec.ts` case spawns `Contents/Resources/bin/witena-mcp` the way
+  a client does and asserts `initialize` plus `tools/list` — the offline half on
+  purpose, since anything that waited for the app would wait for the Keychain
+  prompt a second signed copy raises.)
 Acceptance: with Witena quit, a tool call from Claude Code launches it with no
 window, the discussion runs, the conclusion returns, and clicking the Dock icon
 shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`

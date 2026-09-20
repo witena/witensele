@@ -1,8 +1,8 @@
 # mcp-endpoint — Implementation
 
 > Partly built. `backend.md`'s table is the authority on which work package has
-> landed; packaging (WP-9) and the Integrations settings (WP-11, WP-12) are still
-> to come. The design is PLAN.md
+> landed; the Integrations settings (WP-11, WP-12) are still to come. The design
+> is PLAN.md
 > "Witena as an MCP server (the MCP endpoint)"; the types every package codes
 > against are under "Frozen contracts" in [`tasks.md`](./tasks.md). Each work
 > package replaces part of this file with what it actually built.
@@ -22,6 +22,14 @@ A fourth piece is not a layer but a handful of lines in the Electron entry:
 `src/main/launch-args.ts` plus `src/main/index.ts`). It is the only part of this
 feature that is allowed to import electron, which is exactly why it lives
 outside `src/main/mcp-endpoint/` — see "Launch, lock and deep link" below.
+
+A fifth is not code this project runs at all: **`build/witena-mcp`** (WP-9), the
+twenty-line POSIX shell script that `electron-builder.yml` ships as
+`Contents/Resources/bin/witena-mcp` and that an IDE actually spawns. It `exec`s
+the bundle's own binary on the shim with `ELECTRON_RUN_AS_NODE=1`; every line of
+it is explained in [`../packaging/backend.md`](../packaging/backend.md), "The MCP
+launcher", and what this feature depends on is in
+[`backend.md`](./backend.md), "The bundled launcher".
 
 ## Data flow
 
@@ -542,8 +550,17 @@ it was the one asking is a line of noise in a transcript it pays for by the toke
 | `src/main/agents/history.test.ts` | Two cases for the converter: a question with and without the flag producing byte-identical `ModelMessage`s, and a message that is nothing but the flag dropped (WP-13) |
 | `src/renderer/src/components/chat/transcript-rows.test.ts` — `describe('originClient (S10.4)')` | The row carrying the client name; the flag read wherever it sits; an empty name treated as none; the first of two winning; the two flag parts not confused (WP-13) |
 | `src/mcp-shim/shim.spawn.test.ts` | The **built** `out/mcp-shim/witena-mcp.cjs` (built in `beforeAll`), spawned with plain `node` and driven by the SDK's stdio client against a WP-4 endpoint with a stub registry: `tools/list` with no file and no app; a forwarded call carrying the token and `CLIENT_HEADER`; progress relayed across both hops in order; cancellation reaching the endpoint's `signal`; a failed `ToolOutcome` passed through; the switched-off and not-running refusals; the stale-file re-read |
+| `src/main/packaging.test.ts` | The bundle's half of WP-9, over `electron-builder.yml` and `build/witena-mcp` as text: both `extraResources` destinations (`mcp/witena-mcp.cjs`, `bin/witena-mcp`), the `protocols` entry, the launcher's shebang, its `export ELECTRON_RUN_AS_NODE` and `exec` line, the two paths it derives, `productName === 'Witena'` (the executable the `exec` line names), and its **mode in the git index** — 755 there, because that is the mode a fresh clone and therefore the packaged bundle gets. Owned by [`../packaging/implement.md`](../packaging/implement.md) |
+| `e2e/packaged.spec.ts` | WP-9 against the shipped bundle: `Contents/Resources/bin/witena-mcp` exists and is executable, the shim is beside it at `mcp/witena-mcp.cjs`, and the launcher spawned the way a client spawns it answers `initialize` with `serverInfo.name === MCP_SERVER_NAME` and `tools/list` with the six names. The offline half on purpose — see [`backend.md`](./backend.md), "The bundled launcher" |
 | `e2e/mcp-endpoint.spec.ts` | The two halves with **nothing stood in for** (WP-10): the built app on a temporary `userData`, the switch thrown through `settings.update` from inside the page, and the built shim spawned with plain `node` against the same directory. The discovery file appears within the poll; `tools/list` crosses the stdio hop; `list_chats` finds a chat seeded through the backend client, with its `witena://chat/<id>` and its member; a `start_discussion` with `maxWaitSeconds: 5` on a chat whose provider is a closed port puts the question in the open window's transcript (any status is accepted — the message is the claim); and, with the switch off, a fresh shim answers `SHIM_ERROR_TEXT['endpoint-off']` |
 
 ## Known limitations and TODOs
 
-Listed in STEPS.md S10.7's backlog bullet.
+Listed in STEPS.md S10.7's backlog bullet, plus one this feature has to carry
+until somebody runs it by hand:
+
+- **Lazy launch has never run in one piece** (WP-9). The launcher, `launch.ts`,
+  `--background` and the discovery file are each tested; "a tool call wakes a
+  quit Witena" is not, because reproducing it means a second signed copy of the
+  app with a fresh `WITENA_USER_DATA` and therefore the Keychain prompt WP-0a
+  measured. See [`backend.md`](./backend.md), "The bundled launcher".

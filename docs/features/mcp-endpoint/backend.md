@@ -12,7 +12,7 @@
 | `src/mcp-shim/` and its Vite target | WP-5 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/host.ts`, `AppSettings.mcpEndpoint` | WP-7 `[x]` (2026-09-20) |
 | Single-instance lock, `--background`, `witena://`, `ui.open-chat` | WP-8 `[x]` (2026-09-20) |
-| `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 |
+| `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 `[x]` (2026-09-20) |
 | `integrations.*` handlers over an injected `IdeClients` | WP-11 |
 | `OriginPart`, `ChatSendInput.origin` | WP-13 `[x]` (2026-09-20) |
 
@@ -568,8 +568,9 @@ Three things it settled that a later package would otherwise have to rediscover:
   under bare `node` `bundlePathFor` answers `null`, so a shim that fails to find
   the endpoint *reports* it instead of `open`ing a second Witena on a machine
   several agents share. WP-9, whose launcher exists so that `execPath` is the
-  bundle, is therefore the package that proves lazy launch, and it proves it in
-  `e2e/packaged.spec.ts`.
+  bundle, is therefore the only package that *could* prove lazy launch — and it
+  could not: see "The bundled launcher" below. Its `e2e/packaged.spec.ts` case
+  proves the launcher, the binary and the shim, and stops before the `open`.
 - **An unpackaged, Playwright-launched app writes `SingletonLock` into the
   overridden `userData`**, so with the switch off the shim answers
   `endpoint-off` and not `not-running`. The spec asserts that one sentence
@@ -588,3 +589,68 @@ port, the call passes `maxWaitSeconds: MIN_WAIT_SECONDS`, and what is asserted
 is that the question reached the open window's transcript — the MCP call and the
 renderer meeting on one event bus. Any `status` is accepted, because which one
 comes back is `discussion.ts`'s subject and is pinned by `contract.test.ts`.
+
+## The bundled launcher (WP-9)
+
+The last piece of the path from an IDE to a discussion, and the only one that is
+not code this project runs: `build/witena-mcp`, twenty lines of POSIX `sh`, which
+`electron-builder.yml` copies to `Contents/Resources/bin/witena-mcp` beside a
+plain-file copy of the shim at `Contents/Resources/mcp/witena-mcp.cjs`.
+
+| Surface | Where |
+|---|---|
+| `build/witena-mcp` | The launcher, committed 755. Resolves its own symlinks, walks `bin` → `Resources` → `Contents`, and `exec`s `"$binary" "$shim" "$@"` with `ELECTRON_RUN_AS_NODE=1` exported |
+| `electron-builder.yml` | Two `extraResources` entries; `build/witena-mcp` → `bin/witena-mcp`, `out/mcp-shim/witena-mcp.cjs` → `mcp/witena-mcp.cjs` |
+| `src/main/index.ts` | `MCP_LAUNCHER` and `mcpLauncherPath()`, beside `bundledSkillsDir()` and `bundledAntDir()` |
+| `src/main/packaging.test.ts` | Both entries, the `protocols` block, the script's text and its **git index mode** |
+| `e2e/packaged.spec.ts` | A fourth case: the launcher answers `initialize` and `tools/list` out of the shipped bundle |
+
+The reasoning behind each line of the script is in
+[`../packaging/backend.md`](../packaging/backend.md), "The MCP launcher"; this
+section records what the rest of *this* feature has to know.
+
+### What WP-11 takes from here
+
+```ts
+// src/main/index.ts, in the `ready` handler, next to `const handlers = buildHandlers()`
+const launcherPath = mcpLauncherPath()
+```
+
+`mcpLauncherPath()` answers `process.resourcesPath/bin/witena-mcp` when
+`app.isPackaged` and `null` otherwise. WP-9 computes it and logs it; **WP-11
+passes it into `createAppContext` as `mcpLauncherPath`**, an
+`AppContextOptions` field WP-11 adds itself. Nothing new is exported from
+`app-context.ts` by WP-9, and `AppContext` gained no field — the value exists in
+one place, `index.ts`, where the rule that only that file may ask electron for a
+path is already true.
+
+`null` is a first-class answer, not a missing one: a checkout has no bundle and
+so no stable command to give a client. WP-11's `connect` refuses with
+`validation` in that case and `status` still answers; WP-12 shows the
+`node <repo>/out/mcp-shim/witena-mcp.cjs` snippet instead.
+
+### What it proves, and the one thing it does not
+
+Verified by hand on 2026-09-20 against `dist/mac-arm64/Witena.app` from
+`npm run dist:dir` — Developer ID signed, hardened runtime — with the exact
+command WP-5's *Verify* uses:
+
+| Run | Result |
+|---|---|
+| `printf '<initialize>' \| …/Contents/Resources/bin/witena-mcp` | `{"result":{…,"serverInfo":{"name":"witena","version":"0.1.0"}},"jsonrpc":"2.0","id":1}`, exit 0 |
+| The same from `…/My Applications/Witena.app` (a path with a space) | Identical |
+| The same through a symlink to the launcher, followed by `tools/list` | Identical, plus the six tool names |
+| `lsappinfo` count for `com.witena.app` while it ran | Unchanged: no Dock tile, no LaunchServices registration |
+
+So the launcher, `bundlePathFor`'s premise (`process.execPath` is the bundle's
+binary), the hardened runtime's tolerance of run-as-node and the shim's offline
+half are all proven from a real bundle.
+
+**Lazy launch is still unproven end to end.** Every piece of it exists — the
+launcher makes `execPath` the bundle, `launch.ts` builds the `open -g -j` vector
+and polls, WP-8 implements `--background`, WP-7 writes the discovery file — but
+no test has run them in one line, because doing so means launching a *second*
+signed copy of the app with a fresh `WITENA_USER_DATA`, which is the Keychain
+prompt WP-0a measured (`context.md`, "What the spike found", item 2). The place
+it will finally be exercised is S10.7's README procedure, followed by hand
+against the **installed** app, where the prompt does not arise.
