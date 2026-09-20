@@ -450,12 +450,19 @@ export interface BackendApi {
    * else: the next typed message is back on the chat's own setting. It must be
    * an integer from `MIN_AUTO_ROUNDS` to `MAX_AUTO_ROUNDS`. The Actions card's
    * "Start a vote" is its one caller and sends `1`.
+   *
+   * `origin` (S10.4) says that a **tool** sent this message on the user's
+   * behalf, and is stored as the message's `OriginPart`. Its one caller is the
+   * MCP endpoint, which fills `client` from the calling IDE's name; the composer
+   * sends nothing, because a message with no origin is one the human typed. The
+   * handler sanitises `client` — it is display data from an untrusted header.
    */
   'chat.send': (input: {
     chatId: string
     text: string
     mentions?: string[]
     rounds?: number
+    origin?: { client: string }
   }) => Promise<Message>
   /** Aborts the whole chain for this chat. Idempotent when nothing is running. */
   'chat.stop': (input: { chatId: string }) => Promise<void>

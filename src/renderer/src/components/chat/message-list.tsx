@@ -193,6 +193,7 @@ export function MessageList({
                 message={row.message}
                 chatId={chatId}
                 conclusion={row.conclusion}
+                viaClient={row.viaClient}
                 {...(members ? { members } : {})}
               />
             </div>

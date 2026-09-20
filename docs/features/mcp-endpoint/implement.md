@@ -477,6 +477,44 @@ SDK and zod in, `inlineDynamicImports` keeps it to one file, and only `node:`
 builtins stay external. `npm run build` ends with `npm run mcp-shim:build`, so
 `out/mcp-shim/witena-mcp.cjs` exists whenever `out/main` does.
 
+## Provenance (WP-13) — `OriginPart`
+
+A question that arrived from an IDE has to be distinguishable afterwards from one
+the user typed, or the first thing they see on opening Witena is a discussion
+they do not remember starting. The whole mechanism is one flag part and one chip.
+
+```ts
+// src/shared/types.ts
+export interface OriginPart { type: 'origin'; client: string }   // in MessagePart
+export const MAX_ORIGIN_CLIENT_CHARS = 40
+
+// src/shared/backend.ts — added to chat.send's input
+origin?: { client: string }
+```
+
+The path, end to end:
+
+| Step | Where | What happens |
+|---|---|---|
+| The IDE names itself | `initialize.clientInfo.name` | Whatever that client calls itself: `claude-code`, `codex`, anything |
+| The shim relays it | `src/mcp-shim/index.ts` (WP-5) | As `CLIENT_HEADER` (`x-witena-client`) on the forwarded HTTP request |
+| The endpoint reads it | `server.ts` (WP-4) | Into `ToolCallContext.client`; `undefined` for a direct HTTP caller |
+| The tool passes it | `tools.ts`, `startDiscussion` | `origin: { client: call.client ?? DIRECT_CLIENT }` on the `chat.send` call — the one line WP-13 adds here |
+| The handler cleans it | `handlers/chats.ts`, `sanitizeOriginClient` | `\p{C}` stripped, trimmed, cut to `MAX_ORIGIN_CLIENT_CHARS`, trimmed again; an empty result means no origin at all |
+| The runner stores it | `orchestration/chat-runner.ts`, `originParts` | `[{ type: 'origin', client }, { type: 'text', text }]` — the flag **first**, where `markConclusion` puts the other one, and only on the user message |
+| The model never sees it | `agents/history.ts`, `partsToText` | Not one of the three part kinds that contribute text, so the converted messages are byte-identical with and without it |
+| The row model reads it | `renderer/…/transcript-rows.ts`, `originClient` | A `string | null` on the message row, beside `conclusion` |
+| The chip draws it | `renderer/…/message-item.tsx` | `t('chat.viaClient', { client })` in a `Badge` on the header line, `data-testid="message-via"` |
+
+Nothing else in the codebase knows the part exists, which is the point of a flag:
+the run, the `@` resolution, the rounds and the rendering all treat the message as
+what it is — a user message — and only the two places that are *asking* about
+provenance go looking for the mark.
+
+`get_discussion`'s markdown (`transcript.ts`) deliberately does **not** show it.
+The caller of that tool is the client that sent the question, so telling it that
+it was the one asking is a line of noise in a transcript it pays for by the token.
+
 ## Tests
 
 | File | Covers |
@@ -498,6 +536,11 @@ builtins stay external. `npm run build` ends with `npm run mcp-shim:build`, so
 | `src/mcp-shim/connect.test.ts` | The lookup against real temporary directories: the path rule; a good file; a missing one, a future version, a non-object and a dead pid all as "no endpoint"; `SingletonLock` as the liveness hint; each of the three refusals including which one a timed-out launch produces; connecting with the file's numbers and the IDE's name; the file read once and reused; the re-read after a `401` and after an `ECONNREFUSED`; a non-stale failure neither retried nor cached; staleness recognised in both spellings and not confused with a 403 or a 413 |
 | `src/mcp-shim/launch.test.ts` | `bundlePathFor` on a real bundle path, one with spaces, a nested bundle and four non-bundles; the `open` argument vector with and without the `WITENA_USER_DATA` override; `launch` with an injected `spawn` and clock — detached and unreferenced, polling until the file appears, giving up at the deadline, and not waiting at all when `open` cannot be run |
 | `src/mcp-shim/no-electron.test.ts` | The shim's closure reaches `index.ts`, `connect.ts`, `launch.ts` and WP-1's two shared modules, imports no `electron`, no `better-sqlite3` and nothing under `src/main/`, and no package outside the MCP SDK and zod |
+| `src/main/mcp-endpoint/tools.test.ts` — `describe('provenance (S10.4)')` | The calling client reaching the stored `OriginPart`; `mcp` for a caller that sent no header; a badly chosen name arriving sanitised; and the same mark on a question sent into an existing chat (WP-13) |
+| `src/main/handlers/chats.test.ts` — `describe('sanitizeOriginClient (S10.4)')` | The cleaning rules one by one: ordinary names, whitespace, newline, `\r`, tab, ANSI escape, NUL, bidi override, zero-width space, a non-Latin name kept; the cap, and that the cap does not leave a trailing space; `null` for empty, whitespace-only, control-only and every non-string (WP-13) |
+| `src/main/orchestration/chat-runner.test.ts` — `describe('provenance (S10.4)')` | The flag stored first and on the user message alone; a typed message left unmarked; the event sequence, mentions, round and finish reason unchanged; the client name absent from the prompt (WP-13) |
+| `src/main/agents/history.test.ts` | Two cases for the converter: a question with and without the flag producing byte-identical `ModelMessage`s, and a message that is nothing but the flag dropped (WP-13) |
+| `src/renderer/src/components/chat/transcript-rows.test.ts` — `describe('originClient (S10.4)')` | The row carrying the client name; the flag read wherever it sits; an empty name treated as none; the first of two winning; the two flag parts not confused (WP-13) |
 | `src/mcp-shim/shim.spawn.test.ts` | The **built** `out/mcp-shim/witena-mcp.cjs` (built in `beforeAll`), spawned with plain `node` and driven by the SDK's stdio client against a WP-4 endpoint with a stub registry: `tools/list` with no file and no app; a forwarded call carrying the token and `CLIENT_HEADER`; progress relayed across both hops in order; cancellation reaching the endpoint's `signal`; a failed `ToolOutcome` passed through; the switched-off and not-running refusals; the stale-file re-read |
 
 ## Known limitations and TODOs

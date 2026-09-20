@@ -18,6 +18,7 @@ import type { BackendEvent, ChatUpdatedEvent } from '@shared/events'
 import {
   DEFAULT_CHAT_SETTINGS,
   MAX_GOAL_DESCRIPTION_CHARS,
+  MAX_ORIGIN_CLIENT_CHARS,
   type Agent,
   type ChatGoal,
   type Provider
@@ -26,6 +27,7 @@ import type { AppContext } from '../app-context'
 import { DEFAULT_AGENT_NAME } from '../agents/default-agent'
 import { agentInput, createTestDatabase, providerInput, type TestDatabase } from '../db/testing'
 import { createTestAppContext } from '../testing'
+import { sanitizeOriginClient } from './chats'
 import { buildHandlers } from './index'
 
 describe('handlers/chats members and settings', () => {
@@ -620,5 +622,71 @@ describe('handlers/chats members and settings', () => {
       expect(ctx.repos.chats.get(chat.id, ctx.userId).settings).toEqual(DEFAULT_CHAT_SETTINGS)
       expect(chatUpdates()).toEqual([])
     })
+  })
+})
+
+/**
+ * S10.4: `chat.send`'s `origin.client` is the one string on the backend surface
+ * whose text a **remote party** chose — the MCP shim copies it from the calling
+ * IDE's `initialize.clientInfo.name`. It is stored forever and drawn in a chip,
+ * so the handler cleans it at the boundary rather than trusting it.
+ *
+ * Pure here; the end-to-end assertion that the cleaned name reaches the stored
+ * `OriginPart` lives in `../orchestration/chat-runner.test.ts`, which has the
+ * mock models a real send needs.
+ */
+describe('sanitizeOriginClient (S10.4)', () => {
+  const ESC = String.fromCharCode(27)
+  const NUL = String.fromCharCode(0)
+  /** U+202E, the right-to-left override: invisible, and reverses what follows. */
+  const BIDI = String.fromCharCode(0x202e)
+  /** U+200B, a zero-width space: invisible padding inside a name. */
+  const ZWSP = String.fromCharCode(0x200b)
+  /** A client name written in a non-Latin script; CJK may not appear literally
+   *  outside `zh-CN.json` (CLAUDE.md rule 1), so it is spelled in escapes. */
+  const NON_LATIN = '\u7f16\u8f91\u5668'
+
+  it.each([
+    ['an ordinary client name', 'claude-code', 'claude-code'],
+    ['surrounding whitespace', '  Claude Code \n', 'Claude Code'],
+    ['an embedded newline', 'claude\ncode', 'claudecode'],
+    ['a carriage return', 'claude\r\ncode', 'claudecode'],
+    ['a tab', 'claude\tcode', 'claudecode'],
+    ['an ANSI escape', `${ESC}[31mclaude${ESC}[0m`, '[31mclaude[0m'],
+    ['a NUL byte', `claude${NUL}code`, 'claudecode'],
+    ['a bidi override', `claude${BIDI}code`, 'claudecode'],
+    ['a zero-width space', `claude${ZWSP}code`, 'claudecode'],
+    // Non-ASCII is kept. A client is free to call itself by a word in its own
+    // script, and a rule that dropped it would mangle honest names without
+    // stopping a dishonest one.
+    ['a non-Latin name', NON_LATIN, NON_LATIN]
+  ])('cleans %s', (_label, raw, expected) => {
+    expect(sanitizeOriginClient(raw)).toBe(expected)
+  })
+
+  it('caps a long name at MAX_ORIGIN_CLIENT_CHARS', () => {
+    const cleaned = sanitizeOriginClient('x'.repeat(MAX_ORIGIN_CLIENT_CHARS + 40))
+
+    expect(cleaned).toBe('x'.repeat(MAX_ORIGIN_CLIENT_CHARS))
+  })
+
+  it('does not leave the cap dangling on a space', () => {
+    // The cut can land mid-word, and a trailing space inside the chip reads as a
+    // rendering bug rather than as a truncation.
+    const cleaned = sanitizeOriginClient(`${'a'.repeat(MAX_ORIGIN_CLIENT_CHARS - 1)} bbbb`)
+
+    expect(cleaned).toBe('a'.repeat(MAX_ORIGIN_CLIENT_CHARS - 1))
+  })
+
+  it.each([
+    ['an empty string', ''],
+    ['only whitespace', '   '],
+    ['only control characters', `${NUL}${ESC}\r\n`],
+    ['a number', 7],
+    ['an object', { client: 'x' }],
+    ['null', null],
+    ['undefined', undefined]
+  ])('returns null for %s', (_label, raw) => {
+    expect(sanitizeOriginClient(raw)).toBeNull()
   })
 })

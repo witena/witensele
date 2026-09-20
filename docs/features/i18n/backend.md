@@ -179,6 +179,15 @@ The plan for S1.7, recorded here so it is not rediscovered:
   language is on screen — and the `deliver` hand-off's quoted conclusion beside
   the `handoffDeliver` notice is the group's **own** words, quoted verbatim, not
   copy the app wrote.
+- Since **S10.4** there is a second such flag, and it carries one value:
+  `OriginPart`'s `client`, the name the calling IDE gave itself. The word around
+  it is a key (`chat.viaClient`) and the name is **data**, interpolated verbatim
+  in whichever language is on screen — the same division a working directory, a
+  tool name and a model id are already on. The backend never writes "via": it
+  writes the flag, and the renderer writes the sentence. Note what the backend
+  *does* do to the value, which is the other half of this rule: it is text a
+  remote client chose, so `chat.send` strips its control characters, trims it and
+  caps it before it is stored ([`../chats/backend.md`](../chats/backend.md)).
 - Since **S5.10** the same line runs through the chat's **goal**: the briefing's
   sentences about it are written in both `briefing.en.ts` and `briefing.zh-CN.ts`
   and follow the same setting, while the user's own `description` and the

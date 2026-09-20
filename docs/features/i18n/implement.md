@@ -192,6 +192,23 @@ is no fixed set of network failures to write copy for; it is the same call
 are two sentences rather than one with a parameter, for the reason S5.12 gives:
 a parameter is for a value inside a sentence, and these say different things.
 
+S10.4 added exactly one key, `chat.viaClient` — `via {{client}}` in `en.json`,
+with its translation beside it — and it is the shortest illustration this feature
+has of its own rule about what is copy and what is data. The chip on a message an
+IDE sent is two things: the word "via", which is a sentence the user reads and is
+therefore a key, and the **client's own name** — `claude-code`, `codex`, whatever
+the IDE called itself in `initialize.clientInfo.name` — which is an identifier
+the backend stores, and is therefore interpolated as data and never translated.
+It is the same division the working directory, the tool names in the Always
+allowed block and About's package versions are already on.
+
+Two things about it that are not obvious. It is a **key with a parameter rather
+than two nodes**, so a language that puts the client first can. And the backend
+sends no notice and no sentence: the message carries an `OriginPart`, a flag whose
+only content is that name, exactly as `ConclusionPart` carries none at all — the
+backend says *what the message is*, and the renderer chooses every word around it
+in the language that is on screen now.
+
 S5.8 added five `settings.theme*` keys next to the language ones, and nothing
 else: the theme is an attribute on `<html>`, so the only translated text it
 owns is the three segment labels and one hint. `themeSystem` is worded

@@ -67,6 +67,17 @@ const MAX_TITLE_CHARS = 60
 /** The title a question with no readable first line falls back to. */
 const FALLBACK_TITLE = 'Discussion'
 
+/**
+ * The `OriginPart` client name for a caller that sent no `CLIENT_HEADER`.
+ *
+ * Only the shim sets that header, from the IDE's `initialize.clientInfo.name`;
+ * a script talking to `127.0.0.1` with the token directly does not. Labelling
+ * that message `mcp` says exactly what is known — it came through the endpoint,
+ * and the endpoint was not told by whom — where leaving the flag off entirely
+ * would tell the user the opposite, that they typed it themselves.
+ */
+const DIRECT_CLIENT = 'mcp'
+
 /* -------------------------------------------------------------------------- */
 /* The registry                                                                */
 /* -------------------------------------------------------------------------- */
@@ -364,7 +375,13 @@ async function startDiscussion(
     await handlers['chat.send'](ctx, {
       chatId,
       text,
-      ...(args.rounds === undefined ? {} : { rounds: args.rounds })
+      ...(args.rounds === undefined ? {} : { rounds: args.rounds }),
+      // S10.4: the transcript says who asked. `call.client` is the calling IDE's
+      // own name, relayed by the shim from `initialize.clientInfo.name`; a
+      // direct HTTP caller sends no header and is labelled `DIRECT_CLIENT`,
+      // which is the most the endpoint honestly knows about it. Either way the
+      // handler sanitises the string before it is stored.
+      origin: { client: call.client ?? DIRECT_CLIENT }
     })
   } catch (cause) {
     watch.cancel()

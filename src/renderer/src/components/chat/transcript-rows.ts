@@ -26,6 +26,14 @@
  * `isConclusion(parts)`, the one reading of the `ConclusionPart` flag the
  * backend stores on a closing turn. It is part of the row model rather than a
  * check inside the component for the same reason everything else here is.
+ *
+ * ## Provenance (S10.4)
+ *
+ * And it says whether a **tool** sent the message on the user's behalf —
+ * `originClient(parts)`, the one reading of the `OriginPart` flag the MCP
+ * endpoint puts on a question that arrived from an IDE. Same shape as the
+ * conclusion flag, and here for the same reason: a `string | null` computed in a
+ * pure function is a unit test, the same `find` inside the component is not.
  */
 import type { DiffPart, FileRefPart, Message, MessagePart } from '@shared/types'
 
@@ -49,6 +57,15 @@ export type TranscriptRow =
        * in `node`, with no DOM).
        */
       conclusion: boolean
+      /**
+       * The client that sent this message for the user (S10.4), or `null` when
+       * the human typed it — which is every message until an IDE sends one.
+       *
+       * The name, not a boolean: the chip says *which* tool asked, and a row
+       * model that only reported "some tool" would make the component read the
+       * parts again to find out which.
+       */
+      viaClient: string | null
     }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -101,7 +118,8 @@ export function buildTranscriptRows(
       kind: 'message',
       key: message.id,
       message,
-      conclusion: isConclusion(message.parts)
+      conclusion: isConclusion(message.parts),
+      viaClient: originClient(message.parts)
     })
   }
 
@@ -118,6 +136,30 @@ export function buildTranscriptRows(
  */
 export function isConclusion(parts: readonly MessagePart[]): boolean {
   return parts.some((part) => part.type === 'conclusion')
+}
+
+/**
+ * The name of the tool that sent this message for the user (S10.4), or `null`.
+ *
+ * The whole reading of `OriginPart`. Its position is not asserted — the backend
+ * stores it first, but a reader that insisted on `parts[0]` would break the day
+ * a second flag part is added in front of it, which is the same argument
+ * `isConclusion` makes.
+ *
+ * The **first** flag wins if a row somehow carried two. Nothing writes two, and
+ * picking one silently is better than rendering a stack of chips over a message
+ * whose provenance is already in doubt.
+ *
+ * An empty `client` is treated as no flag at all: the handler that stores the
+ * part never writes one, and a chip reading "via" with nothing after it would
+ * say less than no chip.
+ */
+export function originClient(parts: readonly MessagePart[]): string | null {
+  for (const part of parts) {
+    if (part.type !== 'origin') continue
+    return part.client.length > 0 ? part.client : null
+  }
+  return null
 }
 
 /**

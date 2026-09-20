@@ -41,7 +41,7 @@ is the only thing that reads it. See
 | `permission_grants` | `chat_id`, `tool_name`, `created_at` | text / text / integer | S5.15, migration `0004_messy_the_renegades.sql`. The standing "always allow in this chat" grants, listed in the group settings. Composite key, `ON DELETE CASCADE` from the chat — which is the whole of "deleting a chat deletes its grants" — and owned by [`executor`](../executor/backend.md); it appears here because it hangs off `chats` |
 | `messages` | `seq` | integer | Per-chat monotonic, assigned inside the insert transaction. The transcript's total order, and the `before` cursor's |
 | | `sender_type` / `sender_id` | text | `user` + `ctx.userId`, or `agent` + the agent id |
-| | `parts` | json | `MessagePart[]`; rewritten by the flush during streaming |
+| | `parts` | json | `MessagePart[]`; rewritten by the flush during streaming. An open union, so the two flag parts — S5.16's `ConclusionPart` and S10.4's `OriginPart` — needed no migration, and a row written before either simply has none |
 | | `status` | text enum | `streaming` → `done` \| `passed` \| `error` |
 | | `round` | integer | 0 for a user message, 1-based for an agent's, counted **within a run** |
 | | `mentions` | json | Agent ids this message @mentioned. On a user message, the effective set (parsed ∪ explicit, ∩ members); on a reply, what the model wrote |
@@ -127,6 +127,32 @@ through to `ctx.runners.send`, is **not** written to the chat, and applies only 
 the chain that message starts — [`orchestration`](../orchestration/backend.md)
 owns what it then does. Its one caller today is the Actions card's "Start a vote",
 which sends `1`.
+
+### A message a tool sent for the user (S10.4)
+
+`chat.send` also accepts an optional `origin: { client }`, which becomes an
+`OriginPart` in front of the stored user message's text — another member of the
+`MessagePart` union, so the `messages.parts` JSON column takes it with no
+migration and a row written before S10.4 simply has none.
+
+Its one caller is the MCP endpoint's `start_discussion`
+([`mcp-endpoint`](../mcp-endpoint/backend.md)); the composer sends nothing,
+because a message with no origin is one the human typed.
+
+`client` is **sanitised, not validated** (`sanitizeOriginClient`, exported from
+`handlers/chats.ts` for its own test):
+
+| Rule | Why |
+|---|---|
+| Every `\p{C}` code point removed | A newline, an ANSI escape or a bidi override in a chip is a client trying to look like something it is not. Letters outside ASCII are kept — a client may name itself in its own script |
+| Trimmed, cut to `MAX_ORIGIN_CLIENT_CHARS` (40), trimmed again | The chip sits on the message header line beside the round and the timestamp; the second trim keeps the cut from leaving a trailing space |
+| An empty result means **no origin at all** | A chip reading "via" with a blank after it says less than no chip |
+| Nothing is refused with `validation` | It is the one string on this surface whose text a *remote party* chose — the IDE names itself in `initialize.clientInfo.name`. Failing a whole discussion over the shape of a label would be worse than dropping the label |
+
+Everything downstream assumes the cleaning already happened: the runner stores
+`client` verbatim, and the renderer draws it as text. A second caller of
+`ctx.runners.send` that carries an `origin` has to go through this handler or
+repeat the work.
 
 ### Who closes a discussion (S5.16)
 

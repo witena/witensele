@@ -64,6 +64,12 @@ can hold a real conversation and still holds it after a restart.
   chat-list preview line and the "Closing speaker" select in the group settings.
   What *produces* a conclusion is [`orchestration`](../orchestration/context.md)'s
   closing turn; this feature owns everything the user does with one.
+- **Provenance** (S10.4): the "via {{client}}" chip on a user message that an
+  IDE sent through the MCP endpoint, and the `originClient` reading of the
+  `OriginPart` behind it. What *sends* such a message is
+  [`mcp-endpoint`](../mcp-endpoint/context.md)'s; this feature owns the chip, the
+  row model that feeds it, and the `chat.send` rule that cleans the client's
+  self-chosen name before it is stored.
 - The three renderer surfaces the executor needs (S5.5): the **permission card**
   above the composer (`stores/permissions.ts` plus `permission-card.tsx`), the
   **diff block** a `DiffPart` renders as, and the `path:line` chip a
@@ -154,6 +160,8 @@ the next round boundary rather than mid-turn.
 | **The chat-list preview replaces the member count rather than joining it** (S5.16) | A second line under the title; show both separated by a dot | The row is one line high and the count is on screen the moment the chat is opened. What a discussion concluded is the better answer to "which one was this" |
 | **Automatic delivery is a per-chat switch that is on by default, and absent means on** (S5.18) | A global setting; off by default with an opt-in; a `true` written into `DEFAULT_CHAT_SETTINGS` | A chat that names a file, a folder and a writer has already said what should happen when the talking stops, and the bug S5.18 closes was that nothing did. The switch is per chat because "this one I want to read first" is a fact about a chat, not about the user; and it is `autoDeliver?: boolean` with absence meaning on because the field joined a JSON column every stored chat lacks, so a chat written before the step must behave like one created after it without a migration. Only a literal `false` — the user turning it off — stops the hand-off |
 | **The switch is shown only for a `document` goal** (S5.18) | Always show it; put it in the group settings beside "Closing speaker" | It does something on exactly one kind of goal. On the others it would be a control with nothing behind it, and it sits in the Goal block rather than the group settings because it *is* a property of the goal — what happens to the deliverable — not of the discussion |
+| **A message a tool sent for the user is an ordinary user message plus a flag part** (S10.4) | A new `SenderType`; a column on `messages`; a system notice beside the question | A question that arrived from an IDE is scheduled, mentioned, answered and rendered exactly like a typed one, so a new sender type would add a case to every reader of a message to describe something none of them cares about. `OriginPart` is invisible to all of them and read by two places: the transcript row model and the chip. It also needs no migration, for the reason `ConclusionPart` needed none |
+| **The client name is sanitised at the handler, not validated and not escaped at render time** (S10.4) | Refusing a badly named client with `validation`; storing it verbatim and cleaning it in the chip | It is the one string on this feature's surface whose text a remote party chose. Cleaning once at the boundary means the runner, the row model and the chip all get to assume it is clean; refusing would fail a whole discussion over a label; and cleaning at render time would leave the stored row carrying whatever was sent |
 
 ## Open questions
 

@@ -28,6 +28,10 @@
  * - **A chat holds at most one executor member.** PLAN.md's rule is that all
  *   writes go through a single agent, so the refusal lives where membership is
  *   written rather than where tools are attached.
+ * - **`chat.send`'s `origin` is sanitised, not validated** (S10.4). It is the
+ *   one field here whose text a remote party chose, and the honest answer to a
+ *   client that names itself badly is to drop the label, not to refuse the
+ *   discussion. See `sanitizeOriginClient`.
  * - **A goal's paths are checked against the chat's folder** (S5.10), which is
  *   the *patch's* folder when it carries one and the stored one otherwise — so
  *   binding a folder and setting a goal in a single call is legal, and setting a
@@ -51,6 +55,7 @@ import {
   HANDOFF_INTENTS,
   MAX_AUTO_ROUNDS,
   MAX_GOAL_DESCRIPTION_CHARS,
+  MAX_ORIGIN_CLIENT_CHARS,
   MIN_AUTO_ROUNDS
 } from '@shared/types'
 import { summarizeUsage, type ChatUsageSummary } from '@shared/usage'
@@ -399,6 +404,49 @@ function assertAgentIds(value: unknown): asserts value is string[] {
 }
 
 /**
+ * The client name that goes into a message's `OriginPart` (S10.4).
+ *
+ * `chat.send`'s `origin.client` is the one field of the whole backend surface
+ * that a **remote party chose the text of**: the MCP shim copies it from the
+ * calling IDE's `initialize.clientInfo.name`, which is whatever that client
+ * decided to call itself, and the endpoint hands it on. It is then stored
+ * forever and drawn in a chip, so it is cleaned here — at the boundary, once —
+ * rather than in the runner, the row model and the chip in three slightly
+ * different ways:
+ *
+ * - **Control characters are removed**, not escaped. A newline, a `\r` or an
+ *   ANSI escape in a chip is a client trying to be somewhere it is not, and
+ *   there is no legitimate client name that contains one.
+ * - **Trimmed and capped at `MAX_ORIGIN_CLIENT_CHARS`**, because a chip sits on
+ *   the message header line beside the round and the timestamp; a client that
+ *   sent a kilobyte would push the rest of the row off the screen.
+ * - **Empty means absent.** A client that sends `""`, or a name that was nothing
+ *   but control characters, gets no flag — a chip reading "via" with a blank
+ *   after it says less than no chip at all.
+ *
+ * It is deliberately **not** rejected with `validation`: the caller is a coding
+ * agent relaying a third string, and refusing its discussion over the shape of a
+ * label would be a tool failure where dropping the label is the honest outcome.
+ */
+export function sanitizeOriginClient(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  // `\p{C}` is every Unicode "other" category: controls, format characters such
+  // as the bidi overrides, surrogates and unassigned code points.
+  const cleaned = value.replace(/\p{C}/gu, '').trim()
+  if (cleaned.length === 0) return null
+  return cleaned.slice(0, MAX_ORIGIN_CLIENT_CHARS).trim()
+}
+
+/** `chat.send`'s `origin`, sanitised, or `null` when it carries no usable name. */
+function originOf(input: unknown): { client: string } | null {
+  const origin = (input as { origin?: unknown })?.origin
+  if (origin === null || origin === undefined) return null
+  if (typeof origin !== 'object') throw validation('origin must be an object')
+  const client = sanitizeOriginClient((origin as { client?: unknown }).client)
+  return client === null ? null : { client }
+}
+
+/**
  * The member list a new chat is born with.
  *
  * An explicit list wins. Without one the chat is empty, *except* on an
@@ -576,11 +624,17 @@ export const chatHandlers: HandlerModule = {
       }
     }
 
+    // S10.4: who sent this for the user. Sanitised rather than validated — see
+    // `sanitizeOriginClient` — so a client with an unusable name still gets its
+    // discussion, just without a chip on the message.
+    const origin = originOf(input)
+
     return ctx.runners.send({
       chatId,
       text: input.text,
       ...(input.mentions ? { mentions: input.mentions } : {}),
-      ...(rounds !== undefined ? { rounds } : {})
+      ...(rounds !== undefined ? { rounds } : {}),
+      ...(origin === null ? {} : { origin })
     })
   },
 

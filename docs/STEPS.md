@@ -4222,7 +4222,7 @@ window, the discussion runs, the conclusion returns, and clicking the Dock icon
 shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`
 (all four each).
 
-### S10.4 Settings → Integrations, and provenance `[ ]`
+### S10.4 Settings → Integrations, and provenance `[~]`
 What: a user turns this on and connects an IDE without a terminal; the transcript
 says who typed what.
 - [ ] Handlers `integrations.status` / `integrations.connect` /
@@ -4237,10 +4237,20 @@ says who typed what.
   sentence on what it opens; endpoint status; a card each for Claude Code and
   Codex (Connect / Disconnect / Repair); a generic copyable JSON + TOML snippet
   for any other client. Every string through `t()`, both locales.
-- [ ] `OriginPart` (`{ type: 'origin', client: string }`): `chat.send` accepts an
+- [x] `OriginPart` (`{ type: 'origin', client: string }`): `chat.send` accepts an
   optional `origin`, the endpoint fills it from `X-Witena-Client`, the message
   row renders a "via {{client}}" chip, the history converter ignores it (test, as
-  for `ConclusionPart`).
+  for `ConclusionPart`). (2026-09-20, WP-13. The flag is stored **first** in
+  `parts`, where `markConclusion` puts the other one, and only on a user message;
+  `chat.send` **sanitises** `client` rather than validating it — `\p{C}` stripped,
+  trimmed, capped at `MAX_ORIGIN_CLIENT_CHARS`, and an empty result means no flag
+  — because it is the one string on the backend surface whose text a remote party
+  chose, and failing a discussion over a label would be worse than dropping the
+  label. A caller that sends no header is labelled `mcp`, not left unmarked. The
+  converter needed no code change; a test now pins that the converted messages
+  are byte-identical with and without the flag. `src/shared/backend.ts` had to be
+  touched beyond the package's list: `HandlerMap` is derived from `BackendApi`,
+  so `origin` could not be passed without the contract declaring it.)
 - Tests: handler tests with a fake `IdeClients`; the chip's row model; the
   converter; the locale guard tests. e2e: the Integrations section toggles the
   endpoint and shows the snippet (no real IDE needed).

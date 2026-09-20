@@ -64,6 +64,11 @@ does not throw, it just makes every answer slightly worse.
   `ConclusionPart` in front of the parts of a `closing` turn that finished
   `done`. The turn is where the stored parts are, so it is where the flag is
   written; what the flag *looks like* is [`chats`](../chats/frontend.md)'s.
+- **Keeping a flag part out of the prompt** (S5.16, S10.4): `partsToText` lists
+  the three kinds that contribute text, so `ConclusionPart` and — since S10.4 —
+  `OriginPart` never reach a model. The second is the stronger rule of the two:
+  a group told that an IDE is asking starts answering the IDE. Who *sent* a
+  question belongs to the transcript, which is [`chats`](../chats/context.md)'s.
 - **The closing block knows the goal** (S5.18): in a `document` chat it names
   the deliverable, says the executor writes it from this very message, and asks
   for the file's **content** rather than a summary — and forbids addressing the

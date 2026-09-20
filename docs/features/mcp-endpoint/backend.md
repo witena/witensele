@@ -14,7 +14,7 @@
 | Single-instance lock, `--background`, `witena://`, `ui.open-chat` | WP-8 `[x]` (2026-09-20) |
 | `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 |
 | `integrations.*` handlers over an injected `IdeClients` | WP-11 |
-| `OriginPart`, `ChatSendInput.origin` | WP-13 |
+| `OriginPart`, `ChatSendInput.origin` | WP-13 `[x]` (2026-09-20) |
 
 Nothing under `src/main/mcp-endpoint/` or `src/mcp-shim/` imports electron; a
 closure test in each enforces it (rule 5). The shim's is stricter still: no
@@ -506,3 +506,49 @@ would otherwise have to rediscover:
   discussion that is still going when the next MCP call arrives. Waiting for the
   watcher to subscribe is then `expect.poll` over the counting bus's listener
   count, not a sleep.
+
+## Provenance (WP-13)
+
+Three lines of behaviour and one new member of an open union. The shape is in
+`implement.md`; this section records what the rest of the backend has to know.
+
+### What changed outside this feature
+
+| File | Change |
+|---|---|
+| `src/shared/types.ts` | `OriginPart` and `MAX_ORIGIN_CLIENT_CHARS`; `OriginPart` added to `MessagePart` |
+| `src/shared/backend.ts` | `chat.send`'s input gains `origin?: { client: string }` |
+| `src/main/orchestration/chat-runner.ts` | `ChatSendInput.origin`, and `originParts` putting the flag in front of the text |
+| `src/main/handlers/chats.ts` | `sanitizeOriginClient` (exported for its test) and `originOf`, applied in `chat.send` |
+| `src/main/agents/history.ts` | No code change — `partsToText` already ignores an unknown part — but the rule is now written down, and a test pins it |
+| `src/main/mcp-endpoint/tools.ts` | `origin: { client: call.client ?? DIRECT_CLIENT }` in `startDiscussion` |
+
+`src/shared/backend.ts` was not on WP-13's *Touches* list. It has to be: the
+handler map is derived from `BackendApi`, so `origin` is not a field the endpoint
+could pass without the contract declaring it. The edit is the one `chat.send`
+declaration and nothing else.
+
+### The rules a later package must not undo
+
+- **Sanitise at the boundary, once.** `origin.client` is the only string on the
+  backend surface whose text a remote party chose. `sanitizeOriginClient` is the
+  single place that cleans it, and everything downstream — the runner, the row
+  model, the chip — assumes it already has. A second caller of `ctx.runners.send`
+  with an `origin` has to go through the handler or repeat the cleaning.
+- **Sanitising is not validation.** A client that names itself badly still gets
+  its discussion; it just gets no chip. Turning this into a `validation` refusal
+  would fail a whole tool call over a label.
+- **`mcp` is the fallback, not "no flag".** A direct HTTP caller sent no header,
+  and an unmarked message would claim the user typed it.
+- **The flag goes first in `parts`, and only on the user message.** The same
+  position `markConclusion` uses. Nothing may assume `parts[0]` is the text: a
+  reader that wants the body looks for the first `text` part. `tools.test.ts` had
+  one such assertion and WP-13 corrected it.
+- **The history converter must stay blind to it.** `history.test.ts` asserts the
+  converted `ModelMessage`s are byte-identical with and without the flag. A
+  future `partsToText` that renders unknown parts generically would break that
+  test, which is what it is there for.
+- **Nothing else needs to change.** The database stores `parts` as JSON with no
+  per-type validation, so there is no migration and no schema edit; the server
+  host (`src/server/`) carries `chat.send` through the same `HandlerMap` and
+  needed no change; `transcript.ts` deliberately does not render the mark.

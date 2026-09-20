@@ -53,6 +53,15 @@
  * summary is what should be read first, the diffs are what it is about. A
  * `file-ref` part is a `path:line` chip. Both come from `transcript-rows.ts`.
  *
+ * ## Provenance (S10.4)
+ *
+ * A user message an IDE sent through the MCP endpoint carries an `OriginPart`,
+ * and the header line gains a "via <client>" chip for it. The chip is the whole
+ * rendering: nothing about the row is otherwise special, because nothing about
+ * the *message* is — the runner scheduled it, the agents answered it and the
+ * transcript reads exactly as if it had been typed. `viaClient` arrives from the
+ * row model already sanitised by the backend.
+ *
  * Since S5.7 all four surfaces of a row open a file in the editor — the chip, the
  * diff header, a file tool card's "open" icon, and a path the detector found in
  * the body text — and all four need the same two values: the chat's id, which
@@ -212,13 +221,25 @@ export interface MessageItemProps {
    * and one reading of the flag is one place to change.
    */
   conclusion?: boolean
+  /**
+   * The tool that sent this message for the user (S10.4), or `null` / absent
+   * when the human typed it.
+   *
+   * Comes from the row model (`originClient` in `transcript-rows.ts`) for the
+   * same reason `conclusion` does. The value is a name a *remote client* chose
+   * — the backend has already trimmed it, capped it and stripped its control
+   * characters — so it is rendered as text inside the chip and used for nothing
+   * else.
+   */
+  viaClient?: string | null
 }
 
 export function MessageItem({
   message,
   chatId,
   members = [],
-  conclusion = false
+  conclusion = false,
+  viaClient = null
 }: MessageItemProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   // `null` means "the stream decides"; a boolean means the user has decided.
@@ -367,6 +388,14 @@ export function MessageItem({
             >
               {t('agents.executorBadge')}
             </Badge>
+          ) : null}
+          {/* S10.4: a question an IDE sent for the user. It sits with the other
+              badges rather than in the body, because it is a fact *about* the
+              message and not part of what was said — and on the header line the
+              reader is already asking "who, when, in which round". The client
+              named itself, so it is drawn as text and nothing else. */}
+          {viaClient ? (
+            <Badge data-testid="message-via">{t('chat.viaClient', { client: viaClient })}</Badge>
           ) : null}
           {message.round > 0 ? (
             <span data-testid="message-round" className="text-fg-faint">

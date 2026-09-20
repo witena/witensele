@@ -241,7 +241,67 @@ describe('the MCP discussion tools', () => {
 
       const sent = await handlers['messages.list'](ctx, { chatId: result.chatId, limit: 50 })
       const question = sent.find((message) => message.senderType === 'user')
-      expect(question?.parts[0]).toMatchObject({ text: 'Safe?\n\ndiff --git a/x b/x' })
+      // The text part, not `parts[0]`: since S10.4 the origin flag sits in front
+      // of it on every message this tool sends.
+      expect(question?.parts.find((part) => part.type === 'text')).toMatchObject({
+        text: 'Safe?\n\ndiff --git a/x b/x'
+      })
+    })
+
+    /**
+     * S10.4: the transcript says which IDE asked. `client` comes from the
+     * `CLIENT_HEADER` the shim sets from `initialize.clientInfo.name`; the
+     * `chat.send` handler owns the sanitising, so the cases here are only about
+     * what the tool passes and what a caller that sent no header gets.
+     */
+    describe('provenance (S10.4)', () => {
+      const originOf = async (chatId: string): Promise<unknown> => {
+        const sent = await handlers['messages.list'](ctx, { chatId, limit: 50 })
+        return sent.find((message) => message.senderType === 'user')?.parts[0]
+      }
+
+      it('marks the question with the calling client', async () => {
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion(
+            { question: 'Well?', agents: [ada.id] },
+            call({ client: 'claude-code' })
+          )
+        )
+
+        expect(await originOf(result.chatId)).toEqual({ type: 'origin', client: 'claude-code' })
+      })
+
+      it('falls back to mcp for a caller that sent no client header', async () => {
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion({ question: 'Well?', agents: [ada.id] }, call())
+        )
+
+        // Not "no flag": the message *did* arrive through the endpoint, and
+        // leaving it unmarked would tell the user they typed it themselves.
+        expect(await originOf(result.chatId)).toEqual({ type: 'origin', client: 'mcp' })
+      })
+
+      it('sanitises a client name the caller chose badly', async () => {
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion(
+            { question: 'Well?', agents: [ada.id] },
+            call({ client: `  ${'z'.repeat(80)}\nAda\n  ` })
+          )
+        )
+
+        const origin = (await originOf(result.chatId)) as { type: string; client: string }
+        expect(origin.type).toBe('origin')
+        expect(origin.client).toBe('z'.repeat(40))
+      })
+
+      it('marks a question sent into an existing chat too', async () => {
+        await tools.start_discussion(
+          { question: 'Well?', chatId: chat.id, rounds: 1 },
+          call({ client: 'codex' })
+        )
+
+        expect(await originOf(chat.id)).toEqual({ type: 'origin', client: 'codex' })
+      })
     })
 
     it('continues an existing chat and reports the positions when nobody agrees', async () => {

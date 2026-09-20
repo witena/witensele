@@ -383,4 +383,38 @@ describe('toModelMessages', () => {
 
     expect(result).toEqual([])
   })
+
+  it('shows a question an IDE sent and never its origin flag (S10.4)', () => {
+    const asked = (parts: MessagePart[]): ReturnType<typeof toModelMessages> =>
+      toModelMessages({
+        self: bob,
+        agentsById,
+        messages: [
+          message('user', 'local', parts),
+          message('agent', ada.id, [{ type: 'text', text: 'Because the index is cold.' }])
+        ]
+      })
+
+    const typed = asked([{ type: 'text', text: 'Why is this query slow?' }])
+    const viaIde = asked([
+      { type: 'origin', client: 'claude-code' },
+      { type: 'text', text: 'Why is this query slow?' }
+    ])
+
+    // Byte-identical, which is the whole rule: *who sent* the question is a fact
+    // about the transcript, not about the question, and a group told that a
+    // machine is asking would start answering the machine instead.
+    expect(JSON.stringify(viaIde)).toBe(JSON.stringify(typed))
+    expect(JSON.stringify(viaIde)).not.toContain('claude-code')
+  })
+
+  it('drops a message that is nothing but an origin flag', () => {
+    const result = toModelMessages({
+      self: bob,
+      agentsById,
+      messages: [message('user', 'local', [{ type: 'origin', client: 'claude-code' }])]
+    })
+
+    expect(result).toEqual([])
+  })
 })

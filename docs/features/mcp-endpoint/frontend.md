@@ -1,14 +1,14 @@
 # mcp-endpoint — Frontend
 
-> One handler so far (WP-8), and no component of its own. The visible surfaces —
-> the Settings section and the provenance chip — are still to come.
+> Two surfaces so far: WP-8's deep-link handler and WP-13's provenance chip. The
+> Settings section is still to come.
 
 Surface, by work package (`tasks.md`):
 
 | Surface | Package |
 |---|---|
 | Settings → Integrations: the endpoint switch, status, Claude Code and Codex cards, the generic snippet | WP-12 |
-| The "via {{client}}" chip on a message sent through the endpoint | WP-13 |
+| The "via {{client}}" chip on a message sent through the endpoint | WP-13 `[x]` (2026-09-20) |
 | Selecting a chat on the `ui.open-chat` event (`witena://chat/<id>`) | WP-8 `[x]` (2026-09-20) |
 | `AppSettings.mcpEndpoint.enabled` on the settings store — the value the switch writes, with no control of its own yet | WP-7 `[x]` (2026-09-20) |
 | "Create a Claude Code agent for each committee" | WP-14 |
@@ -142,6 +142,45 @@ selects and navigates; an unknown one selects nothing, navigates nowhere, leaves
 `error` unset and does not clear the current selection; an id that arrives
 before `load` is honoured when the list lands, and dropped when the list turns
 out not to contain it.
+
+## Provenance: the "via" chip (WP-13)
+
+The one surface this feature has inside a chat. A user message that arrived
+through the endpoint carries an `OriginPart`, and its row gains a chip on the
+header line, beside the round and the timestamp:
+
+| Piece | Where |
+|---|---|
+| `originClient(parts) → string \| null` | `components/chat/transcript-rows.ts`, beside `isConclusion` |
+| `viaClient` on the message row | the same file's `TranscriptRow`, filled by `buildTranscriptRows` |
+| The prop | `MessageItem`'s `viaClient?: string \| null`, passed down by `MessageList` |
+| The chip | `message-item.tsx`: `<Badge data-testid="message-via">{t('chat.viaClient', { client })}</Badge>` |
+| The copy | `chat.viaClient`, `via {{client}}` in `en.json` and translated beside it in `zh-CN.json` |
+
+Three things about it are deliberate:
+
+- **The reading lives in the row model, not in the component.** The same argument
+  `conclusion` makes: a `string | null` computed by a pure function is a unit
+  test, and the identical `find` inside a component is not — the renderer suite
+  runs in `node`, with no DOM.
+- **It is a chip on the header line, not a line in the body.** It is a fact
+  *about* the message rather than part of what was said, and the header line is
+  already where the reader is asking who, when and in which round.
+- **The client named itself.** `viaClient` is text a remote party chose. The
+  backend has already trimmed it, stripped its control characters and capped it
+  at `MAX_ORIGIN_CLIENT_CHARS`; the renderer draws it as text and branches on
+  nothing.
+
+Nothing else about the row changes, which is the point: a message an IDE sent is
+an ordinary user message — same avatar, same body, same mentions — and the chip
+is the only thing that says otherwise.
+
+### Tests
+
+`components/chat/transcript-rows.test.ts`: the row carrying the client name and
+an ordinary row carrying `null`; the flag read wherever it sits in `parts`; an
+empty client name treated as no flag; the first of two flags winning; and
+`originClient` / `isConclusion` not reading each other's part.
 
 ## Shim (WP-5)
 
