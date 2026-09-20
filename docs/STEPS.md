@@ -4045,17 +4045,17 @@ What: the design rests on platform behaviour nobody has run yet. Find out before
 building on it; throwaway code, kept out of `src/`. Write the findings into
 `docs/features/mcp-endpoint/context.md` ("What the spike found"), and change PLAN
 first if any of them fails.
-- [ ] **Run-as-node from the shipped bundle.** With a signed, notarized
+- [x] **Run-as-node from the shipped bundle.** (2026-09-20, WP-0a) With a signed, notarized
   `Witena.app` (`npm run dist:dir` plus the v0.1.0 dmg):
   `ELECTRON_RUN_AS_NODE=1 Witena.app/Contents/MacOS/Witena script.cjs` runs the
   script, reads stdin / writes stdout unbuffered, shows no Dock icon and no
   window, and is not blocked by the hardened runtime. Confirm no Electron fuse
   config disables `RunAsNode` today and record that it must stay enabled.
-- [ ] **Hidden launch.** `open -g -j -a <bundle> --args --background` starts the
+- [x] **Hidden launch.** (2026-09-20, WP-0a) `open -g -j -a <bundle> --args --background` starts the
   app without stealing focus; `process.argv` carries `--background` in a packaged
   build; how long from `open` to "HTTP port listening" on a cold start (this
   bounds the shim's launch timeout).
-- [ ] **Single-instance lock and the e2e harness.** `requestSingleInstanceLock()`
+- [x] **Single-instance lock and the e2e harness.** (2026-09-20, WP-0a) `requestSingleInstanceLock()`
   is keyed by `userData`; confirm that with `WITENA_USER_DATA` applied *before*
   the lock, parallel Playwright launches do not evict each other.
 - [ ] **What the clients really do.** Against a ten-line stdio MCP server with a

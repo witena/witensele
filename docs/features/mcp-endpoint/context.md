@@ -64,6 +64,118 @@ PLAN's level are recorded here as work packages land.
 > Filled by WP-0a and WP-0b. Until then every number in this feature that came
 > from memory rather than measurement is listed in `tasks.md` under "Assumptions".
 
+### WP-0a platform (2026-09-20)
+
+Machine: macOS 27.0 (26A428), Apple Silicon, Electron 44.3.0 / Node 24.20.0.
+Two bundles were used. **dist** is `dist/mac-arm64/Witena.app` from
+`npm run dist:dir` — Developer ID signed, hardened runtime
+(`CodeDirectory … flags=0x10000(runtime)`), not notarized. **installed** is
+`/Applications/Witena.app` 0.1.0, which `spctl -a -vvv -t exec` reports as
+`accepted, source=Notarized Developer ID` and `xcrun stapler validate` accepts —
+so the notarized bundle was measured without downloading anything. Every launch
+was given a throwaway `WITENA_USER_DATA` under the scratchpad, and every process
+started here was quit again.
+
+**1. Run-as-node from the shipped bundle — confirmed.**
+
+```
+printf 'one\ntwo\nthree\n' (one line per second, through a pipe) |
+  ELECTRON_RUN_AS_NODE=1 <bundle>/Contents/MacOS/Witena echo.cjs
+```
+
+Both bundles run the script. `process.versions.node` is `24.20.0`,
+`process.versions.electron` is `44.3.0`, `process.execPath` is the bundle's own
+`Contents/MacOS/Witena`. stdin and stdout are **unbuffered when piped**: with the
+writer sending one line per second, each echoed line came back 1–3 ms after it
+was written, not in one burst at exit. The hardened runtime does not block it —
+the notarized, stapled bundle behaves exactly like the locally signed one.
+
+*No Dock icon.* While a run-as-node process was alive,
+`lsappinfo list | grep -c 'bundleID="com.witena.app"'` stayed at 1 (the user's
+own running app) and `lsappinfo info -only pid,name <pid>` returned nothing: the
+process never registers with LaunchServices, so it has no Dock tile and no menu
+bar. Startup cost of the wrapper is small — `/usr/bin/time -p` on a one-line
+script gives 0.07–0.08 s real from either bundle, against 0.06 s for `node`
+itself.
+
+*Fuses.* There is no fuse configuration anywhere: no `@electron/fuses` in
+`package.json`, no `flipFuses` call in `scripts/`, and `electron-builder.yml` has
+no `afterPack` / `afterSign` hook that could flip one. `RunAsNode` is therefore
+at Electron's default, which the runs above prove is *enabled*. **It must stay
+that way** — `bin/witena-mcp` (WP-9) has no other way to execute the shim.
+
+**2. Hidden launch — confirmed, with two findings.**
+
+```
+open -g -j -a dist/mac-arm64/Witena.app \
+  --env WP0A_LOG=<log> --env WITENA_USER_DATA=<temp> --args --background
+```
+
+`--background` **is** in `process.argv` of a packaged build, and nothing else is:
+`argv === ['<bundle>/Contents/MacOS/Witena', '--background']`, so the packaged
+argv has no extra entries to skip (`app.isPackaged` was `true`). Read from a
+temporary `appendFileSync` in `src/main/index.ts`, reverted afterwards.
+
+*Focus is kept.* The frontmost application (`lsappinfo front`) was the same
+before and after each launch. The window the app still creates — `--background`
+is not implemented until WP-8 — did not come forward.
+
+Cold start, three runs, from the `open` call to the line logged immediately after
+`createWindow()` (the whole of `whenReady`: database opened, handlers registered,
+window created, which is where WP-7's host would already be listening):
+
+| Run | process start | electron `ready` | window created |
+|---|---|---|---|
+| 1 (first launch of a freshly built bundle) | +2649 ms | +2710 ms | **+2853 ms** |
+| 2 | +506 ms | +566 ms | **+709 ms** |
+| 3 | +502 ms | +550 ms | **+692 ms** |
+
+Almost all of it is `open` plus process start; from `ready` to a usable app is
+~145 ms. **WP-5's 20 s launch timeout is comfortably right** — a factor of seven
+over the worst number here. The first run is the only cold one; a bundle macOS
+has already validated starts in ~0.7 s.
+
+*Finding for WP-5:* `open -a <bundle>` on a bundle that is **already running**
+does not start a second instance and prints *"Application … was already running
+and so the additional environment variables could not be set."* For the shim this
+is the desired behaviour (an app that is up already has a discovery file), but it
+means `open` can never be used to *re-configure* a running Witena, and any test
+that needs two instances of the same bundle must pass `-n`.
+
+*Finding for WP-9 and for anyone measuring:* a launch of a **second Developer ID
+signed copy** of the app with a *fresh* `WITENA_USER_DATA` raises a macOS
+SecurityAgent (Keychain) prompt from `safeStorage`, and `whenReady` blocks on it
+until it is answered — no database, no window, no endpoint. It does not affect a
+user's normal launch (same bundle, existing key file), but it is why the numbers
+above were taken with `createSafeStorageStore()` temporarily stubbed out. The
+step it skips is a Keychain read of a few milliseconds.
+
+**3. `userData` and the single-instance lock — confirmed.**
+
+`app.getPath('userData')` read before any override, in the packaged build, is
+`/Users/<user>/Library/Application Support/Witena`. **`<APP_DIR>` is `Witena`**
+(`app.setName(APP_NAME)` runs before it), which is what `userDataDirFor` in
+`src/shared/mcp-discovery.ts` must produce for the no-override case. Corroborated
+independently by the running app's helper processes, whose command line carries
+`--user-data-dir=/Users/<user>/Library/Application Support/Witena`.
+
+`requestSingleInstanceLock()` called immediately after
+`app.setPath('userData', …)` **is keyed by `userData`**:
+
+| Instance | `WITENA_USER_DATA` | `requestSingleInstanceLock()` |
+|---|---|---|
+| A | `…/udA` | `true` |
+| B, launched while A runs | `…/udB` | `true` |
+| A2, launched while A runs | `…/udA` | `false` |
+
+A and B ran side by side, each with its own window. The mechanism is visible in
+the directory: Chromium writes `SingletonLock -> <host>-<pid>` (plus
+`SingletonCookie`, `SingletonSocket`) **inside** `userData`, so parallel
+Playwright launches with different temp directories cannot evict each other.
+Note for WP-8: the instance that loses the lock never reaches `ready` at all — it
+sat parked until it was killed — so `app.quit()` on `false` is what ends it
+cleanly, and nothing may be assumed to run afterwards.
+
 ## Open questions
 
 - The real names of Phase 9's handlers and types (WP-14 reads them, never guesses).
