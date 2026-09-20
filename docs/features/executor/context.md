@@ -59,7 +59,9 @@ approved command runs with its writes confined to the folder.
 - `executor/sandbox.ts` (S5.15) — the generated `sandbox-exec` profile
   `run_command` runs under: reads and the network unchanged, writes confined to
   the working directory, the system temp directories and the null-ish devices.
-  `AppSettings.executor.sandbox` switches it off.
+  `AppSettings.executor.sandbox` switches it off, written through
+  `settings.update` with an `executor` patch that is validated against
+  `EXECUTOR_SANDBOX_MODES`.
 - `executor/permissions.ts` — the `PermissionGate`: `ask()` suspends the tool
   call and emits `permission.requested`; `permission.reply` releases it with
   `allow`, `deny` or `allowAlways`; `permission.resolved` closes the card

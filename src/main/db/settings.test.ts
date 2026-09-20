@@ -65,6 +65,28 @@ describe('db/repositories/settings', () => {
     expect(database.repos.settings.update({ language: 'en' }).onboardingDismissed).toBe(true)
   })
 
+  it('stores an executor patch and merges it field by field, on write and on read', () => {
+    // S5.15: the sandbox switch. A write of something else must not reset it,
+    // and it has to survive a reopen — it is the setting that decides whether
+    // a command may write outside the folder.
+    const updated = database.repos.settings.update({ executor: { sandbox: 'off' } })
+    expect(updated).toEqual({ ...DEFAULT_APP_SETTINGS, executor: { sandbox: 'off' } })
+
+    expect(database.repos.settings.update({ language: 'en' }).executor).toEqual({ sandbox: 'off' })
+    expect(database.repos.settings.update({ executor: {} }).executor).toEqual({ sandbox: 'off' })
+
+    database.reopen()
+    expect(database.repos.settings.get().executor).toEqual({ sandbox: 'off' })
+  })
+
+  it('defaults the executor group for a row that has none, or half of one', () => {
+    database.handle.sqlite
+      .prepare('INSERT INTO settings (user_id, data, updated_at) VALUES (?, ?, ?)')
+      .run('local', JSON.stringify({ language: 'en', executor: {} }), Date.now())
+
+    expect(database.repos.settings.get().executor).toEqual(DEFAULT_APP_SETTINGS.executor)
+  })
+
   it('keeps one row per user', () => {
     database.repos.settings.update({ language: 'en' }, 'user-a')
     database.repos.settings.update({ language: 'zh-CN' }, 'user-b')

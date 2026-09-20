@@ -72,6 +72,7 @@ to remove.
 | `subscribe` → `permission.requested` | `lib/event-bridge.ts` | Adds a card. `input` is the only description of what is about to happen |
 | `subscribe` → `permission.resolved` | `lib/event-bridge.ts` | Removes it, for every `decision` including `aborted` |
 | `subscribe` → `chat.deleted` | `lib/event-bridge.ts` | Drops that chat's cards **and** its cached grants; the gate has already aborted the prompts and the rows went with the chat |
+| `invoke('settings.update')` with `{ executor: { sandbox } }` | `setExecutor` in `stores/settings.ts`, from the sandbox control | Stores the sandbox mode. The backend refuses anything outside `EXECUTOR_SANDBOX_MODES`, so the control only offers those |
 | `invoke('permissions.grants.list')` | `GrantsList`'s effect, and `event-bridge.ts` on an `allowAlways` resolution | Fills the "Always allowed" block |
 | `invoke('permissions.grants.revoke')` | The revoke button | Forgets one grant and answers with what is left, which is what the block redraws from |
 

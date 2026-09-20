@@ -247,7 +247,7 @@ Naming conventions the whole app follows:
 | `system.ping` | — | `'pong'` | Implemented in S1.3 |
 | `system.emitTestEvent` | `{ payload }` | `void` | Implemented in S1.3; makes the backend push one `system.test` event |
 | `settings.get` | — | `AppSettings` | Implemented in S1.3 |
-| `settings.update` | `{ patch }` | `AppSettings` | Implemented in S1.3; shallow merge, `timeouts` merges per field, unknown keys rejected |
+| `settings.update` | `{ patch }` | `AppSettings` | Implemented in S1.3; shallow merge, `timeouts`, `editor` and `executor` merge per field, unknown keys rejected |
 | `presence.list` | `{ chatId }` | `AgentPresence[]` | S2.4; every member of the chat, in member order |
 | `presence.retry` | `{ chatId, agentId }` | `AgentPresence` | S2.4; probes the agent's provider once. A failed probe resolves, it does not reject |
 | `providers.list` / `get` / `create` / `update` / `delete` | — / `{ id }` / `{ input }` / `{ id, patch }` / `{ id }` | `Provider[]` / `Provider` / `Provider` / `Provider` / `void` | Omitting `apiKey` in a patch keeps the stored key; `''` clears it. Every returned record carries S7.6's runtime `keyState` (`ok` / `unreadable` / `none`), which is filled by the handler and is **not** a column |
