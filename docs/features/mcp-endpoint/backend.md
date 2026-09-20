@@ -8,6 +8,7 @@
 | `src/main/mcp-endpoint/discussion.ts` — `watchDiscussion`, `readDiscussion` | WP-2 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/tools.ts`, `transcript.ts` — the six tools | WP-3 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/server.ts`, `guards.ts`, `tool-types.ts` — transport and refusals | WP-4 `[x]` (2026-09-20) |
+| `src/main/mcp-endpoint/contract.test.ts` — the two halves over a real socket (no surface of its own) | WP-6 `[x]` (2026-09-20) |
 | `src/mcp-shim/` and its Vite target | WP-5 |
 | `src/main/mcp-endpoint/host.ts`, `AppSettings.mcpEndpoint` | WP-7 |
 | Single-instance lock, `--background`, `witena://`, `ui.open-chat` | WP-8 `[x]` (2026-09-20) |
@@ -313,3 +314,35 @@ Pitfalls for the packages that build on this one:
 - **WP-13 passes `call.client`** into the `chat.send` in `start_discussion`
   (`origin: { client: call.client ?? 'mcp' }`). That is the only line of this
   file it needs; `ToolCallContext.client` is already threaded in by `server.ts`.
+
+## The contract test (WP-6)
+
+`src/main/mcp-endpoint/contract.test.ts` adds no surface. It is the only file
+that runs the transport and the tools together — `createMcpEndpoint({ ctx,
+handlers, token })` with no `tools`, so the registry is the real `createTools()`
+— against a real `AppContext`, the real `buildHandlers()` and the real
+`ChatRunner`, over a socket driven by the SDK `Client`. `implement.md`'s test
+table lists what it asserts. Three things it established that a later package
+would otherwise have to rediscover:
+
+- **`stopped` is only ever seen by a wait that is already in flight.**
+  `readDiscussion` has no row for it (`discussion.ts`, `statusFor`): an idle chat
+  is read as `concluded` or `ended` whatever ended it, so `get_discussion` on a
+  stopped discussion answers `ended`, and `wait_for_discussion` answers `stopped`
+  only when it attached a watcher *before* `chat.stop` landed. That is the
+  intended behaviour — a transcript does not record why it stopped growing — but
+  it is worth saying once, because `stop_discussion`'s own answer
+  (`{ chatId, url, wasRunning, hint }`) is not a `DiscussionResult` and a caller
+  looking for the final status has exactly this one window.
+- **`MIN_WAIT_SECONDS` is a real five seconds.** The `running` row cannot be
+  faked from outside — the deadline is the tool's own timer — so one test spends
+  them, with a model paced at 700 ms per chunk (about 3.5 s per turn, so two
+  sequential members cannot both finish inside the budget) and a raised timeout.
+  It swaps `model` for an instant one as soon as `running` comes back, because
+  `createModel` is asked again for every turn; that is what keeps the file's
+  whole cost around nine seconds. A second such test would be five more.
+- **A run seeded through `handlers['chat.send']` is live by the time the handler
+  resolves**, which is how the `stopped` and `needs-attention` rows get a
+  discussion that is still going when the next MCP call arrives. Waiting for the
+  watcher to subscribe is then `expect.poll` over the counting bus's listener
+  count, not a sleep.
