@@ -4079,15 +4079,16 @@ What: the transport-free core, testable without Electron or a shim.
   the shim serves `tools/list` from it without the app (S10.2). Descriptions are
   written for a model: they say when to call `wait_for_discussion` again and that
   the caller, not Witena, applies the conclusion.
-- [ ] `src/main/mcp-endpoint/discussion.ts`: `DiscussionWatcher` — subscribes to
+- [x] (2026-09-20, WP-2) `src/main/mcp-endpoint/discussion.ts`: `watchDiscussion` — subscribes to
   the `EventBus` **before** sending, resolves on `run.finished`, on
-  `permission.requested` for that chat (`needs-attention`), or at the deadline
-  (`running`); then builds the result from `messages.list`: the latest
+  `permission.requested` for that chat (`needs-attention`), at the deadline
+  (`running`) or on the request's `signal` (`running`, without stopping the run);
+  then builds the result from `messages.list`: the latest
   `ConclusionPart` message after the question, else `positions` (each
-  participant's last message of the final round, truncated), plus
+  participant's last `done` message, truncated at `MAX_POSITION_CHARS`), plus
   `messages.usageSummary`. Maps `RunFinishReason` → status (`completed` with a
   conclusion → `concluded`; `completed` without / `max-rounds` → `ended`;
-  `stopped`; `error`).
+  `stopped`; `error`). `readDiscussion` answers the same shape without waiting.
 - [ ] `src/main/mcp-endpoint/tools.ts`: the six tools over `HandlerMap` +
   `AppContext` — never over repositories directly. `start_discussion`: resolve
   `agents` by id or case-insensitive name (ambiguous or unknown → a validation

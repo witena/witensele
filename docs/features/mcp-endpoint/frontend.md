@@ -16,6 +16,21 @@ Planned surface, by work package (`tasks.md`):
 Every string goes through `t()` under `settings.integrations.*` and
 `chat.viaClient`; no component reaches past `BackendClient`.
 
+## Discussion watcher (WP-2)
+
+No renderer surface, and deliberately none: `src/main/mcp-endpoint/discussion.ts`
+watches the same `EventBus` the window already watches, and adds no event, no
+store field and no component. A discussion started through the endpoint shows up
+in the window as an ordinary chat — the message list, the member panel and the
+presence dots are the ones `chats` and `presence` already own, and the only thing
+that will ever mark it as *not* typed by the user is WP-13's "via {{client}}"
+chip.
+
+The progress lines the watcher produces ("Round 2 — Ada, Lin", "Ada has spoken")
+are **not** UI copy and never reach the renderer: they are written in English for
+the calling model's progress notifications, for the same reason the tool
+descriptions are (below).
+
 One boundary worth stating, because `src/shared/mcp-tools.ts` is importable from
 the renderer and its strings are English: the tool `title` and `description`
 fields are **not** UI copy and must never be rendered. Their reader is the
