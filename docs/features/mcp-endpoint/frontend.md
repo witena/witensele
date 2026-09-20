@@ -13,6 +13,18 @@ Planned surface, by work package (`tasks.md`):
 | Selecting a chat on the `ui.open-chat` event (`witena://chat/<id>`) | WP-8 |
 | "Create a Claude Code agent for each committee" | WP-14 |
 
+## HTTP endpoint and guards (WP-4)
+
+Still nothing in the renderer, and the table above is unchanged. One thing WP-12
+will want when it writes the status line: the endpoint's refusals are **English
+JSON-RPC error objects written for the calling model**, exactly like the tool
+descriptions — a 401 says to re-read the discovery file, a 403 says the endpoint
+is not reachable from a web page. They are read by the shim and by an IDE, never
+by the Witena window, so they are outside i18n by the same rule that puts the
+tool descriptions outside it (CLAUDE.md rule 4 is about what the *user* sees).
+If Settings → Integrations ever surfaces "the last call was refused", it says so
+with its own `settings.integrations.*` key rather than showing the sentence.
+
 Every string goes through `t()` under `settings.integrations.*` and
 `chat.viaClient`; no component reaches past `BackendClient`.
 

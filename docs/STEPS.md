@@ -4098,15 +4098,19 @@ What: the transport-free core, testable without Electron or a shim.
   question + context (cap the total, say the cap in the error); `chat.send` with
   `rounds`. `BackendFailure` → an MCP tool error (`isError: true`) carrying the
   `BackendErrorCode`.
-- [ ] `src/main/mcp-endpoint/server.ts`: `createMcpEndpoint({ ctx, handlers,
-  token })` → a `node:http` request handler. SDK `McpServer` +
+- [x] (2026-09-20, WP-4) `src/main/mcp-endpoint/server.ts`: `createMcpEndpoint({ ctx, handlers,
+  token })` → a `node:http` request handler. A low-level SDK `Server` +
   `StreamableHTTPServerTransport` in stateless mode (one server+transport per
   request). Guards before the SDK sees anything: bearer token (constant-time
-  compare), no `Origin` header, loopback `Host`, body cap. Progress
-  notifications on `run.round` and on each agent `message.updated` when the
-  request carries a `progressToken`.
-- [ ] Extend the no-electron scanner (`src/server/no-electron.test.ts`, or a
-  sibling) to the import closure of `src/main/mcp-endpoint/`.
+  compare), no `Origin` header, loopback `Host` on the socket's own port, body
+  cap. Progress notifications on `run.round` and on each agent `message.updated`
+  when the request carries a `progressToken`. *(The registry is taken by
+  injection; the `createTools()` default is one named seam WP-3 fills. `Server`
+  rather than `McpServer`, per the context.md decision WP-1 recorded.)*
+- [x] (2026-09-20, WP-4) Extend the no-electron scanner (`src/server/no-electron.test.ts`, or a
+  sibling) to the import closure of `src/main/mcp-endpoint/`. *(A sibling:
+  importing one `*.test.ts` from another would collect the server's suite
+  twice.)*
 - Tests: tool-level unit tests with the AI SDK mock model injected through
   `runner.createModel` as `http.test.ts` does — concluded, ended-with-positions,
   deadline-then-wait-again, stop, busy, executor refused, name resolution, a
