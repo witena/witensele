@@ -607,20 +607,34 @@ The build produces three things, and all three come from the `publish:` block:
 | `Witena-<version>-<arch>-mac.zip` (+ `.blockmap`) | Beside the dmgs in the Release | `Squirrel.Mac`, which is the only thing that can replace a running `.app`. The blockmap is what makes the *next* update a differential download |
 | `latest-mac.yml` | Beside them | `electron-updater`, to compare versions and to check the zip's sha512 |
 
-### Why the GitHub feed has nothing to serve yet
+### The GitHub feed, and what has been proven about it
 
 `provider: github` means `electron-updater` asks
-`https://github.com/<owner>/<repo>/releases/download/…/latest-mac.yml`
+`https://github.com/<owner>/<repo>/releases/latest/download/latest-mac.yml`
 unauthenticated. While the repository was private GitHub answered 404 to that
-whatever the Release held; **the repository is public as of 2026-09-19**, so that
-obstacle is gone and nothing in the configuration had to change. What is still
-missing is a Release: none has been published, so
-`releases/latest/download/latest-mac.yml` still answers 404 and a check still
-ends in `state: 'error'` with the provider's own sentence under it ("Please
-double check that your authentication token is correct. Due to security reasons,
-actual status maybe not reported, but 404") in Settings → About. A **draft**
-Release does not change that — drafts are invisible to an unauthenticated
-request — so the feed starts working when a human publishes the first one.
+whatever the Release held; it is public as of 2026-09-19, and nothing in the
+configuration had to change. A **draft** is invisible to that request, so the
+feed exists from the moment a human publishes.
+
+`v0.1.0` was published on 2026-09-20 and the feed was checked the way the updater
+reads it — no token, plain `curl`:
+
+| Request | Answer |
+|---|---|
+| `releases/latest/download/latest-mac.yml` | 200 after GitHub's redirect to `release-assets.githubusercontent.com`; names both zips and both dmgs with `sha512` and `size` |
+| Both `-mac.zip.blockmap` files, both dmgs, the x64 zip (`HEAD`) | 200, with the `Content-Length` the manifest states |
+| `Witena-0.1.0-arm64-mac.zip`, downloaded whole | 157 868 571 bytes; `openssl dgst -sha512 -binary \| base64` equals the manifest's `sha512` — the check `electron-updater` makes before it hands the zip to Squirrel |
+
+**What that does not prove**: an update *applied* from GitHub. There is one
+release, so every install is current; the first install of 0.1.0 that finds a
+newer published version is the first real walk through download, validation and
+restart against this feed (the local-feed walk below proved the mechanism). It
+will also be a **full** download: `MacUpdater` does a differential one only when
+the previous update's zip is cached as `update.zip`, and an install from a dmg
+has none ("Unable to locate previous update.zip … is this first install?").
+Differential downloads start with the second update, and they fetch the *old*
+version's blockmap from its Release — deleting a published Release turns the
+next update from it into a full download.
 
 `electron-updater` supports a `token` in the publish configuration, and that was
 never the way around the private phase: the configuration is copied verbatim

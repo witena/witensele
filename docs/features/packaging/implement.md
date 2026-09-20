@@ -553,13 +553,13 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
 - **The dmg is ~150 MB.** Mostly the Electron runtime. The production dependency
   tree is shipped whole even though the renderer's share of it is already bundled
   into `out/renderer`, which is the obvious place to look if it ever matters.
-- **The GitHub feed has never been read, because no Release has been
-  published** (S7.4). The repository is public as of 2026-09-19, so GitHub will
-  serve `latest-mac.yml`, the zips and the blockmaps to `electron-updater`'s
-  unauthenticated request once they exist; until the first Release is published
-  (a draft is not visible to that request) a check ends in `state: 'error'` with
-  GitHub's 404 under it. The release workflow also has no signing secrets yet, so
-  a tag pushed today would produce unsigned dmgs. The mechanism itself was proven
+- **No update has been applied from the GitHub feed yet** (S7.4). `v0.1.0` was
+  published on 2026-09-20 and the feed reads correctly without a token —
+  `latest-mac.yml`, both blockmaps, both dmgs, and the arm64 zip's `sha512`
+  recomputed from a full download ([`backend.md`](./backend.md), "The GitHub
+  feed, and what has been proven about it"). With a single release there is
+  nothing to update *to*; the first newer published version is the first real
+  download-validate-restart against GitHub, and it will be a full download. The mechanism itself was proven
   against a local generic feed — procedure in [`backend.md`](./backend.md),
   "Auto-update".
 - **A local `npm run dist` now writes four artifacts instead of two** (S7.4): a
