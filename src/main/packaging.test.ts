@@ -282,6 +282,21 @@ describe('the release workflow’s signing steps', () => {
     return step
   }
 
+  it('creates the draft before electron-builder can create two', () => {
+    // Parallel uploaders each create a Release when none exists; the first
+    // successful run left a second draft holding one stray blockmap.
+    const step = named('Create the draft Release')
+    const script = String(step['run'])
+    expect(script).toContain('gh release view "$GITHUB_REF_NAME"')
+    expect(script).toMatch(/flags=\(--draft /)
+    expect(script).toContain('flags+=(--prerelease)')
+
+    const order = steps.map((candidate) => String(candidate['name'] ?? ''))
+    expect(order.findIndex((name) => name.includes('Create the draft Release'))).toBeLessThan(
+      order.findIndex((name) => name.includes('Package both architectures'))
+    )
+  })
+
   it('never hands the certificate to electron-builder', () => {
     // Two failed `v0.1.0` runs, one variable. Empty, electron-builder resolves
     // it against the project directory ("<project dir> not a file"); set, it

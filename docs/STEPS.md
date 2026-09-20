@@ -2948,10 +2948,9 @@ adds a line here in the same commit.
   a pre-release so publishing it cannot become `releases/latest`. A stable tag
   that disagrees with `package.json` is now refused. Unpublished nightly drafts
   beyond the newest three are deleted with their tags. **Not yet exercised end
-  to end**: at the time of writing no release run has succeeded at all (the
-  second `v0.1.0` attempt failed importing the `.p12` — wrong
-  `CSC_KEY_PASSWORD`), so the first nightly is also the first test of the version
-  step and the pre-release flag on a real runner. Details in
+  to end**: the stable path of the version step has run (`v0.1.0`, 2026-09-20),
+  the nightly path and the pre-release flag have not — the first nightly is
+  their first test on a real runner. Details in
   `packaging/backend.md`, "Nightly builds".
 - **A pull request the owner opens now merges itself.**
   `.github/workflows/auto-merge.yml` runs `gh pr merge --auto --merge` on
@@ -3037,7 +3036,10 @@ adds a line here in the same commit.
   password of the keychain it just created. `release.yml` now imports the
   certificate into its own keychain and never gives electron-builder `CSC_LINK`
   (`packaging/backend.md`, "The signing gate, and who imports the certificate").
-  Signing and notarization on a runner are still unproven; (2) a
+  The eighth run (2026-09-20) signed, notarized, stapled and uploaded both
+  architectures — the runner path is proven. It also showed electron-builder's
+  parallel uploaders racing to create the Release (two drafts), so the workflow
+  now creates the draft first; (2) a
   `v*` tag and a human publishing the draft, since a draft is invisible to the
   unauthenticated request. Until then a check ends in `state: 'error'` with
   GitHub's own 404 sentence under it in Settings → About. A `token:` in

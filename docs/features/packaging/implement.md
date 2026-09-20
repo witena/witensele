@@ -502,9 +502,12 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
   runs failed on the `.p12`'s password (a wrong secret) and then inside
   electron-builder's own keychain handling, which is why the workflow now imports
   the certificate itself — all of it in [`backend.md`](./backend.md), "The
-  signing gate, and who imports the certificate". No runner has signed or
-  notarized anything yet. Listed in
-  STEPS.md, Phase 6.
+  signing gate, and who imports the certificate". **The eighth `v0.1.0` run, on
+  2026-09-20, was the first to pass**: both bundles `accepted` /
+  `source=Notarized Developer ID` from `spctl`, `The validate action worked!`
+  from `stapler`, about seven minutes for packaging, signing and notarizing both
+  architectures. What it left behind was a second, stray draft — see
+  [`backend.md`](./backend.md), "Publishing".
 - **A build you make yourself is unsigned**, and Gatekeeper refuses its first
   double-click; right-click → Open once. Verified to still be true after S7.3:
   `npm run dist:dir` with no identity logs `skipped macOS application code

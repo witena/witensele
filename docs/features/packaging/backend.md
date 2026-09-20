@@ -512,6 +512,17 @@ exactly that feed.
 Authentication is `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` plus
 `permissions: contents: write` on the job. No personal token is involved.
 
+**The workflow creates the draft; electron-builder only fills it.** The
+publisher uploads artifacts in parallel, and each uploader that finds no Release
+for the tag creates one. The first run that reached the upload (2026-09-20) left
+**two** drafts named `0.1.0`, created in the same second — eight files in one and
+`Witena-0.1.0-arm64-mac.zip.blockmap` alone in the other; the blockmap was copied
+across by hand. "Create the draft Release the artifacts will be uploaded to" now
+runs `gh release create --draft --verify-tag` before packaging (and
+`--prerelease` for a nightly tag), so every uploader finds the same existing
+draft; if a Release for the tag is already there — a re-run — it is reused.
+`src/main/packaging.test.ts` asserts the step and that it precedes packaging.
+
 ### The signing gate, and who imports the certificate
 
 The `secrets` context is **not** available to an `if:` expression — not at job
