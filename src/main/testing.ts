@@ -189,6 +189,10 @@ export function createTestAppContext(
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
+    // S10.3: no listening endpoint, which is the same answer the Node host
+    // gives. A suite that is about the host builds one itself
+    // (`mcp-endpoint/host.test.ts`); no other suite may open a socket.
+    mcpEndpoint: null,
     memory: createMemoryStore(join(database.dir, MEMORY_DIR)),
     permissions: createPermissionGate({
       emit: (event) => bus.emit(event),

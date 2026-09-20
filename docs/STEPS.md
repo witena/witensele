@@ -4165,11 +4165,17 @@ against `npm run dev`, lists the tools and completes a `start_discussion`. Docs:
 
 ### S10.3 Hosting it in the desktop app `[ ]`
 What: the app listens, can start in the background, and ships the shim.
-- [ ] `AppSettings.mcpEndpoint: { enabled: boolean }` (default `false`).
+- [x] `AppSettings.mcpEndpoint: { enabled: boolean }` (default `false`).
   `src/main/index.ts`: when enabled, a `node:http` server on `127.0.0.1:0`
   mounting `createMcpEndpoint`, a fresh random token, the discovery file written
   `0600` after `listen` and removed in `before-quit`; toggling the setting starts
-  / stops it without a restart.
+  / stops it without a restart. (2026-09-20, WP-7: `src/main/mcp-endpoint/host.ts`
+  and `AppContext.mcpEndpoint`, built only when `AppContextOptions.mcpEndpoint`
+  is passed — the Node host and every test get `null` and open nothing. The
+  token is fresh per `start()` rather than per launch; `stop()` removes the file
+  synchronously before it awaits anything, because `before-quit` cannot await,
+  and only when the file's `pid` is ours. The host starts after the context and
+  independently of the window: `--background` has none.)
 - [x] `app.requestSingleInstanceLock()` after the `WITENA_USER_DATA` override;
   `second-instance` shows / creates the window. `--background` skips
   `createWindow()`; the existing `activate` handler opens it from the Dock.

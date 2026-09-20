@@ -10,6 +10,7 @@ Surface, by work package (`tasks.md`):
 | Settings → Integrations: the endpoint switch, status, Claude Code and Codex cards, the generic snippet | WP-12 |
 | The "via {{client}}" chip on a message sent through the endpoint | WP-13 |
 | Selecting a chat on the `ui.open-chat` event (`witena://chat/<id>`) | WP-8 `[x]` (2026-09-20) |
+| `AppSettings.mcpEndpoint.enabled` on the settings store — the value the switch writes, with no control of its own yet | WP-7 `[x]` (2026-09-20) |
 | "Create a Claude Code agent for each committee" | WP-14 |
 
 ## HTTP endpoint and guards (WP-4)
@@ -26,6 +27,32 @@ with its own `settings.integrations.*` key rather than showing the sentence.
 
 Every string goes through `t()` under `settings.integrations.*` and
 `chat.viaClient`; no component reaches past `BackendClient`.
+
+## Host and the setting (WP-7)
+
+Still no component, and deliberately: WP-7 adds the *setting* the switch will
+write, not the switch. `AppSettings.mcpEndpoint.enabled` reaches the renderer
+through `settings.get` / `settings.update` exactly as `theme` and `editor` do,
+so `useSettingsStore` already carries it and WP-12's section needs one more
+action beside `setEditor` and `setExecutor` rather than a new method.
+
+Two things WP-12 should know before it writes that switch:
+
+- **The toggle is live and it is the write that does it.** `settings.update`
+  starts or stops the listening host after storing the row, so the section needs
+  no second call and no "restart Witena" copy. The discovery file appearing and
+  disappearing in the user-data directory is the observable effect, which is what
+  its e2e case asserts.
+- **A host that fails to start does not fail the update.** The switch will show
+  `enabled: true` while nothing is listening, which is the honest state and the
+  reason the status line reads `listening` from `integrations.status` (WP-11)
+  rather than inferring it from the setting. The two are different facts and the
+  section should show them as two.
+
+Nothing in this package produces user-facing text, so no locale key changes
+hands: the one string the main process writes is a `console.warn` for a host
+that would not start, which is a developer's line and not the user's (CLAUDE.md
+rule 4).
 
 ## Discussion watcher (WP-2)
 

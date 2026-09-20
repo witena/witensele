@@ -191,6 +191,13 @@ describe('defaults', () => {
       executor: {
         sandbox: 'workdir-write'
       },
+      // S10.3: the local MCP endpoint is a door that can spend the user's
+      // provider money and read their chats, so it is off until somebody says
+      // otherwise — including on an installation that updates into the version
+      // that has it, which the repository's read merge is what guarantees.
+      mcpEndpoint: {
+        enabled: false
+      },
       timeouts: {
         stallTimeoutMs: 30000,
         hardTimeoutMs: 120000,

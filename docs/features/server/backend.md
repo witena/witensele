@@ -74,6 +74,16 @@ them, naming the `src/main/ipc/` file that would implement them. `openInEditor`
 with `editor.kind === 'custom'` genuinely works on this host, because that branch
 is `node:child_process` rather than `shell.openExternal`.
 
+**The MCP endpoint is not mounted here** (S10.3): `createServerContext` passes no
+`mcpEndpoint` option, so `ctx.mcpEndpoint` is `null`, nothing listens on `/mcp`,
+no discovery file is written, and `settings.update`'s live toggle is a no-op —
+the row is stored, the door does not exist. The tools are transport-agnostic, so
+`createMcpEndpoint({ ctx, handlers, token })` can be routed from
+`src/server/http.ts` once accounts exist; what is desktop-only is the *host*, and
+deliberately so — a loopback socket plus a `0600` file in `userData` is how a
+shim on the same machine finds the app, and neither means anything to a remote
+client (PLAN.md, "Online version"; backlog).
+
 ## Events emitted
 
 | Event | Payload | Emitted when |

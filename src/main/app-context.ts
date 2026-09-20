@@ -24,6 +24,9 @@ import type { EventBus } from './events/bus'
 import { createEventBus } from './events/bus'
 import type { PermissionGate } from './executor/permissions'
 import { createPermissionGate } from './executor/permissions'
+import type { HandlerMap } from './handlers/types'
+import { createMcpEndpointHost } from './mcp-endpoint/host'
+import type { McpEndpointHost } from './mcp-endpoint/host'
 import { McpManager } from './mcp/manager'
 import type { McpManagerOptions } from './mcp/manager'
 import { createMemoryStore, type MemoryStore } from './memory/store'
@@ -261,6 +264,24 @@ export interface AppContext {
    * answers `unsupported`, which is the truth for a server build.
    */
   updates: UpdateService
+  /**
+   * The local MCP endpoint's listening host (S10.3), or `null` where there is
+   * none.
+   *
+   * `null` is the honest answer for two callers and not a degraded one: the Node
+   * host (`src/server/`) serves MCP over its own routes once accounts exist
+   * (PLAN.md, "Online version") and has no discovery file to write, and a unit
+   * test has no reason to open a socket. Only `src/main/index.ts` passes
+   * `AppContextOptions.mcpEndpoint`, and the `settings.update` handler's
+   * `ctx.mcpEndpoint?.start()` is therefore a no-op everywhere else — which is
+   * what "the setting is stored anywhere, the door only exists on the desktop"
+   * means in code.
+   *
+   * Nothing starts it here. The context is built before it is known whether the
+   * setting is on, and a context that opened a port on construction would be one
+   * no test could build.
+   */
+  mcpEndpoint: McpEndpointHost | null
   /** Releases the database. Safe to call more than once. */
   close(): void
 }
@@ -307,6 +328,19 @@ export interface AppContextOptions {
    * there is none.
    */
   updates?: UpdateServiceInjection
+  /**
+   * Builds the MCP endpoint's host on this context (S10.3).
+   *
+   * The handler map is the one thing the context cannot derive: `buildHandlers()`
+   * takes no context, and the endpoint's tools call handlers rather than
+   * repositories, so the caller that has the map hands it over. Omitted — which
+   * is the Node host, every test and every other caller — `ctx.mcpEndpoint` is
+   * `null` and the setting has nothing to switch.
+   *
+   * Constructed, never started: `src/main/index.ts` calls `start()` once it has
+   * read the setting.
+   */
+  mcpEndpoint?: { handlers: HandlerMap }
 }
 
 /**
@@ -370,6 +404,8 @@ export function createAppContext(options: AppContextOptions): AppContext {
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
+    // Tied off below with the others: the host takes the finished context.
+    mcpEndpoint: null,
     memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
     permissions: createPermissionGate({
       emit: (event) => events.emit(event),
@@ -425,5 +461,12 @@ export function createAppContext(options: AppContextOptions): AppContext {
   ctx.runners = new ChatRunnerRegistry(ctx, options.runner ?? {})
   ctx.supervisor = createSupervisor(ctx, options.supervisor ?? {})
   ctx.mcp = createMcpManager(ctx, options.mcp ?? {})
+  if (options.mcpEndpoint) {
+    ctx.mcpEndpoint = createMcpEndpointHost({
+      ctx,
+      handlers: options.mcpEndpoint.handlers,
+      userDataDir
+    })
+  }
   return ctx
 }

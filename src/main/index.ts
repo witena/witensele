@@ -384,12 +384,18 @@ void app.whenReady().then(() => {
     ...(process.env[UPDATE_FEED_ENV] ? { feedUrl: process.env[UPDATE_FEED_ENV] } : {})
   })
 
+  // Built once and used twice: the IPC transport registers it, and the MCP
+  // endpoint's tools call it. One map, so a discussion started by a coding agent
+  // and one typed in the window go through exactly the same handlers (S10.3).
+  const handlers = buildHandlers()
+
   context = createAppContext({
     databasePath,
     userDataDir,
     secrets,
     updates: updater,
-    bundledAntDir: bundledAntDir()
+    bundledAntDir: bundledAntDir(),
+    mcpEndpoint: { handlers }
   })
   console.log(`[witena] database: ${databasePath}`)
   if (updater.updater) {
@@ -422,8 +428,20 @@ void app.whenReady().then(() => {
 
   // The transport is up before the first window exists, so a renderer that calls
   // `invoke` in its first effect can never race the registration.
-  registerIpc(ipcMain, context, buildHandlers())
+  registerIpc(ipcMain, context, handlers)
   stopForwarding = forwardEvents(context.events, () => BrowserWindow.getAllWindows())
+
+  // S10.3: the endpoint comes up with the backend and **not** with the window.
+  // `--background` is a launch that has no window at all — a coding agent's shim
+  // started it and is polling for the discovery file — so anything hanging off
+  // `createWindow()` would be a door that only opens when somebody is looking.
+  // Off unless the user switched it on; the switch itself is live, in
+  // `settings.update`.
+  if (context.repos.settings.get().mcpEndpoint.enabled) {
+    void context.mcpEndpoint?.start().catch((cause: unknown) => {
+      console.warn(`[witena] the MCP endpoint could not start: ${String(cause)}`)
+    })
+  }
 
   // The window chrome the renderer cannot paint — the traffic lights of
   // `titleBarStyle: 'hiddenInset'` and the native dialogs — follows the stored
@@ -466,6 +484,10 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   stopForwarding?.()
   stopForwarding = null
+  // First, because this listener cannot await and the discovery file is the one
+  // piece of endpoint state that outlives the process: `stop()` removes it
+  // synchronously and closes the socket on the way out (S10.3).
+  void context?.mcpEndpoint?.stop().catch(() => undefined)
   context?.close()
   context = null
 })

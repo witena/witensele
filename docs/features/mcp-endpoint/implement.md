@@ -268,6 +268,53 @@ why the lock is asked for after the `userData` override, and why `ui.open-chat`
 is emitted only once the window has finished loading. [frontend.md](./frontend.md)
 has the renderer's half.
 
+## The listening host and the setting (WP-7) — `host.ts`
+
+`server.ts` opens no socket, because the same handler is meant to be mounted by
+the Node host later (PLAN.md, "Online version"). `host.ts` is what the desktop
+mounts it with, and it is the smallest module in the folder that has to be
+exactly right: everything a shim knows about the endpoint comes out of it.
+
+| Export | Signature | Notes |
+|---|---|---|
+| `McpEndpointHost` | `{ state, start(), stop() }` | `state` is `{ listening: false } \| { listening: true; port }`, so a caller that narrowed on the flag has the port |
+| `createMcpEndpointHost` | `({ ctx, handlers, userDataDir, randomToken?, pid? }) => McpEndpointHost` | `randomToken` and `pid` exist for the tests; production takes 32 random bytes and `process.pid` |
+
+| Setting | Where |
+|---|---|
+| `McpEndpointSettings { enabled }` | `src/shared/types.ts`, with `AppSettings.mcpEndpoint` defaulting to `{ enabled: false }` and `AppSettingsPatch.mcpEndpoint?: Partial<…>` |
+| The merge | `src/main/db/repositories/settings.ts`, field by field on the read and the write — the read merge is what keeps an installation that updates into S10.3 switched off |
+| The validation and the live toggle | `src/main/handlers/settings.ts` |
+| `AppContext.mcpEndpoint` | `src/main/app-context.ts`, built only when `AppContextOptions.mcpEndpoint = { handlers }` is passed |
+
+Four things are decided here rather than in PLAN:
+
+- **The token is per `start()`, not per launch.** PLAN says "per launch", which
+  is the same thing for an endpoint that is switched on once; making it per
+  `start()` means switching off and on again invalidates the old one, which is
+  the behaviour a user turning the switch off would expect from it.
+- **The discovery file is removed synchronously, ahead of everything else in
+  `stop()`.** `before-quit` cannot await, so a quit is only guaranteed to reach
+  the first synchronous statement; a file left pointing at a port that is closing
+  is the stale-file case the shim exists to survive, not one to manufacture.
+- **`stop()` checks the file's `pid` before deleting it.** See
+  [backend.md](./backend.md) — a file naming another process belongs to another
+  process.
+- **The host is constructed by `createAppContext` and started by
+  `src/main/index.ts`.** Construction opens nothing, so every existing suite
+  keeps building contexts for free; the setting is read once at launch and again
+  on every toggle, and nowhere else.
+
+The chain that makes the switch live, end to end:
+
+```
+Settings switch (WP-12)  → settings.update { mcpEndpoint: { enabled } }
+  → repositories.settings.update                     the row
+  → ctx.mcpEndpoint?.start() / .stop()               the socket
+    → 127.0.0.1:0 + <userData>/mcp-endpoint.json 0600
+      → the shim's connect() finds both              (WP-5)
+```
+
 ## The discussion tools (WP-3) — `tools.ts` and `transcript.ts`
 
 `createTools()` returns the `ToolRegistry` the transport takes by injection, and
@@ -346,6 +393,8 @@ collapsible blocks, the other produces text, and the two have no shape in common
 | `src/renderer/src/stores/chats.test.ts` | `describe('ui.open-chat')`: select, ignore, hold until the list lands, drop (WP-8) |
 | `e2e/launch.spec.ts` | `--background` yields no window and `activate` still opens one; a link opens one; two `WITENA_USER_DATA` directories coexist (WP-8) |
 | `src/main/mcp-endpoint/tools.test.ts` | All six against a **real** backend (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): each tool's happy path; name resolution by id, by name and by case, ambiguous and unknown; an executor refused; `busy` on a chat that is still talking; both caps; a relative and a missing `workdir` (and that neither left a chat behind); a `chat.send` that fails releasing the watcher; `wait_for_discussion` on an idle chat with and without a conclusion, and giving up at the deadline; `get_discussion` both details and `afterMessageId`; `stop_discussion` running and idle; `not_found` surfacing as `not_found`; and, for every tool, that garbage arguments are refused rather than thrown. In `afterEach`: the bus ends with as many listeners as it started with |
+| `src/main/mcp-endpoint/host.test.ts` | The host as a separate process meets it (WP-7): nothing listens until asked; `start()` publishes a port, a 32-byte token and this pid, mode `0600`; the published port answers `tools/list` through the SDK client with the token and `401` without; a fresh token on every start; `stop()` takes the file and the port away; both calls idempotent, and two overlapping `start()`s leave one socket; a discovery file naming another pid is neither deleted nor trusted; the injected `randomToken` / `pid` |
+| `src/main/handlers/settings.test.ts` | The row and the toggle (WP-7): the defaults, `mcpEndpoint.enabled` false, a row written before S10.3 gaining the group switched off, a patch merging rather than replacing, every malformed `mcpEndpoint` patch refused *before* the write, a context with no host storing the switch anyway, a fake host started and stopped as the switch is thrown, a patch about something else leaving it alone, and a `start()` that throws still storing the row |
 | `src/main/mcp-endpoint/transcript.test.ts` | The rendering, from hand-built rows: the header shape, the conclusion mark, a tool call on one line and a failed one marked, reasoning and `[AGREED]` absent, `passed` / `skipped` / `error` in the header, a notice as its key, an unnamed agent as its id, and an empty transcript saying so |
 
 ## Known limitations and TODOs
