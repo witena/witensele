@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DISCOVERY_FILE, type McpDiscovery } from '@shared/mcp-discovery'
 import {
+  RESOURCE_UNAVAILABLE_TEXT,
   SHIM_ERROR_TEXT,
   ShimError,
   appIsRunning,
@@ -42,6 +43,8 @@ function discovery(over: Partial<McpDiscovery> = {}): McpDiscovery {
 function fakeClient(): EndpointClient {
   return {
     callTool: async () => ({ content: [] }),
+    listResources: async () => ({ resources: [] }),
+    readResource: async () => ({ contents: [] }),
     close: async () => undefined
   }
 }
@@ -303,6 +306,65 @@ describe('the shim finding the app', () => {
     await rm(join(dir, DISCOVERY_FILE))
     openFailures = [connectionRefused()]
     await expect(connector.open(undefined)).rejects.toThrow(SHIM_ERROR_TEXT['not-running'])
+  })
+
+  /* ---------------------------------------------------------------------- */
+  /* openIfRunning: the resource path, which never launches (WP-15)          */
+  /* ---------------------------------------------------------------------- */
+
+  it('answers null for a resource request when there is no discovery file, without launching', async () => {
+    const connector = createConnector(deps())
+    expect(await connector.openIfRunning('claude-code')).toBeNull()
+    // The whole point: `open()` on the same deps would have launched, because
+    // `launch` is not null here. Claude Code sends `resources/list` on every
+    // session start, and starting Witena for it is what this branch prevents.
+    expect(launched).toBe(0)
+    expect(opened).toHaveLength(0)
+  })
+
+  it('does not launch for a resource request even when the app is up with the endpoint off', async () => {
+    await writeSingletonLock(LIVE_PID)
+    const connector = createConnector(deps())
+    expect(await connector.openIfRunning(undefined)).toBeNull()
+    expect(launched).toBe(0)
+  })
+
+  it('connects with the file’s numbers when the app is already there', async () => {
+    await writeDiscovery(discovery())
+    const connector = createConnector(deps())
+    expect(await connector.openIfRunning('claude-code')).not.toBeNull()
+    expect(opened).toEqual([{ discovery: discovery(), clientName: 'claude-code' }])
+    expect(launched).toBe(0)
+  })
+
+  it('re-reads the file every time rather than trusting the cache', async () => {
+    // A cached endpoint that has since gone away would make this answer
+    // "running" and then fail, and a listing cannot tell the two apart.
+    await writeDiscovery(discovery())
+    const connector = createConnector(deps())
+    await connector.open(undefined)
+    expect(opened).toHaveLength(1)
+
+    await rm(join(dir, DISCOVERY_FILE))
+    expect(await connector.openIfRunning(undefined)).toBeNull()
+    expect(opened).toHaveLength(1)
+  })
+
+  it('reports a socket that refuses as "nothing there", and says so on stderr', async () => {
+    await writeDiscovery(discovery())
+    openFailures = [connectionRefused()]
+    const connector = createConnector(deps())
+
+    expect(await connector.openIfRunning(undefined)).toBeNull()
+    expect(launched).toBe(0)
+    expect(logs.some((line) => line.includes('did not answer a resource request'))).toBe(true)
+  })
+
+  it('offers one sentence for a resource that cannot be read, naming the switch', () => {
+    // Unlike the three tool refusals, this one never learns whether Witena is
+    // down or merely closed, because it did not launch anything to find out.
+    expect(RESOURCE_UNAVAILABLE_TEXT).toContain('Settings -> Integrations')
+    expect(RESOURCE_UNAVAILABLE_TEXT).toContain('Witena tool')
   })
 
   /* ---------------------------------------------------------------------- */

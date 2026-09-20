@@ -37,7 +37,16 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { CallToolResultSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import {
+  CallToolResultSchema,
+  ListResourcesResultSchema,
+  ReadResourceResultSchema,
+  type CallToolResult,
+  type ListResourcesRequest,
+  type ListResourcesResult,
+  type ReadResourceRequest,
+  type ReadResourceResult
+} from '@modelcontextprotocol/sdk/types.js'
 import {
   DISCOVERY_FILE,
   parseDiscovery,
@@ -88,6 +97,21 @@ export const SHIM_ERROR_TEXT: Record<ShimErrorKind, string> = {
   ].join(' ')
 }
 
+/**
+ * What a `resources/read` is told when nothing is listening.
+ *
+ * One sentence for both reasons, unlike the three above, because a resource
+ * read never launches the app (see `openIfRunning`) and therefore never learns
+ * which of the two it is: the shim has only looked for the discovery file, and
+ * "no file" covers a Witena that is not running *and* a Witena whose endpoint
+ * is switched off. Naming both is more useful than guessing one.
+ */
+export const RESOURCE_UNAVAILABLE_TEXT = [
+  'Witena is not running, or its MCP endpoint is switched off, so this transcript cannot be read.',
+  'Ask the user to open Witena and turn on Settings -> Integrations -> MCP endpoint.',
+  'Calling a Witena tool instead will start the app if it is installed.'
+].join(' ')
+
 /** A refusal the shim can explain, as opposed to one it only passes on. */
 export class ShimError extends Error {
   readonly kind: ShimErrorKind
@@ -119,6 +143,17 @@ export interface EndpointClient {
       onprogress?: ((progress: { progress: number; message?: string | undefined }) => void) | undefined
     }
   ): Promise<CallToolResult>
+  /**
+   * The two resource methods, forwarded with their own parameters.
+   *
+   * They need their own passthrough rather than riding on `callTool`: the only
+   * thing that crosses on a tool call is the name and the arguments, while
+   * `resources/list` carries a pagination `cursor` and `resources/read` carries
+   * the `uri` that is the whole of the request. Forwarding them as a tool call
+   * would mean inventing a tool the endpoint does not have.
+   */
+  listResources(params: ListResourcesRequest['params']): Promise<ListResourcesResult>
+  readResource(params: ReadResourceRequest['params']): Promise<ReadResourceResult>
   close(): Promise<void>
 }
 
@@ -206,7 +241,27 @@ export function isStaleEndpoint(error: unknown): boolean {
 
 /** The shim's half of the connection: one connected client per forwarded call. */
 export interface Connector {
+  /**
+   * For `tools/call`: connects, **launching Witena** when there is no endpoint
+   * to connect to. A tool call is the user asking for work to be done, which is
+   * the one thing worth waking an app for.
+   */
   open(clientName: string | undefined): Promise<EndpointClient>
+  /**
+   * For the resource methods: connects only when the app is *already* there,
+   * and answers `null` rather than launching it.
+   *
+   * WP-0b measured Claude Code sending `resources/list` on **every session
+   * start**, so a listing that launched the app would launch it every time the
+   * user opened a project — exactly the thing the whole shim exists to avoid.
+   * `resources/read` is held to the same rule: it is a browse, the user did not
+   * ask for a discussion, and a tool call is one step away if they want one.
+   *
+   * It probes the discovery file itself instead of calling `open()`, so there
+   * is no window in which a file that vanished between the probe and the
+   * connection could turn a listing into a launch.
+   */
+  openIfRunning(clientName: string | undefined): Promise<EndpointClient | null>
 }
 
 /**
@@ -256,6 +311,22 @@ export async function openEndpointClient(
         CallToolResultSchema,
         requestOptions
       )) as CallToolResult
+    },
+    async listResources(params) {
+      // `client.request` rather than `client.listResources`, so the forwarded
+      // `params` object crosses verbatim: the typed helper takes the same
+      // shape, but going through `request` keeps this hop a relay rather than a
+      // second client with opinions of its own.
+      return (await client.request(
+        { method: 'resources/list', ...(params === undefined ? {} : { params }) },
+        ListResourcesResultSchema
+      )) as ListResourcesResult
+    },
+    async readResource(params) {
+      return (await client.request(
+        { method: 'resources/read', params },
+        ReadResourceResultSchema
+      )) as ReadResourceResult
     },
     async close() {
       await client.close()
@@ -312,6 +383,33 @@ export function createConnector(deps: ConnectDeps): Connector {
         const client = await deps.openClient(second, clientName)
         cached = second
         return client
+      }
+    },
+
+    async openIfRunning(clientName) {
+      // Always the file, never the cache: a cached endpoint that has since gone
+      // away would make this answer "running" and then fail, and the caller
+      // cannot tell those apart. `probeDiscovery` also checks the pid.
+      const found = await probe()
+      if (found === null) return null
+
+      try {
+        const client = await deps.openClient(found, clientName)
+        cached = found
+        return client
+      } catch (cause) {
+        // A failure here is reported as "nothing is listening" rather than
+        // raised: the file said there was an endpoint and the socket disagreed,
+        // which for a listing is the same as no endpoint at all. The reason
+        // goes to stderr, where it is debuggable without becoming an error in
+        // the IDE's resource picker.
+        cached = null
+        deps.log(
+          `127.0.0.1:${found.port} did not answer a resource request: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`
+        )
+        return null
       }
     }
   }

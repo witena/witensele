@@ -414,6 +414,149 @@ describe('Witena over MCP, end to end', () => {
   })
 
   /* ---------------------------------------------------------------------- */
+  /* Resources and the prompt (WP-15)                                        */
+  /* ---------------------------------------------------------------------- */
+
+  describe('the parts of MCP beyond tools', () => {
+    /** The text of a `resources/read`, which is the only content kind we send. */
+    function bodyOf(read: Awaited<ReturnType<Client['readResource']>>): string {
+      const content = read.contents[0]
+      return content !== undefined && 'text' in content ? content.text : ''
+    }
+
+    it('advertises the three capabilities it serves, and promises no notifications', () => {
+      const capabilities = client.getServerCapabilities()
+      expect(capabilities?.tools).toEqual({})
+      expect(capabilities?.resources).toEqual({})
+      expect(capabilities?.prompts).toEqual({})
+      // Stateless: a request-scoped `Server` has nobody to notify a moment
+      // later, so neither `subscribe` nor `listChanged` is offered.
+      expect(capabilities?.resources?.subscribe).toBeUndefined()
+      expect(capabilities?.resources?.listChanged).toBeUndefined()
+    })
+
+    it('lists the recent chats as witena://chat/<id>, newest first', async () => {
+      await handlers['chats.create'](ctx, {
+        input: { title: 'Another group', memberAgentIds: [ada.id] }
+      })
+
+      const listed = await client.listResources()
+      // The order is `chats.list`'s, which is `updatedAt` descending — the
+      // discussion the user had ten minutes ago is the one they are about to
+      // mention. Asserted against the handler rather than against two hard-coded
+      // ids, so it states the rule instead of one instance of it.
+      expect(listed.resources.map((resource) => resource.uri)).toEqual(
+        (await handlers['chats.list'](ctx)).map((entry) => `witena://chat/${entry.id}`)
+      )
+      expect(listed.resources.map((resource) => resource.name).sort()).toEqual([
+        'Another group',
+        'Migration'
+      ])
+      expect(listed.resources.every((resource) => resource.mimeType === 'text/markdown')).toBe(true)
+      // Nothing was started by looking: the list is a read.
+      expect(ctx.runners.getState(chat.id)).toBeNull()
+    })
+
+    it('offers at most twenty of them, because the list is a mention menu', async () => {
+      for (let index = 0; index < 25; index += 1) {
+        await handlers['chats.create'](ctx, {
+          input: { title: `Chat ${index}`, memberAgentIds: [ada.id] }
+        })
+      }
+      expect(await handlers['chats.list'](ctx)).toHaveLength(26)
+
+      const listed = await client.listResources()
+      expect(listed.resources).toHaveLength(20)
+      // Every one of them is a link the reader can hand straight back to
+      // `resources/read`; there is no `nextCursor`, because a caller that wants
+      // the older ones wants `list_chats` and its query.
+      expect(listed.resources.every((resource) => resource.uri.startsWith('witena://chat/'))).toBe(
+        true
+      )
+      expect(listed.nextCursor).toBeUndefined()
+    })
+
+    it('reads a chat as the same markdown get_discussion renders', async () => {
+      const result = await call<DiscussionResult>('start_discussion', {
+        question: 'Is this migration safe?',
+        chatId: chat.id
+      })
+      expect(result.status).toBe('concluded')
+
+      const read = await client.readResource({ uri: `witena://chat/${chat.id}` })
+      const body = bodyOf(read)
+      expect(read.contents[0]?.uri).toBe(`witena://chat/${chat.id}`)
+      expect(read.contents[0]?.mimeType).toBe('text/markdown')
+      expect(body).toContain('# Migration')
+      expect(body).toContain('**Ada**')
+      expect(body).toContain('**Lin**')
+      expect(body).not.toContain(AGREED_TOKEN)
+
+      // The `@`-mention body and the tool result are one document, not two
+      // renderings that have to be kept in step.
+      const transcript = await call<{ markdown: string }>('get_discussion', {
+        chatId: chat.id,
+        detail: 'transcript'
+      })
+      expect(body).toBe(transcript.markdown)
+    })
+
+    it('reads a chat nobody has spoken in as its heading alone', async () => {
+      // Not an error and not an empty body: the chat exists, and what it has to
+      // say is its name. An `@`-mention of it is a legal thing to do.
+      expect(bodyOf(await client.readResource({ uri: `witena://chat/${chat.id}` })).trim()).toBe(
+        '# Migration'
+      )
+    })
+
+    it('distinguishes a uri that is not ours from a chat that is not there', async () => {
+      // Strict parsing first: this never reached the database.
+      await expect(client.readResource({ uri: 'https://example.test/chat/1' })).rejects.toThrow(
+        /not a Witena chat resource/
+      )
+      await expect(
+        client.readResource({ uri: 'witena://chat/not-a-uuid' })
+      ).rejects.toThrow(/not a Witena chat resource/)
+
+      // And a well-formed link whose chat is gone is `not_found`, raised by
+      // `chats.get` and turned into the resource error a model can act on.
+      await expect(
+        client.readResource({ uri: 'witena://chat/3f2504e0-4f89-41d3-9a0c-0305e82c3301' })
+      ).rejects.toThrow(/no Witena chat at/)
+    })
+
+    it('offers the consult prompt, expanded with the question the user typed', async () => {
+      const listed = await client.listPrompts()
+      expect(listed.prompts.map((prompt) => prompt.name)).toEqual(['consult'])
+      expect(listed.prompts[0]?.arguments?.map((argument) => argument.name)).toEqual([
+        'question',
+        'chat',
+        'agents'
+      ])
+
+      const got = await client.getPrompt({
+        name: 'consult',
+        arguments: { question: 'Is this migration safe?', agents: 'Ada, Lin' }
+      })
+      const content = got.messages[0]?.content
+      const text = content?.type === 'text' ? content.text : ''
+      expect(text).toContain('Is this migration safe?')
+      expect(text).toContain('`agents: ["Ada","Lin"]`')
+      expect(text).toContain('wait_for_discussion')
+
+      // WP-0b: Codex never asks for this, so nothing may depend on it — the
+      // prompt starts no discussion and touches no chat.
+      expect(await handlers['chats.list'](ctx)).toHaveLength(1)
+    })
+
+    it('refuses a prompt request the tools would refuse, before anything runs', async () => {
+      await expect(client.getPrompt({ name: 'consult' })).rejects.toThrow(/question/)
+      await expect(client.getPrompt({ name: 'summon' })).rejects.toThrow(/Unknown prompt/)
+      expect(await handlers['chats.list'](ctx)).toHaveLength(1)
+    })
+  })
+
+  /* ---------------------------------------------------------------------- */
   /* The door is the same door                                               */
   /* ---------------------------------------------------------------------- */
 

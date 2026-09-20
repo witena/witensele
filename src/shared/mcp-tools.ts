@@ -11,8 +11,8 @@
  *
  * | Side | Uses |
  * |---|---|
- * | The shim (`src/mcp-shim/`) | `MCP_TOOLS` for its offline `tools/list`, `MCP_SERVER_NAME`, `CLIENT_HEADER`, `MCP_PATH` |
- * | The endpoint (`src/main/mcp-endpoint/`) | `MCP_TOOLS` for its own `tools/list`, `MCP_TOOL_INPUTS` to validate `tools/call` arguments, the caps and the result type |
+ * | The shim (`src/mcp-shim/`) | `MCP_TOOLS` for its offline `tools/list`, `MCP_PROMPTS` and `renderPrompt` for its offline `prompts/list` and `prompts/get`, `MCP_SERVER_NAME`, `CLIENT_HEADER`, `MCP_PATH` |
+ * | The endpoint (`src/main/mcp-endpoint/`) | `MCP_TOOLS` for its own `tools/list`, `MCP_TOOL_INPUTS` to validate `tools/call` arguments, the same `MCP_PROMPTS` / `renderPrompt`, the caps and the result type |
  *
  * One zod schema per tool is the single definition: `z.infer` gives the endpoint
  * its argument type, `z.toJSONSchema` gives both sides the wire schema, and
@@ -353,6 +353,207 @@ export const MCP_TOOLS: readonly McpToolDefinition[] = MCP_TOOL_NAMES.map((name)
   description: TOOL_TEXT[name].description,
   inputSchema: inputSchemaFor(MCP_TOOL_INPUTS[name])
 }))
+
+/* -------------------------------------------------------------------------- */
+/* Prompts (WP-15)                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The prompts Witena offers, which today is one.
+ *
+ * An MCP prompt is a *user-invoked* template: in Claude Code it appears as the
+ * slash command `/mcp__witena__consult`, and what it expands to is a message
+ * addressed to the coding agent, not to Witena. So `consult` is not another way
+ * to call `start_discussion` — it is the sentence that teaches the agent to call
+ * it properly: bring the real material as `context`, and keep waiting rather
+ * than treating `running` as a failure.
+ *
+ * WP-0b measured which clients ask for this at all: Claude Code sends
+ * `prompts/list` on every session start, Codex never sends it and carries no
+ * handler for prompts. The prompt is therefore a Claude-Code-only extra, and
+ * nothing in this feature is allowed to depend on it — the tools stand on their
+ * own, and the resource is the half that both clients fetch.
+ */
+export const MCP_PROMPT_NAMES = ['consult'] as const
+
+export type McpPromptName = (typeof MCP_PROMPT_NAMES)[number]
+
+/**
+ * One argument of a prompt, in MCP's own shape.
+ *
+ * Prompt arguments are **strings and only strings** on the wire (`prompts/get`
+ * takes `arguments?: { [key: string]: string }`), which is why `agents` below is
+ * a comma-separated list rather than the array `start_discussion` takes. The
+ * expansion tells the agent to split it.
+ */
+export interface McpPromptArgument {
+  name: string
+  description: string
+  required: boolean
+}
+
+export interface McpPromptDefinition {
+  name: McpPromptName
+  title: string
+  description: string
+  arguments: McpPromptArgument[]
+}
+
+/**
+ * `consult`'s arguments, as the wire declares them and as both sides parse them.
+ *
+ * Everything is a string because that is all MCP allows, and `question` is the
+ * only required one: a user typing `/mcp__witena__consult` has a question and
+ * usually nothing else, and choosing who to ask is work the agent can do with
+ * `list_agents`.
+ *
+ * `committee` is deliberately absent. It belongs to WP-14, which is the package
+ * that adds `list_committees` and `start_discussion`'s `committee` field; an
+ * argument here that expanded into an instruction to pass `committee` to a tool
+ * that has no such field would be a prompt that teaches a model to fail.
+ */
+const consultPromptInput = z.object({
+  question: z.string().min(1),
+  chat: z.string().min(1).optional(),
+  agents: z.string().min(1).optional()
+})
+
+/** The zod input per prompt; the shape `renderPrompt` parses `arguments` with. */
+export const MCP_PROMPT_INPUTS = {
+  consult: consultPromptInput
+} satisfies { [N in McpPromptName]: z.ZodObject<z.ZodRawShape> }
+
+const CONSULT_ARGUMENTS: McpPromptArgument[] = [
+  {
+    name: 'question',
+    description: 'What you want the group to decide. One question, stated plainly.',
+    required: true
+  },
+  {
+    name: 'chat',
+    description:
+      'The chatId of an existing Witena discussion to continue, from list_chats. Leave it out to start a new group.',
+    required: false
+  },
+  {
+    name: 'agents',
+    description:
+      'Who to ask, as a comma-separated list of agent names from list_agents. Leave it out to let the assistant choose, and do not combine it with `chat`.',
+    required: false
+  }
+]
+
+export const MCP_PROMPTS: readonly McpPromptDefinition[] = [
+  {
+    name: 'consult',
+    title: 'Consult a Witena group',
+    description:
+      'Put the question to a group of Witena agents, wait for them to finish arguing, and come back with their conclusion.',
+    arguments: CONSULT_ARGUMENTS
+  }
+]
+
+/** One message of a prompt expansion. Plain JSON, so the SDK is not imported. */
+export interface McpPromptMessage {
+  role: 'user'
+  content: { type: 'text'; text: string }
+}
+
+/**
+ * What `prompts/get` answers, or why it cannot.
+ *
+ * A result rather than a throw because the two sides report a refusal
+ * differently — the endpoint and the shim each turn `ok: false` into their own
+ * `McpError` — and because this module may not import the SDK that defines one.
+ */
+export type PromptRendering =
+  | { ok: true; description: string; messages: McpPromptMessage[] }
+  | { ok: false; message: string }
+
+/**
+ * `prompts/get`, for both sides.
+ *
+ * The shim answers this without any I/O at all: the expansion is a function of
+ * the arguments and nothing else, the app would produce the same text, and a
+ * `prompts/list` on every Claude Code session start must never be the thing that
+ * launches Witena. Sharing the function is what makes "the same text" a fact
+ * rather than an intention.
+ */
+export function renderPrompt(
+  name: string,
+  args: Record<string, unknown> | undefined
+): PromptRendering {
+  if (name !== 'consult') {
+    return {
+      ok: false,
+      message: `Unknown prompt: ${name}. Witena offers: ${MCP_PROMPT_NAMES.join(', ')}.`
+    }
+  }
+
+  const parsed = consultPromptInput.safeParse(args ?? {})
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    const path = issue?.path.map((segment) => String(segment)).join('.') ?? ''
+    return {
+      ok: false,
+      message:
+        path.length > 0
+          ? `${path}: ${issue?.message ?? 'is not valid'}`
+          : (issue?.message ?? 'The arguments are not valid.')
+    }
+  }
+
+  const { question, chat, agents } = parsed.data
+  if (chat !== undefined && agents !== undefined) {
+    return {
+      ok: false,
+      message:
+        'Pass either `chat` (continue an existing discussion) or `agents` (start a new one), not both — start_discussion takes exactly one of them.'
+    }
+  }
+
+  return {
+    ok: true,
+    description: `Consult a Witena group about: ${question}`,
+    messages: [{ role: 'user', content: { type: 'text', text: consultText(question, chat, agents) } }]
+  }
+}
+
+/**
+ * The expansion, addressed to the coding agent that is reading it.
+ *
+ * Numbered because it is a procedure and the failure mode it exists to prevent
+ * is skipping step 2 or giving up at step 3: a model that asks a group a
+ * question without pasting the code gets a generic answer, and one that reads
+ * `status: "running"` as an error abandons a discussion that was about to
+ * conclude.
+ */
+function consultText(question: string, chat: string | undefined, agents: string | undefined): string {
+  const who =
+    chat !== undefined
+      ? `Continue the existing discussion: pass \`chatId: ${JSON.stringify(chat)}\` to \`start_discussion\` (no \`agents\`).`
+      : agents !== undefined
+        ? `Start a new group with exactly these members: pass \`agents: ${JSON.stringify(
+            agents
+              .split(',')
+              .map((name) => name.trim())
+              .filter((name) => name.length > 0)
+          )}\` to \`start_discussion\`. If a name is not exact, call \`list_agents\` first and use the names it returns.`
+        : 'Call `list_agents` first and choose the two to four agents whose role fits this question, then pass their names as `agents` to `start_discussion`.'
+
+  return [
+    'Ask a Witena group about the question below and bring their answer back to me. Witena runs several models as a group chat: they argue for a few rounds and either agree on a conclusion or hand back their disagreement.',
+    `Question: ${question}`,
+    'Do this:',
+    [
+      `1. ${who}`,
+      '2. Put the material the group needs into `context`: the actual code, the diff, the failing output, the design notes. The agents cannot see my files, and a question without its material gets a generic answer.',
+      '3. `status: "running"` is not a failure — it means the group is still talking. Call `wait_for_discussion` with the same `chatId` and repeat for as long as it keeps coming back `running`.',
+      '4. Then report what came back: `concluded` — give me the conclusion and, if it is code, apply it yourself, because the group only reads and argues and you are the one who writes. `ended` — the group did not agree, so give me each member\'s position; the disagreement is the answer. `needs-attention` — tell me to open the `url` in Witena. `error` or `stopped` — say what happened and do not retry blindly.'
+    ].join('\n'),
+    'Every result carries a `hint` saying what to do next; follow it.'
+  ].join('\n\n')
+}
 
 /** The scheme the app registers, and the one `chatUrl` speaks. */
 const CHAT_URL_PREFIX = 'witena://chat/'

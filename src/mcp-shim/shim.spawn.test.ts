@@ -17,6 +17,7 @@
  * | A `tools/call` reaches the endpoint with the client's name | The bearer token, the header and the URL are assembled from a file the shim read at run time |
  * | Progress crosses both hops | Two SDK `Protocol` instances, two progress tokens, one relay |
  * | The switched-off message comes back as a tool error | An IDE must see a readable refusal, not a server that died |
+ * | `prompts/list` and `resources/list` answer with no app | WP-0b measured Claude Code asking for both on **every session start**; the bundle must answer them without waking anything |
  */
 import { execFile } from 'node:child_process'
 import { createServer, type Server as HttpServer } from 'node:http'
@@ -46,9 +47,24 @@ const ROOT = resolve(import.meta.dirname, '../..')
 const SHIM = join(ROOT, 'out/mcp-shim/witena-mcp.cjs')
 const TOKEN = 'spawn-test-token'
 
-/** The two objects the endpoint only passes through; the stub never reads them. */
+/** The context the endpoint only passes through; the stub registry never reads it. */
 const CTX = { sentinel: 'ctx' } as unknown as AppContext
-const HANDLERS = { sentinel: 'handlers' } as unknown as HandlerMap
+
+/** The one chat the endpoint's own `resources/list` finds (WP-15). */
+const CHAT = {
+  id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+  title: 'Migration',
+  updatedAt: 1_700_000_000_000
+}
+
+/**
+ * `tools/call` goes to the stub registry, so the handler map is unused there —
+ * but `resources/list` is served by the endpoint itself and does reach it, so
+ * the one handler it calls is real enough to answer.
+ */
+const HANDLERS = {
+  'chats.list': async () => [CHAT]
+} as unknown as HandlerMap
 
 interface Recorded {
   name: string
@@ -146,6 +162,69 @@ describe('the built shim over stdio', () => {
       const listed = await client.listTools()
       expect(listed.tools.map((tool) => tool.name)).toEqual([...MCP_TOOL_NAMES])
       expect(recorded).toHaveLength(0)
+      await client.close()
+    },
+    60_000
+  )
+
+  it(
+    'answers a whole Claude Code session start with no app running',
+    async () => {
+      // WP-0b: `tools/list`, `prompts/list` and `resources/list` arrive
+      // together every time an editor opens a project. None of the three may
+      // launch Witena, and with no bundle to launch here the proof is that all
+      // three answer at once, quickly, and that the endpoint saw nothing.
+      const started = Date.now()
+      const client = await startShim('claude-code')
+
+      const [tools, prompts, resources, templates] = await Promise.all([
+        client.listTools(),
+        client.listPrompts(),
+        client.listResources(),
+        client.listResourceTemplates()
+      ])
+
+      expect(tools.tools.map((tool) => tool.name)).toEqual([...MCP_TOOL_NAMES])
+      expect(prompts.prompts.map((prompt) => prompt.name)).toEqual(['consult'])
+      expect(resources.resources).toEqual([])
+      expect(templates.resourceTemplates).toEqual([])
+      expect(recorded).toHaveLength(0)
+      expect(Date.now() - started).toBeLessThan(20_000)
+
+      // And the prompt expands out of the bundled `@shared/mcp-tools`, with no
+      // app at the other end to ask.
+      const got = await client.getPrompt({
+        name: 'consult',
+        arguments: { question: 'Is this migration safe?' }
+      })
+      const content = got.messages[0]?.content
+      expect(content?.type === 'text' ? content.text : '').toContain('Is this migration safe?')
+
+      await client.close()
+    },
+    60_000
+  )
+
+  it(
+    'forwards a resource listing and a read to an app that is already up',
+    async () => {
+      await writeDiscovery()
+      const client = await startShim('claude-code')
+
+      // The listing crossed both hops: this row came out of the endpoint's
+      // `chats.list`, not out of anything the shim knows.
+      const listed = await client.listResources()
+      expect(listed.resources.map((resource) => resource.uri)).toEqual([
+        `witena://chat/${CHAT.id}`
+      ])
+      expect(listed.resources[0]?.name).toBe('Migration')
+
+      // And a refusal written at the far end arrives as a JSON-RPC error rather
+      // than as a dead server — `resources/read` has no `isError` shape.
+      await expect(client.readResource({ uri: 'witena://chat/not-a-uuid' })).rejects.toThrow(
+        /not a Witena chat resource/
+      )
+
       await client.close()
     },
     60_000

@@ -150,6 +150,7 @@ describe('the shim bundles only what it may', () => {
     // The claim is only worth making because the closure is the real one: the
     // entry point, both halves of the lookup and WP-1's two shared modules.
     expect(closure).toContain('src/mcp-shim/index.ts')
+    expect(closure).toContain('src/mcp-shim/server.ts')
     expect(closure).toContain('src/mcp-shim/connect.ts')
     expect(closure).toContain('src/mcp-shim/launch.ts')
     expect(closure).toContain('src/shared/mcp-tools.ts')

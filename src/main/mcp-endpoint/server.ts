@@ -11,9 +11,20 @@
  * ```
  * shim (or any MCP client) → POST /mcp  →  guards.ts        → 401 / 403 / 413
  *                                       →  Server + transport (one per request)
- *                                       →  tools/list  → MCP_TOOLS
- *                                       →  tools/call  → ToolRegistry → ToolOutcome
+ *                                       →  tools/list      → MCP_TOOLS
+ *                                       →  tools/call      → ToolRegistry → ToolOutcome
+ *                                       →  resources/list  → the recent chats
+ *                                       →  resources/read  → the transcript, as markdown
+ *                                       →  prompts/list    → MCP_PROMPTS
+ *                                       →  prompts/get     → renderPrompt
  * ```
+ *
+ * **Three capabilities, no notifications.** `tools`, `resources` and `prompts`
+ * are declared without `subscribe` or `listChanged`, because the endpoint is
+ * stateless: a request-scoped `Server` has nobody to notify a moment later, and
+ * a client that subscribed to a chat would be subscribing to an object that
+ * stops existing when the response ends. A client that wants the current list
+ * asks for it again, which is one cheap request.
  *
  * **Stateless, by PLAN's decision.** `sessionIdGenerator: undefined` and a fresh
  * `Server` + `StreamableHTTPServerTransport` per request: a discussion's state
@@ -51,16 +62,24 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import {
   CallToolRequestSchema,
   ErrorCode,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  ReadResourceRequestSchema,
   type CallToolResult,
+  type Prompt,
   type Tool
 } from '@modelcontextprotocol/sdk/types.js'
 import {
   MCP_PATH,
+  MCP_PROMPTS,
   MCP_SERVER_NAME,
   MCP_TOOL_NAMES,
   MCP_TOOLS,
+  renderPrompt,
   type McpToolName
 } from '@shared/mcp-tools'
 import { APP_VERSION } from '@shared/version'
@@ -74,6 +93,7 @@ import {
   sendRefusal,
   type GuardRefusal
 } from './guards'
+import { listChatResources, readChatResource } from './resources'
 import type { ToolCallContext, ToolOutcome, ToolRegistry } from './tool-types'
 import { createTools } from './tools'
 
@@ -122,6 +142,16 @@ function isToolName(name: string): name is McpToolName {
  * SDK's `ToolSchema` requires, so the cast asserts something already proven.
  */
 const LISTED_TOOLS = MCP_TOOLS as readonly unknown[] as Tool[]
+
+/**
+ * The `prompts/list` payload, cast for the same reason as `LISTED_TOOLS`.
+ *
+ * `McpPromptDefinition` is `@shared/mcp-tools`'s own spelling of `Prompt` —
+ * `name`, `title`, `description` and the argument table — written out there
+ * because that module may not import the SDK. `mcp-tools.test.ts` asserts the
+ * shape the SDK requires.
+ */
+const LISTED_PROMPTS = MCP_PROMPTS as readonly unknown[] as Prompt[]
 
 /**
  * `ToolOutcome` → the MCP result.
@@ -184,10 +214,38 @@ export function createMcpEndpoint(o: McpEndpointOptions): McpEndpoint {
   function buildServer(client: string | undefined): Server {
     const server = new Server(
       { name: MCP_SERVER_NAME, version: APP_VERSION },
-      { capabilities: { tools: {} } }
+      // No `subscribe`, no `listChanged`: see "Three capabilities" in the header.
+      { capabilities: { tools: {}, resources: {}, prompts: {} } }
     )
 
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: LISTED_TOOLS }))
+
+    server.setRequestHandler(ListResourcesRequestSchema, () =>
+      listChatResources(o.ctx, o.handlers)
+    )
+
+    server.setRequestHandler(ReadResourceRequestSchema, (request) =>
+      readChatResource(o.ctx, o.handlers, request.params.uri)
+    )
+
+    // Every chat resource is a concrete `witena://chat/<uuid>` that
+    // `resources/list` already names, so there is no template to expand. The
+    // handler exists rather than being left out because Codex asks for this
+    // method (WP-0b saw the handler in its binary) and an empty list is a
+    // truthful answer where `Method not found` is noise in somebody's log.
+    server.setRequestHandler(ListResourceTemplatesRequestSchema, () => ({
+      resourceTemplates: []
+    }))
+
+    server.setRequestHandler(ListPromptsRequestSchema, () => ({ prompts: LISTED_PROMPTS }))
+
+    server.setRequestHandler(GetPromptRequestSchema, (request) => {
+      // The same function the shim answers this with, so the expansion a user
+      // sees does not depend on whether the app happened to be running.
+      const rendered = renderPrompt(request.params.name, request.params.arguments)
+      if (!rendered.ok) throw new McpError(ErrorCode.InvalidParams, rendered.message)
+      return { description: rendered.description, messages: rendered.messages }
+    })
 
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const name = request.params.name

@@ -414,3 +414,42 @@ cards render *not installed* on every machine with no action button on the scree
 at all. The first test asserts that emptiness, which is both a check of the
 not-installed state and the guard that keeps the file safe. Everything after a
 button press is the two unit files' subject.
+
+## Resources and the prompt (WP-15)
+
+Nothing in the renderer again: no page, no component, no store field, no event,
+no locale key, and the table at the top of this file is unchanged.
+`resources/list`, `resources/read`, `prompts/list` and `prompts/get` are served
+by `src/main/mcp-endpoint/` and `src/mcp-shim/`, and every word they produce is
+read by an IDE.
+
+What they add is a second place a Witena chat is **displayed outside Witena**,
+which is worth knowing when the transcript's rendering changes:
+
+| Surface | What the user sees | Rendered by |
+|---|---|---|
+| The Witena window | Cards, avatars, streaming states, collapsible reasoning | `components/chat/transcript-rows.ts` + `message-item.tsx` |
+| `@witena:<chat>` in Claude Code, and Codex's `read_mcp_resource` | `# Title`, `**Name** (round n)` headers, the conclusion marked, one line per tool call, no reasoning | `src/main/mcp-endpoint/transcript.ts` |
+
+They are deliberately two renderings of the same rows — one produces a React
+model, the other produces text a model reads — and only the second one is
+WP-15's. A change to the first does not touch it.
+
+Two notes for Settings → Integrations (WP-12), neither of which needs a change
+there today:
+
+- **The endpoint's new refusals are English, like the old ones.** `resources/read`
+  with nothing listening answers `RESOURCE_UNAVAILABLE_TEXT` from
+  `src/mcp-shim/connect.ts`, which — like `SHIM_ERROR_TEXT` — tells the user's
+  *agent* to say "open Witena → Settings → Integrations and turn the MCP
+  endpoint on". The section says the same thing in the user's own language, with
+  its own key; this sentence never appears in the window.
+- **A chat's title is what a user picks from.** `resources/list` sends the chat
+  title as both `name` and `title`, so whatever the user typed in the window is
+  what the `@`-mention menu offers. A chat with a generated title reads as that
+  title, which is one more reason the title matters.
+
+The acceptance criterion S10.6 names — `@witena:` offering recent chats and
+`/mcp__witena__consult` starting a discussion, inside Claude Code — could not be
+exercised here: the `claude` CLI on this machine is not logged in, the same wall
+WP-0b hit. Everything under it is asserted through the SDK client instead.
