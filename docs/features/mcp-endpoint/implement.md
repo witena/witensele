@@ -1,10 +1,10 @@
 # mcp-endpoint — Implementation
 
-> Partly built: WP-1's contracts are in the tree; everything under
-> `src/main/mcp-endpoint/` and `src/mcp-shim/` is still to come. The design is
-> PLAN.md "Witena as an MCP server (the MCP endpoint)"; the types every package
-> codes against are under "Frozen contracts" in [`tasks.md`](./tasks.md). Each
-> work package replaces part of this file with what it actually built.
+> Partly built. `backend.md`'s table is the authority on which work package has
+> landed; `src/mcp-shim/` is still entirely to come. The design is PLAN.md
+> "Witena as an MCP server (the MCP endpoint)"; the types every package codes
+> against are under "Frozen contracts" in [`tasks.md`](./tasks.md). Each work
+> package replaces part of this file with what it actually built.
 
 ## Approach
 
@@ -129,6 +129,91 @@ read once through `agents.list` and memoised on a single promise so the updates
 keep their order. An update whose name lookup lands after the watch settled is
 dropped: the request it would have been reported to is over.
 
+## HTTP endpoint and guards (WP-4)
+
+`src/main/mcp-endpoint/` now holds the transport half of the endpoint: the door
+(`guards.ts`), the MCP server over Streamable HTTP (`server.ts`) and the three
+types the tools are written against (`tool-types.ts`). The six tools themselves
+are WP-3's; the endpoint takes a `ToolRegistry` by injection and a stub is what
+its own tests pass.
+
+### `src/main/mcp-endpoint/guards.ts`
+
+Four checks run **before the SDK sees a byte**, in this order, and each is a pure
+function of headers plus the port the request arrived on:
+
+| Check | Answer | Why |
+|---|---|---|
+| An `Origin` header is present at all | 403 | Only a browser sends one, and no legitimate caller here is a browser — so its presence is enough and no origin ever has to be judged friendly |
+| `Host` is not `127.0.0.1:<port>` or `localhost:<port>` | 403 | The DNS-rebinding defence: a page at `evil.test` that resolved to loopback still sends its own name. `<port>` is `req.socket.localPort` |
+| No bearer token, or the wrong one | 401 | `timingSafeEqual` over equal-length buffers; an empty configured token never matches |
+| A body over `MAX_BODY_BYTES` (8 MiB) | 413 | Checked while reading, not from `content-length`, which is what the caller claims |
+
+A repeated `Authorization`, `Host` or `x-witena-client` header collapses to
+`undefined` rather than to its first value — a caller that sent a header twice is
+not one to be charitable to. The refusal body is a JSON-RPC error object with a
+null id; the HTTP status is what the shim keys its retry on.
+
+### `src/main/mcp-endpoint/server.ts`
+
+`createMcpEndpoint({ ctx, handlers, token, tools? })` → `{ handle, close }`.
+`handle` answers `MCP_PATH` and 404s everything else, so a host that multiplexes
+can route with the exported `isMcpPath` first. One SDK `Server` +
+`StreamableHTTPServerTransport` is built **per request** (stateless: the SDK
+requires a fresh transport in that mode, and a discussion's state is the chat).
+
+- `tools/list` → `MCP_TOOLS` verbatim, which is the same table the shim serves
+  offline.
+- `tools/call` → the registry, with `client` captured from `CLIENT_HEADER` in the
+  request closure, `signal` from the SDK's handler extra, and `progress` only
+  when the call carried `_meta.progressToken`.
+- A name that is not in `MCP_TOOL_NAMES` is a JSON-RPC error
+  (`InvalidParams`), not an `isError` result: the specification reserves
+  protocol errors for "errors in finding the tool".
+- `ToolOutcome` `ok` → `{ content: [{ type: 'text', text }], structuredContent }`;
+  not ok → `isError: true` with `"<code>: <message>"`, so the calling model can
+  read the failure and correct itself.
+- `structuredContent` is set only when `structured` is a plain object, because
+  that is all MCP allows there. An array or a primitive is dropped rather than
+  wrapped in an invented key — `text` renders the same value either way. **Tools
+  return objects.**
+- `close()` closes every transport still on the wire, which aborts the tool calls
+  riding on them, and answers 503 to anything that arrives afterwards.
+
+Two behaviours are worth knowing before writing against it:
+
+**Cancellation rides the socket.** A client that cancels sends
+`notifications/cancelled` as its *own* HTTP request, which in stateless mode
+reaches a new `Server` that has never heard of the call it names — so it cannot
+abort it. What does abort a running tool is the caller dropping its HTTP request:
+the response closes, `res.on('close')` closes the transport, and the SDK's
+`Protocol._onclose` aborts every in-flight request handler, which is the `signal`
+in `ToolCallContext`. The shim therefore cancels by abandoning its request
+(closing, or per-call scoping, its `StreamableHTTPClientTransport`), not by
+sending a notification.
+
+**Progress is a counter plus a sentence.** MCP's progress notification carries
+`progress` (a number that must increase) and `message`, and nothing else — so
+`ToolCallContext.progress`'s `round` rides in the message text the watcher writes
+("Round 2 — Ada, Lin") and `progress` counts the updates. A caller that passed no
+`progressToken` gets no callback at all rather than a no-op one, so a tool can
+tell "nobody is listening" from "listening, nothing happened".
+
+### `src/main/mcp-endpoint/tool-types.ts` — and the one seam WP-3 fills
+
+"Frozen contracts" puts `ToolCallContext`, `ToolOutcome` and `ToolRegistry` in
+`tools.ts` beside `createTools()`, and `McpEndpointOptions.tools` defaults to
+`createTools()`. WP-3 writes that file after WP-4, so the three declarations live
+in `tool-types.ts` and `server.ts` imports them from there. When `tools.ts` lands:
+
+1. `export type { ToolCallContext, ToolOutcome, ToolRegistry } from './tool-types'`
+   at the top of `tools.ts`, so the contract reads where it says it reads.
+2. Replace the body of `missingToolRegistry()` in `server.ts` with
+   `return createTools()`. That function currently throws a sentence naming this
+   step — a wiring mistake must not become six tools that answer "unknown tool".
+
+Nothing else in `server.ts` changes.
+
 ## Tests
 
 | File | Covers |
@@ -136,6 +221,9 @@ dropped: the request it would have been reported to is over.
 | `src/main/mcp-endpoint/discussion.test.ts` | Every row of the status table above, through a **real** run (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): consensus → `concluded` with the conclusion's text and author; a `rounds: 1` chain → `ended` with one truncated position per member; the deadline → `running`, then a second watch → the final result; `chat.stop` → `stopped`; a throwing model → `error`; an emitted `permission.requested` → `needs-attention`; abort and `cancel()` → `running`, with the run still finishing afterwards. Plus the `seq`-is-a-position assumption, paging past one page, `afterSeq` scoping, and — in an `afterEach` every case goes through — the event bus ending with as many listeners as it started with |
 | `src/shared/mcp-tools.test.ts` | The wire shape of every `inputSchema`; names against `MCP_TOOL_NAMES`; `start_discussion`'s three refinements; the wait and round bounds; `chatUrl` / `parseChatUrl`; the `z.infer` type test; that the module imports `zod` and nothing else |
 | `src/shared/mcp-discovery.test.ts` | Every way the discovery file can be wrong; `userDataDirFor` with and without the override; that the module stays pure |
+| `src/main/mcp-endpoint/guards.test.ts` | Each guard as a sentence, without a socket: the path claim; any `Origin`; a foreign `Host`, loopback on another port, a missing one; the bearer in every malformed spelling; the order the three run in; a repeated header; the body cap at, one over, and not-JSON |
+| `src/main/mcp-endpoint/server.test.ts` | A real listener driven by the SDK `Client`: `tools/list`; a call arriving with its arguments, `ctx`, `handlers` and `client`; `isError` for a failed outcome and for a tool that throws; a protocol error for an unknown tool; progress relayed in order and absent when unasked; `signal` aborting when a raw `fetch` is abandoned and when a client closes mid-call; `close()` aborting in-flight calls; the five refusals by raw request; `ToolOutcome` → `CallToolResult` without a socket |
+| `src/main/mcp-endpoint/no-electron.test.ts` | The import closure of `src/main/mcp-endpoint/` reaches `app-context.ts` and `chat-runner.ts` and contains no `electron`, in any of its spellings (CLAUDE.md rule 5) |
 
 ## Known limitations and TODOs
 
