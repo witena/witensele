@@ -44,7 +44,9 @@ src/
   renderer/
     index.html
     src/            # pages/, components/, stores/, locales/, lib/
-  shared/           # types.ts, events.ts, backend.ts, mentions.ts, presets.ts, version.ts
+  shared/           # types.ts, events.ts, backend.ts, mentions.ts, presets.ts, version.ts,
+                    # mcp-tools.ts and mcp-discovery.ts (Witena as an MCP server:
+                    # the tool contract and the discovery file, shared with the shim)
 resources/          # Shipped with the build; seeded on first launch (skills/)
 build/              # Packaging inputs: icon.svg, icon.png, icon.icns
 docs/               # PLAN.md, STEPS.md, README.md, features/<feature>/, assets/

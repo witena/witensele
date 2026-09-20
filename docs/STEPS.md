@@ -4072,9 +4072,9 @@ the default `maxWaitSeconds` and the shim's launch timeout are chosen from
 measured numbers, not from memory. Docs: `mcp-endpoint` (context only — the other
 three files say "not built yet").
 
-### S10.1 The endpoint and the discussion tools `[ ]`
+### S10.1 The endpoint and the discussion tools `[~]`
 What: the transport-free core, testable without Electron or a shim.
-- [ ] `src/shared/mcp-tools.ts`: the six tool definitions (name, description,
+- [x] (2026-09-20, WP-1) `src/shared/mcp-tools.ts`: the six tool definitions (name, description,
   JSON Schema input, result types, the `DiscussionStatus` union). Shared because
   the shim serves `tools/list` from it without the app (S10.2). Descriptions are
   written for a model: they say when to call `wait_for_discussion` again and that
@@ -4119,17 +4119,19 @@ question and receives the mock group's conclusion through MCP; `npm test` and
 (nothing changes — say so in one line if the watcher leans on an ordering
 guarantee of `run.finished`).
 
-### S10.2 The shim `[ ]`
+### S10.2 The shim `[~]`
 What: `witena-mcp`, the command an IDE runs.
 - [ ] `src/mcp-shim/`: a low-level SDK `Server` on `StdioServerTransport`.
   `initialize` and `tools/list` answered locally from `@shared/mcp-tools`;
   `tools/call` forwarded through an SDK `Client` +
   `StreamableHTTPClientTransport`, relaying progress and cancellation. Captures
   `clientInfo.name` from `initialize` and sends it as `X-Witena-Client`.
-- [ ] Discovery: `src/shared/mcp-discovery.ts` — the file name, its schema and
+- [~] (2026-09-20, WP-1) Discovery: `src/shared/mcp-discovery.ts` — the file name, its schema and
   the `userData` path rule (honouring `WITENA_USER_DATA`), used by both sides.
+  *(The shared half is done: `DISCOVERY_FILE`, `DISCOVERY_VERSION`,
+  `McpDiscovery`, `parseDiscovery`, `userDataDirFor`.)*
   The shim reads it, checks `pid` is alive, connects; on `ECONNREFUSED` / `401`
-  re-reads once (app restarted) before failing.
+  re-reads once (app restarted) before failing. *(WP-5.)*
 - [ ] Lazy launch (macOS, packaged only): derive the bundle from
   `process.execPath`, `open -g -j -a <bundle> --args --background`, poll for the
   discovery file up to the timeout S10.0 measured. In dev, and when the endpoint
