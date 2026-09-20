@@ -53,6 +53,7 @@ kind of thing that goes stale.
 | `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` and `Witena-0.1.0-x64.dmg` — `${arch}` is what keeps two builds of one version from overwriting each other in `dist/` and in the Release |
 | `publish.provider` | `github` | electron-builder uploads the artifacts itself and writes the `latest-mac.yml` feed S7.4's `electron-updater` reads. `owner` / `repo` are deliberately absent: they are inferred from the checkout's git remote, so a tag pushed on a fork publishes to that fork. The block is also copied verbatim into the bundle as `Contents/Resources/app-update.yml`, which is why it must never gain a `token:` — see "Auto-update" |
 | `publish.releaseType` | `draft` | The review step. CI packages; a human reads the artifacts and presses Publish |
+| `protocols` (S10.3) | `[{ name: Witena chat link, schemes: [witena] }]` | electron-builder writes it into the bundle's Info.plist as `CFBundleURLTypes`, which is what makes LaunchServices hand a `witena://chat/<id>` URL to Witena at all. `app.setAsDefaultProtocolClient('witena')` in `src/main/index.ts` runs in packaged builds only and merely *claims* a scheme the bundle already declares — without this block there is nothing to claim. The scheme has to stay in step with `chatUrl` in `src/shared/mcp-tools.ts`; `src/main/launch-args.test.ts` pins them together. See [`../mcp-endpoint/backend.md`](../mcp-endpoint/backend.md) |
 
 ## The resources path
 

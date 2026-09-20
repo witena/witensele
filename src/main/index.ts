@@ -13,6 +13,7 @@ import { buildHandlers } from './handlers'
 import { createSafeStorageStore } from './ipc/secret-store'
 import { forwardEvents, registerIpc } from './ipc/register'
 import { createElectronUpdater, UPDATE_FEED_ENV } from './ipc/updater'
+import { CHAT_URL_SCHEME, parseLaunchArgs } from './launch-args'
 import { migrateProviderSecrets } from './providers/migrate-secrets'
 import { createFileKeySecretStore, isSignedBuild, rewrapKeyFile, SECRETS_KEY_FILE } from './secrets'
 import { seedSkills } from './skills/loader'
@@ -207,10 +208,131 @@ function createWindow(): BrowserWindow {
   return window
 }
 
+/**
+ * Brings the window forward, creating it if this launch has none (S10.3).
+ *
+ * The single window is a deliberate simplification: `second-instance`, a deep
+ * link and the Dock's `activate` all mean "show me the app", and the app has one
+ * thing to show. `restore` before `show` because a minimized window is visible
+ * to `getAllWindows` but not to the user.
+ */
+function showOrCreateWindow(): BrowserWindow {
+  const existing = BrowserWindow.getAllWindows().find((window) => !window.isDestroyed())
+  if (!existing) return createWindow()
+  if (existing.isMinimized()) existing.restore()
+  existing.show()
+  existing.focus()
+  return existing
+}
+
+/**
+ * A chat link that arrived before the backend existed (S10.3).
+ *
+ * macOS delivers `open-url` to a *cold* process as well as to a running one, and
+ * for the cold case it can fire before `whenReady` — the handler has to be
+ * registered before `ready` to receive it at all. There is no bus to emit on
+ * yet, so the id waits here and the ready handler drains it.
+ */
+let pendingOpenChatId: string | null = null
+
+/**
+ * Asks the window to show a chat, from whichever direction the request came.
+ *
+ * Three subtleties, all of them about timing:
+ *
+ * - **Before the context exists**, the id is buffered rather than dropped. This
+ *   is the cold-launch path, and it is the one that matters most: the app was
+ *   not running when the user clicked the link.
+ * - **The event is emitted after the window has loaded.** `forwardEvents` sends
+ *   to the windows that exist at the moment of the emit, and a window created
+ *   one line earlier has no renderer yet — the event would reach nobody. The
+ *   renderer starts its subscription before the first render, so
+ *   `did-finish-load` is late enough.
+ * - **Nothing here checks that the chat exists.** The main process would have to
+ *   reach past the handlers to find out, and the window can answer the question
+ *   better anyway: it ignores an id it does not know, which is also the right
+ *   answer for a chat that was deleted between the link being written and being
+ *   clicked.
+ */
+function requestOpenChat(chatId: string): void {
+  if (!context) {
+    pendingOpenChatId = chatId
+    return
+  }
+
+  const window = showOrCreateWindow()
+  const deliver = (): void => {
+    context?.events.emit({ type: 'ui.open-chat', chatId })
+  }
+
+  if (window.webContents.isLoading()) window.webContents.once('did-finish-load', deliver)
+  else deliver()
+}
+
 app.setName(APP_NAME)
 applyUserDataOverride()
 
+/** `--background` and a `witena://chat/<id>` argument; see `./launch-args.ts`. */
+const launch = parseLaunchArgs(process.argv)
+
+/**
+ * One app per `userData` directory (S10.3).
+ *
+ * Asked immediately after the override, because WP-0a measured that the lock is
+ * keyed by `userData`: two instances pointed at different directories both get
+ * `true` and run side by side — which is what lets the Playwright specs launch
+ * several apps at once — while a second instance on the same directory gets
+ * `false`. That second instance **never reaches `ready`**; it parks until
+ * something ends it, so `app.quit()` here is the thing that ends it, and nothing
+ * below may be assumed to run in that process.
+ *
+ * It matters now because the app can be started by a machine rather than by a
+ * person: the MCP shim launches it when a coding agent calls a tool, and a
+ * second copy of Witena over the same SQLite file would mean two `ChatRunner`s
+ * on one chat.
+ */
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
+
+/**
+ * Someone tried to start a second copy: they wanted the one that is running.
+ *
+ * The argument vector is the second process's, so a `witena://` link passed on a
+ * command line arrives here rather than through `open-url`.
+ */
+app.on('second-instance', (_event, argv) => {
+  const { openChatId } = parseLaunchArgs(argv)
+  if (openChatId) requestOpenChat(openChatId)
+  else showOrCreateWindow()
+})
+
+/**
+ * The deep link, registered before `ready` because macOS delivers it that early.
+ *
+ * `preventDefault` is what tells Electron the URL has been dealt with. An
+ * unparseable one is still "dealt with" — it is refused silently, because a link
+ * the app does not understand is not a dialog the user asked for.
+ */
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  const { openChatId } = parseLaunchArgs(['', url])
+  if (openChatId) requestOpenChat(openChatId)
+})
+
 void app.whenReady().then(() => {
+  // Belt and braces: WP-0a measured that a second instance for the same
+  // `userData` never gets here at all, and this costs one comparison to make
+  // that a guarantee of this file rather than of a platform note.
+  if (!hasSingleInstanceLock) return
+
+  // Only a packaged build may claim the scheme. In development the "app" is the
+  // electron binary in `node_modules`, and registering it would point every
+  // `witena://` link on the machine at a checkout that moves, gets deleted, or
+  // is a different branch by the time the link is clicked. `protocols` in
+  // `electron-builder.yml` is the other half: LaunchServices reads the bundle's
+  // Info.plist, and this call only claims a scheme the bundle already declares.
+  if (app.isPackaged) app.setAsDefaultProtocolClient(CHAT_URL_SCHEME)
+
   const userDataDir = app.getPath('userData')
   const databasePath = join(userDataDir, DATABASE_FILE)
 
@@ -310,7 +432,12 @@ void app.whenReady().then(() => {
   // working with no listener of our own (see `src/main/ipc/theme.ts`).
   nativeTheme.themeSource = currentThemeSetting()
 
-  createWindow()
+  // `--background` is the shim's launch (S10.3): the app comes up with its Dock
+  // icon, its endpoint and no window, so a tool call from a coding agent never
+  // takes over the screen. Clicking the Dock icon opens the window through the
+  // `activate` handler below, which is the same path a user who closed the
+  // window already takes — there is no second code path and no new UI.
+  if (!launch.background) createWindow()
 
   // After the window, so the `update.available` a launch check can produce
   // reaches a renderer rather than an empty window list. The status is cached
@@ -321,6 +448,14 @@ void app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+
+  // A link that was waiting for the backend, or one that came in on this
+  // launch's own argument vector. Last, so the window it may create is built
+  // after the transport is registered and the theme is set — and so a launch
+  // that is *only* a deep link still gets its window, `--background` or not.
+  const requested = pendingOpenChatId ?? launch.openChatId
+  pendingOpenChatId = null
+  if (requested) requestOpenChat(requested)
 })
 
 app.on('window-all-closed', () => {

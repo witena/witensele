@@ -16,6 +16,12 @@ Three pieces, none of which owns business logic:
 | Endpoint | `src/main/mcp-endpoint/` | Guards, the MCP transport, the tools over `HandlerMap`, the discussion watcher over `EventBus`, the listening host and its discovery file |
 | Shim | `src/mcp-shim/` → `out/mcp-shim/witena-mcp.cjs` | stdio, offline `tools/list`, discovery, lazy launch, forwarding |
 
+A fourth piece is not a layer but a handful of lines in the Electron entry:
+**how the app is started and how a link gets back into it** (WP-8,
+`src/main/launch-args.ts` plus `src/main/index.ts`). It is the only part of this
+feature that is allowed to import electron, which is exactly why it lives
+outside `src/main/mcp-endpoint/` — see "Launch, lock and deep link" below.
+
 ## Data flow
 
 IDE agent → `tools/call` on stdio → shim → (launch the app if needed) → Streamable
@@ -23,6 +29,13 @@ HTTP `POST /mcp` with the bearer token → guards → tool → `watchDiscussion`
 subscribes → `handlers['chat.send']` → `ChatRunner` runs as for any message →
 `run.finished` → `readDiscussion` → `DiscussionResult` → tool result → shim → IDE.
 The window, if open, sees the same events on the same bus.
+
+The way back, which is WP-8's: the tool result carries `chatUrl(chatId)`, and a
+user who clicks it gets `witena://chat/<id>` → LaunchServices → `open-url` (or a
+second launch, whose argv is handed to `second-instance`) → `src/main/index.ts`
+→ show or create the window → `ui.open-chat` on the same bus → the chats store
+selects it. If the app was not running at all, the same link starts it; if it
+was running in the background with no window, the link is what makes one.
 
 ## Key types and contracts
 
@@ -214,6 +227,41 @@ in `tool-types.ts` and `server.ts` imports them from there. When `tools.ts` land
 
 Nothing else in `server.ts` changes.
 
+### Launch, lock and deep link (WP-8)
+
+The only electron-facing part of this feature, and therefore the one that is
+kept as small and as pure as it can be made.
+
+| Export | Where | What it is |
+|---|---|---|
+| `parseLaunchArgs(argv)` | `src/main/launch-args.ts` | `{ background: boolean; openChatId: string \| null }`. Scans every entry after `argv[0]` for the literal `--background` and for the first argument `parseChatUrl` accepts |
+| `BACKGROUND_FLAG` | same | `'--background'`, the flag the shim passes through `open --args` |
+| `CHAT_URL_SCHEME` | same | `'witena'`, for `setAsDefaultProtocolClient` and for `protocols` in `electron-builder.yml` |
+| `UiOpenChatEvent` | `src/shared/events.ts` | `{ type: 'ui.open-chat'; chatId }`, the one event about the interface rather than the data |
+| `ChatsState.applyOpenRequest` | `src/renderer/src/stores/chats.ts` | Selects the chat if this window has it; returns whether it did |
+
+Three things decided here rather than in PLAN:
+
+- **The parser scans, it does not count.** WP-0a measured a packaged launch's
+  argv as exactly `['<bundle>/Contents/MacOS/Witena', '--background']`, while a
+  development launch is given the app directory and whatever switches the
+  Playwright harness adds. Matching the literal flag anywhere after the
+  executable is the one rule that is right for both shapes; a fixed position
+  would be right for one and wrong for the shipped one.
+- **`argv[0]` is never read**, because it is a path the process was started
+  from, never something a user asked for.
+- **The scheme is duplicated, and pinned by a test.** `src/shared/mcp-tools.ts`
+  keeps `CHAT_URL_PREFIX` private, so `index.ts`, `electron-builder.yml` and
+  that module each spell `witena` themselves;
+  `src/main/launch-args.test.ts` asserts that `chatUrl` really writes
+  `${CHAT_URL_SCHEME}://`, which turns a drift into a failing test rather than
+  into a link the app does not answer.
+
+[backend.md](./backend.md) has the ordering rules inside `src/main/index.ts` —
+why the lock is asked for after the `userData` override, and why `ui.open-chat`
+is emitted only once the window has finished loading. [frontend.md](./frontend.md)
+has the renderer's half.
+
 ## Tests
 
 | File | Covers |
@@ -224,6 +272,9 @@ Nothing else in `server.ts` changes.
 | `src/main/mcp-endpoint/guards.test.ts` | Each guard as a sentence, without a socket: the path claim; any `Origin`; a foreign `Host`, loopback on another port, a missing one; the bearer in every malformed spelling; the order the three run in; a repeated header; the body cap at, one over, and not-JSON |
 | `src/main/mcp-endpoint/server.test.ts` | A real listener driven by the SDK `Client`: `tools/list`; a call arriving with its arguments, `ctx`, `handlers` and `client`; `isError` for a failed outcome and for a tool that throws; a protocol error for an unknown tool; progress relayed in order and absent when unasked; `signal` aborting when a raw `fetch` is abandoned and when a client closes mid-call; `close()` aborting in-flight calls; the five refusals by raw request; `ToolOutcome` → `CallToolResult` without a socket |
 | `src/main/mcp-endpoint/no-electron.test.ts` | The import closure of `src/main/mcp-endpoint/` reaches `app-context.ts` and `chat-runner.ts` and contains no `electron`, in any of its spellings (CLAUDE.md rule 5) |
+| `src/main/launch-args.test.ts` | Both argv shapes, the accepted and rejected link forms, and the scheme pin (WP-8) |
+| `src/renderer/src/stores/chats.test.ts` | `describe('ui.open-chat')`: select, ignore, hold until the list lands, drop (WP-8) |
+| `e2e/launch.spec.ts` | `--background` yields no window and `activate` still opens one; a link opens one; two `WITENA_USER_DATA` directories coexist (WP-8) |
 
 ## Known limitations and TODOs
 

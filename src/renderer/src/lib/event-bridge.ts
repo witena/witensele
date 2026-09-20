@@ -22,6 +22,7 @@ import { useMessagesStore } from '../stores/messages'
 import { usePermissionsStore } from '../stores/permissions'
 import { usePresenceStore } from '../stores/presence'
 import { useRunStore } from '../stores/run'
+import { useUiStore } from '../stores/ui'
 import { useUpdatesStore } from '../stores/updates'
 import { useUsageStore } from '../stores/usage'
 import { getBackend } from './backend-provider'
@@ -92,6 +93,16 @@ export function applyBackendEvent(event: BackendEvent): void {
       break
     case 'update.downloaded':
       useUpdatesStore.getState().applyDownloaded(event.version)
+      break
+    // A `witena://chat/<id>` link the operating system handed the app (S10.3) —
+    // the one event that is about the interface rather than the data. The store
+    // decides whether it knows the chat, and only a chat that was really
+    // selected is worth navigating to: a link to something this window does not
+    // have must not take the user off the page they were on.
+    case 'ui.open-chat':
+      if (useChatsStore.getState().applyOpenRequest(event.chatId)) {
+        useUiStore.getState().setPage('chats')
+      }
       break
     // `system.test` belongs to the Developer section, which subscribes itself.
     default:

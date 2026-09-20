@@ -4167,13 +4167,21 @@ What: the app listens, can start in the background, and ships the shim.
   mounting `createMcpEndpoint`, a fresh random token, the discovery file written
   `0600` after `listen` and removed in `before-quit`; toggling the setting starts
   / stops it without a restart.
-- [ ] `app.requestSingleInstanceLock()` after the `WITENA_USER_DATA` override;
+- [x] `app.requestSingleInstanceLock()` after the `WITENA_USER_DATA` override;
   `second-instance` shows / creates the window. `--background` skips
   `createWindow()`; the existing `activate` handler opens it from the Dock.
-- [ ] `witena://chat/<id>`: `protocols` in `electron-builder.yml`,
+  (2026-09-20, WP-8: `src/main/launch-args.ts` + `e2e/launch.spec.ts`. The order
+  matters — S10.0 measured the lock as keyed by `userData`, so asking before the
+  override would make every parallel Playwright run fight over one lock, and the
+  losing instance never reaches `ready`, so `app.quit()` is all it may do.)
+- [x] `witena://chat/<id>`: `protocols` in `electron-builder.yml`,
   `setAsDefaultProtocolClient`, `open-url` (and the `second-instance` argv) →
   show the window and emit a new `ui.open-chat` event on the bus; the renderer
-  navigates on it through `BackendClient.subscribe` (rule 6).
+  navigates on it through `BackendClient.subscribe` (rule 6). (2026-09-20, WP-8.
+  `setAsDefaultProtocolClient` in packaged builds only; the emit waits for the
+  window's `did-finish-load`, and the chats store holds an id that arrives
+  before `chats.list` answers. An id the list does not have is ignored with no
+  error.)
 - [ ] Packaging: `out/mcp-shim/witena-mcp.cjs` → `Contents/Resources/mcp/`, and a
   `Contents/Resources/bin/witena-mcp` POSIX launcher that resolves the bundle
   from its own path and `exec`s the app binary with `ELECTRON_RUN_AS_NODE=1`.
