@@ -506,3 +506,39 @@ would otherwise have to rediscover:
   discussion that is still going when the next MCP call arrives. Waiting for the
   watcher to subscribe is then `expect.poll` over the counting bus's listener
   count, not a sleep.
+
+## End to end through the shim (WP-10)
+
+`e2e/mcp-endpoint.spec.ts` adds no surface either. It is the first file in which
+a real app and the real `out/mcp-shim/witena-mcp.cjs` meet: the app is launched
+by `e2e/helpers.ts` against a temporary `userData`, the endpoint is switched on
+through `settings.update` from inside the page — there is no launch-time
+override, and the toggle being live is what WP-7 promised — and the shim is
+spawned with the same `WITENA_USER_DATA` by the SDK's `StdioClientTransport`.
+Three things it settled that a later package would otherwise have to rediscover:
+
+- **The shim is spawned with plain `node`, never with a bundle.** That is how
+  `shim.spawn.test.ts` runs it and it is a safety property, not a convenience:
+  under bare `node` `bundlePathFor` answers `null`, so a shim that fails to find
+  the endpoint *reports* it instead of `open`ing a second Witena on a machine
+  several agents share. WP-9, whose launcher exists so that `execPath` is the
+  bundle, is therefore the package that proves lazy launch, and it proves it in
+  `e2e/packaged.spec.ts`.
+- **An unpackaged, Playwright-launched app writes `SingletonLock` into the
+  overridden `userData`**, so with the switch off the shim answers
+  `endpoint-off` and not `not-running`. The spec asserts that one sentence
+  rather than accepting either: which of the two a user is shown decides whether
+  they go looking for a switch or for an app. It is the same file WP-5's unit
+  test fakes with a `symlink`, here written by Chromium because the app really
+  is holding the lock on that directory (WP-8).
+- **The discovery file is the handshake the spec waits on.** `settings.update`
+  resolves before `listen` does, so every step that needs the door open polls
+  `<userData>/mcp-endpoint.json` — it appears within a few hundred milliseconds
+  of the switch and is gone again when it is thrown back, which is the whole of
+  what a separate process can observe about `host.ts`.
+
+The discussion itself needs no model: the seeded agent's provider is a closed
+port, the call passes `maxWaitSeconds: MIN_WAIT_SECONDS`, and what is asserted
+is that the question reached the open window's transcript — the MCP call and the
+renderer meeting on one event bus. Any `status` is accepted, because which one
+comes back is `discussion.ts`'s subject and is pinned by `contract.test.ts`.
