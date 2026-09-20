@@ -170,7 +170,11 @@ function renderNotice(part: SystemNoticePart): string | null {
  * repeating the arguments doubles the cost of every tool the chat ever used.
  * A `conclusion` (S5.16) is left out because it is a **flag**: the model reads
  * the conclusion's text like any other message and must never be shown the mark
- * the UI puts on it, or it learns to write one.
+ * the UI puts on it, or it learns to write one. An `origin` (S10.4) is left out
+ * for that reason and one of its own — whether the human typed the question or
+ * an IDE sent it on their behalf is a fact about the *transcript*, not about the
+ * question, and a group told that a machine is asking would start answering a
+ * different question than the one it was handed.
  *
  * Two rules applied while rendering:
  *

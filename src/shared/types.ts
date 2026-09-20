@@ -643,6 +643,40 @@ export interface ConclusionPart {
   type: 'conclusion'
 }
 
+/**
+ * The mark on a user message a tool sent on the user's behalf (S10.4).
+ *
+ * The transcript has to say what a human typed and what an IDE typed for them.
+ * A question that arrived through the MCP endpoint is an ordinary user message —
+ * the runner schedules it, the agents read it, the composer could have produced
+ * the same row — and after the fact the difference is the answer to "why is
+ * there a discussion here I do not remember starting".
+ *
+ * A **flag part**, for the reasons `ConclusionPart` is one: `parts` is the open,
+ * migration-free place where a message says what it is made of, so a new member
+ * of this union costs no schema change and a row written before S10.4 simply has
+ * none. Stored **first** in `parts`, and only ever on a `user` message.
+ *
+ * `client` is **display data from an untrusted header**. The shim fills it from
+ * the calling IDE's `initialize.clientInfo.name`, a string that client chose, so
+ * the `chat.send` handler trims it, strips control characters and caps it at
+ * `MAX_ORIGIN_CLIENT_CHARS` before it is stored. Nothing branches on its value:
+ * it is rendered inside a chip and read nowhere else.
+ *
+ * Everything that reads a message treats it as invisible unless it is looking
+ * for it: `partsToText` (the history transform) skips it, so the model is never
+ * told which of the user's questions a machine asked; `messageText` in the
+ * renderer skips it, so it is never drawn as text.
+ */
+export interface OriginPart {
+  type: 'origin'
+  /** The calling client's own name, sanitised. Never empty. */
+  client: string
+}
+
+/** How much of an `OriginPart.client` survives sanitising. See `OriginPart`. */
+export const MAX_ORIGIN_CLIENT_CHARS = 40
+
 /** Everything a message can be made of, discriminated on `type`. */
 export type MessagePart =
   | TextPart
@@ -652,6 +686,7 @@ export type MessagePart =
   | DiffPart
   | FileRefPart
   | ConclusionPart
+  | OriginPart
   | SystemNoticePart
 
 /** Token accounting for one message, as reported by the provider. */

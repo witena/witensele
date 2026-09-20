@@ -129,6 +129,7 @@
     "stop": "停止",
     "round": "第 {{round}} 轮",
     "replyingTo": "回复 {{names}}",
+    "viaClient": "来自 {{client}}",
     "runStatus": "第 {{round}} 轮 · {{speakers}} 发言中",
     "usage": "{{tokens}} 个 token",
     "usageWithCost": "{{tokens}} 个 token · {{cost}}",

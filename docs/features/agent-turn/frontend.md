@@ -82,6 +82,13 @@ than a summary with a request attached — and the rows that follow it, which
 to an automatic delivery carries no `ConclusionPart`: only the `closing` turn is
 flagged, whatever comes after it.
 
+S10.4 changes nothing this feature draws either, and that is the point of it: a
+question an IDE sent through the MCP endpoint reaches a turn as an ordinary user
+message, because `partsToText` does not render its `OriginPart` and nothing in
+the prompt mentions it. The "via {{client}}" chip the user sees is drawn from the
+same flag by [`chats`](../chats/frontend.md), on the message row, never from
+anything a turn produced.
+
 The group briefing and the system prompt never reach the renderer at all: they
 are model-facing text, which is exactly why `briefing.zh-CN.ts` is a `.ts` file
 rather than a locale entry (see [`backend.md`](./backend.md)). Neither do the

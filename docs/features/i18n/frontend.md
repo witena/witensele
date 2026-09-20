@@ -146,6 +146,12 @@ that had instead stored the label would have frozen it in the language that was
 active when the discussion closed — the same argument that makes every
 `SystemNoticePart` a key.
 
+S10.4 adds the case where a flag part carries a value: `OriginPart` holds the
+calling client's name, and the chip is `t('chat.viaClient', { client })` — the
+word is copy, the name is data. It is the smallest example in the codebase of the
+division this section is about, and it is on the data side for the usual reason:
+`claude-code` is not a sentence anybody wrote, it is what a program calls itself.
+
 Two runtime keys now exist, and both are checked in `locales.test.ts` rather
 than by the usage guard, which cannot see a key that is assembled:
 `settings.mcp.presets.<id>` (S5.1) and `agents.templates.<id>` (S7.5). Each is

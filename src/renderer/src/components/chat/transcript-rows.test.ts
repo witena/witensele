@@ -15,6 +15,7 @@ import {
   countDiffLines,
   formatFileRef,
   isConclusion,
+  originClient,
   dayBucket,
   startOfDay
 } from './transcript-rows'
@@ -126,6 +127,26 @@ describe('buildTranscriptRows', () => {
       ['conclusion', true]
     ])
   })
+
+  it('names the client on the row of a message an IDE sent (S10.4)', () => {
+    const typed = message('typed', NOW)
+    const viaIde = {
+      ...message('via-ide', NOW),
+      parts: [
+        { type: 'origin' as const, client: 'claude-code' },
+        { type: 'text' as const, text: 'Why is this slow?' }
+      ]
+    }
+
+    const rows = buildTranscriptRows([typed, viaIde], NOW)
+
+    expect(
+      rows.filter((row) => row.kind === 'message').map((row) => [row.message.id, row.viaClient])
+    ).toEqual([
+      ['typed', null],
+      ['via-ide', 'claude-code']
+    ])
+  })
 })
 
 describe('isConclusion', () => {
@@ -134,6 +155,43 @@ describe('isConclusion', () => {
     expect(isConclusion([{ type: 'text', text: 'x' }, { type: 'conclusion' }])).toBe(true)
     expect(isConclusion([{ type: 'text', text: 'x' }])).toBe(false)
     expect(isConclusion([])).toBe(false)
+  })
+})
+
+describe('originClient (S10.4)', () => {
+  it('reads the flag wherever it sits, and says nothing when there is none', () => {
+    expect(originClient([{ type: 'origin', client: 'codex' }, { type: 'text', text: 'x' }])).toBe(
+      'codex'
+    )
+    expect(originClient([{ type: 'text', text: 'x' }, { type: 'origin', client: 'codex' }])).toBe(
+      'codex'
+    )
+    expect(originClient([{ type: 'text', text: 'x' }])).toBeNull()
+    expect(originClient([])).toBeNull()
+  })
+
+  it('treats an empty client name as no flag', () => {
+    // Nothing writes one — the handler drops an origin whose name sanitises to
+    // nothing — but a chip reading "via" with a blank after it would say less
+    // than no chip, so the row model refuses it rather than the component.
+    expect(originClient([{ type: 'origin', client: '' }, { type: 'text', text: 'x' }])).toBeNull()
+  })
+
+  it('takes the first flag when a row somehow carries two', () => {
+    expect(
+      originClient([
+        { type: 'origin', client: 'claude-code' },
+        { type: 'origin', client: 'codex' },
+        { type: 'text', text: 'x' }
+      ])
+    ).toBe('claude-code')
+  })
+
+  it('does not confuse the two flag parts', () => {
+    expect(originClient([{ type: 'conclusion' }, { type: 'text', text: 'x' }])).toBeNull()
+    expect(isConclusion([{ type: 'origin', client: 'codex' }, { type: 'text', text: 'x' }])).toBe(
+      false
+    )
   })
 })
 

@@ -112,6 +112,11 @@
  *   once and the run closes with `voteClosed`. The cap is checked at the *end*
  *   of a round as well as at the top of one, because a vote whose answers
  *   mention nobody would otherwise end in silence.
+ * - **A message may say a tool sent it** (S10.4). `ChatSendInput.origin` becomes
+ *   an `OriginPart` in front of the user message's text and changes nothing else
+ *   about the run: the MCP endpoint's question is scheduled, mentioned and
+ *   answered exactly like a typed one, and the flag exists so the transcript can
+ *   later say which IDE asked. See `originParts`.
  *
  * - **Three things are announced by the runner rather than by the turn** (S4.2,
  *   S4.3, S5.11), because each is a fact about a *run* and `AgentTurn` does not
@@ -128,7 +133,14 @@
 import type { BackendEvent, RunFinishReason } from '@shared/events'
 import { closureMarker } from '@shared/markers'
 import { parseMentions } from '@shared/mentions'
-import { HANDOFF_INTENTS, type Agent, type Chat, type HandoffIntent, type Message } from '@shared/types'
+import {
+  HANDOFF_INTENTS,
+  type Agent,
+  type Chat,
+  type HandoffIntent,
+  type Message,
+  type MessagePart
+} from '@shared/types'
 import type { AppContext } from '../app-context'
 import {
   createModelFromRegistry,
@@ -282,6 +294,18 @@ export interface ChatSendInput {
    * to `chat.settings.maxAutoRounds`.
    */
   rounds?: number
+  /**
+   * Who sent this message on the user's behalf (S10.4), when it was not the
+   * human at the composer.
+   *
+   * Stored verbatim as the message's `OriginPart`, and read by nothing here: the
+   * scheduling, the mentions, the round and the pending list are identical
+   * either way, because a question asked through the MCP endpoint *is* a user
+   * message. `client` has already been sanitised by the `chat.send` handler when
+   * it reaches the runner — see `OriginPart` — so this layer neither trims it
+   * nor has to decide what an empty client name would mean.
+   */
+  origin?: { client: string }
 }
 
 export interface ChatRunnerOptions {
@@ -421,7 +445,13 @@ export class ChatRunner {
         chatId: chat.id,
         senderType: 'user',
         senderId: this.#ctx.userId,
-        parts: [{ type: 'text', text }],
+        // S10.4: the origin flag goes **first**, where `markConclusion` puts the
+        // other flag part, so a reader that only wants the body can stop at the
+        // first `text` part. It is written only for a message a tool sent — a
+        // message the human typed carries no mark, because "nobody sent this for
+        // me" is the ordinary case and an `origin: 'user'` on every row would be
+        // a word the transcript repeats forever to say nothing.
+        parts: originParts(input.origin, text),
         status: 'done',
         // 0 = outside a run; rounds are 1-based and belong to the agents.
         round: 0,
@@ -1291,6 +1321,21 @@ export class ChatRunner {
       .listMembers(chat.id, this.#ctx.userId)
       .map((member) => this.#ctx.repos.agents.get(member.agentId, this.#ctx.userId))
   }
+}
+
+/**
+ * The parts of a user message: its text, behind an `OriginPart` when a tool sent
+ * it (S10.4).
+ *
+ * The flag is **first**, which is where `markConclusion` puts the other flag
+ * part, so the body is always the parts from the first `text` onwards. A message
+ * the human typed gets no flag at all: "nobody sent this for me" is the ordinary
+ * case, and a mark on every row would be a word the transcript repeats forever
+ * to say nothing.
+ */
+function originParts(origin: ChatSendInput['origin'], text: string): MessagePart[] {
+  const body: MessagePart = { type: 'text', text }
+  return origin === undefined ? [body] : [{ type: 'origin', client: origin.client }, body]
 }
 
 /**

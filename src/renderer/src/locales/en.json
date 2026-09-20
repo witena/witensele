@@ -129,6 +129,7 @@
     "stop": "Stop",
     "round": "Round {{round}}",
     "replyingTo": "Replying to {{names}}",
+    "viaClient": "via {{client}}",
     "runStatus": "Round {{round}} · {{speakers}} speaking",
     "usage": "{{tokens}} tokens",
     "usageWithCost": "{{tokens}} tokens · {{cost}}",
