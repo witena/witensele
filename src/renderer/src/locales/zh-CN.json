@@ -535,7 +535,9 @@
     "goal_material_not_relative": "参考材料必须是工作目录里的相对路径。",
     "goal_material_outside_workdir": "这个路径不在本群的工作目录里。",
     "goal_material_missing": "这份材料已经不在了。",
-    "goal_needs_workdir": "请先为这个群选一个工作目录。"
+    "goal_needs_workdir": "请先为这个群选一个工作目录。",
+    "integrations_no_launcher": "当前构建没有随附启动器，因此没有可以交给客户端的命令。请改用下方的配置片段。",
+    "integrations_client_not_installed": "这台机器上没有安装该客户端。"
   },
   "notices": {
     "agentSkipped": "{{agent}} 本轮没有响应，已被跳过",

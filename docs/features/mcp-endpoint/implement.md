@@ -1,8 +1,8 @@
 # mcp-endpoint — Implementation
 
 > Partly built. `backend.md`'s table is the authority on which work package has
-> landed; the Integrations settings (WP-11, WP-12) are still to come. The design
-> is PLAN.md
+> landed; the Integrations *section* (WP-12) is still to come, its backend
+> (WP-11) is here. The design is PLAN.md
 > "Witena as an MCP server (the MCP endpoint)"; the types every package codes
 > against are under "Frozen contracts" in [`tasks.md`](./tasks.md). Each work
 > package replaces part of this file with what it actually built.
@@ -523,6 +523,74 @@ provenance go looking for the mark.
 The caller of that tool is the client that sent the question, so telling it that
 it was the one asking is a line of noise in a transcript it pays for by the token.
 
+
+## Integrations (WP-11) — `src/main/integrations/ide-clients.ts`
+
+The capability and the policy are deliberately two modules. `ide-clients.ts`
+knows *how to talk to* `claude` and `codex` and nothing about Witena's rules;
+`src/main/handlers/integrations.ts` knows the rules and nothing about argument
+vectors. The seam between them is four methods, and it is the seam every test
+injects across.
+
+```ts
+export interface IdeClients {
+  detect(id: IdeClientId): Promise<boolean>
+  registered(id: IdeClientId): Promise<string | null>
+  register(id: IdeClientId, command: string): Promise<void>
+  unregister(id: IdeClientId): Promise<void>
+}
+export function createIdeClients(options?: IdeClientsOptions): IdeClients
+/** Nothing installed, and a refusal for anything that would write. */
+export function absentIdeClients(): IdeClients
+```
+
+| Export | What it is |
+|---|---|
+| `ExecFileFn`, `ExecResult`, `defaultExecFile` | The one capability the module takes by injection. It **resolves for a non-zero exit** rather than rejecting, because a non-zero exit is an answer here: `claude mcp get witena` exits 1 to say "nothing is registered". It rejects only for a binary that could not be run or one that outran `IDE_CLIENT_TIMEOUT_MS` |
+| `newestVersionFirst(names)` | Version directory names ordered numerically, segment by segment. A string sort puts `2.1.9` above `2.1.10` and `2.1.30` above `2.1.275`; a non-numeric name sorts last rather than being dropped |
+| `claudeCodeDirs(home)` | The globbed `…/claude-code/<version>/claude.app/Contents/MacOS` candidates, newest first, and `[]` when the root is not there |
+| `parseClaudeCommand(result)` | `  Command: <path>` out of `claude mcp get`'s indented `Label: value` block. `null` for a non-zero exit, so "not registered" is never mistaken for an empty command |
+| `parseCodexCommand(result)` | The `witena` entry of `codex mcp list --json`, found **by name**. Unparsable output degrades to `null` rather than throwing — the settings section has to draw something |
+| `isIdeClientId(value)` | The runtime narrowing the handler validates its input with |
+| `IdeClientsOptions` | `execFile`, `env`, `home`, `fallbackDirs` (per client), `timeoutMs` — everything the module reaches the outside world through, so a test reaches none of it |
+
+`IdeClientsOptions.fallbackDirs` exists for exactly one test: *no binary
+anywhere*. The environment overrides cannot express it, because
+`/Applications/ChatGPT.app` really is on a machine that has ChatGPT installed,
+and a suite whose result depended on that would be no suite at all.
+
+The two CLIs' differences are a `Record<IdeClientId, IdeClientCli>` of six
+fields — binary name, override variable, install locations, and the three
+argument vectors — so adding a third client is one entry there, one entry in
+`IDE_CLIENT_IDS`, and nothing else.
+
+### `src/main/handlers/integrations.ts`
+
+`integrations.status` builds `IntegrationStatus` by asking, per client, `detect`
+and then — only if installed — `registered`; `stale` is
+`launcherPath !== null && command !== launcherPath`. `endpoint` comes from two
+different places on purpose: `enabled` from the settings row, `listening` / `port`
+from `ctx.mcpEndpoint?.state`.
+
+`integrations.connect` is the whole of the button:
+
+1. `readClientId(input)` — an unknown id is a client bug, so a plain `validation`.
+2. `ctx.mcpLauncherPath === null` → `validation` with `integrations_no_launcher`,
+   before anything is spawned or stored.
+3. `detect` false → `validation` with `integrations_client_not_installed`.
+4. `handlers['settings.update'](ctx, { patch: { mcpEndpoint: { enabled: true } } })`
+   — the handler, not the repository, because storing the row *and* starting the
+   host idempotently is that handler's side effect (WP-7). It is reached as
+   `settingsHandlers['settings.update']`: `buildHandlers()` is assembled *from*
+   this module, so asking the built map for a sibling would be a cycle.
+5. `registered` → equal to the launcher: do nothing; different: `unregister`
+   then `register`; absent: `register`. `mcp add` over an existing name is an
+   error in both CLIs, which is why a repair is never an overwrite.
+6. Re-read and return the status.
+
+`integrations.disconnect` refuses a client that is not installed, unregisters
+only when something is registered, and leaves the endpoint listening.
+
 ## Tests
 
 | File | Covers |
@@ -538,6 +606,8 @@ it was the one asking is a line of noise in a transcript it pays for by the toke
 | `e2e/launch.spec.ts` | `--background` yields no window and `activate` still opens one; a link opens one; two `WITENA_USER_DATA` directories coexist (WP-8) |
 | `src/main/mcp-endpoint/tools.test.ts` | All six against a **real** backend (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): each tool's happy path; name resolution by id, by name and by case, ambiguous and unknown; an executor refused; `busy` on a chat that is still talking; both caps; a relative and a missing `workdir` (and that neither left a chat behind); a `chat.send` that fails releasing the watcher; `wait_for_discussion` on an idle chat with and without a conclusion, and giving up at the deadline; `get_discussion` both details and `afterMessageId`; `stop_discussion` running and idle; `not_found` surfacing as `not_found`; and, for every tool, that garbage arguments are refused rather than thrown. In `afterEach`: the bus ends with as many listeners as it started with |
 | `src/main/mcp-endpoint/contract.test.ts` | The two halves together (WP-6), which no other file does: a real `AppContext`, the real `buildHandlers()`, the real `ChatRunner` against a `MockLanguageModelV4`, and `createMcpEndpoint({ ctx, handlers, token })` **without** `tools` — so the registry is the real `createTools()` — on an ephemeral port, driven by the SDK `Client`. `tools/list`; `list_agents` → `start_discussion({ agents: ['Ada', 'lin'] })` → `concluded` with the mock's text, no `[AGREED]` on either half of the result → `list_chats` finds the chat under the question's first line → `get_discussion` `transcript` has both names and the `context` that was sent. Then the status mapping of "Frozen contracts" row by row, each through the socket: `concluded`; `rounds: 1` → `ended` with one position per member; a wait in flight when `stop_discussion` lands → `stopped`; a throwing provider → `error`; an emitted `permission.requested` → `needs-attention` with the run still live; `maxWaitSeconds: MIN_WAIT_SECONDS` → `running` and the next `wait_for_discussion` → the conclusion. Plus a validation refusal arriving as `isError` `"validation: …"` with no `structuredContent`, and 401 / 403 from the real door. The counting bus rides along in `afterEach` |
+| `src/main/integrations/ide-clients.test.ts` | The real implementation with **no CLI ever run** (WP-11): `newestVersionFirst` against both directions a string sort gets wrong; `claudeCodeDirs` over a temporary home and over a machine that never installed it; `detect` confirming with `--version` and reading three kinds of no; the exact argument vector of each of the six commands, with a launcher path containing a space kept as one argument; `claude mcp get`'s exit 1 read as "not registered"; Codex's entry found by name among plugin-injected servers; both parsers degrading to `null` on output they do not recognise; a CLI that refused surfacing as `internal` with its own words; and a missing binary carrying `integrations_client_not_installed` |
+| `src/main/handlers/integrations.test.ts` | The policy over a stateful fake `IdeClients` that records every call in order (WP-11): a machine with neither client, asked once each and no more; installed separated from connected; a registration naming another installation flagged `stale`, and never flagged in a build with no launcher; `enabled` and `listening` disagreeing honestly; `connect` opening the endpoint **before** it registers, leaving an already-correct client completely alone, and repairing a stale one by removing and adding; both refusals touching neither the CLI nor the settings row; `disconnect` idempotent and leaving the endpoint up; and the default test context — `absentIdeClients()` — answering as the Node host does |
 | `src/main/mcp-endpoint/host.test.ts` | The host as a separate process meets it (WP-7): nothing listens until asked; `start()` publishes a port, a 32-byte token and this pid, mode `0600`; the published port answers `tools/list` through the SDK client with the token and `401` without; a fresh token on every start; `stop()` takes the file and the port away; both calls idempotent, and two overlapping `start()`s leave one socket; a discovery file naming another pid is neither deleted nor trusted; the injected `randomToken` / `pid` |
 | `src/main/handlers/settings.test.ts` | The row and the toggle (WP-7): the defaults, `mcpEndpoint.enabled` false, a row written before S10.3 gaining the group switched off, a patch merging rather than replacing, every malformed `mcpEndpoint` patch refused *before* the write, a context with no host storing the switch anyway, a fake host started and stopped as the switch is thrown, a patch about something else leaving it alone, and a `start()` that throws still storing the row |
 | `src/main/mcp-endpoint/transcript.test.ts` | The rendering, from hand-built rows: the header shape, the conclusion mark, a tool call on one line and a failed one marked, reasoning and `[AGREED]` absent, `passed` / `skipped` / `error` in the header, a notice as its key, an unnamed agent as its id, and an empty transcript saying so |

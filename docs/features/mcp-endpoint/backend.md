@@ -13,7 +13,7 @@
 | `src/main/mcp-endpoint/host.ts`, `AppSettings.mcpEndpoint` | WP-7 `[x]` (2026-09-20) |
 | Single-instance lock, `--background`, `witena://`, `ui.open-chat` | WP-8 `[x]` (2026-09-20) |
 | `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 `[x]` (2026-09-20) |
-| `integrations.*` handlers over an injected `IdeClients` | WP-11 |
+| `src/main/integrations/ide-clients.ts`, `integrations.*` handlers | WP-11 `[x]` (2026-09-20) |
 | `OriginPart`, `ChatSendInput.origin` | WP-13 `[x]` (2026-09-20) |
 
 Nothing under `src/main/mcp-endpoint/` or `src/mcp-shim/` imports electron; a
@@ -654,3 +654,151 @@ signed copy of the app with a fresh `WITENA_USER_DATA`, which is the Keychain
 prompt WP-0a measured (`context.md`, "What the spike found", item 2). The place
 it will finally be exercised is S10.7's README procedure, followed by hand
 against the **installed** app, where the prompt does not arise.
+
+## Integrations: the endpoint's two buttons (WP-11)
+
+The last backend piece, and the first one a *user* touches: three methods that
+answer "what is on this machine, and point one of them at me".
+
+| Surface | Where |
+|---|---|
+| `IdeClientId`, `IdeClientStatus`, `IntegrationStatus`, `IDE_CLIENT_IDS` | `src/shared/types.ts` |
+| `integrations.status` / `.connect` / `.disconnect` | `src/shared/backend.ts` (+ `BACKEND_METHODS`) |
+| `IdeClients`, `createIdeClients`, `absentIdeClients` | `src/main/integrations/ide-clients.ts` |
+| The policy — what "connected", "stale" and "connect" mean | `src/main/handlers/integrations.ts` |
+| `AppContext.ideClients`, `AppContext.mcpLauncherPath` | `src/main/app-context.ts` |
+
+Nothing new crosses a transport by hand: the preload bridge, `registerIpc` and
+`src/server/http.ts` all derive their method list from `BACKEND_METHODS`, so the
+three are reachable over IPC and over `POST /api/integrations.*` the moment they
+are declared.
+
+### Why the CLIs and not the two configuration files
+
+Claude Code keeps its MCP servers in the `mcpServers` object of
+`~/.claude.json`; Codex keeps them in `[mcp_servers.<name>]` of
+`~/.codex/config.toml`. Writing either directly is two filesystem calls, and it
+is not done, because **those files belong to somebody else**. WP-0b measured
+`codex mcp add` rewriting the whole of `config.toml` and normalising unrelated
+entries as it went (`120` became `120.0`; an `args = []` line disappeared), with
+the Codex application holding the file open the entire time. A third party
+editing that file is a corruption waiting for a race. The CLI is the interface
+its author supports and the thing that gets updated when the format changes.
+
+### The vectors, exactly as WP-0b measured them
+
+Argument vectors, never a shell line — the launcher's path can contain spaces
+(`/Applications/My Apps/Witena.app/…`) and a vector cannot be re-split.
+
+| | Claude Code | Codex |
+|---|---|---|
+| installed | `claude --version` | `codex --version` |
+| read | `claude mcp get witena` | `codex mcp list --json` |
+| register | `claude mcp add witena --scope user -- <launcher>` | `codex mcp add witena -- <launcher>` |
+| unregister | `claude mcp remove witena -s user` | `codex mcp remove witena` |
+
+Four findings decide those four cells:
+
+- **Claude Code has no `--json`.** `mcp get` prints a block of two-space-indented
+  `Label: value` lines, so `  Command: <path>` is parsed out of it
+  (`parseClaudeCommand`). Its *exit status* is the primary answer: `1` with *No
+  MCP server named "witena"* means "not registered", which is a state and not a
+  failure — hence `ExecFileFn` resolving for a non-zero exit instead of throwing.
+- **Codex's human output masks env values** as `*****`, so only `--json` may be
+  parsed. `mcp list --json` also reports servers injected by Codex plugins that
+  are in no configuration file at all, so the entry is found **by name** and
+  nothing is inferred from the order or the count.
+- **`codex mcp add` has no scope flag** — it is always global. `claude mcp add`
+  needs `--scope user`, or the registration lands in whatever directory the
+  process happened to be in.
+- **`claude` is a multi-call executable**, so a file being at the expected path
+  is not proof that it is the CLI. `detect` confirms with `--version`.
+
+The read costs a child process per client per call, and `claude mcp get`
+health-checks the server it finds — which spawns *our* shim. That is affordable
+because the shim answers `initialize` and `tools/list` offline in milliseconds
+and never launches the app on that path (WP-5); it is also why a client that
+answered `--version` with a failure is never asked a second question.
+
+### Finding the binaries
+
+Neither CLI is on the `PATH` of a packaged Electron app, and WP-0b found neither
+on the *login* shell's `PATH` either. The search is the one
+`src/main/providers/cli-process.ts` already does for `ant` and `gcloud` —
+`resolveCliBinary`, reused rather than copied:
+
+| Step | Claude Code | Codex |
+|---|---|---|
+| override | `WITENA_CLAUDE_BIN` | `WITENA_CODEX_BIN` |
+| then | `PATH` | `PATH` |
+| then | `~/Library/Application Support/Claude/claude-code/<version>/claude.app/Contents/MacOS`, versions globbed and sorted **numerically** highest-first | `/Applications/ChatGPT.app/Contents/Resources` |
+| else | `installed: false` | `installed: false` |
+
+`newestVersionFirst` compares segment by segment as numbers, because a string
+sort puts `2.1.9` above `2.1.10` and `2.1.30` above `2.1.275` — both wrong, in
+opposite directions. A directory whose name is not a version sorts last rather
+than being dropped.
+
+### The policy, in the handler
+
+```
+status      → per client: detect → (if installed) registered → stale?
+connect     → launcher? → installed? → settings.update(enabled: true) → repair-or-register
+disconnect  → installed? → (if registered) unregister
+```
+
+| Rule | Why |
+|---|---|
+| `connect` enables the endpoint, through `handlers['settings.update']` and **before** it registers anything | An IDE pointed at a closed door is never what the button meant, and the toggle's side effect — storing the row *and* starting the host, idempotently — lives in that handler (WP-7). Registering first would leave a window in which the client exists and its first tool call fails |
+| `enabled` and `listening` are two fields | The row is the user's intent; `ctx.mcpEndpoint?.state` is what this process is doing. `ctx.mcpEndpoint` is `null` on the Node host and in every test, so the two honestly disagree there, and one "on" would have to lie about one of them |
+| `connect` repairs: a command that is not this launcher is **unregistered and registered again** | `mcp add` over an existing name is an error in both CLIs, so a repair cannot be an overwrite. Making Repair the same call as Connect means the two cannot drift |
+| A client already registered with this launcher is left completely alone | Idempotence, and the same CLI error avoided |
+| `disconnect` leaves the endpoint listening | Another client, or a hand-written configuration, may still be pointed at it. The switch is how the user closes the door |
+| `disconnect` on a client with nothing registered resolves | "Nothing registered" is the state the caller asked for |
+| `stale` is `false` whenever `launcherPath` is `null` | A checkout has nothing to compare against, and calling a hand-written `node …/witena-mcp.cjs` stale would offer a Repair that could only fail |
+| `status` never rejects for a state | Not installed, not connected and endpoint-off are the three things the section exists to draw |
+
+### The two refusals, and why they are reasons
+
+Both are `validation` with a `ValidationReason` in `details`, so the sentence is
+written in the renderer (CLAUDE.md rule #4):
+
+| Reason | Raised when |
+|---|---|
+| `integrations_no_launcher` | `connect` in a build that ships none — a development checkout, the Node host. Nothing is spawned and the setting is not touched |
+| `integrations_client_not_installed` | `connect` / `disconnect` for a client whose CLI is absent. Also carried by `createIdeClients`'s own binary-search failure, so a client that disappears between `detect` and the next call is still reported as the state it is in |
+
+A CLI that ran and refused (`already exists`, a bad flag) is `internal` with the
+CLI's own `stderr` quoted and bounded at 200 characters — the developer-facing
+detail line beside the generic sentence, which is where text a *third party*
+wrote belongs.
+
+### On the Node host
+
+`src/server/context.ts` passes neither option, so `mcpLauncherPath` is `null`
+and `ideClients` is the real implementation finding nothing on a machine that is
+not this Mac. `status` answers — `{ enabled, listening: false, launcherPath:
+null, clients: [not installed, not installed] }` — and `connect` refuses with
+`integrations_no_launcher`, which is the truth: a server has no local IDE to
+install itself into, and PLAN.md's "Online version" serves MCP over its own
+routes rather than a discovery file.
+
+### Tests, and the rule they exist to keep
+
+**`npm test` must never run a real `claude` or `codex` with `mcp add` or
+`mcp remove`**, because those write `~/.claude.json` and `~/.codex/config.toml`,
+which belong to whoever is running the suite. Three things enforce it:
+
+- `createTestAppContext` injects `absentIdeClients()` by default, exactly as it
+  injects `absentAnthropicCli()`.
+- `src/main/integrations/ide-clients.test.ts` drives the real implementation
+  through an **injected `execFile` that only records**, and pins the binary
+  search with `WITENA_CLAUDE_BIN` / `WITENA_CODEX_BIN`, which
+  `resolveCliBinary` returns without an existence check. The one case that is
+  about *no binary anywhere* also empties Codex's fallback directory, because
+  `/Applications/ChatGPT.app` really is there on a machine that has ChatGPT and
+  the suite must not depend on whose laptop it runs on.
+- `src/main/handlers/integrations.test.ts` uses a stateful fake `IdeClients` that
+  records `detect:`/`registered:`/`register:`/`unregister:` calls in order — the
+  only way to assert that connect does nothing when it is already right, and
+  removes before adding when it is not.

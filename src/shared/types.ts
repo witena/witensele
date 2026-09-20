@@ -931,6 +931,58 @@ export interface McpEndpointSettings {
   enabled: boolean
 }
 
+/* -------------------------------------------------------------------------- */
+/* IDE integrations (S10.4)                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The coding agents Witena can install itself into, as data (S10.4).
+ *
+ * An array rather than a bare union so the handler can iterate it and the
+ * settings section can render one card per entry without repeating the list;
+ * `IdeClientId` is derived from it, so a third client is one line here.
+ */
+export const IDE_CLIENT_IDS = ['claude-code', 'codex'] as const
+
+/** One coding agent Witena knows how to register itself with. */
+export type IdeClientId = (typeof IDE_CLIENT_IDS)[number]
+
+/**
+ * What Witena knows about one coding agent on this machine (S10.4).
+ *
+ * Three independent facts, none of which implies another: whether the client's
+ * own CLI is on the machine at all, whether it has a `witena` MCP server
+ * registered, and whether that registration still names *this* installation's
+ * launcher. The third is what makes "the user moved the app, or installed a
+ * second copy" a repairable state rather than a tool list that mysteriously
+ * stopped working.
+ */
+export interface IdeClientStatus {
+  id: IdeClientId
+  installed: boolean
+  connected: boolean
+  /** The command the IDE has registered, when connected. */
+  command?: string
+  /** Connected, but `command` is not this installation's launcher. */
+  stale: boolean
+}
+
+/**
+ * Everything Settings → Integrations draws, in one read (S10.4).
+ *
+ * `endpoint.enabled` is the stored setting and `endpoint.listening` is what this
+ * process is actually doing, and they are reported separately because they can
+ * honestly disagree: the row is the user's intent, while `ctx.mcpEndpoint` is
+ * `null` on the Node host and in every test, where nothing listens. One "on"
+ * would have to lie about one of the two.
+ */
+export interface IntegrationStatus {
+  endpoint: { enabled: boolean; listening: boolean; port?: number }
+  /** Absolute path of `bin/witena-mcp`; null in a build that ships none. */
+  launcherPath: string | null
+  clients: IdeClientStatus[]
+}
+
 export interface AppSettings {
   /** `'system'` follows the OS language, which is the first-launch default. */
   language: Language | 'system'
@@ -1208,7 +1260,17 @@ export const VALIDATION_REASONS = [
   /** A material that is not on disk (S5.10). */
   'goal_material_missing',
   /** A `document` or `codebase` goal on a chat bound to no folder (S5.10). */
-  'goal_needs_workdir'
+  'goal_needs_workdir',
+  /**
+   * `integrations.connect` in a build that ships no launcher (S10.4).
+   *
+   * A development checkout and the Node host, not a failure: there is no stable
+   * absolute command to hand a client, so the section offers the copyable
+   * `node <repo>/out/mcp-shim/witena-mcp.cjs` snippet instead of a button.
+   */
+  'integrations_no_launcher',
+  /** `integrations.connect` / `disconnect` for a client whose CLI is absent (S10.4). */
+  'integrations_client_not_installed'
 ] as const
 
 export type ValidationReason = (typeof VALIDATION_REASONS)[number]

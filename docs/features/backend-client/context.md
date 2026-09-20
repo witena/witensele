@@ -39,8 +39,11 @@ changed to make it work.
   `providers.setQuotaProject`, S5.4 `permission.reply`, S5.6
   `chat.handoff`, S7.4 `system.updateStatus` / `checkForUpdates` /
   `installUpdate` plus the first **new event pair** since S5.4,
-  `update.available` / `update.downloaded`). The compile-time `Assert` below
-  makes the first two inseparable.
+  `update.available` / `update.downloaded`; S10.4 `integrations.status` /
+  `connect` / `disconnect`, which brought a namespace of its own — the three
+  run the *coding agents'* CLIs rather than reading Witena's own storage, so
+  folding them into `settings.*` would have claimed the wrong thing about them).
+  The compile-time `Assert` below makes the first two inseparable.
 - `src/shared/updates.ts` (S7.4) — the update status, its eight states and the
   normalised `UpdateEvent` union the updater port speaks. A shared module beside
   `usage.ts` and `presets.ts` rather than more of `types.ts`, because all three

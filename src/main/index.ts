@@ -419,17 +419,12 @@ void app.whenReady().then(() => {
   // and one typed in the window go through exactly the same handlers (S10.3).
   const handlers = buildHandlers()
 
-  // S10.3: where an IDE would point its MCP configuration. WP-11 passes it into
-  // `createAppContext` as `mcpLauncherPath`, so that the Integrations section can
-  // register it and can tell a stale registration from a current one; until then
-  // it is computed and logged, which is also how a user reports the path they
-  // should have been given when a client refuses to start it.
+  // S10.4: where an IDE points its MCP configuration. Computed here because
+  // this file is the only one allowed to ask electron where anything is
+  // (CLAUDE.md rule #5), and handed to the context so that `integrations.*` can
+  // register it with a coding agent and tell a stale registration from a current
+  // one. `null` in a checkout, which is what makes `connect` refuse there.
   const launcherPath = mcpLauncherPath()
-  console.log(
-    launcherPath === null
-      ? '[witena] MCP launcher: none (not a packaged build)'
-      : `[witena] MCP launcher: ${launcherPath}`
-  )
 
   context = createAppContext({
     databasePath,
@@ -437,7 +432,8 @@ void app.whenReady().then(() => {
     secrets,
     updates: updater,
     bundledAntDir: bundledAntDir(),
-    mcpEndpoint: { handlers }
+    mcpEndpoint: { handlers },
+    mcpLauncherPath: launcherPath
   })
   console.log(`[witena] database: ${databasePath}`)
   if (updater.updater) {

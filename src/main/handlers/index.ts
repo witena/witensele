@@ -13,6 +13,7 @@ import { BACKEND_METHODS, type BackendMethod } from '@shared/backend'
 import { BackendFailure } from '../errors'
 import { systemHandlers } from './system'
 import { settingsHandlers } from './settings'
+import { integrationsHandlers } from './integrations'
 import { providerHandlers } from './providers'
 import { agentHandlers } from './agents'
 import { mcpHandlers } from './mcp'
@@ -27,6 +28,7 @@ import type { HandlerMap, HandlerModule } from './types'
 const MODULES: HandlerModule[] = [
   systemHandlers,
   settingsHandlers,
+  integrationsHandlers,
   providerHandlers,
   agentHandlers,
   mcpHandlers,

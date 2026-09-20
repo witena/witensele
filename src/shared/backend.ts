@@ -32,6 +32,8 @@ import type {
   ChatPatch,
   ConnectionTestResult,
   HandoffIntent,
+  IdeClientId,
+  IntegrationStatus,
   McpConnectionTestResult,
   McpServer,
   McpServerInput,
@@ -203,6 +205,48 @@ export interface BackendApi {
   'settings.get': () => Promise<AppSettings>
   /** Shallow merge; `timeouts` merges field by field. Returns the stored result. */
   'settings.update': (input: { patch: AppSettingsPatch }) => Promise<AppSettings>
+
+  /* -- IDE integrations (S10.4) ------------------------------------------- */
+
+  /**
+   * The state of the local MCP endpoint and of every coding agent Witena can
+   * install itself into (S10.4).
+   *
+   * Cheap enough to ask for on every mount of Settings → Integrations, and it
+   * **never rejects** for any of the states the section exists to show: a client
+   * that is not installed, one that is installed and not connected, and an
+   * endpoint that is switched off are all values. It does run the clients' own
+   * CLIs to answer, so it is a filesystem-and-subprocess read rather than a
+   * database one — see `docs/features/mcp-endpoint/backend.md`.
+   */
+  'integrations.status': () => Promise<IntegrationStatus>
+  /**
+   * Registers this installation's launcher as the `witena` MCP server of one
+   * coding agent, and opens the door it points at (S10.4).
+   *
+   * Enabling the endpoint is part of connecting, not a second step the user has
+   * to remember: an IDE pointed at a closed door is never what "Connect" meant.
+   * The call is **idempotent and repairing** — a client already registered with
+   * this launcher is left alone, and one registered with a different command
+   * (the app was moved, or a second copy installed it) is unregistered and
+   * registered again, which is what the section's "Repair" does.
+   *
+   * Rejects with `validation` and a `ValidationReason` for the two states a
+   * button cannot fix: `integrations_no_launcher` in a build that ships none —
+   * a development checkout and the Node host — and
+   * `integrations_client_not_installed` when the client's CLI is absent.
+   * Resolves with the same status `integrations.status` would answer.
+   */
+  'integrations.connect': (input: { client: IdeClientId }) => Promise<IntegrationStatus>
+  /**
+   * Removes the `witena` MCP server from one coding agent (S10.4).
+   *
+   * Leaves the endpoint listening: another client, or a hand-written
+   * configuration, may still be using it, and the switch is the user's way to
+   * close the door. Idempotent — a client with nothing registered resolves with
+   * the current status rather than rejecting.
+   */
+  'integrations.disconnect': (input: { client: IdeClientId }) => Promise<IntegrationStatus>
 
   /* -- providers ---------------------------------------------------------- */
 
@@ -531,6 +575,9 @@ export const BACKEND_METHODS = [
   'system.installUpdate',
   'settings.get',
   'settings.update',
+  'integrations.status',
+  'integrations.connect',
+  'integrations.disconnect',
   'providers.list',
   'providers.get',
   'providers.create',

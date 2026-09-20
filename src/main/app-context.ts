@@ -25,6 +25,8 @@ import { createEventBus } from './events/bus'
 import type { PermissionGate } from './executor/permissions'
 import { createPermissionGate } from './executor/permissions'
 import type { HandlerMap } from './handlers/types'
+import type { IdeClients } from './integrations/ide-clients'
+import { createIdeClients } from './integrations/ide-clients'
 import { createMcpEndpointHost } from './mcp-endpoint/host'
 import type { McpEndpointHost } from './mcp-endpoint/host'
 import { McpManager } from './mcp/manager'
@@ -282,6 +284,32 @@ export interface AppContext {
    * no test could build.
    */
   mcpEndpoint: McpEndpointHost | null
+  /**
+   * Absolute path of the `bin/witena-mcp` launcher this build ships, or `null`
+   * (S10.4).
+   *
+   * Injected, because only `src/main/index.ts` may ask electron whether the app
+   * is packaged and where its resources are (CLAUDE.md rule #5). It is what
+   * `integrations.connect` registers with a coding agent and what "the
+   * registered command is not this installation's launcher" is compared
+   * against.
+   *
+   * `null` is a first-class answer rather than a missing one: a development
+   * checkout and the Node host have no bundle and therefore no stable command to
+   * give a client. `connect` refuses with `integrations_no_launcher`; `status`
+   * still answers, and the settings section shows a copyable snippet instead.
+   */
+  mcpLauncherPath: string | null
+  /**
+   * The coding agents Witena can install itself into (S10.4).
+   *
+   * On the context for exactly the reasons `anthropicCli` and `googleCli` are:
+   * it is a capability that spawns software the user installed themselves, and a
+   * test must be able to replace it with a fake rather than run whatever
+   * `claude` or `codex` the developer's machine happens to have — let alone let
+   * a test suite write to `~/.claude.json`.
+   */
+  ideClients: IdeClients
   /** Releases the database. Safe to call more than once. */
   close(): void
 }
@@ -341,6 +369,20 @@ export interface AppContextOptions {
    * read the setting.
    */
   mcpEndpoint?: { handlers: HandlerMap }
+  /**
+   * The `bin/witena-mcp` this build ships (S10.4).
+   *
+   * Passed by `src/main/index.ts` from `mcpLauncherPath()`. Omitted — the Node
+   * host and every test — `ctx.mcpLauncherPath` is `null`, which is the truth
+   * for a build with no bundle.
+   */
+  mcpLauncherPath?: string | null
+  /**
+   * Injectable coding-agent CLIs; omitted, the real `claude` / `codex`-spawning
+   * implementation. A test passes a fake, and `npm test` therefore never runs a
+   * real `mcp add`.
+   */
+  ideClients?: IdeClients
 }
 
 /**
@@ -406,6 +448,8 @@ export function createAppContext(options: AppContextOptions): AppContext {
     mcp: undefined as unknown as McpManager,
     // Tied off below with the others: the host takes the finished context.
     mcpEndpoint: null,
+    mcpLauncherPath: options.mcpLauncherPath ?? null,
+    ideClients: options.ideClients ?? createIdeClients(),
     memory: createMemoryStore(join(userDataDir, MEMORY_DIR)),
     permissions: createPermissionGate({
       emit: (event) => events.emit(event),

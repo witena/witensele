@@ -535,7 +535,9 @@
     "goal_material_not_relative": "A material has to be a path inside the chat’s folder.",
     "goal_material_outside_workdir": "That path is outside the chat’s folder.",
     "goal_material_missing": "That material is not there any more.",
-    "goal_needs_workdir": "Choose a working directory for this chat first."
+    "goal_needs_workdir": "Choose a working directory for this chat first.",
+    "integrations_no_launcher": "This build ships no launcher, so there is no command to give a client. Copy the snippet below instead.",
+    "integrations_client_not_installed": "That client is not installed on this machine."
   },
   "notices": {
     "agentSkipped": "{{agent}} did not respond and was skipped this round",

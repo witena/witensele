@@ -4244,7 +4244,7 @@ shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`
 ### S10.4 Settings → Integrations, and provenance `[~]`
 What: a user turns this on and connects an IDE without a terminal; the transcript
 says who typed what.
-- [ ] Handlers `integrations.status` / `integrations.connect` /
+- [x] Handlers `integrations.status` / `integrations.connect` /
   `integrations.disconnect` over an injected `IdeClients` interface
   (`node:child_process`; reuse the binary lookup the `ant` / `gcloud` wrappers
   use, because a GUI app does not inherit the shell's `PATH`). Status per client:
@@ -4252,6 +4252,23 @@ says who typed what.
   bundle (the app was moved) → "Repair". Connect runs the client's own CLI with
   the forms S10.0 recorded. `system.capabilities` reports the feature absent on the
   server host.
+  (2026-09-20, WP-11. `resolveCliBinary` from `providers/cli-process.ts` is
+  reused unchanged; Claude Code's install directory is versioned, so its
+  candidates are globbed and sorted **numerically** highest-first. Every command
+  is an argument vector, never a shell line — a bundle path can contain spaces.
+  `connect` also **enables the endpoint**, through `handlers['settings.update']`
+  and before it registers anything: an IDE pointed at a closed door is not
+  connected, and that handler is what starts the host. It is also Repair — a
+  registration naming another installation is removed and added again, because
+  `mcp add` over an existing name is an error in both CLIs. The two refusals are
+  new `ValidationReason`s, `integrations_no_launcher` (a checkout, the Node host)
+  and `integrations_client_not_installed`. **No `system.capabilities` was
+  added**: the method does not exist in `BackendApi`, and `integrations.status`
+  already reports the absence honestly on the server host — `launcherPath: null`,
+  both clients not installed — which is what that bullet wanted. `npm test`
+  never runs a real `claude` or `codex`: the real implementation is tested as
+  argument vectors against an injected `execFile`, and `createTestAppContext`
+  injects `absentIdeClients()`.)
 - [ ] Settings page, new "Integrations" section: the enable switch with one
   sentence on what it opens; endpoint status; a card each for Claude Code and
   Codex (Connect / Disconnect / Repair); a generic copyable JSON + TOML snippet

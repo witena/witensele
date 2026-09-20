@@ -52,6 +52,9 @@ const EXPECTED_METHODS = [
   'system.installUpdate',
   'settings.get',
   'settings.update',
+  'integrations.status',
+  'integrations.connect',
+  'integrations.disconnect',
   'providers.list',
   'providers.get',
   'providers.create',
@@ -126,6 +129,11 @@ describe('BACKEND_METHODS', () => {
       'agents',
       'chat',
       'chats',
+      // S10.4. Its own namespace rather than `settings.integrations.*`: the
+      // three methods run the *clients'* CLIs and probe the machine, and folding
+      // them into the settings namespace would suggest they read and write the
+      // settings row, which only `connect`'s side effect does.
+      'integrations',
       'mcp',
       'memory',
       'messages',

@@ -941,7 +941,13 @@ describe('handlers/stubs', () => {
       // `unsupported` rather than rejecting. Their cases are above.
       'system.updateStatus',
       'system.checkForUpdates',
-      'system.installUpdate'
+      'system.installUpdate',
+      // S10.4 — real handlers over an injected `IdeClients`, which the sweep's
+      // context-shaped `{ userId }` cannot provide, so their cases live in
+      // `integrations.test.ts`.
+      'integrations.status',
+      'integrations.connect',
+      'integrations.disconnect'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

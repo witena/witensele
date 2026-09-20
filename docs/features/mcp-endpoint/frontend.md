@@ -8,6 +8,8 @@ Surface, by work package (`tasks.md`):
 | Surface | Package |
 |---|---|
 | Settings → Integrations: the endpoint switch, status, Claude Code and Codex cards, the generic snippet | WP-12 |
+| `IntegrationStatus` and the three `integrations.*` calls the section is built from — backend only, no component yet | WP-11 `[x]` (2026-09-20) |
+| `errors.integrations_no_launcher`, `errors.integrations_client_not_installed` in both locale files | WP-11 `[x]` (2026-09-20) |
 | The "via {{client}}" chip on a message sent through the endpoint | WP-13 `[x]` (2026-09-20) |
 | Selecting a chat on the `ui.open-chat` event (`witena://chat/<id>`) | WP-8 `[x]` (2026-09-20) |
 | `AppSettings.mcpEndpoint.enabled` on the settings store — the value the switch writes, with no control of its own yet | WP-7 `[x]` (2026-09-20) |
@@ -225,3 +227,73 @@ Two consequences for the section WP-12 writes:
   running `npm run dev` sees the fallback snippet and a note; nothing is
   disabled, because the endpoint itself works there — it is only the *command*
   that has no stable spelling.
+
+## The Integrations backend (WP-11)
+
+Still nothing in the renderer, and the table above is unchanged — but this is the
+package WP-12 draws from, so here is everything the section will hold.
+
+**One read, three calls.** `BackendClient.invoke('integrations.status')` answers
+everything the section shows, and the two actions answer with the *same shape*,
+so the store never has to re-read after a click:
+
+```ts
+interface IntegrationStatus {
+  endpoint: { enabled: boolean; listening: boolean; port?: number }
+  launcherPath: string | null
+  clients: IdeClientStatus[]   // one per IDE_CLIENT_IDS, always in that order
+}
+interface IdeClientStatus {
+  id: 'claude-code' | 'codex'
+  installed: boolean
+  connected: boolean
+  command?: string
+  stale: boolean
+}
+```
+
+`clients` is always as long as `IDE_CLIENT_IDS` and always in its order, so the
+section can render a card per entry without matching by id — and adding a third
+client will add a card with no change in the renderer's shape.
+
+**The card's five states**, and which call each offers:
+
+| `installed` | `connected` | `stale` | The card says | The button |
+|---|---|---|---|---|
+| `false` | — | — | not installed | none (the snippet block is the fallback) |
+| `true` | `false` | — | installed, not connected | Connect → `integrations.connect` |
+| `true` | `true` | `false` | connected | Disconnect → `integrations.disconnect` |
+| `true` | `true` | `true` | connected to another installation (`command` says which) | Repair → `integrations.connect`, the same call |
+
+**The endpoint line is two facts, not one.** `enabled` is the switch's position —
+it is also `settings.mcpEndpoint.enabled`, so a section that already mirrors the
+settings store may read it there — and `listening` (with `port`) is whether this
+process has a socket. They agree in the desktop app and disagree wherever
+`ctx.mcpEndpoint` is `null`; a line that showed only one would be wrong in the
+case a user is most likely to report.
+
+**Connect throws the switch.** `integrations.connect` enables the endpoint before
+it registers anything, so a section that keeps a settings store has to expect
+`settings.mcpEndpoint.enabled` to become `true` without the switch having been
+touched — either by re-reading settings after a successful connect, or by
+driving the switch from `IntegrationStatus.endpoint.enabled`, which is the
+simpler of the two.
+
+**The two refusals already have copy.** Both are `validation` with a
+`ValidationReason` in `details`, so `translateFailure` from
+`src/renderer/src/i18n/errors.ts` writes the sentence with no new mapping:
+
+| Reason | English key | When the section sees it |
+|---|---|---|
+| `integrations_no_launcher` | `errors.integrations_no_launcher` | Connect in a development build. Reachable, so the button is offered and the error line explains — see below |
+| `integrations_client_not_installed` | `errors.integrations_client_not_installed` | A client uninstalled between the status read and the click |
+
+A CLI that ran and refused arrives as `internal` with the CLI's own words in
+`error.message` — the dimmed detail line, never the sentence (`errors.ts`).
+
+**With `launcherPath: null`, Connect is offered and fails.** That is deliberate
+rather than an oversight to design around: the button may be disabled with the
+snippet block shown instead, but if it is pressed the refusal is a translated
+sentence and not a crash. Nothing else about a development build is degraded —
+the endpoint listens, the shim works, and only the *command* has no stable
+spelling.
