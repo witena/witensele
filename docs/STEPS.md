@@ -4126,29 +4126,42 @@ guarantee of `run.finished`).
 
 ### S10.2 The shim `[~]`
 What: `witena-mcp`, the command an IDE runs.
-- [ ] `src/mcp-shim/`: a low-level SDK `Server` on `StdioServerTransport`.
+- [x] (2026-09-20, WP-5) `src/mcp-shim/`: a low-level SDK `Server` on `StdioServerTransport`.
   `initialize` and `tools/list` answered locally from `@shared/mcp-tools`;
   `tools/call` forwarded through an SDK `Client` +
   `StreamableHTTPClientTransport`, relaying progress and cancellation. Captures
   `clientInfo.name` from `initialize` and sends it as `X-Witena-Client`.
-- [~] (2026-09-20, WP-1) Discovery: `src/shared/mcp-discovery.ts` — the file name, its schema and
+  *(One `Client` per forwarded call, closed in a `finally`: the endpoint is
+  stateless, so only dropping the HTTP request cancels a running tool, and the
+  SDK has one `AbortController` per transport. The forwarded request's timeout
+  is `maxWaitSeconds` + 30 s, or the SDK's 60 s default would abort every long
+  wait.)*
+- [x] (2026-09-20, WP-1 + WP-5) Discovery: `src/shared/mcp-discovery.ts` — the file name, its schema and
   the `userData` path rule (honouring `WITENA_USER_DATA`), used by both sides.
-  *(The shared half is done: `DISCOVERY_FILE`, `DISCOVERY_VERSION`,
+  *(The shared half is WP-1's: `DISCOVERY_FILE`, `DISCOVERY_VERSION`,
   `McpDiscovery`, `parseDiscovery`, `userDataDirFor`.)*
   The shim reads it, checks `pid` is alive, connects; on `ECONNREFUSED` / `401`
-  re-reads once (app restarted) before failing. *(WP-5.)*
-- [ ] Lazy launch (macOS, packaged only): derive the bundle from
+  re-reads once (app restarted) before failing. *(WP-5: `src/mcp-shim/connect.ts`,
+  which also caches the file between calls and drops the cache on either error.)*
+- [x] (2026-09-20, WP-5) Lazy launch (macOS, packaged only): derive the bundle from
   `process.execPath`, `open -g -j -a <bundle> --args --background`, poll for the
   discovery file up to the timeout S10.0 measured. In dev, and when the endpoint
   is switched off, return a tool error that says exactly that — the text is for
   the calling model, in English, and is not UI copy.
-- [ ] Build: a fourth Vite target → one bundled `out/mcp-shim/witena-mcp.cjs`
+  *(`src/mcp-shim/launch.ts`, 20 s against WP-0a's 2.9 s worst cold start. The
+  three sentences are `SHIM_ERROR_TEXT`; "the app is up" is read from the
+  `SingletonLock` symlink Electron keeps in `userData`.)*
+- [x] (2026-09-20, WP-5) Build: a fourth Vite target → one bundled `out/mcp-shim/witena-mcp.cjs`
   with the SDK inlined (no `node_modules` lookup at run time). Nothing but
   `@shared/*` and the SDK may be imported — a test walks the closure and fails on
   `electron`, `better-sqlite3` or anything under `src/main/`.
-- Tests: spawn the built shim with `node` against the S10.1 test endpoint and a
+  *(`vite.mcp-shim.config.ts`, `npm run mcp-shim:build`; `npm run build` ends
+  with it.)*
+- [x] (2026-09-20, WP-5) Tests: spawn the built shim with `node` against the S10.1 test endpoint and a
   fake discovery file; drive it with the SDK's stdio client: `tools/list` with no
   app, a forwarded call, the stale-file re-read, the endpoint-off error.
+  *(`src/mcp-shim/shim.spawn.test.ts`, plus cancellation reaching the endpoint's
+  `signal` and progress relayed across both hops.)*
 Acceptance: `node out/mcp-shim/witena-mcp.cjs`, registered by hand in Claude Code
 against `npm run dev`, lists the tools and completes a `start_discussion`. Docs:
 `mcp-endpoint` (all four).

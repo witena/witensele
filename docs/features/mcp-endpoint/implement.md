@@ -1,7 +1,8 @@
 # mcp-endpoint — Implementation
 
 > Partly built. `backend.md`'s table is the authority on which work package has
-> landed; `src/mcp-shim/` is still entirely to come. The design is PLAN.md
+> landed; the six tools (WP-3) and the listening host (WP-7) are still to come.
+> The design is PLAN.md
 > "Witena as an MCP server (the MCP endpoint)"; the types every package codes
 > against are under "Frozen contracts" in [`tasks.md`](./tasks.md). Each work
 > package replaces part of this file with what it actually built.
@@ -214,6 +215,103 @@ in `tool-types.ts` and `server.ts` imports them from there. When `tools.ts` land
 
 Nothing else in `server.ts` changes.
 
+## The shim (WP-5) — `src/mcp-shim/`
+
+The command an IDE is configured with, and the only piece of Phase 10 that runs
+outside the app. Three modules and one Vite target:
+
+| Module | Does |
+|---|---|
+| `index.ts` | The MCP server on `StdioServerTransport`. `initialize` is the SDK's; `tools/list` is `MCP_TOOLS` with no I/O; `tools/call` opens a connection and forwards. The bundle's entry point, so it calls `main()` at the bottom of the file |
+| `connect.ts` | The discovery file, the liveness checks, the one retry, the three refusals, and the real `Client` factory |
+| `launch.ts` | `bundlePathFor` and the `open(1)` call, with `spawn`, the clock and the probe injected |
+| `vite.mcp-shim.config.ts` | → `out/mcp-shim/witena-mcp.cjs`, one CommonJS file with the SDK and zod inlined |
+
+### What it answers without the app
+
+```
+initialize   → the SDK, and `clientInfo.name` is remembered
+tools/list   → MCP_TOOLS, verbatim, no file read and no socket
+tools/call   → connect(), then forward
+```
+
+That split is PLAN.md's decision and it has two reasons, both of which are about
+*not* launching Witena: an editor that opens a project must not start the app
+for every MCP server in its config, and Codex gives a server only a few seconds
+to come up — a shim that answered `initialize` by launching an app would lose
+that race every time.
+
+### How it finds the app
+
+```
+open()  ─→ discovery file → pid alive? ─→ connect with the bearer token
+             │ no                                │ 401 / ECONNREFUSED
+             ▼                                   ▼
+         app up?  ── yes → "the endpoint is switched off"
+             │ no                            re-read the file, once
+             ▼
+         launch()  ── timed out → ask "app up?" again, then one of two sentences
+```
+
+The file's contents are cached for the life of the process and thrown away the
+moment the endpoint answers like a different process — a `401` (Witena
+restarted and minted a new token) or an `ECONNREFUSED` (nothing is listening
+there). That is exactly one retry, and it is why the token never has to appear
+in an IDE's configuration file.
+
+`appIsRunning` is a hint, not a requirement: it reads `<userData>/SingletonLock`,
+the `<host>-<pid>` symlink Electron keeps there, purely to choose between two
+English sentences. Every way of failing to read it answers `false`, which falls
+back to the weaker message.
+
+### The three refusals
+
+`SHIM_ERROR_TEXT`, returned as an ordinary tool error (`isError: true`) so the
+IDE shows a readable sentence rather than a server that died:
+
+| Kind | When | Says |
+|---|---|---|
+| `not-running` | No endpoint, and `process.execPath` is not inside a `.app` — development, or a bare `node` | Start Witena (`npm run dev`) and turn the endpoint on |
+| `endpoint-off` | No discovery file, but Witena is up | Open Settings → Integrations and turn the MCP endpoint on |
+| `launch-timeout` | `open` ran and 20 s passed with no file and no app | Open Witena and check the switch |
+
+They are written at the calling model, exactly like the tool descriptions: each
+one names the next action, because an agent told only "not running" either
+retries for ever or gives up. Outside i18n for the same reason (rule 4 is about
+what the *user* sees).
+
+### Forwarding, and the two things that cross with it
+
+**Cancellation.** WP-4 established that the endpoint is stateless, so
+`notifications/cancelled` reaches a `Server` that never heard of the call it
+names; what aborts a running tool is the caller dropping its HTTP request. The
+SDK client owns one `AbortController` per **transport**, not per request, so
+every forwarded call gets its own `Client` and its own transport, closed in a
+`finally` and closed early when the incoming `signal` aborts. The spawn test
+drives this end to end: abort the stdio call, watch the endpoint's
+`ToolCallContext.signal` fire.
+
+**Progress.** Relayed only when the IDE asked for it — the incoming
+`_meta.progressToken` is what says so. The shim passes `onprogress` to the
+forwarded call, which is how the SDK mints the *second* hop's token, and each
+update becomes one `notifications/progress` back to the IDE with the counter
+and message it received. Only `name` and `arguments` are forwarded; the
+incoming `_meta` belongs to the first hop.
+
+**The timeout is derived, not fixed.** `forwardTimeoutMs(args)` is
+`maxWaitSeconds` (or `DEFAULT_WAIT_SECONDS`) plus 30 s. Without it the SDK's
+60-second default would abort every wait longer than a minute while the
+discussion carried on at the other end.
+
+### Why the build is what it is
+
+One CommonJS file with everything inlined, because the shim runs from inside a
+signed bundle that contains no `node_modules` and is started by the app's own
+binary with `ELECTRON_RUN_AS_NODE=1` (WP-9). `ssr.noExternal: true` pulls the
+SDK and zod in, `inlineDynamicImports` keeps it to one file, and only `node:`
+builtins stay external. `npm run build` ends with `npm run mcp-shim:build`, so
+`out/mcp-shim/witena-mcp.cjs` exists whenever `out/main` does.
+
 ## Tests
 
 | File | Covers |
@@ -224,6 +322,10 @@ Nothing else in `server.ts` changes.
 | `src/main/mcp-endpoint/guards.test.ts` | Each guard as a sentence, without a socket: the path claim; any `Origin`; a foreign `Host`, loopback on another port, a missing one; the bearer in every malformed spelling; the order the three run in; a repeated header; the body cap at, one over, and not-JSON |
 | `src/main/mcp-endpoint/server.test.ts` | A real listener driven by the SDK `Client`: `tools/list`; a call arriving with its arguments, `ctx`, `handlers` and `client`; `isError` for a failed outcome and for a tool that throws; a protocol error for an unknown tool; progress relayed in order and absent when unasked; `signal` aborting when a raw `fetch` is abandoned and when a client closes mid-call; `close()` aborting in-flight calls; the five refusals by raw request; `ToolOutcome` → `CallToolResult` without a socket |
 | `src/main/mcp-endpoint/no-electron.test.ts` | The import closure of `src/main/mcp-endpoint/` reaches `app-context.ts` and `chat-runner.ts` and contains no `electron`, in any of its spellings (CLAUDE.md rule 5) |
+| `src/mcp-shim/connect.test.ts` | The lookup against real temporary directories: the path rule; a good file; a missing one, a future version, a non-object and a dead pid all as "no endpoint"; `SingletonLock` as the liveness hint; each of the three refusals including which one a timed-out launch produces; connecting with the file's numbers and the IDE's name; the file read once and reused; the re-read after a `401` and after an `ECONNREFUSED`; a non-stale failure neither retried nor cached; staleness recognised in both spellings and not confused with a 403 or a 413 |
+| `src/mcp-shim/launch.test.ts` | `bundlePathFor` on a real bundle path, one with spaces, a nested bundle and four non-bundles; the `open` argument vector with and without the `WITENA_USER_DATA` override; `launch` with an injected `spawn` and clock — detached and unreferenced, polling until the file appears, giving up at the deadline, and not waiting at all when `open` cannot be run |
+| `src/mcp-shim/no-electron.test.ts` | The shim's closure reaches `index.ts`, `connect.ts`, `launch.ts` and WP-1's two shared modules, imports no `electron`, no `better-sqlite3` and nothing under `src/main/`, and no package outside the MCP SDK and zod |
+| `src/mcp-shim/shim.spawn.test.ts` | The **built** `out/mcp-shim/witena-mcp.cjs` (built in `beforeAll`), spawned with plain `node` and driven by the SDK's stdio client against a WP-4 endpoint with a stub registry: `tools/list` with no file and no app; a forwarded call carrying the token and `CLIENT_HEADER`; progress relayed across both hops in order; cancellation reaching the endpoint's `signal`; a failed `ToolOutcome` passed through; the switched-off and not-running refusals; the stale-file re-read |
 
 ## Known limitations and TODOs
 

@@ -8,7 +8,7 @@
 | `src/main/mcp-endpoint/discussion.ts` — `watchDiscussion`, `readDiscussion` | WP-2 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/tools.ts`, `transcript.ts` — the six tools | WP-3 |
 | `src/main/mcp-endpoint/server.ts`, `guards.ts`, `tool-types.ts` — transport and refusals | WP-4 `[x]` (2026-09-20) |
-| `src/mcp-shim/` and its Vite target | WP-5 |
+| `src/mcp-shim/` and its Vite target | WP-5 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/host.ts`, `AppSettings.mcpEndpoint` | WP-7 |
 | Single-instance lock, `--background`, `witena://`, `ui.open-chat` | WP-8 |
 | `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 |
@@ -16,7 +16,9 @@
 | `OriginPart`, `ChatSendInput.origin` | WP-13 |
 
 Nothing under `src/main/mcp-endpoint/` or `src/mcp-shim/` imports electron; a
-closure test in each enforces it (rule 5).
+closure test in each enforces it (rule 5). The shim's is stricter still: no
+`better-sqlite3`, nothing under `src/main/`, and no package outside the MCP SDK
+and zod.
 
 ## What exists today (WP-1)
 
@@ -165,3 +167,68 @@ instead, which is the identical property read at runtime.
 re-runs its `describe` blocks inside the importer, so the server's suite would be
 collected and reported twice; thirty lines of directory walk is the cheaper
 price, and it keeps the two guards independent.
+
+## The shim (WP-5)
+
+`src/mcp-shim/` → `out/mcp-shim/witena-mcp.cjs`. It is a *client* of everything
+above and owns no state beyond one cached discovery file, so nothing in the app
+imports it and nothing in it imports the app. Three modules:
+
+| Module | Exports | Notes |
+|---|---|---|
+| `index.ts` | `createShimServer`, `createProcessConnector`, `main`, `forwardTimeoutMs`, `toolErrorResult`, `logToStderr` | The bundle's entry point: it calls `main()` at the bottom of the file, so importing it starts a server |
+| `connect.ts` | `createConnector`, `probeDiscovery`, `appIsRunning`, `isStaleEndpoint`, `discoveryPathFor`, `openEndpointClient`, `ShimError`, `SHIM_ERROR_TEXT` | The lookup, the one retry and the three refusals |
+| `launch.ts` | `bundlePathFor`, `openArgsFor`, `launch`, `LAUNCH_TIMEOUT_MS` (20 000), `LAUNCH_POLL_MS` (250) | `open(1)`, with `spawn` and the clock injected |
+
+### The build
+
+`vite.mcp-shim.config.ts`, a fourth target beside electron-vite's three and
+`vite.server.config.ts`. `npm run mcp-shim:build` runs it and `npm run build`
+ends with it, so `out/mcp-shim/witena-mcp.cjs` exists whenever `out/main` does —
+which is what WP-9's `extraResources` and WP-10's e2e both assume.
+
+Four settings, each forced by where the file ends up:
+
+| Setting | Why |
+|---|---|
+| `ssr.noExternal: true` | Vite's SSR build externalizes `node_modules` by default. The shim runs from inside a signed bundle that has none, so the SDK and zod are inlined |
+| `format: 'cjs'` + `inlineDynamicImports` | One file, executed by the app's binary with `ELECTRON_RUN_AS_NODE=1`. `.cjs` needs no `package.json` beside it and no loader flag; inlining collapses the SDK's lazy imports so no sibling chunk has to be shipped |
+| `external: builtinModules` (+ `node:` forms) | The runtime's, and not inlinable |
+| `minify: false` | 696 kB either way once it is inside a 200 MB bundle; a stack trace that points at readable code is worth more |
+
+### Pitfalls for the packages downstream
+
+- **WP-9's launcher decides `process.execPath`.** `bundlePathFor` matches
+  exactly `<anything>.app/Contents/MacOS/<one segment>`; anything else answers
+  `null`, which is the *development* branch — the shim then never runs `open`
+  and reports "Witena is not running" instead. So `bin/witena-mcp` must `exec`
+  the bundle's own `Contents/MacOS/Witena` (which WP-0a confirmed is what sets
+  `execPath`), not `node`, or lazy launch silently stops working while every
+  other test still passes.
+- **The three error texts are `SHIM_ERROR_TEXT`**, exported and asserted by
+  name. WP-10 and WP-15 should match against that export rather than against a
+  copy of the sentence.
+- **A forwarded call gets its own `Client` and its own transport**, closed in a
+  `finally`. That is not tidiness: the SDK client owns one `AbortController` per
+  *transport*, and the endpoint only aborts a running tool when its HTTP request
+  is dropped (WP-4), so a shared transport would make cancelling one call cancel
+  all of them.
+- **Only `name` and `arguments` are forwarded.** The incoming `_meta` carries
+  the IDE's own progress token, which means nothing to the endpoint; the SDK
+  mints this hop's token when `onprogress` is passed, and `onprogress` is passed
+  only when the IDE asked for progress.
+- **The forwarded request's timeout is derived from `maxWaitSeconds`**
+  (`forwardTimeoutMs`, + 30 s). Without it the SDK's 60 s default would abort
+  every wait longer than a minute — silently, with the discussion still running.
+  A tool that ever waits on something other than `maxWaitSeconds` has to be
+  added there.
+- **`appIsRunning` reads `<userData>/SingletonLock`**, the symlink
+  (`<host>-<pid>`) Electron keeps inside `userData` and that WP-0a found is what
+  makes `requestSingleInstanceLock()` per-directory. It is used for nothing but
+  choosing between two English sentences, and every way of failing to read it
+  answers `false`, so WP-8 may change how the lock is taken without breaking
+  anything here.
+- **`open --env` is passed only when `WITENA_USER_DATA` is set.** The ordinary
+  launch is the plain `open -g -j -a <bundle> --args --background` the work
+  package specifies; the override is added so a harness that points the shim at
+  a temporary directory does not launch an app that writes to a different one.

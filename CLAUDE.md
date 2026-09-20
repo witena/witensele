@@ -36,6 +36,12 @@ src/
     mcp/            # MCPManager: connection pool, tool discovery, execution
     skills/         # SKILL.md scanning and parsing
     memory/         # Per-agent markdown memory and its built-in tools
+    mcp-endpoint/   # Witena as an MCP server: guards, transport, discussion tools
+  mcp-shim/         # `witena-mcp`, the stdio MCP server an IDE runs: offline
+                    # tools/list, discovery, lazy launch, forwarding. Bundled by
+                    # vite.mcp-shim.config.ts into one out/mcp-shim/witena-mcp.cjs
+                    # and shipped inside the app, so its import closure is the
+                    # MCP SDK, zod and @shared/* — never electron, never src/main/
   server/           # The Node host for the online version: the same handlers
                     # over POST /api/<method> and the event bus over a WebSocket
   preload/
@@ -52,8 +58,8 @@ build/              # Packaging inputs: icon.svg, icon.png, icon.icns
 docs/               # PLAN.md, STEPS.md, README.md, features/<feature>/, assets/
 ```
 
-Path alias `@shared/*` → `src/shared/*` works in main, preload and renderer.
-`@renderer/*` → `src/renderer/src/*` in the renderer only.
+Path alias `@shared/*` → `src/shared/*` works in main, preload, renderer and the
+shim. `@renderer/*` → `src/renderer/src/*` in the renderer only.
 
 ## Hard rules
 
@@ -131,7 +137,8 @@ are worked around:
 |---|---|
 | `npm run dev` | Start the Vite dev server and launch Electron with HMR |
 | `npm run server` | Build `src/server/` into `out/server/` and run the Node host (`PORT`, `HOST`, `WITENA_DATA_DIR`, `WITENA_SECRETS_KEY`). `docker compose up -d postgres` starts the database the Postgres tests want; see `docs/features/server/` |
-| `npm run build` | Build main, preload and renderer into `out/` |
+| `npm run build` | Build main, preload and renderer into `out/`, then the MCP shim |
+| `npm run mcp-shim:build` | Bundle `src/mcp-shim/` into one `out/mcp-shim/witena-mcp.cjs` (CommonJS, SDK and zod inlined, only `node:` builtins external). Part of `npm run build`; run it alone when iterating on the shim. See `docs/features/mcp-endpoint/` |
 | `npm run typecheck` | Type-check both projects (`tsconfig.node.json`, `tsconfig.web.json`) |
 | `npm test` | Run the vitest suite once |
 | `npm run test:watch` | Run vitest in watch mode |
