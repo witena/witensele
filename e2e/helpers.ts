@@ -85,6 +85,29 @@ export function locale(language: 'en' | 'zh-CN'): LocaleFile {
 }
 
 /**
+ * Creates a chat the way the "+" button now does it (S9.3): open the New chat
+ * dialog, press Create having chosen nothing.
+ *
+ * Every spec that only needs *a chat* goes through here, because before S9.3 a
+ * click on `chats-new` was the whole interaction and fourteen files had that
+ * click written into them. The two-step sequence is the shape of the flow, not
+ * of this helper — pressing Create with nothing selected sends the same empty
+ * input the button used to send, so a chat created here is the same chat those
+ * specs have always asserted against.
+ *
+ * It waits for the dialog to be gone rather than for a new row: several callers
+ * add members straight afterwards and would otherwise click through the scrim.
+ * A spec that wants the dialog's own contents drives it directly; this is the
+ * "and then I had a chat" path.
+ */
+export async function createChat(window: Page): Promise<void> {
+  await window.getByTestId('chats-new').click()
+  await expect(window.getByTestId('new-chat-dialog')).toBeVisible()
+  await window.getByTestId('new-chat-create').click()
+  await expect(window.getByTestId('new-chat-dialog')).toHaveCount(0)
+}
+
+/**
  * Opens Settings → Developer, where the transport smoke widgets live.
  *
  * S1.5 replaced the standalone smoke screen with the real shell, so `ping`,

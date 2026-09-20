@@ -28,7 +28,7 @@ import type { TFunction } from 'i18next'
 import type { Chat } from '@shared/types'
 import { groupChats, type ChatGroupId } from '../../stores/chats'
 import type { ConclusionPreviews } from './conclusion'
-import { Button, IconButton, Input } from '../ui'
+import { Badge, Button, IconButton, Input } from '../ui'
 
 /** Literal `t()` calls so the used-keys guard can see all three headings. */
 function groupLabel(t: TFunction, id: ChatGroupId): string {
@@ -41,6 +41,17 @@ function groupLabel(t: TFunction, id: ChatGroupId): string {
       return t('chat.earlier')
   }
 }
+
+/**
+ * Committee name per committee id (S9.3).
+ *
+ * A named alias rather than an inline `Record<…>`, for the same reason
+ * `ConclusionPreviews` is one: a generic argument inside a props interface
+ * looks like a JSX tag to `i18n/used-keys.test.ts`, whose header calls that
+ * trade-off out. Naming the type keeps the guard honest and the interface
+ * readable.
+ */
+export type CommitteeNames = Record<string, string>
 
 export interface ChatListProps {
   chats: Chat[]
@@ -57,6 +68,16 @@ export interface ChatListProps {
    * is on the screen anyway the moment the chat is opened.
    */
   conclusionPreviews?: ConclusionPreviews
+  /**
+   * Committee name per committee id (S9.3), for the provenance badge.
+   *
+   * A lookup rather than a name on `Chat`, because the chat stores where it came
+   * from and the committee stores what it is called — and a committee that has
+   * been renamed must read the new name on every topic it convened. An id the
+   * map cannot resolve draws no badge: it means the committee was deleted and
+   * this row is one `chat.updated` behind.
+   */
+  committeeNames?: CommitteeNames
   onSelect: (chatId: string) => void
   onRename: (chatId: string, title: string) => void
   onDelete: (chatId: string) => void
@@ -93,6 +114,9 @@ export function ChatList(props: ChatListProps): React.JSX.Element {
             const selected = chat.id === props.selectedId
             const renaming = renamingId === chat.id
             const preview = props.conclusionPreviews?.[chat.id]
+            const committeeName = chat.committeeId
+              ? props.committeeNames?.[chat.committeeId]
+              : undefined
 
             if (renaming) {
               return (
@@ -129,9 +153,24 @@ export function ChatList(props: ChatListProps): React.JSX.Element {
                     selected ? 'bg-bg-hover text-fg' : 'text-fg-muted hover:bg-bg-subtle'
                   )}
                 >
+                  {/* Title first, the committee under it rather than beside it:
+                      the row is 264px wide minus the kebab, and a badge on the
+                      title line would eat the half of the name that tells two
+                      topics apart. */}
                   <span data-testid="chat-item-title" className="w-full truncate text-[13px]">
                     {chat.title}
                   </span>
+                  {committeeName ? (
+                    <Badge
+                      tone="accent"
+                      font="sans"
+                      data-testid="chat-item-committee"
+                      title={t('chat.committeeBadgeTitle', { name: committeeName })}
+                      className="max-w-full truncate"
+                    >
+                      {committeeName}
+                    </Badge>
+                  ) : null}
                   {preview === undefined ? (
                     <span className="text-[11px] text-fg-faint">
                       {t('chat.memberCount', { members: props.memberCounts[chat.id] ?? 0 })}

@@ -75,7 +75,13 @@ import {
   type Page
 } from '@playwright/test'
 import { MCP_SERVER_NAME, MCP_TOOL_NAMES } from '@shared/mcp-tools'
-import { addOllamaProvider, createUserDataDir, removeUserDataDir, repoRoot } from './helpers'
+import {
+  addOllamaProvider,
+  createChat,
+  createUserDataDir,
+  removeUserDataDir,
+  repoRoot
+} from './helpers'
 
 /** Serial: one app, and each test continues where the last one left off. */
 test.describe.configure({ mode: 'serial' })
@@ -218,7 +224,7 @@ test('one real model reply completes inside the packaged build', async () => {
   await expect(window.getByTestId('agent-item')).toHaveCount(1)
 
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   // A new chat starts empty once the agents table is no longer empty
   // (`chats.create` only falls back to a default member on a virgin database),
   // so the member is added explicitly rather than assumed.

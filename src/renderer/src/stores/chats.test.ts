@@ -26,6 +26,7 @@ function chat(id: string, updatedAt: number, title = id): Chat {
     title,
     workdir: null,
     goal: null,
+    committeeId: null,
     settings: DEFAULT_CHAT_SETTINGS
   }
 }
@@ -196,6 +197,52 @@ describe('chats store', () => {
     // The "+" button's call is unchanged: the backend decides.
     await useChatsStore.getState().create()
     expect(calls.at(-1)).toEqual({ input: {} })
+  })
+
+  it('takes a title, a committee and extras from the New chat dialog (S9.3)', async () => {
+    const created = chat('new', 9)
+    const calls: unknown[] = []
+    setBackend({
+      invoke: (async (method: BackendMethod, input: unknown) => {
+        if (method === 'chats.create') {
+          calls.push(input)
+          return created
+        }
+        if (method === 'chats.members.list') return []
+        throw new Error(`unexpected method ${method}`)
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    await useChatsStore.getState().create({
+      title: '  Retrospective  ',
+      committeeId: 'committee-1',
+      memberAgentIds: ['agent-9']
+    })
+    // The title is trimmed here rather than in the dialog, so every caller gets
+    // the same treatment; the merge itself is the backend's, which is why only
+    // the *extras* travel.
+    expect(calls.at(-1)).toEqual({
+      input: {
+        title: 'Retrospective',
+        committeeId: 'committee-1',
+        memberAgentIds: ['agent-9']
+      }
+    })
+
+    // Pressing Create having chosen nothing has to be byte for byte the call
+    // the "+" button used to make, or the first-run bootstrap path changes
+    // meaning. An empty object and an empty array are both "you decide".
+    await useChatsStore.getState().create({})
+    expect(calls.at(-1)).toEqual({ input: {} })
+
+    await useChatsStore.getState().create({ title: '   ', memberAgentIds: [] })
+    expect(calls.at(-1)).toEqual({ input: {} })
+
+    // A committee on its own: no extras, and the members come back from the
+    // expansion the handler performs.
+    await useChatsStore.getState().create({ committeeId: 'committee-1' })
+    expect(calls.at(-1)).toEqual({ input: { committeeId: 'committee-1' } })
   })
 
   it('upserts on chat.updated and keeps the list sorted', () => {

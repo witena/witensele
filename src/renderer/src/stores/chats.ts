@@ -17,6 +17,7 @@ import { create } from 'zustand'
 import type {
   BackendErrorCode,
   Chat,
+  ChatCreateInput,
   ChatGoal,
   ChatGoalStatus,
   ChatSettingsPatch,
@@ -125,6 +126,47 @@ function sortChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/**
+ * What the New chat dialog asks for (S9.3).
+ *
+ * The three things a topic can be convened with, all optional. `committeeId` is
+ * accepted only here because `chats.create` accepts it only there: provenance
+ * is written once and `chats.update` has no word for it.
+ */
+export interface NewChatRequest {
+  /** Trimmed before it is sent; blank or absent lets the backend name the chat. */
+  title?: string | undefined
+  committeeId?: string | undefined
+  /** Individual agents, *beyond* whatever the committee contributes. */
+  memberAgentIds?: readonly string[] | undefined
+}
+
+/**
+ * One `ChatCreateInput` from either call shape, omitting every field the caller
+ * left empty.
+ *
+ * Omitting rather than sending a blank is the whole contract: `{}` is "you
+ * decide", and a `memberAgentIds: []` would look like a deliberately empty chat
+ * to a reader of the handler even though the backend happens to treat the two
+ * the same today.
+ */
+function createInput(request: readonly string[] | NewChatRequest | undefined): ChatCreateInput {
+  const normalized: NewChatRequest = Array.isArray(request)
+    ? { memberAgentIds: request }
+    : ((request as NewChatRequest | undefined) ?? {})
+
+  const title = normalized.title?.trim()
+  const memberAgentIds = normalized.memberAgentIds
+
+  return {
+    ...(title ? { title } : {}),
+    ...(normalized.committeeId ? { committeeId: normalized.committeeId } : {}),
+    ...(memberAgentIds && memberAgentIds.length > 0
+      ? { memberAgentIds: [...memberAgentIds] }
+      : {})
+  }
+}
+
 export interface ChatsState {
   /** Backend-owned mirror, newest `updatedAt` first. */
   chats: Chat[]
@@ -182,13 +224,18 @@ export interface ChatsState {
   /**
    * Creates a chat and selects it. Returns `null` and sets `error` on failure.
    *
-   * `memberAgentIds` is what the first-run card passes (S7.5). Without it the
-   * backend decides: an empty chat, unless the agent library is empty too, in
-   * which case the bootstrap agent is written and added. Once the user owns
-   * agents, picking who is in a chat is theirs — which is exactly why the card
-   * has to name the agent it just created rather than hope.
+   * Two call shapes, because S9.3 widened one that already had a caller. A bare
+   * array is `memberAgentIds` — what the first-run card passes (S7.5) — and a
+   * `NewChatRequest` is what the New chat dialog passes, with an optional title
+   * and an optional committee beside them.
+   *
+   * Everything is optional, and *nothing* named is nothing sent: `create()` and
+   * `create({})` both reach `chats.create` with an empty input, which is what
+   * makes "press Create having chosen nothing" behave exactly as the chat
+   * list's "+" always did — an empty chat, unless the agent library is empty
+   * too, in which case the backend writes the bootstrap agent and adds it.
    */
-  create: (memberAgentIds?: readonly string[]) => Promise<Chat | null>
+  create: (request?: readonly string[] | NewChatRequest) => Promise<Chat | null>
   rename: (id: string, title: string) => Promise<void>
   /**
    * Replaces a chat's member list, order included.
@@ -338,15 +385,12 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
     }
   },
 
-  async create(memberAgentIds) {
+  async create(request) {
     try {
-      // No title, and members only when the caller named them: `chats.create`
-      // fills in both otherwise (see `src/main/handlers/chats.ts`). It rejects
-      // with `validation` when no provider has a model, which is the first-run
-      // path.
-      const chat = await getBackend().invoke('chats.create', {
-        input: memberAgentIds ? { memberAgentIds: [...memberAgentIds] } : {}
-      })
+      // Only what the caller actually named: `chats.create` fills in the rest
+      // (see `src/main/handlers/chats.ts`). It rejects with `validation` when no
+      // provider has a model, which is the first-run path.
+      const chat = await getBackend().invoke('chats.create', { input: createInput(request) })
       get().applyUpdated(chat)
       set({ selectedId: chat.id, error: undefined, errorCode: undefined, errorDetails: undefined })
       await get().loadMembers(chat.id)

@@ -41,6 +41,7 @@ import { basename, join } from 'node:path'
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import {
   addOllamaProvider,
+  createChat,
   createUserDataDir,
   launchWitena,
   openAgents,
@@ -220,7 +221,7 @@ test('the agent list tags the executors and only the executors', async () => {
 
 test('an executor member shows the badge in the member panel', async () => {
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('chat-item')).toHaveCount(1)
 
   await addMember('Reviewer')
@@ -370,7 +371,7 @@ test('the hand-off button needs a folder and an executor, and says which is miss
  */
 test('a document goal shows the deliverable, and says so once it is written', async () => {
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await addMember('Reviewer')
   const chatId = await selectedChatId()
 
@@ -527,7 +528,7 @@ test('a chat with no executor shows no permission card', async () => {
   // The offline half of the acceptance sentence, and the one that always runs:
   // nothing can be waiting on a chat whose members cannot write anything.
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await addMember('Reviewer')
 
   await expect(memberRows()).toHaveCount(1)
@@ -557,7 +558,7 @@ test('the executor asks before writing, and the diff appears once it is allowed'
   // A chat of its own: one member, so nobody else speaks, and its own folder, so
   // the assertions are about files this test created.
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await addMember('Hands')
   const chatId = await selectedChatId()
   expect((await call('chats.update', { id: chatId, patch: { workdir: execdir } })).ok).toBe(true)
@@ -643,7 +644,7 @@ test('hands the discussion to the executor, and a participant reviews what it di
   await expect(window.getByTestId('agent-save')).toBeDisabled()
 
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await addMember('Reviewer')
   await addMember('Critic')
   await addMember('Hands')
@@ -756,7 +757,7 @@ test('a participant answers from the materials, and reads an unmarked file when 
   await createAgent('Watcher', 'participant')
 
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await addMember('Scout')
   await addMember('Watcher')
   await window.getByTestId('chat-max-rounds').selectOption('1')
@@ -846,7 +847,7 @@ test('a participant answers from the materials, and reads an unmarked file when 
  */
 test('the quick action needs a document goal on top of the hand-off rules', async () => {
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await addMember('Reviewer')
   const chatId = await selectedChatId()
   const deliver = window.getByTestId('chat-write-deliverable')

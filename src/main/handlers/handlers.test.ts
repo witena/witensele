@@ -8,6 +8,7 @@ import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_EDITOR_COMMAND,
   EDITOR_KINDS,
+  EXECUTOR_SANDBOX_MODES,
   LOCAL_USER_ID,
   THEME_SETTINGS,
   type ProviderAuthState,
@@ -310,6 +311,36 @@ describe('handlers/buildHandlers', () => {
       await expect(
         handlers['settings.update'](ctx, { patch: { editor: { nope: true } as never } })
       ).rejects.toMatchObject({ code: 'validation' })
+
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
+    })
+
+    it('stores every executor sandbox mode, and keeps it across a later patch (S5.15)', async () => {
+      for (const sandbox of EXECUTOR_SANDBOX_MODES) {
+        const updated = await handlers['settings.update'](ctx, { patch: { executor: { sandbox } } })
+        expect(updated.executor).toEqual({ sandbox })
+      }
+
+      await handlers['settings.update'](ctx, { patch: { executor: { sandbox: 'off' } } })
+      const updated = await handlers['settings.update'](ctx, { patch: { language: 'en' } })
+      expect(updated.executor).toEqual({ sandbox: 'off' })
+      await expect(handlers['settings.get'](ctx)).resolves.toEqual(updated)
+    })
+
+    it('rejects an executor patch that is malformed, and stores nothing', async () => {
+      const patches = [
+        { executor: 'off' },
+        { executor: null },
+        { executor: ['off'] },
+        { executor: { nope: true } },
+        { executor: { sandbox: 'chroot' } },
+        { executor: { sandbox: true } }
+      ]
+      for (const patch of patches) {
+        await expect(
+          handlers['settings.update'](ctx, { patch: patch as never })
+        ).rejects.toMatchObject({ code: 'validation' })
+      }
 
       await expect(handlers['settings.get'](ctx)).resolves.toEqual(DEFAULT_APP_SETTINGS)
     })
@@ -942,6 +973,12 @@ describe('handlers/stubs', () => {
       'system.updateStatus',
       'system.checkForUpdates',
       'system.installUpdate',
+      // S9.1
+      'committees.list',
+      'committees.get',
+      'committees.create',
+      'committees.update',
+      'committees.delete',
       // S10.4 — real handlers over an injected `IdeClients`, which the sweep's
       // context-shaped `{ userId }` cannot provide, so their cases live in
       // `integrations.test.ts`.

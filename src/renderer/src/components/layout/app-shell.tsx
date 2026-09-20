@@ -14,6 +14,7 @@
  */
 import { ChatsPage } from '../../pages/chats-page'
 import { AgentsPage } from '../../pages/agents-page'
+import { CommitteesPage } from '../../pages/committees-page'
 import { SettingsPage } from '../../pages/settings-page'
 import { useUiStore, type Page } from '../../stores/ui'
 import { NavRail } from './nav-rail'
@@ -21,6 +22,7 @@ import { UpdateBar } from './update-bar'
 
 const PAGE_COMPONENTS: Record<Page, () => React.JSX.Element> = {
   chats: ChatsPage,
+  committees: CommitteesPage,
   agents: AgentsPage,
   settings: SettingsPage
 }

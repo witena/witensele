@@ -31,6 +31,12 @@ S1.4 delivers the whole mechanism, not just the two files:
   match, and no hard-coded string may reach JSX.
 - The full key tree for the screens S1.5–S2.5 will build, written ahead of the
   components so those steps add UI rather than vocabulary.
+- Since S9.3 the rules also cover **reuse**: a screen that says a thing another
+  screen already says reads that screen's key rather than adding its own. The
+  New chat dialog draws four sentences it did not write, and the test for
+  whether that is reuse or coincidence is whether the two places would have to
+  change together. Neither guard can catch two keys drifting apart, so this one
+  is a review rule, written down in [frontend.md](./frontend.md).
 
 ## Out of scope
 

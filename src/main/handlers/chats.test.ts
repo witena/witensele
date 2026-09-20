@@ -21,6 +21,8 @@ import {
   MAX_ORIGIN_CLIENT_CHARS,
   type Agent,
   type ChatGoal,
+  type ChatPatch,
+  type Committee,
   type Provider
 } from '@shared/types'
 import type { AppContext } from '../app-context'
@@ -121,6 +123,117 @@ describe('handlers/chats members and settings', () => {
       await expect(handlers['chats.create'](ctx, { input: {} })).rejects.toMatchObject({
         code: 'validation'
       })
+    })
+  })
+
+  /**
+   * S9.1. A committee is expanded into `chat_members` at creation and recorded
+   * on the chat as provenance; everything else about a chat is unchanged.
+   */
+  describe('chats.create with a committee', () => {
+    const createCommittee = (name: string, memberAgentIds: string[]): Promise<Committee> =>
+      handlers['committees.create'](ctx, {
+        input: { name, description: '', memberAgentIds }
+      })
+
+    it('puts the committee first, then the extras, without duplicates', async () => {
+      const ada = await createAgent('Ada')
+      const bob = await createAgent('Bob')
+      const cy = await createAgent('Cy')
+      const committee = await createCommittee('Review', [bob, ada].map((agent) => agent.id))
+
+      const chat = await handlers['chats.create'](ctx, {
+        input: { title: 'Topic', committeeId: committee.id, memberAgentIds: [cy.id, ada.id] }
+      })
+
+      // `ada` was in the committee and named again: she keeps the committee's
+      // place in the speaking order rather than being pushed to the end.
+      expect(ctx.repos.chats.listMembers(chat.id, ctx.userId).map((m) => m.agentId)).toEqual([
+        bob.id,
+        ada.id,
+        cy.id
+      ])
+      expect(chat.committeeId).toBe(committee.id)
+    })
+
+    it('rejects a committeeId that names no committee', async () => {
+      await createAgent('Ada')
+      const before = ctx.repos.chats.list(ctx.userId).length
+
+      await expect(
+        handlers['chats.create'](ctx, { input: { committeeId: 'ghost' } })
+      ).rejects.toMatchObject({ code: 'not_found' })
+
+      expect(ctx.repos.chats.list(ctx.userId)).toHaveLength(before)
+    })
+
+    it('refuses two executors spread across the committee and the extras', async () => {
+      const hands = await createExecutor('Hands')
+      const other = await createExecutor('Other hands')
+      const committee = await createCommittee('Builders', [hands.id])
+      const before = ctx.repos.chats.list(ctx.userId).length
+
+      await expect(
+        handlers['chats.create'](ctx, {
+          input: { committeeId: committee.id, memberAgentIds: [other.id] }
+        })
+      ).rejects.toMatchObject({ code: 'validation', details: { reason: 'second_executor' } })
+
+      // Refused before the row exists, so nothing was left half-built.
+      expect(ctx.repos.chats.list(ctx.userId)).toHaveLength(before)
+    })
+
+    it('is a snapshot: editing the committee later leaves the topic alone', async () => {
+      const ada = await createAgent('Ada')
+      const bob = await createAgent('Bob')
+      const committee = await createCommittee('Review', [ada.id])
+      const chat = await handlers['chats.create'](ctx, {
+        input: { committeeId: committee.id }
+      })
+
+      await handlers['committees.update'](ctx, {
+        id: committee.id,
+        patch: { memberAgentIds: [bob.id, ada.id] }
+      })
+
+      expect(ctx.repos.chats.listMembers(chat.id, ctx.userId).map((m) => m.agentId)).toEqual([
+        ada.id
+      ])
+      // The provenance still points at the committee that has since grown —
+      // which is what lets S9.3 offer "Sync committee members".
+      expect(ctx.repos.chats.get(chat.id, ctx.userId).committeeId).toBe(committee.id)
+    })
+
+    it('falls back to the bootstrap agent only when the merged list and the library are empty', async () => {
+      const empty = await createCommittee('Nobody', [])
+
+      const first = await handlers['chats.create'](ctx, { input: { committeeId: empty.id } })
+      const [bootstrap] = ctx.repos.agents.list(ctx.userId)
+      expect(bootstrap?.name).toBe(DEFAULT_AGENT_NAME)
+      expect(ctx.repos.chats.listMembers(first.id, ctx.userId).map((m) => m.agentId)).toEqual([
+        bootstrap?.id
+      ])
+
+      // With a library, an empty committee simply makes an empty chat.
+      const second = await handlers['chats.create'](ctx, { input: { committeeId: empty.id } })
+      expect(ctx.repos.chats.listMembers(second.id, ctx.userId)).toEqual([])
+      expect(ctx.repos.agents.list(ctx.userId)).toHaveLength(1)
+    })
+
+    it('does not let chats.update move a topic to another committee', async () => {
+      const ada = await createAgent('Ada')
+      const committee = await createCommittee('Review', [ada.id])
+      const other = await createCommittee('Other', [ada.id])
+      const chat = await handlers['chats.create'](ctx, { input: { committeeId: committee.id } })
+
+      // `ChatPatch` omits the field, so this is a hand-written call; provenance
+      // is written once and the patch is ignored rather than obeyed.
+      const updated = await handlers['chats.update'](ctx, {
+        id: chat.id,
+        patch: { committeeId: other.id } as ChatPatch
+      })
+
+      expect(updated.committeeId).toBe(committee.id)
     })
   })
 

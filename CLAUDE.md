@@ -110,8 +110,8 @@ Details and the full key tree are in `docs/features/i18n/`. The short version:
 
 1. **Add the key to both locale files.** `src/renderer/src/locales/en.json` and
    `zh-CN.json`, in the same position in the tree. The top-level keys are the
-   namespaces: `common`, `nav`, `chat`, `agents`, `settings`, `presence`,
-   `notices`. `zh-CN.json` is the only file in the repository that may contain
+   namespaces: `common`, `nav`, `chat`, `committees`, `agents`, `settings`,
+   `presence`, `notices`. `zh-CN.json` is the only file in the repository that may contain
    Chinese; `en.json` may not contain any.
 2. **Render it with `t()`.** `const { t } = useTranslation()`, then
    `{t('chat.send')}`. Interpolate with `{{name}}` in the JSON and

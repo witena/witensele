@@ -13,10 +13,13 @@
  */
 import {
   EDITOR_KINDS,
+  EXECUTOR_SANDBOX_MODES,
   THEME_SETTINGS,
   type AppSettingsPatch,
   type EditorKind,
   type EditorSettings,
+  type ExecutorSandboxMode,
+  type ExecutorSettings,
   type McpEndpointSettings,
   type ThemeSetting
 } from '@shared/types'
@@ -52,6 +55,33 @@ function assertEditorPatch(editor: unknown): asserts editor is Partial<EditorSet
   }
   if (command !== undefined && (typeof command !== 'string' || command.trim().length === 0)) {
     throw validation('settings.update: editor.command must be a non-empty string')
+  }
+}
+
+/**
+ * The `executor` half of the patch (S5.15), checked like `editor`.
+ *
+ * `sandbox` is compared with `'off'` when the executor's tools are built, so an
+ * unknown value would not fail: it would quietly mean "sandboxed" or "not"
+ * depending on which side of that comparison the reader sits. For the one
+ * setting that decides whether a command may write outside the folder, a
+ * refusal is the only acceptable answer.
+ */
+function assertExecutorPatch(executor: unknown): asserts executor is Partial<ExecutorSettings> {
+  if (typeof executor !== 'object' || executor === null || Array.isArray(executor)) {
+    throw validation('settings.update: executor must be an object')
+  }
+  const allowed = new Set(['sandbox'])
+  const unknownKeys = Object.keys(executor).filter((key) => !allowed.has(key))
+  if (unknownKeys.length > 0) {
+    throw validation(`settings.update: executor received unknown keys: ${unknownKeys.join(', ')}`)
+  }
+
+  const { sandbox } = executor as Partial<ExecutorSettings>
+  if (sandbox !== undefined && !EXECUTOR_SANDBOX_MODES.includes(sandbox as ExecutorSandboxMode)) {
+    throw validation(
+      `settings.update received an unknown executor sandbox mode: ${String(sandbox)} (expected ${EXECUTOR_SANDBOX_MODES.join(', ')})`
+    )
   }
 }
 
@@ -103,6 +133,7 @@ function assertPatch(patch: unknown): asserts patch is AppSettingsPatch {
     'language',
     'theme',
     'editor',
+    'executor',
     'mcpEndpoint',
     'timeouts',
     'onboardingDismissed'
@@ -119,6 +150,8 @@ function assertPatch(patch: unknown): asserts patch is AppSettingsPatch {
   }
   const editor = (patch as AppSettingsPatch).editor
   if (editor !== undefined) assertEditorPatch(editor)
+  const executor = (patch as AppSettingsPatch).executor
+  if (executor !== undefined) assertExecutorPatch(executor)
 
   const mcpEndpoint = (patch as AppSettingsPatch).mcpEndpoint
   if (mcpEndpoint !== undefined) assertMcpEndpointPatch(mcpEndpoint)

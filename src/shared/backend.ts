@@ -30,6 +30,9 @@ import type {
   ChatGoalStatus,
   ChatMember,
   ChatPatch,
+  Committee,
+  CommitteeInput,
+  CommitteePatch,
   ConnectionTestResult,
   HandoffIntent,
   IdeClientId,
@@ -370,11 +373,37 @@ export interface BackendApi {
   /** Case-insensitive substring search over the index and every note body. */
   'memory.search': (input: { agentId: string; query: string }) => Promise<MemorySearchHit[]>
 
+  /* -- committees --------------------------------------------------------- */
+
+  /**
+   * Standing groups of agents (Phase 9), newest `updatedAt` first.
+   *
+   * Membership rides on the entity — `Committee.memberAgentIds`, ordered — so
+   * there is no `committees.members.*` pair to keep in step with it: `create`
+   * and `update` write the row and its join rows in one transaction.
+   */
+  'committees.list': () => Promise<Committee[]>
+  'committees.get': (input: { id: string }) => Promise<Committee>
+  'committees.create': (input: { input: CommitteeInput }) => Promise<Committee>
+  /** An absent field is left alone; `memberAgentIds` replaces the whole list. */
+  'committees.update': (input: { id: string; patch: CommitteePatch }) => Promise<Committee>
+  /**
+   * Removes the committee. Its topics keep their members and their transcript;
+   * only `Chat.committeeId` goes back to `null`, and each affected chat is
+   * announced with a `chat.updated`.
+   */
+  'committees.delete': (input: { id: string }) => Promise<void>
+
   /* -- chats -------------------------------------------------------------- */
 
   'chats.list': () => Promise<Chat[]>
   'chats.get': (input: { id: string }) => Promise<Chat>
-  /** `memberAgentIds` seeds the member list; see `ChatCreateInput`. */
+  /**
+   * `committeeId` convenes a committee on this topic and `memberAgentIds` adds
+   * individual agents: the members are the committee's, in its own order,
+   * followed by the extras, de-duplicated keeping the first occurrence. See
+   * `ChatCreateInput`.
+   */
   'chats.create': (input: { input: ChatCreateInput }) => Promise<Chat>
   /** `settings` is merged field by field; see `ChatPatch`. */
   'chats.update': (input: { id: string; patch: ChatPatch }) => Promise<Chat>
@@ -610,6 +639,11 @@ export const BACKEND_METHODS = [
   'memory.write',
   'memory.delete',
   'memory.search',
+  'committees.list',
+  'committees.get',
+  'committees.create',
+  'committees.update',
+  'committees.delete',
   'chats.list',
   'chats.get',
   'chats.create',

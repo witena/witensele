@@ -4,14 +4,17 @@
 
 | File | Responsibility |
 |---|---|
-| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the three list loads (chats, agents, providers), the per-chat transcript load, the group-settings block (which writes straight through to `chats.update`) including the S5.2 "Working directory" row, the folder chip beside the header title, and — since S5.10 — the goal-status load and the two goal surfaces it hosts |
+| `src/renderer/src/pages/chats-page.tsx` | The three-column page. Owns the list loads (chats, agents, providers, and since S9.3 committees), the per-chat transcript load, the group-settings block (which writes straight through to `chats.update`) including the S5.2 "Working directory" row, the folder chip beside the header title, and — since S5.10 — the goal-status load and the two goal surfaces it hosts. **S9.3**: resolves `Chat.committeeId` to a name for the header chip and the chat-list badge, computes the sync gap with `lib/committee-members.ts`, and renders the New chat dialog |
+| `src/renderer/src/components/chat/new-chat-dialog.tsx` | **S9.3.** What the chat list's "+" now opens: an optional title, at most one committee, any number of individual agents, a live "n members will join" count, Create and Cancel. Owned by [`committees`](../committees/frontend.md); hosted here because what it creates is a chat. Pressing Create having chosen nothing is the call the "+" button used to make |
+| `src/renderer/src/components/ui/dialog.tsx` | **S9.3.** The shell's first modal primitive — the scrim, `role="dialog"` + `aria-modal`, a focus trap that restores focus on close, Escape from a capturing document listener, and dismissal on a `mousedown` that started on the backdrop |
+| `src/renderer/src/lib/committee-members.ts` | **S9.3.** `mergeMembers` (the renderer's counting copy of the backend's merge rule) and `missingCommitteeMembers` (the gap a snapshot leaves). Pure and unit-tested, like `handoff.ts` and `goal.ts` |
 | `src/renderer/src/components/onboarding/onboarding-card.tsx` | **S7.5.** The first-run card, drawn in the conversation column in place of the "no chat selected" empty state. Five steps done in place, the first three of them the provider editor's own components (see [`providers`](../providers/frontend.md)), then the agent templates and the button that creates the first chat. Exports `useOnboarding()`, which the page calls to decide which of the two to render |
 | `src/renderer/src/lib/onboarding.ts` | `onboardingState(input)` and `credentialReady(draft, authStatus)`: which step is current, and whether the card should be on screen at all. Pure and unit-tested, like `handoff.ts` and `goal.ts` |
 | `src/renderer/src/components/chat/goal-settings.tsx` | The **Goal** block (S5.10) under the Working directory row: the kind `SegmentedControl` (Document and Codebase disabled without a folder, with the reason under them), the description, the deliverable and its "Choose…", the "Write the deliverable automatically when the discussion concludes" switch (S5.18, shown for a `document` only; a `ChatSettings` patch rather than part of the draft), and the materials list with "Add…". The one block in the panel that holds a **draft**, because a goal is one JSON column and two of its fields are free text; it writes on blur |
 | `src/renderer/src/components/chat/grants-list.tsx` | The **Always allowed** block (S5.15), last in the group settings: one monospace row per standing permission grant, newest first, each with a revoke button that appears on hover, or an empty line saying how a row gets there. Owned by [`executor`](../executor/frontend.md); hosted here |
 | `src/renderer/src/components/chat/goal-chip.tsx` | The goal chip in the header (S5.10). Four states, one of which is a button: a **delivered** document opens in the editor through S5.7's `openInEditor`, and a refused open paints the chip red for 2.5 s |
 | `src/renderer/src/components/chat/goal.ts` | `goalChipState(goal, status)`: which of those four states to draw, and what to open. Pure and unit-tested; the component turns it into `t()` copy |
-| `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete. Since S5.16 a row's subtitle is the chat's **conclusion** (`chat-item-conclusion`, the translated label plus its first line) when `conclusionPreviews` has one for it, and the member count otherwise |
+| `src/renderer/src/components/chat/chat-list.tsx` | The grouped chat list: selection, kebab / right-click menu, inline rename, two-step delete. Since S5.16 a row's subtitle is the chat's **conclusion** (`chat-item-conclusion`, the translated label plus its first line) when `conclusionPreviews` has one for it, and the member count otherwise. Since S9.3 a row convened from a committee also carries a `chat-item-committee` badge under the title, from the `committeeNames` lookup the page passes — under and not beside, because 264px minus the kebab has no room for a badge on the title line |
 | `src/renderer/src/components/chat/message-list.tsx` | The virtualized scroller (react-virtuoso): `followOutput` only while at the bottom, the "jump to latest" pill, the day separators, and (S5.16) `scrollTo`, which the header's Conclusion chip uses to bring one message back into view |
 | `src/renderer/src/components/chat/transcript-rows.ts` | The transcript's pure transforms: `buildTranscriptRows` / `dayBucket` (`Message[]` → the flat row array the virtualizer renders, each message row carrying `conclusion` since S5.16 and `viaClient` since S10.4 — `originClient`, the client name of an `OriginPart`, or `null`) and, since S5.5, `collectDiffs`, `collectFileRefs`, `countDiffLines` and `formatFileRef` — the part-level cases a message row draws. Unit-tested |
 | `src/renderer/src/components/chat/conclusion-card.tsx` | The conclusion card (S5.16): the "Conclusion" label, the accent edge, the body, the speaker underneath, **Copy** (the markdown source, through `navigator.clipboard`) and **Write to the deliverable** (`chat.handoff` with `intent: 'deliver'`) |
@@ -33,8 +36,10 @@
 | `src/renderer/src/components/chat/composer.tsx` | Auto-growing textarea (Enter sends, Shift+Enter newline, IME-safe, up to 8 lines), the `@` autocomplete popover, the clickable mention chips plus `@all`, Send / Stop |
 | `src/renderer/src/components/chat/mention-query.ts` | `extractMentionQuery` / `filterMentionCandidates` / `insertMention` / `appendMention`: everything the autocomplete could get wrong. Pure and unit-tested |
 | `src/renderer/src/components/chat/actions-card.tsx` | The right column's Actions card: the summarise picker and the vote button, both sending an ordinary message — the vote with `VOTE_ROUNDS` (`1`, S5.14), so it runs one round whatever the chat's Max automatic rounds says — and, since S5.12, "Write the deliverable" (`chat-write-deliverable`), the one row that does **not**: it is `chat.handoff` with `intent: 'deliver'`, owned by [`orchestration`](../orchestration/frontend.md) and disabled by the same `handoffBlocker` as the button above the composer |
-| `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover (which since S5.2 greys out a second executor and says why in its sub-line), the member rows (avatar with presence dot, name, the executor badge, `model · presence` — counting up as `away · Ns` — the usage placeholder or, while the member is offline, a Retry button, and remove on hover) and native HTML5 drag-and-drop reordering |
-| `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested |
+| `src/renderer/src/components/chat/member-panel.tsx` | The right column: the add-member popover (which since S5.2 greys out a second executor and says why in its sub-line), the member rows (avatar with presence dot, name, the executor badge, `model · presence` — counting up as `away · Ns` — the usage placeholder or, while the member is offline, a Retry button, and remove on hover) and native HTML5 drag-and-drop reordering. **S9.2 extracted the popover and the drag** into `components/agents/agent-picker.tsx` and `components/ui/reorderable-list.tsx` so the committee editor reuses both; the panel's DOM, classes and test ids are unchanged, and `e2e/members.spec.ts` needed no edit. What stayed here is what is the panel's own: whether the picker is open (closed by a `mousedown` outside the whole panel — a listener inside the popover would fire before the Add button's own click and reopen it), the presence and usage columns, and the single `chats.members.set` every action ends in. **S9.3** adds one control below the list: `member-sync-committee`, drawn only when the page hands it a non-empty `missingCommitteeMemberIds`, which appends them and never removes anyone |
+| `src/renderer/src/components/agents/agent-picker.tsx` | S9.2: the shared add-an-agent popover. Owned by [`committees`](../committees/frontend.md); the panel passes `testIdPrefix="member"`, which reproduces `member-picker`, `member-candidate` and `member-candidate-executor` exactly, plus the two `chat.addMember*` sentences and the positioning |
+| `src/renderer/src/components/ui/reorderable-list.tsx` | S9.2: the shared draggable rows. Renders no container element, so the panel's own flex column and its `gap` still lay the members out |
+| `src/renderer/src/lib/reorder.ts` | `reorder(list, from, to)`: the index arithmetic behind the drag, pure and unit-tested. Called by the panel and, since S9.2, by `stores/committees` |
 | `src/renderer/src/lib/workdir.ts` | `folderName(path)`: the last segment of a path, for the header chip and the settings row. Hand-written rather than `node:path`, because the renderer has no Node types. Pure and unit-tested |
 | `src/renderer/src/i18n/errors.ts` | `translateFailure(t, code, details)`: the one place a store's `errorCode` + `errorDetails` becomes a sentence, and where a `ValidationReason` overrides the generic `validation` copy |
 | `src/renderer/src/components/agents/agent-display.ts` | `agentModelLabel`, plus `isExecutor` / `hasExecutor` (S5.2) — shared with the Agents page so all four surfaces that draw the badge read one rule |
@@ -51,6 +56,9 @@
 | `chats` | `membersByChat` | `Record<string, string[]>` | Backend-owned member agent ids, in speaking order. Written only by `setMembers`, which goes through the backend first |
 | `chats` | `goalStatusByChat` | `Record<string, ChatGoalStatus>` | Backend-owned (S5.10), from `chats.goalStatus`. A chat with no entry has simply not been asked about yet, which the chip draws as "not delivered" rather than as a third state |
 | `chats` | `selectedId` | `string \| null` | Local UI state, not persisted |
+| `chats` | `create(request)` | `readonly string[] \| NewChatRequest` | **S9.3**: widened for the New chat dialog. A bare array is `memberAgentIds`, as the first-run card has always passed it; the object adds `title` and `committeeId`. Empty fields are omitted from the payload, so `create({})` is the "+" button's original call |
+| `committees` | `committees` | `Committee[]` | Backend-owned; owned by [`committees`](../committees/frontend.md). **S9.3**: this page reads it for the dialog's list, the two provenance badges and the sync gap. Never read while a chat runs — membership was snapshotted at creation |
+| `ui` | `newChatDialog` | `{ open: boolean; committeeId?: string }` | **S9.3**: local UI state. In the store rather than in this page because the Committees page's "New topic" opens it across a navigation |
 | `settings` | `settings.onboardingDismissed` | `boolean` | Backend-owned (S7.5). Read by `useOnboarding`, written once by the card's Skip link through `dismissOnboarding()` |
 | `chats` | `status` / `error` / `errorCode` / `errorDetails` | | Load state and the last failure. `errorDetails` is the rejection's own `details`, which may carry a `ValidationReason` — that is what turns "the request was rejected as invalid" into "that folder no longer exists" |
 | `messages` | `byChat` | `Record<string, Message[]>` | Backend-owned, **oldest first** |
@@ -71,7 +79,9 @@ Selectors worth knowing: `useChatMessages(chatId)`, `useChatMemberIds(chatId)`,
 `useIsRunning(chatId)`, `useAgentPresence(chatId, agentId)`, `useAgent(id)`, and
 since S7.5 `useHasChatWithMembers()` — a boolean, because it is the single fact
 that ends the first-run card and a derived array would re-render it on every
-write. Each
+write. The two committee questions are **not** selectors: `mergeMembers` and
+`missingCommitteeMembers` in `lib/committee-members.ts` are pure functions over
+values the page already holds (S9.3). Each
 returns a stable reference for the empty case, because a fresh array from a
 selector re-renders on every store write.
 
@@ -80,7 +90,9 @@ selector re-renders on every store write.
 | Call / subscription | Called from | Purpose |
 |---|---|---|
 | `invoke('chats.list')` + `invoke('chats.members.list')` | `chats.load()`, from the page's mount effect | The left column and its "N members" subtitles |
-| `invoke('chats.create')` | The "+" button, and (S7.5) the first-run card's "Start chat" | Creates and selects a chat; also reloads `agents` because the bootstrap agent may have just been created. The card passes `memberAgentIds`: once the agent library is non-empty the backend creates an **empty** chat, so the card names the agent it has just made rather than producing a chat nobody can speak in |
+| `invoke('chats.create')` | The New chat dialog's **Create** (S9.3), and (S7.5) the first-run card's "Start chat" | Creates and selects a chat; also reloads `agents` because the bootstrap agent may have just been created. The card passes `memberAgentIds`: once the agent library is non-empty the backend creates an **empty** chat, so the card names the agent it has just made rather than producing a chat nobody can speak in. The dialog additionally passes `title` and `committeeId`, and only the *extras* as members — expanding the committee is the handler's job |
+| `invoke('committees.list')` | The page's mount effect (S9.3) | Committee names for the two provenance badges, and the list the dialog offers |
+| `invoke('chats.members.set')` | **Sync committee members** (S9.3) | The chat's current members with the missing committee members appended. An ordinary membership write, refused by the same one-executor rule as any other |
 | `invoke('agents.create')` | The card's template tiles (S7.5), through `agents.createFromTemplate` | The first agent, from `@shared/agent-templates` |
 | `invoke('settings.update', { patch: { onboardingDismissed: true } })` | The card's Skip link (S7.5) | Hides the card for this installation |
 | `invoke('chats.update')` | Inline rename | Title change; the row floats to the top |
@@ -164,6 +176,11 @@ Event handling is written once, in `lib/event-bridge.ts`:
 | a conclusion has been copied | The Copy button reads "Copied" and turns accent for two seconds (`data-copied="true"`). What is on the clipboard is the **markdown source**, not the rendered text |
 | a chat holds a conclusion | An accent "Conclusion" chip in the header beside the goal chip, carrying `data-message-id`. Clicking scrolls the transcript to that card, centred, and clicking it again scrolls back to it |
 | the chat list has read a chat's transcript | That row's subtitle is the conclusion's first line behind the translated label, instead of "N members". A chat that has never been opened keeps the count |
+| the New chat dialog is open (S9.3) | The window is dimmed behind a modal panel: an optional title, the committee list, the agent list and "n members will join". Escape, the scrim, Cancel and the header's × all dismiss it; Create closes it only if the chat was written, and a refusal prints `new-chat-error` inside the panel |
+| a committee is picked in the dialog | Its row is ticked and every one of its members is ticked **and locked** in the agent list, with "Joins with the committee" where the model line would be. Picking the row again clears the committee; picking a *different* one drops any extras it makes impossible |
+| a second executor is offered in the dialog | The agent's row is disabled at 55% opacity with `chat.executorTaken` under the name — the same sentence, the same rule and the same treatment as in the member picker |
+| a chat was convened from a committee | An accent badge with the committee's **name**: under the title on its chat-list row (`chat-item-committee`) and beside the title in the header (`chat-committee-chip`). Both disappear on their own when the committee is deleted — the backend nulls `committeeId` and emits `chat.updated` |
+| the committee has gained a member since (S9.3) | **Sync committee members (n)** under the member list, with `data-missing` counting them. It appends them and never removes anyone; it is absent, not disabled, when there is nothing to sync |
 
 Sending during a run is deliberately allowed: the message appears immediately and
 is answered after the current run (see `../orchestration/context.md`).
@@ -214,6 +231,10 @@ New keys, all under the existing namespaces:
 | `chat.actions.summarizePrompt`, `chat.actions.votePrompt` | The **message text** each action sends, after the `@mention`. A locale key rather than a constant, because an agent answers in the language it is addressed in |
 | `notices.consensus`, `notices.voteClosed` | The two dimmed lines S5.14 added to the transcript, written by the runner and translated like every other notice — see [`orchestration`](../orchestration/frontend.md) |
 | `agents.reasoning`, `agents.reasoningHint` | Renamed by S5.14 to "Show thinking" and its hint; the control is [`agents`](../agents/frontend.md)'s, and what the transcript then holds is [`agent-turn`](../agent-turn/frontend.md)'s |
+| `chat.newChatCreate`, `chat.newChatTitleLabel`, `chat.newChatTitlePlaceholder`, `chat.newChatCommitteesHint`, `chat.newChatCommitteesEmpty`, `chat.newChatAgents`, `chat.newChatFromCommittee`, `chat.newChatSummary` | S9.3's New chat dialog. The panel's own heading is `chat.newChat` — the "+" button's label, unchanged — and the committee section's heading is `nav.committees`: the same word the rail uses, and a second translation of it would be free to drift. Committee and agent **names** are data and are printed |
+| `common.close` | The × in a `Dialog`'s header. In `common` because it belongs to the primitive, not to this page |
+| `chat.committeeBadgeTitle` | The tooltip on both provenance badges (`{{name}}`). The badge's *text* is the committee's name, which is data |
+| `chat.syncCommittee`, `chat.syncCommitteeTitle` | The member panel's sync button (`{{members}}`) and its tooltip |
 
 Already present and now actually used: `chat.today` / `yesterday` / `earlier`,
 `chat.round`, `chat.passed`, `chat.skipped`, `chat.send`, `chat.stop`,
@@ -291,3 +312,18 @@ is never translated.
   opens the file, with the expand/collapse word as a third.
 - The diff block's toggle is a `button` with `aria-expanded`; the file-reference
   chip is a `button` with a translated `title`.
+- **The New chat dialog is a real modal** (S9.3): `role="dialog"`,
+  `aria-modal="true"`, labelled by its own heading, focus moved inside on open
+  and returned to whatever had it on close, Tab and Shift+Tab cycling within the
+  panel, and Escape dismissing it from a **capturing** document listener —
+  without the capture the title field would swallow the key. Every row in its
+  two lists is a `<button>`; the tick beside a row is drawn rather than a real
+  checkbox, because the row is the control and two focus stops for one decision
+  would be worse than one. S9.3 added the test ids `new-chat-dialog` (and
+  `new-chat-dialog-backdrop`), `dialog-close`, `new-chat-title`,
+  `new-chat-committee` (with `data-committee-id` and `data-selected`),
+  `new-chat-agent` (with `data-agent-id`, `data-selected`, `data-locked` and
+  `data-blocked`), `new-chat-agent-executor`, `new-chat-summary` (with
+  `data-members`), `new-chat-error`, `new-chat-cancel` and `new-chat-create`,
+  plus `chat-committee-chip`, `chat-item-committee`, `committee-new-topic` and
+  `member-sync-committee` (with `data-missing`).

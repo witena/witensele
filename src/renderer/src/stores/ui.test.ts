@@ -12,7 +12,11 @@ const INITIAL = useUiStore.getState()
 beforeEach(() => {
   // zustand stores are module singletons; without this a test would inherit the
   // page the previous one navigated to.
-  useUiStore.setState({ page: INITIAL.page, settingsSection: INITIAL.settingsSection })
+  useUiStore.setState({
+    page: INITIAL.page,
+    settingsSection: INITIAL.settingsSection,
+    newChatDialog: { open: false }
+  })
 })
 
 describe('ui store', () => {
@@ -51,8 +55,58 @@ describe('ui store', () => {
     expect(useUiStore.getState().page).toBe('agents')
   })
 
+  it('lists the rail destinations in rail order, Settings last', () => {
+    // The order is what the rail renders top to bottom (S9.2 inserted
+    // `committees` between Chats and Agents), and `app-shell.tsx` keys its page
+    // lookup off the same union — a page added to one and not the other is a
+    // compile error there and a missing button here.
+    expect([...PAGES]).toEqual(['chats', 'committees', 'agents', 'settings'])
+  })
+
   it('lists the sections the settings nav renders, without duplicates', () => {
     expect(new Set(SETTINGS_SECTIONS).size).toBe(SETTINGS_SECTIONS.length)
     expect(new Set(PAGES).size).toBe(PAGES.length)
+  })
+})
+
+describe('the new chat dialog (S9.3)', () => {
+  it('starts closed, on no committee', () => {
+    expect(useUiStore.getState().newChatDialog).toEqual({ open: false })
+  })
+
+  it('opens with no committee for the chat list’s "+"', () => {
+    useUiStore.getState().openNewChatDialog()
+
+    // No `committeeId` key at all, not a key holding `undefined`:
+    // `exactOptionalPropertyTypes` is on and the dialog reads the absence.
+    expect(useUiStore.getState().newChatDialog).toEqual({ open: true })
+  })
+
+  it('opens on a committee for "New topic"', () => {
+    useUiStore.getState().openNewChatDialog('committee-1')
+
+    expect(useUiStore.getState().newChatDialog).toEqual({
+      open: true,
+      committeeId: 'committee-1'
+    })
+  })
+
+  it('forgets the committee when it closes', () => {
+    // Otherwise the next plain "+" would arrive with the committee of whatever
+    // the user last convened still ticked.
+    useUiStore.getState().openNewChatDialog('committee-1')
+    useUiStore.getState().closeNewChatDialog()
+
+    expect(useUiStore.getState().newChatDialog).toEqual({ open: false })
+  })
+
+  it('does not navigate on its own', () => {
+    // "New topic" is two calls — open, then `setPage` — because the Committees
+    // page has to decide the order, and the chat list must not change page when
+    // it opens the very dialog it is already showing.
+    useUiStore.getState().setPage('committees')
+    useUiStore.getState().openNewChatDialog('committee-1')
+
+    expect(useUiStore.getState().page).toBe('committees')
   })
 })

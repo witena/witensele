@@ -13,6 +13,7 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import type {
   Chat,
+  ChatCreateInput,
   ChatMember,
   ChatPatch,
   ChatSettings,
@@ -82,12 +83,24 @@ export function mergeChatSettings(
   return merged as ChatSettings
 }
 
+/**
+ * What `create` accepts: a chat patch plus the committee this topic is
+ * convened from.
+ *
+ * `memberAgentIds` is dropped because membership is a separate table the
+ * handler fills with `setMembers`, and `committeeId` is **only** here: it is
+ * absent from `ChatPatch` on purpose, so provenance can be written at birth and
+ * never again.
+ */
+export type ChatCreateFields = Omit<ChatCreateInput, 'memberAgentIds'>
+
 export interface ChatRepository {
   /** Newest `updatedAt` first. */
   list(userId?: UserId): Chat[]
   get(id: string, userId?: UserId): Chat
   /** Missing fields fall back to `DEFAULT_CHAT_TITLE` and `DEFAULT_CHAT_SETTINGS`. */
-  create(input?: ChatPatch, userId?: UserId): Chat
+  create(input?: ChatCreateFields, userId?: UserId): Chat
+  /** `committeeId` is not patchable; see `ChatCreateFields`. */
   update(id: string, patch: ChatPatch, userId?: UserId): Chat
   /** Cascades to `chat_members` and `messages`. */
   delete(id: string, userId?: UserId): void
@@ -113,6 +126,13 @@ export interface ChatRepository {
    * membership rows.
    */
   listChatIdsForAgent(agentId: string, userId?: UserId): string[]
+  /**
+   * Ids of the topics convened from a committee, newest chat first.
+   *
+   * Read by `committees.delete`, which has to tell the renderer those chats
+   * changed *after* the foreign key has set their `committee_id` to null.
+   */
+  listChatIdsForCommittee(committeeId: string, userId?: UserId): string[]
 }
 
 function toChat(row: ChatRow): Chat {
@@ -124,6 +144,7 @@ function toChat(row: ChatRow): Chat {
     title: row.title,
     workdir: row.workdir,
     goal: row.goal,
+    committeeId: row.committeeId,
     settings: row.settings
   }
 }
@@ -171,6 +192,7 @@ export function createChatRepository(db: DrizzleDb): ChatRepository {
         title: input.title ?? DEFAULT_CHAT_TITLE,
         workdir: input.workdir ?? null,
         goal: input.goal ?? null,
+        committeeId: input.committeeId ?? null,
         settings: mergeChatSettings(DEFAULT_CHAT_SETTINGS, input.settings ?? {}),
         createdAt: timestamp,
         updatedAt: timestamp
@@ -300,6 +322,16 @@ export function createChatRepository(db: DrizzleDb): ChatRepository {
         .from(chatMembers)
         .innerJoin(chats, eq(chatMembers.chatId, chats.id))
         .where(and(eq(chatMembers.agentId, agentId), eq(chats.userId, userId)))
+        .orderBy(desc(chats.updatedAt))
+        .all()
+        .map((found) => found.id)
+    },
+
+    listChatIdsForCommittee(committeeId, userId = LOCAL_USER_ID) {
+      return db
+        .select({ id: chats.id })
+        .from(chats)
+        .where(and(eq(chats.committeeId, committeeId), eq(chats.userId, userId)))
         .orderBy(desc(chats.updatedAt))
         .all()
         .map((found) => found.id)

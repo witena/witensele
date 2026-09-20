@@ -47,6 +47,7 @@ import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import {
   addOllamaProvider,
+  createChat,
   createUserDataDir,
   launchWitena,
   locale,
@@ -234,7 +235,7 @@ async function waitForRunToEnd(): Promise<void> {
 /** A fresh chat with both members, so each test starts from an empty transcript. */
 async function newChatWithBothMembers(): Promise<void> {
   const before = await window.getByTestId('chat-item').count()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
   await addMember('Agreeable')
   await addMember('Amenable')
@@ -366,7 +367,7 @@ test('a document chat writes its deliverable when the discussion closes', async 
   for (let attempt = 0; attempt < ATTEMPTS && !asked; attempt += 1) {
     await window.getByTestId('nav-chats').click()
     const before = await window.getByTestId('chat-item').count()
-    await window.getByTestId('chats-new').click()
+    await createChat(window)
     await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
     await addMember('Agreeable')
     await addMember('Amenable')
@@ -537,7 +538,7 @@ test.describe('the conclusion as a message (S5.16)', () => {
 
     await window.getByTestId('nav-chats').click()
     const before = await window.getByTestId('chat-item').count()
-    await window.getByTestId('chats-new').click()
+    await createChat(window)
     await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
     await addMember('Agreeable')
 

@@ -35,6 +35,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import {
+  createChat,
   createUserDataDir,
   launchWitena,
   locale,
@@ -270,7 +271,7 @@ test('an agent calls the echo tool and a tool card appears', async () => {
   test.setTimeout(TOOL_ATTEMPTS * TOOL_CALL_MS + 60_000)
 
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('composer-input')).toBeEnabled()
   if ((await window.getByTestId('member-row').count()) === 0) {
     await window.getByTestId('member-add').click()

@@ -20,6 +20,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import {
+  createChat,
   createUserDataDir,
   launchWitena,
   locale,
@@ -84,7 +85,7 @@ const agentMessages = () => window.locator('[data-testid="message-item"][data-se
 /** Creates a chat, makes sure it has a member, and returns nothing. */
 async function newChat(): Promise<void> {
   const before = await window.getByTestId('chat-item').count()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
   await expect(window.getByTestId('composer-input')).toBeEnabled()
 

@@ -87,6 +87,11 @@ const EXPECTED_METHODS = [
   'memory.write',
   'memory.delete',
   'memory.search',
+  'committees.list',
+  'committees.get',
+  'committees.create',
+  'committees.update',
+  'committees.delete',
   'chats.list',
   'chats.get',
   'chats.create',
@@ -129,6 +134,8 @@ describe('BACKEND_METHODS', () => {
       'agents',
       'chat',
       'chats',
+      // Phase 9: standing groups of agents a topic can be convened from.
+      'committees',
       // S10.4. Its own namespace rather than `settings.integrations.*`: the
       // three methods run the *clients'* CLIs and probe the machine, and folding
       // them into the settings namespace would suggest they read and write the
