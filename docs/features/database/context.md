@@ -9,7 +9,7 @@ userData directory. This feature is the layer that owns that file: the schema, t
 migrations that create and evolve it, and the typed repositories every other
 backend feature persists through.
 
-Since S8.1 it owns a **second dialect** as well: the same seven tables in
+Since S8.1 it owns a **second dialect** as well: the same ten tables in
 Postgres, for the hosted version (`../server/context.md`). The desktop app is
 untouched by that — it still opens better-sqlite3 — and the two schemas are kept
 in step by a test rather than by care.
@@ -19,10 +19,11 @@ handlers (S1.3 onwards), `ChatRunner` and `AgentTurn`.
 
 ## Scope
 
-- `src/main/db/schema.ts` — the drizzle definition of all eight tables. Columns
-  are added by later steps (S2.3's `messages.in_reply_to`, S5.3's
-  `providers.auth`), always through a generated migration, never by editing one
-  that has shipped.
+- `src/main/db/schema.ts` — the drizzle definition of all ten tables. Columns
+  and tables are added by later steps (S2.3's `messages.in_reply_to`, S5.3's
+  `providers.auth`, S9.1's `committees` / `committee_members` /
+  `chats.committee_id`), always through a migration, never by editing one that
+  has shipped.
 - `src/main/db/migrations/` — generated SQL plus drizzle-kit's `meta/` snapshot,
   and `drizzle.config.ts` at the repository root that produces them.
 - `src/main/db/migrate.ts` — the migrator, which applies the SQL that was
@@ -37,7 +38,7 @@ handlers (S1.3 onwards), `ChatRunner` and `AgentTurn`.
   repositories throw (`not_found`, `validation`).
 - The wiring in `src/main/index.ts` that opens the file at
   `app.getPath('userData')/witena.db` and closes it on `before-quit`.
-- **S8.1**: `src/main/db/postgres/` — `schema.ts` (the same seven tables in
+- **S8.1**: `src/main/db/postgres/` — `schema.ts` (the same ten tables in
   `pg-core`), `migrations/0000_init.sql`, `database.ts`
   (`openPostgresDatabase`, `runPostgresMigrations`, `truncateAll`) and
   `schema-drift.test.ts`, which is what makes "two schema files" safe.

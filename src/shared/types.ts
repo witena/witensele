@@ -321,6 +321,42 @@ export interface McpServer extends EntityBase {
 export type McpServerInput = Omit<McpServer, keyof EntityBase>
 
 /* -------------------------------------------------------------------------- */
+/* Committees                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** How long a committee name may be. Long enough to be descriptive, short
+ * enough to fit the list row it is read in. */
+export const MAX_COMMITTEE_NAME_CHARS = 100
+
+/**
+ * A named, ordered standing group of agents (Phase 9).
+ *
+ * A committee only assembles people; it never holds a conversation itself. A
+ * chat is a *topic* the committee is convened on, and joining is a **snapshot**:
+ * the members below are expanded into `chat_members` when the chat is created
+ * and `Chat.committeeId` records where they came from, so orchestration keeps
+ * reading membership exactly as before and an old topic does not change when
+ * the committee does.
+ *
+ * `memberAgentIds` is **ordered** — it is the speaking order a chat inherits —
+ * and rides on the entity rather than behind `committees.members.*` methods:
+ * the repository reads and replaces the join rows in the same transaction as
+ * the committee row, so a member list is never half-written.
+ */
+export interface Committee extends EntityBase {
+  name: string
+  description: string
+  /** Member agent ids in speaking order. Deduplicated, every id an existing agent. */
+  memberAgentIds: string[]
+}
+
+/** Create payload for a committee: everything except the stored base fields. */
+export type CommitteeInput = Omit<Committee, keyof EntityBase>
+
+/** Update payload for a committee. An absent field is left alone. */
+export type CommitteePatch = Partial<CommitteeInput>
+
+/* -------------------------------------------------------------------------- */
 /* Chats                                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -494,6 +530,18 @@ export interface Chat extends EntityBase {
    * nobody bothered to name.
    */
   goal: ChatGoal | null
+  /**
+   * The committee this topic was convened from (Phase 9), or `null` for a chat
+   * assembled out of individual agents.
+   *
+   * **Provenance, not membership.** The committee's members were expanded into
+   * `chat_members` when the chat was created; this field only records where
+   * they came from, so the renderer can badge the topic and offer "Sync
+   * committee members" when the committee has since grown. Deleting the
+   * committee sets it back to `null` (`ON DELETE SET NULL`) and leaves the
+   * chat's members untouched, and a chat written before Phase 9 reads `null`.
+   */
+  committeeId: string | null
   settings: ChatSettings
 }
 
@@ -510,7 +558,7 @@ export type ChatInput = Omit<Chat, keyof EntityBase>
  * `ChatSettingsPatch`, which is that partial plus the one field a control can
  * clear.
  */
-export interface ChatPatch extends Partial<Omit<ChatInput, 'settings'>> {
+export interface ChatPatch extends Partial<Omit<ChatInput, 'settings' | 'committeeId'>> {
   settings?: ChatSettingsPatch
 }
 
@@ -526,6 +574,16 @@ export interface ChatPatch extends Partial<Omit<ChatInput, 'settings'>> {
  */
 export interface ChatCreateInput extends ChatPatch {
   memberAgentIds?: string[]
+  /**
+   * The committee to convene this topic on (Phase 9).
+   *
+   * Its members, in `position` order, become the chat's first members, followed
+   * by `memberAgentIds`, de-duplicated keeping the first occurrence. It is
+   * accepted **only here**: `ChatPatch` deliberately omits it, because
+   * provenance is written once and a topic that changed committee would be a
+   * snapshot of nothing.
+   */
+  committeeId?: string
 }
 
 /** How many automatic rounds a chat may be configured for. */

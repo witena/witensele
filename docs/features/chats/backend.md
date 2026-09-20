@@ -35,6 +35,7 @@ is the only thing that reads it. See
 | | `title` | text | `New chat` until it is renamed, or until `ChatRunner` generates one after the first run (S4.3) |
 | | `workdir` | text null | Absolute path of the folder this chat's executor works in, or `null`. Written by `chats.update`, which validates it; real since S5.2 |
 | | `goal` | json null | `ChatGoal` (S5.10), or `null`. Migration `0003_acoustic_vermin.sql`; **replaced** by `chats.update`, never merged |
+| | `committee_id` | text null | **S9.1**, migration `0005_ambiguous_sersi.sql`. The committee this topic was convened from, or `null`. FK → `committees.id`, `ON DELETE SET NULL`: provenance only, written once at creation and never patched |
 | | `settings` | json | `ChatSettings`; written by the member panel's group-settings block, merged field by field |
 | | `created_at` / `updated_at` | integer | Epoch ms. `updated_at` is bumped by every message insert, which is what floats an active chat to the top |
 | `chat_members` | `chat_id`, `agent_id`, `position` | text / text / integer | Composite key; `ON DELETE CASCADE` from both parents |
@@ -55,7 +56,7 @@ is the only thing that reads it. See
 |---|---|---|---|
 | `chats.list` | — | `Chat[]` newest first | — |
 | `chats.get` | `{ id }` | `Chat` | `validation` on an empty id, `not_found` otherwise |
-| `chats.create` | `{ input: ChatCreateInput }` | `Chat` | The patch checks below; `not_found` for a `memberAgentIds` entry that names no agent; `validation` + `second_executor` for two executors, checked **before** the row is written; `validation` **"no provider with models"** only on the bootstrap path |
+| `chats.create` | `{ input: ChatCreateInput }` | `Chat` | The patch checks below; `not_found` for a `memberAgentIds` entry that names no agent **or a `committeeId` that names no committee** (S9.1); `validation` for a `committeeId` that is not a non-empty string; `validation` + `second_executor` for two executors anywhere in the merged list, checked **before** the row is written; `validation` **"no provider with models"** only on the bootstrap path |
 | `chats.update` | `{ id, patch: ChatPatch }` | `Chat` | The patch checks below; `not_found` |
 | `chats.delete` | `{ id }` | `void` | `not_found`. Stops the run **before** deleting |
 | `chats.members.list` | `{ chatId }` | `ChatMember[]` by `position` | `validation`, `not_found` |
@@ -104,13 +105,30 @@ boolean in the settings row, validated in `src/main/handlers/settings.ts` and
 merged over the defaults on read, so no migration was needed and a row written
 by an older version simply answers `false`.
 
-`chats.create` seeds members in exactly two ways:
+`chats.create` seeds members from two sources, in this order (S9.1):
 
-1. `memberAgentIds` is given — those agents, in that order.
-2. It is not — the chat is created **empty**, *unless* the agents table is also
-   empty, in which case `ensureDefaultAgent` writes the bootstrap agent and puts
-   it in. That is the only reason a fresh install can hold a conversation before
-   anyone opens the Agents page.
+1. **The committee**, when `committeeId` is given — its members in `position`
+   order, read once. This is what makes joining a
+   [snapshot](../committees/context.md): the ids land in `chat_members` and
+   nothing reads the committee again, so editing it tomorrow cannot change a
+   topic convened today.
+2. **`memberAgentIds`** — the individual agents the caller named, appended.
+
+The two are de-duplicated keeping the **first** occurrence, so an agent who is
+both a committee member and an extra keeps the committee's place in the speaking
+order rather than being pushed to the end. `assertOneExecutor` then runs over the
+merged list, before the row exists, so a chat is never written and then left
+half-built. When the merged list is empty the chat is created **empty**, *unless*
+the agents table is also empty, in which case `ensureDefaultAgent` writes the
+bootstrap agent and puts it in — the only reason a fresh install can hold a
+conversation before anyone opens the Agents page.
+
+`committeeId` is stored on the chat as **provenance** and is not patchable:
+`ChatPatch` omits the field and the repository writes it only in `create`, so a
+hand-written `chats.update` carrying one is ignored rather than obeyed. Deleting
+the committee sets the column to null through `ON DELETE SET NULL` and leaves
+the members alone; [`committees`](../committees/backend.md) emits one
+`chat.updated` per affected topic.
 
 A chat with no members refuses `chat.send` with `validation('chat has no
 members')`, checked in `ChatRunner.send` before the user's message is persisted.
@@ -317,7 +335,7 @@ drift.
 
 | Event | Payload | Emitted when |
 |---|---|---|
-| `chat.updated` | `{ chat }` | `chats.create`, `chats.update`, `chats.members.set`, and — from [`agents`](../agents/backend.md) — `agents.update` / `agents.delete`, once per affected chat |
+| `chat.updated` | `{ chat }` | `chats.create`, `chats.update`, `chats.members.set`, and — from [`agents`](../agents/backend.md) — `agents.update` / `agents.delete` and, since S9.1, [`committees`](../committees/backend.md)'s `committees.delete`, once per affected chat |
 | `chat.deleted` | `{ chatId }` | `chats.delete`, after the rows are gone |
 | `message.created` | `{ message }` | The user's message, from `ChatRunner.send` |
 

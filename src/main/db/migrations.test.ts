@@ -8,6 +8,9 @@ const EXPECTED_TABLES = [
   'agents',
   'chat_members',
   'chats',
+  // S9.1: a named, ordered standing group of agents, and its membership.
+  'committee_members',
+  'committees',
   'mcp_servers',
   'messages',
   // S5.15: "always allow in this chat", persisted so the user can see and

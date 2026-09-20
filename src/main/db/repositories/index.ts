@@ -10,6 +10,7 @@ import type { Encrypt } from './providers'
 import { createProviderRepository, type ProviderRepository } from './providers'
 import { createAgentRepository, type AgentRepository } from './agents'
 import { createMcpServerRepository, type McpServerRepository } from './mcpServers'
+import { createCommitteeRepository, type CommitteeRepository } from './committees'
 import { createChatRepository, type ChatRepository } from './chats'
 import { createMessageRepository, type MessageRepository } from './messages'
 import {
@@ -22,6 +23,8 @@ export interface Repositories {
   providers: ProviderRepository
   agents: AgentRepository
   mcpServers: McpServerRepository
+  /** Standing groups of agents a chat can be convened from (Phase 9). */
+  committees: CommitteeRepository
   chats: ChatRepository
   messages: MessageRepository
   /** "Always allow in this chat", persisted and revocable since S5.15. */
@@ -43,6 +46,7 @@ export function createRepositories(db: DrizzleDb, options: RepositoryOptions): R
     providers: createProviderRepository(db, options.encrypt),
     agents: createAgentRepository(db),
     mcpServers: createMcpServerRepository(db),
+    committees: createCommitteeRepository(db),
     chats: createChatRepository(db),
     messages: createMessageRepository(db),
     permissionGrants: createPermissionGrantRepository(db),
@@ -53,7 +57,8 @@ export function createRepositories(db: DrizzleDb, options: RepositoryOptions): R
 export type { ProviderRepository, Encrypt } from './providers'
 export type { AgentRepository } from './agents'
 export type { McpServerRepository } from './mcpServers'
-export type { ChatRepository } from './chats'
+export type { CommitteeRepository } from './committees'
+export type { ChatRepository, ChatCreateFields } from './chats'
 export { CHAT_SEARCH_LIMIT, DEFAULT_CHAT_TITLE, escapeLike } from './chats'
 export type {
   MessageRepository,

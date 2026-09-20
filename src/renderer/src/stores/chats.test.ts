@@ -25,6 +25,7 @@ function chat(id: string, updatedAt: number, title = id): Chat {
     title,
     workdir: null,
     goal: null,
+    committeeId: null,
     settings: DEFAULT_CHAT_SETTINGS
   }
 }

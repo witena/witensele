@@ -4031,7 +4031,7 @@ Each step is one commit on `feat/committees`, ends with `npm test` and
 same commit. The new feature folder is `docs/features/committees/` (copied from
 `_template` in S9.1, indexed in `docs/README.md`).
 
-### S9.1 Committees: data and API `[ ]`
+### S9.1 Committees: data and API `[x]` (2026-09-20)
 What: committees exist in the backend and `chats.create` can convene one.
 - Schema, both dialects: table `committees` (`id`, `user_id`, `name`,
   `description`, `created_at`, `updated_at`); table `committee_members`
@@ -4077,6 +4077,31 @@ Acceptance: all of the above tests pass; `npm test` and `npm run typecheck`
 green; `grep -r "from 'electron'" src/main/handlers src/main/db` finds nothing
 new. Docs: new `committees` (four files + index row), `database`, `chats`
 (`backend.md`: the create expansion), `backend-client` (method list).
+Done: the two tables, `chats.committee_id`, five `committees.*` methods and the
+merge in `chats.create`, exactly as written — 1948 tests green, typecheck green,
+and no new electron import. Three things worth knowing. **The generated SQLite
+migration was hand-edited**: drizzle-kit emits `ALTER TABLE chats ADD
+committee_id text REFERENCES committees(id)` *without* the `ON DELETE set null`
+that its own `meta/0005_snapshot.json` records, and without the action a
+committee delete would have been refused by the foreign key instead of clearing
+the column; the two `CREATE TABLE`s were also swapped so `committees` precedes
+the table referencing it, and the file's header says both. The Postgres
+`0002_committees.sql` is hand-written like `0001`, and could not be *executed*
+here — no Docker on this machine — so it is covered by reading and by
+`schema-drift.test.ts`. **`committees.delete` emits one `chat.updated` per topic
+that lost its committee**, which the step text did not ask for: without it the
+renderer keeps mirroring a `committeeId` that is already null, and
+`agents.delete` sets the precedent for exactly this fan-out. It needed one new
+repository method, `chats.listChatIdsForCommittee`, read before the delete
+because afterwards there is nothing left to join on. **`assertOneExecutor` is
+now exported from `handlers/chats.ts`** and imported by `handlers/committees.ts`
+rather than copied, so a committee and a chat refuse a second executor with one
+function and one `second_executor` reason. S9.2 and S9.3 inherit: `Committee` /
+`CommitteeInput` / `CommitteePatch` / `MAX_COMMITTEE_NAME_CHARS` in
+`shared/types.ts`, `Chat.committeeId` (mirrored by the chat store already, drawn
+nowhere), `ChatCreateInput.committeeId` — accepted only at creation, never by
+`chats.update` — and the merge rule the renderer's `mergeMembers` has to match:
+committee members in `position` order, then the extras, first occurrence wins.
 
 ### S9.2 Committees page `[ ]`
 What: the user can build a committee.
