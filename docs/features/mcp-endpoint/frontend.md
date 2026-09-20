@@ -347,8 +347,10 @@ states, and `ideClientAction` maps each to its one button:
 `mcpServers` JSON object and Codex's `[mcp_servers.witena]` table, each with a
 Copy button. They are built from `launcherPath`, and they are shown **even when
 it is `null`**, because a development checkout's endpoint works perfectly well
-and it is only the *command* that has no stable spelling. The command is then
-`node <witena-repo>/out/mcp-shim/witena-mcp.cjs`, with `<witena-repo>` left as a
+and it is only the *command* that has no stable spelling. The invocation is then
+`command: node` with `args: [<witena-repo>/out/mcp-shim/witena-mcp.cjs]` — kept
+apart (`LauncherInvocation`), because a client looks `command` up as one file and
+`node /path/shim.cjs` in it would never start — with `<witena-repo>` left as a
 placeholder that `settings.integrations.snippetDevNote` explains — the window
 genuinely does not know where the checkout is, and a guessed path would be wrong
 on every machine but one.

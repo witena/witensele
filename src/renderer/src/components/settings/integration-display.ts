@@ -170,21 +170,35 @@ export function endpointTone(endpoint: IntegrationStatus['endpoint']): StatusTon
 export const REPO_PLACEHOLDER = '<witena-repo>'
 
 /** What `npm run build` and `npm run mcp-shim:build` both emit. */
-export const DEV_LAUNCHER_COMMAND = `node ${REPO_PLACEHOLDER}/out/mcp-shim/witena-mcp.cjs`
+export const DEV_SHIM_PATH = `${REPO_PLACEHOLDER}/out/mcp-shim/witena-mcp.cjs`
 
-/** The command the snippets register: the shipped launcher, or the dev fallback. */
-export function launcherCommand(launcherPath: string | null): string {
-  return launcherPath ?? DEV_LAUNCHER_COMMAND
+/**
+ * What a client is told to spawn. An MCP configuration takes the executable and
+ * its arguments separately: a `command` of `node /path/shim.cjs` would be looked
+ * up as one file of that whole name and never start.
+ */
+export interface LauncherInvocation {
+  command: string
+  args: string[]
+}
+
+/** The invocation the snippets register: the shipped launcher, or the dev fallback. */
+export function launcherInvocation(launcherPath: string | null): LauncherInvocation {
+  return launcherPath === null
+    ? { command: 'node', args: [DEV_SHIM_PATH] }
+    : { command: launcherPath, args: [] }
 }
 
 /**
  * The `mcpServers` entry Claude Code and every client with its JSON shape take.
  *
  * Built with `JSON.stringify` rather than a template, so a path containing a
- * quote or a backslash is escaped by the thing that defines the escaping.
+ * quote or a backslash is escaped by the thing that defines the escaping. `args`
+ * is left out when empty: the shipped launcher takes none.
  */
-export function claudeSnippet(command: string): string {
-  return JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { command } } }, null, 2)
+export function claudeSnippet({ command, args }: LauncherInvocation): string {
+  const entry = args.length > 0 ? { command, args } : { command }
+  return JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: entry } }, null, 2)
 }
 
 /** A TOML basic string: only `\` and `"` need escaping in a single-line one. */
@@ -193,6 +207,8 @@ function tomlString(value: string): string {
 }
 
 /** The `[mcp_servers.witena]` table Codex's `config.toml` takes. */
-export function codexSnippet(command: string): string {
-  return `[mcp_servers.${MCP_SERVER_NAME}]\ncommand = ${tomlString(command)}\n`
+export function codexSnippet({ command, args }: LauncherInvocation): string {
+  const lines = [`[mcp_servers.${MCP_SERVER_NAME}]`, `command = ${tomlString(command)}`]
+  if (args.length > 0) lines.push(`args = [${args.map(tomlString).join(', ')}]`)
+  return `${lines.join('\n')}\n`
 }

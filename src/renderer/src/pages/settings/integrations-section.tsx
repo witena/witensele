@@ -54,7 +54,7 @@ import {
   ideClientState,
   ideClientStateLabel,
   ideClientTone,
-  launcherCommand
+  launcherInvocation
 } from '../../components/settings/integration-display'
 import { translateFailure } from '../../i18n/errors'
 import { useIntegrationsStore } from '../../stores/integrations'
@@ -207,7 +207,7 @@ export function IntegrationsSection(): React.JSX.Element {
   }, [])
 
   const endpoint = status?.endpoint ?? { enabled: false, listening: false }
-  const command = launcherCommand(status?.launcherPath ?? null)
+  const invocation = launcherInvocation(status?.launcherPath ?? null)
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
@@ -267,12 +267,12 @@ export function IntegrationsSection(): React.JSX.Element {
         <SnippetBlock
           testId="integrations-snippet-json"
           title={t('settings.integrations.snippetJson')}
-          snippet={claudeSnippet(command)}
+          snippet={claudeSnippet(invocation)}
         />
         <SnippetBlock
           testId="integrations-snippet-toml"
           title={t('settings.integrations.snippetToml')}
-          snippet={codexSnippet(command)}
+          snippet={codexSnippet(invocation)}
         />
       </div>
 

@@ -158,7 +158,9 @@ test('the snippets are copyable, and say so when the build ships no launcher', a
   // while `writeText` is a promise the button deliberately does not wait for.
   await expect.poll(readClipboard).toContain(`"${MCP_SERVER_NAME}"`)
   expect(JSON.parse(await readClipboard())).toMatchObject({
-    mcpServers: { [MCP_SERVER_NAME]: { command: expect.stringContaining('witena-mcp.cjs') } }
+    mcpServers: {
+      [MCP_SERVER_NAME]: { command: 'node', args: [expect.stringContaining('witena-mcp.cjs')] }
+    }
   })
 
   await window.getByTestId('integrations-snippet-toml-copy').click()
@@ -167,7 +169,7 @@ test('the snippets are copyable, and say so when the build ships no launcher', a
     'true'
   )
   await expect.poll(readClipboard).toContain(`[mcp_servers.${MCP_SERVER_NAME}]`)
-  expect(await readClipboard()).toContain('command = "node ')
+  expect(await readClipboard()).toContain('command = "node"\nargs = ["')
 })
 
 test('the acceptance screenshot', async () => {

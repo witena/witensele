@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest'
 import { MCP_SERVER_NAME } from '@shared/mcp-tools'
 import { IDE_CLIENT_IDS, type IdeClientStatus } from '@shared/types'
 import {
-  DEV_LAUNCHER_COMMAND,
+  DEV_SHIM_PATH,
   REPO_PLACEHOLDER,
   claudeSnippet,
   codexSnippet,
@@ -31,7 +31,8 @@ import {
   ideClientState,
   ideClientStateLabel,
   ideClientTone,
-  launcherCommand
+  launcherInvocation,
+  type LauncherInvocation
 } from './integration-display'
 
 /** Answers with the key, so a test names the mapping and never the copy. */
@@ -135,21 +136,35 @@ describe('the endpoint line', () => {
 })
 
 describe('the snippets', () => {
+  const shipped = (command: string): LauncherInvocation => ({ command, args: [] })
+
   it('registers the shipped launcher when there is one', () => {
     const command = '/Applications/Witena.app/Contents/Resources/bin/witena-mcp'
-    expect(launcherCommand(command)).toBe(command)
+    expect(launcherInvocation(command)).toEqual({ command, args: [] })
   })
 
   it('falls back to the built shim, with the checkout left as a placeholder', () => {
     // The window cannot know where the repository is, so it says so rather than
     // printing a path that would be wrong on every other machine.
-    expect(launcherCommand(null)).toBe(DEV_LAUNCHER_COMMAND)
-    expect(DEV_LAUNCHER_COMMAND).toContain(REPO_PLACEHOLDER)
-    expect(DEV_LAUNCHER_COMMAND).toContain('out/mcp-shim/witena-mcp.cjs')
+    expect(launcherInvocation(null)).toEqual({ command: 'node', args: [DEV_SHIM_PATH] })
+    expect(DEV_SHIM_PATH).toContain(REPO_PLACEHOLDER)
+    expect(DEV_SHIM_PATH).toContain('out/mcp-shim/witena-mcp.cjs')
+  })
+
+  it('keeps the executable and its arguments apart in the fallback', () => {
+    // A client looks `command` up as one file: `node /path/shim.cjs` in it would
+    // never start.
+    const parsed = JSON.parse(claudeSnippet(launcherInvocation(null))) as {
+      mcpServers: Record<string, { command: string; args?: string[] }>
+    }
+    expect(parsed.mcpServers[MCP_SERVER_NAME]).toEqual({ command: 'node', args: [DEV_SHIM_PATH] })
+    expect(codexSnippet(launcherInvocation(null))).toBe(
+      `[mcp_servers.${MCP_SERVER_NAME}]\ncommand = "node"\nargs = ["${DEV_SHIM_PATH}"]\n`
+    )
   })
 
   it('writes JSON a Claude-style client takes', () => {
-    const parsed = JSON.parse(claudeSnippet('/bin/witena-mcp')) as {
+    const parsed = JSON.parse(claudeSnippet(shipped('/bin/witena-mcp'))) as {
       mcpServers: Record<string, { command: string }>
     }
     expect(parsed.mcpServers[MCP_SERVER_NAME]).toEqual({ command: '/bin/witena-mcp' })
@@ -158,27 +173,27 @@ describe('the snippets', () => {
   it('escapes a path the way JSON defines it', () => {
     // A bundle path can contain anything a file name can; the snippet is pasted
     // into a configuration file, so a broken escape is a broken installation.
-    const parsed = JSON.parse(claudeSnippet('/Apps/My "Witena"\\x/witena-mcp')) as {
+    const parsed = JSON.parse(claudeSnippet(shipped('/Apps/My "Witena"\\x/witena-mcp'))) as {
       mcpServers: Record<string, { command: string }>
     }
     expect(parsed.mcpServers[MCP_SERVER_NAME]?.command).toBe('/Apps/My "Witena"\\x/witena-mcp')
   })
 
   it('writes the TOML table Codex keeps its servers in', () => {
-    expect(codexSnippet('/bin/witena-mcp')).toBe(
+    expect(codexSnippet(shipped('/bin/witena-mcp'))).toBe(
       `[mcp_servers.${MCP_SERVER_NAME}]\ncommand = "/bin/witena-mcp"\n`
     )
   })
 
   it('escapes a TOML basic string', () => {
-    expect(codexSnippet('/Apps/My "W"\\x/witena-mcp')).toContain(
+    expect(codexSnippet(shipped('/Apps/My "W"\\x/witena-mcp'))).toContain(
       'command = "/Apps/My \\"W\\"\\\\x/witena-mcp"'
     )
   })
 
   it('quotes a path containing spaces in both snippets', () => {
     const command = '/Applications/My Apps/Witena.app/Contents/Resources/bin/witena-mcp'
-    expect(claudeSnippet(command)).toContain(`"${command}"`)
-    expect(codexSnippet(command)).toContain(`"${command}"`)
+    expect(claudeSnippet(shipped(command))).toContain(`"${command}"`)
+    expect(codexSnippet(shipped(command))).toContain(`"${command}"`)
   })
 })
