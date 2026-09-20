@@ -58,6 +58,7 @@ One table of its own since S5.15, plus the columns other features own. The
 |---|---|---|---|
 | `permission.reply` | `{ requestId: string, decision: 'allow' \| 'deny' \| 'allowAlways' }` | `void` | `validation` — blank `requestId`, or a `decision` outside the union (refused rather than read as `deny`: silently denying a call the user allowed is the worse wrong answer, and the call stays pending). `not_found` — nothing is waiting on that id, because it was answered already or a stop or a timeout closed it |
 | `permissions.grants.list` | `{ chatId }` | `PermissionGrant[]`, newest first | `validation` — a blank `chatId`. A chat that does not exist answers `[]`: this is a question about grants, not a way to probe for chat ids |
+| `settings.update` (owned by [`backend-client`](../backend-client/backend.md)) | `{ patch: { executor: { sandbox } } }` | `AppSettings` | `validation` — `executor` is not an object, carries a key other than `sandbox`, or names a mode outside `EXECUTOR_SANDBOX_MODES`. The repository merges the group field by field on write **and** on read, so a row with no `executor`, or half of one, still answers the default |
 | `permissions.grants.revoke` | `{ chatId, toolName }` | The **remaining** grants | `validation` — either field blank. Idempotent otherwise; revoking what was never granted succeeds, because the only thing asked for is that it not be there afterwards |
 
 ## The command policy (S5.15)
@@ -207,6 +208,15 @@ it is describing a folder rather than searching it:
 | `node:child_process` (`spawnSync`) | `gitInfo`: `git -C <dir> rev-parse --is-inside-work-tree`, `rev-parse --abbrev-ref HEAD`, `status --short` | Synchronous on purpose — `buildTurnPrompt` is synchronous and the calls are milliseconds — but with `timeout: 2_000` and every failure mapped to `null`, so a folder on a stalled network mount costs the briefing its git half rather than costing the chat its turn. A repository with no commits answers `HEAD` to `--abbrev-ref`, which is why `symbolic-ref --short HEAD` is the fallback |
 
 ## Pitfalls found the hard way
+
+- **The sandbox switch could not be saved at first** (S5.15). `executor` was
+  added to `AppSettingsPatch` and to the renderer's `setExecutor`, but not to
+  `settings.update`'s allowed keys nor to the repository's merge, so the control
+  was refused with `unknown keys: executor` — and would have been dropped
+  silently had it got through. A new settings group needs three edits: the
+  patch type, `assertPatch` in `handlers/settings.ts`, and both merges in
+  `db/repositories/settings.ts`. The handler and repository tests now each
+  store an executor patch to hold the last two.
 
 - **The MCP side-effects gate had to move into the `call` closure**, not into
   `mcp/tools.ts`: that module is pure and knows nothing about a chat. It also

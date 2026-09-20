@@ -7,10 +7,13 @@
  */
 import {
   EDITOR_KINDS,
+  EXECUTOR_SANDBOX_MODES,
   THEME_SETTINGS,
   type AppSettingsPatch,
   type EditorKind,
   type EditorSettings,
+  type ExecutorSandboxMode,
+  type ExecutorSettings,
   type ThemeSetting
 } from '@shared/types'
 import { validation } from '../errors'
@@ -48,7 +51,34 @@ function assertEditorPatch(editor: unknown): asserts editor is Partial<EditorSet
 }
 
 /**
- * Accepts only the five documented keys; anything else is a client bug.
+ * The `executor` half of the patch (S5.15), checked like `editor`.
+ *
+ * `sandbox` is compared with `'off'` when the executor's tools are built, so an
+ * unknown value would not fail: it would quietly mean "sandboxed" or "not"
+ * depending on which side of that comparison the reader sits. For the one
+ * setting that decides whether a command may write outside the folder, a
+ * refusal is the only acceptable answer.
+ */
+function assertExecutorPatch(executor: unknown): asserts executor is Partial<ExecutorSettings> {
+  if (typeof executor !== 'object' || executor === null || Array.isArray(executor)) {
+    throw validation('settings.update: executor must be an object')
+  }
+  const allowed = new Set(['sandbox'])
+  const unknownKeys = Object.keys(executor).filter((key) => !allowed.has(key))
+  if (unknownKeys.length > 0) {
+    throw validation(`settings.update: executor received unknown keys: ${unknownKeys.join(', ')}`)
+  }
+
+  const { sandbox } = executor as Partial<ExecutorSettings>
+  if (sandbox !== undefined && !EXECUTOR_SANDBOX_MODES.includes(sandbox as ExecutorSandboxMode)) {
+    throw validation(
+      `settings.update received an unknown executor sandbox mode: ${String(sandbox)} (expected ${EXECUTOR_SANDBOX_MODES.join(', ')})`
+    )
+  }
+}
+
+/**
+ * Accepts only the six documented keys; anything else is a client bug.
  *
  * `theme` is the first value whose *content* is checked as well (S5.8), and
  * `editor` the second (S5.7). Both are worth the lines because they are the
@@ -62,7 +92,14 @@ function assertPatch(patch: unknown): asserts patch is AppSettingsPatch {
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
     throw validation('settings.update requires a patch object')
   }
-  const allowed = new Set(['language', 'theme', 'editor', 'timeouts', 'onboardingDismissed'])
+  const allowed = new Set([
+    'language',
+    'theme',
+    'editor',
+    'executor',
+    'timeouts',
+    'onboardingDismissed'
+  ])
   const unknownKeys = Object.keys(patch).filter((key) => !allowed.has(key))
   if (unknownKeys.length > 0) {
     throw validation(`settings.update received unknown keys: ${unknownKeys.join(', ')}`)
@@ -75,6 +112,8 @@ function assertPatch(patch: unknown): asserts patch is AppSettingsPatch {
   }
   const editor = (patch as AppSettingsPatch).editor
   if (editor !== undefined) assertEditorPatch(editor)
+  const executor = (patch as AppSettingsPatch).executor
+  if (executor !== undefined) assertExecutorPatch(executor)
 
   // S7.5's Skip flag. Checked like the two above because it is read back as a
   // boolean by code with no other branch: a stored `'no'` is truthy and would

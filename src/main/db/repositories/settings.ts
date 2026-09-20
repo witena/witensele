@@ -4,9 +4,9 @@
  * Reads merge the stored object over `DEFAULT_APP_SETTINGS`, so a user who has
  * never opened the settings page gets the defaults, and a setting added in a
  * later version appears with its default value without a migration. Writes are a
- * shallow merge, except `timeouts` and `editor`, which merge field by field so a
- * caller can change `toolTimeoutMs` — or the editor's `kind` — without resending
- * the rest of the group.
+ * shallow merge, except `timeouts`, `editor` and `executor`, which merge field by
+ * field so a caller can change `toolTimeoutMs` — or the editor's `kind` — without
+ * resending the rest of the group.
  *
  * The nested groups are merged on the **read** side as well, and that is not
  * belt and braces: a row written by an older version has no `editor` at all, and
@@ -31,6 +31,7 @@ function withDefaults(stored: Partial<AppSettings> | undefined): AppSettings {
     ...DEFAULT_APP_SETTINGS,
     ...stored,
     editor: { ...DEFAULT_APP_SETTINGS.editor, ...stored?.editor },
+    executor: { ...DEFAULT_APP_SETTINGS.executor, ...stored?.executor },
     timeouts: { ...DEFAULT_APP_SETTINGS.timeouts, ...stored?.timeouts }
   }
 }
@@ -56,6 +57,7 @@ export function createSettingsRepository(db: DrizzleDb): SettingsRepository {
           ? { onboardingDismissed: patch.onboardingDismissed }
           : {}),
         editor: { ...current.editor, ...patch.editor },
+        executor: { ...current.executor, ...patch.executor },
         timeouts: { ...current.timeouts, ...patch.timeouts }
       }
       const timestamp = now()
