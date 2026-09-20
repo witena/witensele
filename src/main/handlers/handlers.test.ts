@@ -978,7 +978,13 @@ describe('handlers/stubs', () => {
       'committees.get',
       'committees.create',
       'committees.update',
-      'committees.delete'
+      'committees.delete',
+      // S10.4 — real handlers over an injected `IdeClients`, which the sweep's
+      // context-shaped `{ userId }` cannot provide, so their cases live in
+      // `integrations.test.ts`.
+      'integrations.status',
+      'integrations.connect',
+      'integrations.disconnect'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

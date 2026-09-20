@@ -23,6 +23,19 @@ database that opens on the first launch.
 - `asarUnpack` for `better-sqlite3`, whose `.node` binary cannot be `dlopen`ed
   out of an asar archive.
 - `npm run dist` and `npm run dist:dir`.
+- **Since S10.3**, the `protocols` block: the bundle declares the `witena://`
+  scheme so macOS can hand a chat link to the app. It is one entry in
+  `electron-builder.yml` and it has no build step of its own; everything the
+  link then does belongs to
+  [`../mcp-endpoint/context.md`](../mcp-endpoint/context.md).
+- **Also since S10.3**, the MCP server an IDE runs: two more `extraResources`
+  entries put `out/mcp-shim/witena-mcp.cjs` at `Contents/Resources/mcp/` and the
+  `build/witena-mcp` launcher at `Contents/Resources/bin/`, and
+  `src/main/index.ts` computes that launcher's path for Settings →
+  Integrations. What the shim *does* is
+  [`../mcp-endpoint/`](../mcp-endpoint/context.md)'s; what this feature owns is
+  that both files are in the bundle, that the launcher is still executable after
+  a clone and a package, and that it starts on the bundle's own binary.
 - `e2e/packaged.spec.ts`, run on its own by `npm run e2e:packaged`, which drives
   the shipped binary rather than `out/`.
 - The demo recording (`e2e/demo.record.ts`), the script that renders it
@@ -97,6 +110,9 @@ Nothing depends on packaging in return: no runtime code branches on it except
 | **S7.3: the minimum entitlements, without `disable-library-validation`** | electron-builder's default template, which includes it; @electron/osx-sign's default, which adds camera, microphone, Bluetooth, USB, printing and location | Every entitlement is an exception to what the hardened runtime promises. `better_sqlite3.node` is signed by this build with this project's own identity — osx-sign signs every Mach-O under `Contents/` — so same-team library validation passes and the exception buys nothing while widening what the app may load. The risk taken is real and named: it cannot be confirmed without a certificate, and if the first signed build fails to load the module the fix is one key, documented in the plist itself |
 | **S7.3: the signed-build flag travels in the packaged `package.json`** | The `WITENA_SIGNED_BUILD` environment variable S7.6 used; a constant baked into the bundle by the Vite build; an Info.plist key | The variable was already recorded as broken: it is read by the *running* process, and a variable exported while building is not in the environment of an app launched days later. `extraMetadata` writes the answer into the bundle, where the app can read it with `app.getAppPath()`. A Vite-time constant would have to be threaded through electron-vite's config and would make the *build* command decide, not the *packaging* command — and it is packaging that knows whether a certificate was found. An Info.plist key would need electron to read it, which `secrets.ts` may not do |
 | **S7.3: re-wrapping the key file silently, but only the container** | Leave it (S7.6's position); offer it in Settings with a confirmation | S7.6 declined because "rewriting the user's stored secrets" needs consent. The distinction that changes the answer is that this rewrites the **container, not the contents**: the same 32 bytes go back in, every stored ciphertext stays readable, and no provider key is re-encrypted. Nothing the user can observe changes except that the key is now protected — which is what signing was bought for. A screen and a confirmation for "would you like your key file to be safer" is a prompt with one sensible answer. The write is atomic and fails soft, which is what makes it safe to do unasked |
+| **S10.3: the launcher `exec`s the bundle's own binary with `ELECTRON_RUN_AS_NODE=1`** | `#!/usr/bin/env node`; ship a Node binary beside the shim; register `node <path>` with the client directly | A double-clicked application may not have a `node` at all, and an IDE spawns its MCP servers with an environment the user never sees. The bundle already contains a Node — its Electron binary — and WP-0a measured it running a script from a signed, hardened, notarized bundle with unbuffered stdio and no Dock tile. It is also what makes lazy launch possible: `bundlePathFor` derives the app to wake from `process.execPath`, so a stray `node` would keep answering calls while silently losing the ability to start Witena. The cost is a dependency on the `RunAsNode` fuse staying at Electron's default, which is written down in [`../mcp-endpoint/context.md`](../mcp-endpoint/context.md) and has no fuse configuration to contradict it |
+| **S10.3: the shim is shipped twice — inside the asar and as a plain file** | Point the launcher inside `app.asar`; drop the shim from `files:` so only the plain copy exists; `asarUnpack` it | The launcher hands the shim to the binary as a **script path**, and asar support is not part of what `ELECTRON_RUN_AS_NODE=1` promises. Dropping it from `files:` would mean the shim's path depends on the `extraResources` layout in every other context too (the e2e harness runs it straight out of `out/`), and `asarUnpack` moves a file into `app.asar.unpacked`, a directory whose name is an implementation detail this script would then have to spell. 700 kB duplicated inside a 200 MB bundle is the cheapest of the four |
+| **The launcher's mode is asserted from the git index, not from the working tree** | `statSync` on the file; `chmod` in a build step; no assertion | electron-builder copies the file with the mode it finds on disk, and the mode that reaches a fresh clone is the one in the index. A `chmod` after a clone would make a working-tree check pass on the machine that packages and fail for everyone else — which is exactly the failure that produces an MCP server no client can spawn, on a machine that never runs the test |
 | `extraResources: resources → resources` (the nested `Resources/resources`) | `from: resources/skills, to: skills`, which is the shorter path | Keeping the folder's own name means the packaged tree mirrors the repository, so `bundledSkillsDir()` is one join below a root that differs and anything added to `resources/` later ships without another config edit. The cost is a path that reads oddly once |
 | `files: [out/**, package.json]` and no `node_modules` entry | Spelling out `node_modules/**` | electron-builder appends the production dependency tree on its own. Listing it by hand is a second copy of the same fact, and the two would drift |
 | `e2e/packaged.spec.ts` outside `npm run e2e` | A tag or a `test.skip` inside the normal suite | The spec cannot run without a dmg, and producing one takes minutes. A skip inside the suite would either be a silent pass on every ordinary run, or a twelve-minute prelude to the everyday command. Its own config says which it is |
@@ -140,6 +156,18 @@ Nothing depends on packaging in return: no runtime code branches on it except
   on 2026-09-20 the published `v0.1.0` feed was read anonymously and its arm64
   zip matched the manifest's `sha512`. What is left is an installed 0.1.0
   finding a newer published version; the second release is that test.
+- **`npm run e2e:packaged` cannot run unattended on a machine with a Developer
+  ID** (S10.3). The spec launches a *second* signed copy of Witena with a fresh
+  `WITENA_USER_DATA`, and WP-0a measured that this raises a macOS Keychain
+  prompt from `safeStorage` which `whenReady` blocks on — no window, so
+  Playwright waits for `firstWindow()` until a human answers a dialog. It was
+  true before S10.3 and is unchanged by it; what S10.3 adds is a fourth case
+  that would pass without the app at all. The launcher half was therefore
+  verified by hand against the signed `dist:dir` bundle (the commands are in
+  [`backend.md`](./backend.md), "The MCP launcher"), and the *Playwright* run of
+  all four remains untried. A fix would be an opt-out that skips
+  `createSafeStorageStore()`, which is a change to `src/main/index.ts` that no
+  work package has asked for.
 - Whether the dmg's 150 MB is worth attacking. Most of it is the Electron
   runtime; the biggest avoidable share is `node_modules` dependencies that only
   the renderer bundle uses and that are therefore shipped twice.

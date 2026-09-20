@@ -28,6 +28,8 @@ import { ChatRunnerRegistry, type ChatRunnerOptions } from './orchestration/chat
 import type { AgentSupervisor } from './presence/supervisor'
 import type { AnthropicCli } from './providers/anthropic-cli'
 import { antMissing } from './providers/anthropic-cli'
+import type { IdeClients } from './integrations/ide-clients'
+import { absentIdeClients } from './integrations/ide-clients'
 import type { GoogleCli } from './providers/google-cli'
 import { gcloudMissing } from './providers/google-cli'
 import type { FetchImpl } from './providers/discovery'
@@ -80,6 +82,19 @@ export interface TestAppContextOptions {
    * `gcloud auth application-default login` would be no test at all.
    */
   googleCli?: GoogleCli
+  /**
+   * The coding-agent CLIs (S10.4). Defaults to `absentIdeClients()`, which is
+   * both the honest baseline and a hard safety rule: a unit test must never run
+   * the real `claude` or `codex`, because `mcp add` and `mcp remove` write
+   * `~/.claude.json` and `~/.codex/config.toml` — the developer's own files.
+   */
+  ideClients?: IdeClients
+  /**
+   * The `bin/witena-mcp` this "build" ships (S10.4). Defaults to `null`, which
+   * is what a checkout has; a test that exercises `integrations.connect` passes
+   * a path.
+   */
+  mcpLauncherPath?: string | null
   /**
    * Request ids for the `PermissionGate` (S5.4).
    *
@@ -189,6 +204,14 @@ export function createTestAppContext(
     runners: undefined as unknown as ChatRunnerRegistry,
     supervisor: undefined as unknown as AgentSupervisor,
     mcp: undefined as unknown as McpManager,
+    // S10.3: no listening endpoint, which is the same answer the Node host
+    // gives. A suite that is about the host builds one itself
+    // (`mcp-endpoint/host.test.ts`); no other suite may open a socket.
+    mcpEndpoint: null,
+    // S10.4: no bundle, so no launcher — the same answer a checkout gives. A
+    // suite about `integrations.connect` passes one.
+    mcpLauncherPath: options.mcpLauncherPath ?? null,
+    ideClients: options.ideClients ?? absentIdeClients(),
     memory: createMemoryStore(join(database.dir, MEMORY_DIR)),
     permissions: createPermissionGate({
       emit: (event) => bus.emit(event),

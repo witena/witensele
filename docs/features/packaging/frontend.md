@@ -25,6 +25,22 @@ The screen itself, the notice bar and the store belong to
 [`../ui-shell/frontend.md`](../ui-shell/frontend.md); what this feature owns is
 the fact the two of them render.
 
+S10.3's `protocols` entry adds none either, and what it enables is worth one
+sentence for the same reason: a `witena://chat/<id>` link handed to the packaged
+bundle **does** reach the renderer, but not as anything this feature owns. The
+bundle only declares the scheme; `src/main/index.ts` turns a link into a
+`ui.open-chat` event and the chats store selects the chat. See
+[`../mcp-endpoint/frontend.md`](../mcp-endpoint/frontend.md).
+
+S10.3's other half — shipping the MCP launcher — adds no renderer code either,
+but it does produce one **string the UI will print**: the absolute path of
+`Contents/Resources/bin/witena-mcp`, which S10.4's Settings → Integrations shows
+in a copyable snippet and registers with a client. It is printed as data, like
+the version and the `ant` install command: a path is the same in both languages,
+and the sentence around it is what goes through `t()`. In a checkout the path is
+`null` and the section shows the development command instead — see
+[`../mcp-endpoint/frontend.md`](../mcp-endpoint/frontend.md).
+
 Shipping the Anthropic CLI added no renderer code either. Its only visible
 effects are one more row in Settings → About's licence list (`ant`, MIT, written
 by `scripts/generate-licenses.mjs` from the same pin the download uses) and a

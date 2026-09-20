@@ -128,10 +128,29 @@ Electron API sets it, and `src/main/index.ts` never names it. See
 
 ## Events emitted
 
-None added. Two are **consumed** since S7.4 — `update.available` and
-`update.downloaded` — through `lib/event-bridge.ts` into `stores/updates.ts`;
-they are emitted by the `UpdateService`
-([`../backend-client/backend.md`](../backend-client/backend.md)).
+None added. Three are **consumed**: `update.available` and `update.downloaded`
+since S7.4, through `lib/event-bridge.ts` into `stores/updates.ts` (emitted by
+the `UpdateService`,
+[`../backend-client/backend.md`](../backend-client/backend.md)), and
+`ui.open-chat` since S10.3, which is the only event that asks the *interface*
+for something rather than reporting a change in the data. The bridge hands it to
+the chats store and, when that store really selected the chat, calls
+`setPage('chats')`. It is emitted by `src/main/index.ts`; see
+[`../mcp-endpoint/backend.md`](../mcp-endpoint/backend.md).
+
+## When there is no window (S10.3)
+
+A second main-process fact the shell now depends on, alongside the window
+options above: **`createWindow()` at ready is conditional.** A launch carrying
+`--background` creates no window at all, which is how the MCP shim starts Witena
+for a coding agent. Nothing in the renderer changes — there simply is no
+renderer yet — and the way back in is the `activate` handler the app has always
+had for "the user closed the last window on macOS".
+
+`src/main/index.ts` also gained `showOrCreateWindow()`, which `second-instance`
+and a `witena://` link both go through: it restores a minimized window, focuses
+an existing one, or creates one. The shell's single-window assumption is what
+makes that one function rather than a window manager.
 
 ## External dependencies
 

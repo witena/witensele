@@ -56,6 +56,17 @@ Actions: `setPage(page)`, `setSettingsSection(section)`. Neither touches the
 backend and neither persists — nothing about "which page was open" is worth a row
 in SQLite, and a restart landing on Chats is the right default.
 
+Since S10.3 the shell has **one caller of `setPage` that is not a click**:
+`lib/event-bridge.ts`, on the `ui.open-chat` event a `witena://chat/<id>` link
+produces. It navigates only when the chats store reports that it really selected
+the chat, so a link to something this window does not have leaves the user on
+the page they were on. That is the whole of the deep link's effect on this
+feature; the event, the link and the launch behind them belong to
+[`../mcp-endpoint/frontend.md`](../mcp-endpoint/frontend.md). `stores/ui.ts` is
+unchanged — its header already reserved this: "if deep links ever matter … the
+router becomes the thing that writes these two fields and nothing else has to
+change", and one event bridge is a smaller version of exactly that.
+
 Component-local state, deliberately not in a store:
 
 - `ChatsPage` holds the group-settings values (`mode`, `speaking`,

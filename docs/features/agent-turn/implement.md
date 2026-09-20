@@ -94,6 +94,15 @@ Then: consecutive same-role messages are merged with a blank line (several
 providers reject two adjacent user messages, and one round of three agents
 produces exactly that), and empty, `passed` and `skipped` messages are dropped.
 
+Only three part kinds contribute text — `text`, `tool-result` and
+`system-notice` — so everything else is invisible to the model by construction.
+That includes both **flag** parts: `ConclusionPart` (S5.16), because a model that
+saw the mark would learn to write one, and `OriginPart` (S10.4), because *who
+sent* a question is a fact about the transcript rather than about the question,
+and a group told that a machine is asking answers the machine instead. A test in
+`history.test.ts` pins the second one hard: the converted messages are
+**byte-identical** with and without the flag.
+
 ### The group briefing
 
 Per PLAN's "One agent turn": the member list with descriptions, which member the
@@ -360,6 +369,7 @@ arrived, and how it *ended*. The supervisor owns the session, the heartbeat, the
 | `src/main/agents/briefing.test.ts` (S5.14 cases) | Both markers present in the rules in both languages; the closing block absent byte for byte in an ordinary turn, and replacing the marker rule when `closing` is set — the roster, the `[name]:` protocol and `[PASS]` all still there |
 | `src/main/agents/agent-turn.test.ts` (S5.16 cases) | A `closing: true` turn storing the flag first in `parts` and in the row; an ordinary turn storing none; a closing turn that **failed** storing none; and `markConclusion`'s three cases (added in front, the array returned untouched when the turn is not closing, and never a second flag) |
 | `src/main/agents/history.test.ts` (S5.16 cases) | A conclusion's text reaching the prompt with no trace of the flag, and a message that is nothing but the flag dropped entirely |
+| `src/main/agents/history.test.ts` (S10.4 cases) | A question with an `OriginPart` and the same question without one converting to **byte-identical** `ModelMessage`s, with the client's name absent from both; and a message that is nothing but the origin flag dropped entirely |
 | `src/main/handlers/agents.test.ts` (S5.14 block) | The creation default per provider type: hidden for `openai-compatible` and for a local preset, shown for `anthropic` / `openai` / `google`, and an explicit choice left alone in both directions. Plus a non-boolean `reasoning` refused |
 | `src/shared/presets.test.ts` (S5.14 block) | `showsThinkingByDefault` over the open-model route, the three first-party adapters, and every preset flagged `local` |
 | `src/main/agents/default-agent.test.ts` | Creating exactly one agent on the first usable provider, reusing it, preferring a user-created agent, and the `validation` refusal |

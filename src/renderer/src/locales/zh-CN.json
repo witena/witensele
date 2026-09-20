@@ -142,6 +142,7 @@
     "stop": "停止",
     "round": "第 {{round}} 轮",
     "replyingTo": "回复 {{names}}",
+    "viaClient": "来自 {{client}}",
     "runStatus": "第 {{round}} 轮 · {{speakers}} 发言中",
     "usage": "{{tokens}} 个 token",
     "usageWithCost": "{{tokens}} 个 token · {{cost}}",
@@ -309,6 +310,7 @@
     "sections": {
       "providers": "模型服务商",
       "mcp": "MCP 服务器",
+      "integrations": "集成",
       "skills": "技能",
       "timeouts": "超时与心跳",
       "appearanceLanguage": "外观与语言",
@@ -398,6 +400,34 @@
       "statusFailed": "连接失败",
       "statusDisabled": "已停用",
       "statusUntested": "未测试"
+    },
+    "integrations": {
+      "endpoint": "MCP 端点",
+      "endpointSwitch": "打开 MCP 端点",
+      "endpointHint": "让这台 Mac 上的编程 agent 把问题抛给你的群,并读回结论。它只监听本机回环地址,每次启动都会重新生成令牌;不在这里打开就一直是关的。",
+      "endpointOff": "已关闭",
+      "endpointListening": "正在监听 {{port}} 端口",
+      "endpointNotListening": "已打开,但没有任何监听",
+      "clients": "编程 agent",
+      "clientsHint": "Witena 通过运行对方自己的命令行工具来完成安装,不去动它的配置文件。",
+      "clientClaudeCode": "Claude Code",
+      "clientCodex": "Codex",
+      "clientNotInstalled": "未安装",
+      "clientNotConnected": "未连接",
+      "clientConnected": "已连接",
+      "clientStale": "指向另一份副本",
+      "connect": "连接",
+      "disconnect": "断开",
+      "repair": "修复",
+      "notInstalledHint": "这台 Mac 上没有这个 agent 的命令行工具,所以没什么可连的。装好之后,下面的配置片段对它同样适用。",
+      "staleHint": "它注册的命令不是当前这份安装 —— Witena 被移动或重装过。点「修复」把它指回这里。",
+      "snippets": "其他客户端",
+      "snippetsHint": "把下面任意一段粘进客户端自己的 MCP 配置里。需要填的就只有这条命令:端口和令牌都在运行时自动找到。",
+      "snippetJson": "JSON,适用于带 mcpServers 对象的客户端",
+      "snippetToml": "TOML,适用于配置文件形如 Codex 的客户端",
+      "snippetDevNote": "这个构建没有随附启动器,所以下面这条命令是用 node 直接跑打包出来的 shim。把 {{placeholder}} 换成你本地 Witena 仓库的路径,并先构建一次。",
+      "copy": "复制",
+      "copied": "已复制"
     },
     "skills": {
       "intro": "一个 skill 就是一个带 SKILL.md 的文件夹。agent 平时只看到它的名字和描述,需要时才会读正文。",
@@ -580,7 +610,9 @@
     "goal_material_not_relative": "参考材料必须是工作目录里的相对路径。",
     "goal_material_outside_workdir": "这个路径不在本群的工作目录里。",
     "goal_material_missing": "这份材料已经不在了。",
-    "goal_needs_workdir": "请先为这个群选一个工作目录。"
+    "goal_needs_workdir": "请先为这个群选一个工作目录。",
+    "integrations_no_launcher": "当前构建没有随附启动器，因此没有可以交给客户端的命令。请改用下方的配置片段。",
+    "integrations_client_not_installed": "这台机器上没有安装该客户端。"
   },
   "notices": {
     "agentSkipped": "{{agent}} 本轮没有响应，已被跳过",

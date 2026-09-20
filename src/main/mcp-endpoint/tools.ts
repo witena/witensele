@@ -1,0 +1,870 @@
+/**
+ * The seven discussion tools, over `HandlerMap` and nothing else.
+ *
+ * This is the whole of what an IDE agent can do to Witena. `server.ts` decides
+ * *who* may call (the token, the loopback checks) and turns one HTTP request
+ * into one MCP exchange; this module decides what each call means. It owns no
+ * business logic of its own: every read and every write goes through a handler,
+ * exactly as the IPC and HTTP transports do, which is what lets the endpoint be
+ * mounted on the Node host later without a second implementation (PLAN.md,
+ * "Online version"). Nothing here touches `ctx.repos`.
+ *
+ * ```
+ * tools/call → parse with MCP_TOOL_INPUTS[name] → handlers → ToolOutcome
+ * ```
+ *
+ * Four rules hold for every tool in the table:
+ *
+ * 1. **Parse first, with the zod schema.** `z.toJSONSchema` silently drops
+ *    `start_discussion`'s refinements, so a caller that validated against the
+ *    published JSON Schema can still send `{ chatId, agents }`. The schema in
+ *    `MCP_TOOL_INPUTS` is the only complete statement of what is legal, and its
+ *    messages were written to be handed to a model unchanged — so they are.
+ * 2. **Never throw.** A throw would become `internal: <message>` in `server.ts`
+ *    and hide the bug; every failure is a `{ ok: false, code, message }` the
+ *    calling model can read and correct itself from. A `BackendFailure` keeps
+ *    its `BackendErrorCode`, anything else is `internal` with the message and no
+ *    stack.
+ * 3. **`structured` is an object.** MCP's `structuredContent` is a JSON object or
+ *    nothing, and `server.ts` drops a non-object rather than inventing a wrapper
+ *    key. `text` is a complete rendering of the same value, ending with the
+ *    `hint` — the one sentence that tells the caller what to do next.
+ * 4. **The caller is the executor.** No tool starts a hand-off and every `hint`
+ *    on a conclusion says that applying it is the caller's job (PLAN.md, "the
+ *    role split"). Since WP-14 that is a rule about *hand-offs*, not about
+ *    membership: an executor named individually in `agents` is still refused,
+ *    but a committee that happens to contain one is convened as the user built
+ *    it, and the `hint` says in so many words that nothing was handed off.
+ *
+ * No electron (CLAUDE.md rule 5); `no-electron.test.ts` in this folder proves it
+ * for the whole closure.
+ */
+import type { z } from 'zod'
+import {
+  chatUrl,
+  DEFAULT_WAIT_SECONDS,
+  MAX_DISCUSSION_INPUT_CHARS,
+  MCP_TOOL_INPUTS,
+  type DiscussionResult,
+  type McpToolName
+} from '@shared/mcp-tools'
+import type { Agent, Chat, Committee, Message } from '@shared/types'
+import type { AppContext } from '../app-context'
+import { isBackendFailure } from '../errors'
+import type { HandlerMap } from '../handlers/types'
+import { loadTranscript, readDiscussion, watchDiscussion } from './discussion'
+import type { ToolCallContext, ToolOutcome, ToolRegistry } from './tool-types'
+import { renderTranscript } from './transcript'
+
+/**
+ * The frozen contract puts these three beside `createTools()`, and this is where
+ * every reader of it looks for them. They are declared in `./tool-types.ts`
+ * because WP-4 needed them before this file existed; the re-export is what makes
+ * the contract read as written.
+ */
+export type { ToolCallContext, ToolOutcome, ToolRegistry } from './tool-types'
+
+/** Longest default title made from a question's first line. */
+const MAX_TITLE_CHARS = 60
+
+/** The title a question with no readable first line falls back to. */
+const FALLBACK_TITLE = 'Discussion'
+
+/**
+ * The `OriginPart` client name for a caller that sent no `CLIENT_HEADER`.
+ *
+ * Only the shim sets that header, from the IDE's `initialize.clientInfo.name`;
+ * a script talking to `127.0.0.1` with the token directly does not. Labelling
+ * that message `mcp` says exactly what is known — it came through the endpoint,
+ * and the endpoint was not told by whom — where leaving the flag off entirely
+ * would tell the user the opposite, that they typed it themselves.
+ */
+const DIRECT_CLIENT = 'mcp'
+
+/* -------------------------------------------------------------------------- */
+/* The registry                                                                */
+/* -------------------------------------------------------------------------- */
+
+export function createTools(): ToolRegistry {
+  return {
+    list_chats: tool('list_chats', listChats),
+    list_agents: tool('list_agents', listAgents),
+    list_committees: tool('list_committees', listCommittees),
+    start_discussion: tool('start_discussion', startDiscussion),
+    wait_for_discussion: tool('wait_for_discussion', waitForDiscussion),
+    get_discussion: tool('get_discussion', getDiscussion),
+    stop_discussion: tool('stop_discussion', stopDiscussion)
+  }
+}
+
+/** The argument type one tool's implementation receives, after parsing. */
+type ToolArgs<N extends McpToolName> = z.infer<(typeof MCP_TOOL_INPUTS)[N]>
+
+type ToolImpl<N extends McpToolName> = (
+  args: ToolArgs<N>,
+  call: ToolCallContext
+) => Promise<ToolOutcome>
+
+/**
+ * Parsing and the two failure rules, once, for every tool.
+ *
+ * The wrapper is what makes rules 1 and 2 of the header structural rather than
+ * something each of the seven has to remember: an implementation below receives
+ * arguments that are already valid and may throw a `BackendFailure` freely,
+ * because the only way out of this function is a `ToolOutcome`.
+ */
+function tool<N extends McpToolName>(name: N, implementation: ToolImpl<N>): ToolRegistry[N] {
+  return async (args, call) => {
+    const parsed = MCP_TOOL_INPUTS[name].safeParse(args)
+    if (!parsed.success) {
+      return { ok: false, code: 'validation', message: zodMessage(parsed.error) }
+    }
+    try {
+      return await implementation(parsed.data as ToolArgs<N>, call)
+    } catch (cause) {
+      return failure(cause)
+    }
+  }
+}
+
+/**
+ * zod's own words, passed through.
+ *
+ * The schema's messages were written for this reader (`mcp-tools.ts`: "the wire
+ * schema describes the fields and the *message* of a refusal describes the
+ * rule"), so rewriting them here would throw away the one place the rule is
+ * stated in prose. A field path is prefixed when there is one — `question` says
+ * nothing about which argument it was — and several issues are joined rather
+ * than dropped, because zod reports the cross-field refinements together and a
+ * caller that got one of three would fix one of three.
+ */
+function zodMessage(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.map((segment) => String(segment)).join('.')
+      return path.length > 0 ? `${path}: ${issue.message}` : issue.message
+    })
+    .join(' ')
+}
+
+/** A refusal of the caller's input, in the tool's own words. */
+function refuse(message: string): ToolOutcome {
+  return { ok: false, code: 'validation', message }
+}
+
+/** Anything thrown below, as an outcome. A `BackendFailure` keeps its code. */
+function failure(cause: unknown): ToolOutcome {
+  if (isBackendFailure(cause)) return { ok: false, code: cause.code, message: cause.message }
+  return {
+    ok: false,
+    code: 'internal',
+    message: cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* list_chats                                                                  */
+/* -------------------------------------------------------------------------- */
+
+interface ChatSummary {
+  id: string
+  title: string
+  url: string
+  memberNames: string[]
+  /** The goal's kind, or `null` for a chat nobody has given a goal. */
+  goalKind: string | null
+  /** ISO 8601, because the caller is not a UI and has no locale. */
+  updatedAt: string
+  /** True while a run is in flight; `start_discussion` would answer `busy`. */
+  running: boolean
+}
+
+/**
+ * The chats, most recently active first.
+ *
+ * `query` filters over titles **and member names**, which is how a caller finds
+ * "the one the architects were in" without remembering what it was called. It is
+ * deliberately not `chats.search`: that handler also searches message bodies and
+ * returns ids, and a tool whose answer changed because a word appeared inside a
+ * message would be a surprising thing to give a model.
+ */
+async function listChats(
+  args: ToolArgs<'list_chats'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  const chats = await handlers['chats.list'](ctx)
+  const names = await agentNames(ctx, handlers)
+
+  const query = args.query?.trim().toLowerCase() ?? ''
+  const summaries: ChatSummary[] = []
+
+  for (const chat of chats) {
+    const members = await handlers['chats.members.list'](ctx, { chatId: chat.id })
+    const memberNames = members.map((member) => names.get(member.agentId) ?? member.agentId)
+    if (query.length > 0 && !matches(chat, memberNames, query)) continue
+    summaries.push({
+      id: chat.id,
+      title: chat.title,
+      url: chatUrl(chat.id),
+      memberNames,
+      goalKind: chat.goal?.kind ?? null,
+      updatedAt: new Date(chat.updatedAt).toISOString(),
+      running: ctx.runners.getState(chat.id) !== null
+    })
+  }
+
+  const hint =
+    summaries.length === 0
+      ? 'No chat matched. Call list_agents and start_discussion with a fresh group instead.'
+      : 'Pass one of these chatIds to start_discussion to continue that group, or to get_discussion to read it.'
+
+  const lines = summaries.map(
+    (chat) =>
+      `- ${chat.title} — ${chat.id}${chat.running ? ' (running)' : ''}\n  members: ${
+        chat.memberNames.join(', ') || 'none'
+      }\n  updated: ${chat.updatedAt}${chat.goalKind === null ? '' : `\n  goal: ${chat.goalKind}`}`
+  )
+
+  return {
+    ok: true,
+    structured: { chats: summaries, hint },
+    text: [`${summaries.length} chat(s).`, ...lines, '', hint].join('\n')
+  }
+}
+
+function matches(chat: Chat, memberNames: string[], query: string): boolean {
+  if (chat.title.toLowerCase().includes(query)) return true
+  return memberNames.some((name) => name.toLowerCase().includes(query))
+}
+
+/* -------------------------------------------------------------------------- */
+/* list_agents                                                                 */
+/* -------------------------------------------------------------------------- */
+
+interface AgentSummary {
+  id: string
+  name: string
+  role: Agent['role']
+  /** `<provider> · <model>`, or the model alone when the provider is gone. */
+  model: string
+  description: string
+  /**
+   * False for an executor: the caller is the executor, so inviting Witena's own
+   * would be two writers over one folder (PLAN.md, "the role split").
+   */
+  invitable: boolean
+}
+
+async function listAgents(
+  _args: ToolArgs<'list_agents'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  const agents = await handlers['agents.list'](ctx)
+  const providers = await handlers['providers.list'](ctx)
+  const providerNames = new Map(providers.map((provider) => [provider.id, provider.name]))
+
+  const summaries: AgentSummary[] = agents.map((agent) => ({
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    model: label(providerNames.get(agent.providerId), agent.modelId),
+    description: agent.description,
+    invitable: agent.role !== 'executor'
+  }))
+
+  const invitable = summaries.filter((agent) => agent.invitable)
+  const hint =
+    invitable.length === 0
+      ? 'No agent can be invited. Ask the user to create participant agents in Witena first.'
+      : 'Pass the names of the agents you want in `agents` on start_discussion. Executors cannot be invited: you are the executor.'
+
+  const lines = summaries.map(
+    (agent) =>
+      `- ${agent.name} — ${agent.model}${agent.invitable ? '' : ' (executor, cannot be invited)'}`
+  )
+
+  return {
+    ok: true,
+    structured: { agents: summaries, hint },
+    text: [`${summaries.length} agent(s).`, ...lines, '', hint].join('\n')
+  }
+}
+
+function label(providerName: string | undefined, modelId: string): string {
+  return providerName === undefined ? modelId : `${providerName} · ${modelId}`
+}
+
+/* -------------------------------------------------------------------------- */
+/* list_committees                                                             */
+/* -------------------------------------------------------------------------- */
+
+interface CommitteeSummary {
+  id: string
+  name: string
+  description: string
+  /** Member names in the committee's own speaking order. */
+  memberNames: string[]
+  /**
+   * True when one of those members is an executor.
+   *
+   * Not a refusal and not a warning: it is the user's committee, and Phase 9
+   * already allows at most one executor in it. It is here because it changes
+   * what the caller should expect — the chat will contain an agent that *can*
+   * write, and the endpoint still hands nothing off, so the conclusion is the
+   * caller's to apply (`start_discussion` says so again in its `hint`).
+   */
+  hasExecutor: boolean
+}
+
+/**
+ * The standing groups, as `committees.list` orders them.
+ *
+ * A committee is the user's own answer to "who should look at this", which
+ * makes it the better first question than `list_agents` for a caller that has
+ * no opinion about the individuals. Names are resolved here rather than shipped
+ * as ids, for the same reason `list_chats` resolves its members: the caller is
+ * choosing people, and an id tells it nothing about who they are.
+ *
+ * A member whose agent has since been deleted cannot appear — `committee_members`
+ * cascades — so the id fallback below is for the impossible case rather than
+ * for an expected one.
+ */
+async function listCommittees(
+  _args: ToolArgs<'list_committees'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  const committees = await handlers['committees.list'](ctx)
+  const agents = await handlers['agents.list'](ctx)
+  const byId = new Map(agents.map((agent) => [agent.id, agent]))
+
+  const summaries: CommitteeSummary[] = committees.map((committee) => ({
+    id: committee.id,
+    name: committee.name,
+    description: committee.description,
+    memberNames: committee.memberAgentIds.map((agentId) => byId.get(agentId)?.name ?? agentId),
+    hasExecutor: committee.memberAgentIds.some((agentId) => byId.get(agentId)?.role === 'executor')
+  }))
+
+  const hint =
+    summaries.length === 0
+      ? 'The user has saved no committees. Call list_agents and name the members yourself in `agents` on start_discussion.'
+      : 'Pass a committee name or id as `committee` on start_discussion to convene the whole group at once, and add anyone it is missing with `agents` in the same call.'
+
+  const lines = summaries.map(
+    (committee) =>
+      `- ${committee.name} — ${committee.id}\n  members: ${
+        committee.memberNames.join(', ') || 'none'
+      }${committee.description.length === 0 ? '' : `\n  ${committee.description}`}`
+  )
+
+  return {
+    ok: true,
+    structured: { committees: summaries, hint },
+    text: [`${summaries.length} committee(s).`, ...lines, '', hint].join('\n')
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* start_discussion                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Ask a group, and wait for as long as the caller's budget allows.
+ *
+ * The order of the four steps is the whole of the tool, and it is not free to
+ * rearrange:
+ *
+ * 1. The deadline is taken **first**, so the budget measures the caller's wait
+ *    rather than the wait that was left after a chat was created.
+ * 2. The chat is resolved or created, and refused (`busy`) if it is already
+ *    talking — a second run over one chat would double-speak.
+ * 3. `watchDiscussion` subscribes **before** `chat.send`, because a short
+ *    discussion can finish inside the same turn of the event loop the send
+ *    resolved in.
+ * 4. Only then is the message sent. If the send throws, the watcher is
+ *    cancelled: a subscription made in front of a send that never happened must
+ *    not outlive the call.
+ *
+ * Since WP-14 a new chat has two sources of members — a `committee` and the
+ * individual `agents` — and **neither the expansion nor the order nor the
+ * de-duplication happens here**. Both are handed to `chats.create`, which has
+ * done that since S9.1: the committee's members in its own order, then the
+ * extras, first occurrence wins. A second merge in this file would be a second
+ * rule to keep in step with Phase 9's, and the one an IDE reached would be the
+ * copy that drifted.
+ */
+async function startDiscussion(
+  args: ToolArgs<'start_discussion'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  const deadlineMs = deadlineFor(args.maxWaitSeconds)
+
+  const total = args.question.length + (args.context?.length ?? 0)
+  if (total > MAX_DISCUSSION_INPUT_CHARS) {
+    return refuse(
+      `question and context are ${total} characters together, and the limit is ${MAX_DISCUSSION_INPUT_CHARS}. Send the relevant excerpt rather than the whole file.`
+    )
+  }
+
+  let chatId: string
+  /** Appended to the result's `hint` when the convened group can write. */
+  let executorNote: string | undefined
+  if (args.chatId !== undefined) {
+    // `not_found` for an id the model invented, before anything is sent.
+    await handlers['chats.get'](ctx, { id: args.chatId })
+    if (ctx.runners.getState(args.chatId) !== null) {
+      return {
+        ok: false,
+        code: 'busy',
+        message: `That discussion is still running. Call wait_for_discussion with chatId ${args.chatId}, or stop_discussion to end it first.`
+      }
+    }
+    chatId = args.chatId
+  } else {
+    // One read of the agent library serves both resolvers and the executor
+    // check below, so naming a committee costs the same two handler calls as
+    // naming two agents did.
+    const agents = await handlers['agents.list'](ctx)
+
+    let committee: Committee | undefined
+    if (args.committee !== undefined) {
+      const resolved = await resolveCommittee(args.committee, ctx, handlers)
+      if ('refusal' in resolved) return resolved.refusal
+      committee = resolved.committee
+    }
+
+    const members = resolveAgents(args.agents ?? [], agents)
+    if ('refusal' in members) return members.refusal
+
+    if (committee !== undefined && committee.memberAgentIds.length === 0 && members.agentIds.length === 0) {
+      return refuse(
+        `The committee "${committee.name}" has no members, so there would be nobody to ask. Add members to it in Witena, or name the agents yourself in \`agents\`.`
+      )
+    }
+
+    const chat = await handlers['chats.create'](ctx, {
+      input: {
+        title: args.title ?? titleFrom(args.question),
+        // Phase 9's `chats.create` expands `committeeId` into the chat's first
+        // members, in the committee's own order, then appends these — keeping
+        // the first occurrence of an agent that is in both. That merge is not
+        // repeated here (see the header).
+        ...(committee === undefined ? {} : { committeeId: committee.id }),
+        memberAgentIds: members.agentIds,
+        // `workdir` is validated by `chats.create` against the real filesystem
+        // (absolute, exists, is a directory) and refused before the row is
+        // written, so a bad path never leaves a half-created chat behind. The
+        // tool does not re-check it: the handler owns that boundary, and its
+        // refusals already name the path they rejected.
+        ...(args.workdir === undefined ? {} : { workdir: args.workdir })
+      }
+    })
+    chatId = chat.id
+    // Only a committee can seat an executor: `resolveAgents` refuses one that
+    // is named individually, so an `agents`-only chat never reaches this.
+    executorNote = committee === undefined ? undefined : executorNoteFor(committee, agents)
+  }
+
+  const text =
+    args.context === undefined || args.context.length === 0
+      ? args.question
+      : `${args.question}\n\n${args.context}`
+
+  const afterSeq = (await loadTranscript(ctx, handlers, chatId)).length
+  const watch = watchDiscussion(ctx, handlers, {
+    chatId,
+    afterSeq,
+    deadlineMs,
+    signal: call.signal,
+    ...(call.progress === undefined ? {} : { progress: call.progress })
+  })
+
+  try {
+    await handlers['chat.send'](ctx, {
+      chatId,
+      text,
+      ...(args.rounds === undefined ? {} : { rounds: args.rounds }),
+      // S10.4: the transcript says who asked. `call.client` is the calling IDE's
+      // own name, relayed by the shim from `initialize.clientInfo.name`; a
+      // direct HTTP caller sends no header and is labelled `DIRECT_CLIENT`,
+      // which is the most the endpoint honestly knows about it. Either way the
+      // handler sanitises the string before it is stored.
+      origin: { client: call.client ?? DIRECT_CLIENT }
+    })
+  } catch (cause) {
+    watch.cancel()
+    throw cause
+  }
+
+  const result = await watch.result
+  return discussion(
+    executorNote === undefined ? result : { ...result, hint: `${result.hint} ${executorNote}` }
+  )
+}
+
+/**
+ * The extra sentence a committee containing an executor earns.
+ *
+ * S10.5 settled the rule this states: the chat is created, because the
+ * committee is the user's and refusing it would make a group they assembled
+ * deliberately unusable from the IDE — but the endpoint still hands nothing
+ * off, so the conclusion is the caller's to apply. Without the sentence a model
+ * that read "an executor is in the room" could reasonably conclude that
+ * somebody else was going to write the code, and nobody would.
+ */
+function executorNoteFor(committee: Committee, agents: Agent[]): string | undefined {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]))
+  const executor = committee.memberAgentIds
+    .map((agentId) => byId.get(agentId))
+    .find((agent) => agent?.role === 'executor')
+  if (executor === undefined) return undefined
+  return `The committee "${committee.name}" contains the executor ${executor.name}, but nothing was handed off to it: you are the executor here, so apply the conclusion yourself.`
+}
+
+/** The first line of the question, as the new chat's name. */
+function titleFrom(question: string): string {
+  const line = question
+    .split('\n')
+    .map((candidate) => candidate.trim())
+    .find((candidate) => candidate.length > 0)
+  if (line === undefined) return FALLBACK_TITLE
+  return line.slice(0, MAX_TITLE_CHARS)
+}
+
+/**
+ * The members of a new chat, from names or ids.
+ *
+ * Resolution is **id first, then a case-insensitive exact name**. Exact rather
+ * than fuzzy because the caller has just been handed the list by `list_agents`
+ * and a near-match is far more likely to be a different agent than a typo;
+ * case-insensitive because a model writing prose will capitalise a name the way
+ * the sentence wants it.
+ *
+ * Every refusal names what it could not use *and what it could have used*: a
+ * model that is told "unknown agent" can only guess again, while one that is
+ * handed the list corrects itself in the next call.
+ *
+ * The agent library is passed in rather than read here, because since WP-14 the
+ * caller of this function needs it for the committee's executor check as well,
+ * and one `agents.list` per `start_discussion` is the honest cost.
+ */
+function resolveAgents(
+  wanted: string[],
+  agents: Agent[]
+): { agentIds: string[] } | { refusal: ToolOutcome } {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]))
+  const invitable = agents.filter((agent) => agent.role !== 'executor').map((agent) => agent.name)
+
+  const agentIds: string[] = []
+  for (const entry of wanted) {
+    const needle = entry.trim()
+    const byIdMatch = byId.get(needle)
+    const candidates =
+      byIdMatch !== undefined
+        ? [byIdMatch]
+        : agents.filter((agent) => agent.name.toLowerCase() === needle.toLowerCase())
+
+    if (candidates.length === 0) {
+      return {
+        refusal: refuse(
+          `There is no agent called "${entry}". Available agents: ${
+            invitable.join(', ') || 'none'
+          }. Call list_agents to see them with their models.`
+        )
+      }
+    }
+    if (candidates.length > 1) {
+      return {
+        refusal: refuse(
+          `"${entry}" matches more than one agent: ${candidates
+            .map((agent) => `${agent.name} (${agent.id})`)
+            .join(', ')}. Pass the id instead of the name.`
+        )
+      }
+    }
+
+    const agent = candidates[0] as Agent
+    if (agent.role === 'executor') {
+      return {
+        refusal: refuse(
+          `${agent.name} is an executor and cannot be invited by name: you are the executor. Witena's group reads and argues, and you apply the conclusion. Pick from: ${
+            invitable.join(', ') || 'none'
+          }, or convene a committee the user built with \`committee\`.`
+        )
+      }
+    }
+    // The same agent named twice is one member: `setMembers` rejects a duplicate
+    // outright, and a caller that wrote a name and then its id meant one seat.
+    if (!agentIds.includes(agent.id)) agentIds.push(agent.id)
+  }
+
+  return { agentIds }
+}
+
+/**
+ * The committee to convene, from a name or an id.
+ *
+ * Resolved exactly as an agent is — id first, then a case-insensitive exact
+ * name, with every refusal listing the candidates — because the caller has just
+ * been handed the list by `list_committees` and learns one rule rather than
+ * two. Names are deliberately **not unique** in Phase 9 (a committee name is a
+ * label, not an identity), so "matches more than one" is a real state here
+ * rather than a theoretical one, and the answer to it is the id.
+ *
+ * The whole `Committee` comes back rather than its id: the caller needs
+ * `memberAgentIds` to refuse an empty committee before a chat exists, and
+ * `name` to say which one it refused.
+ */
+async function resolveCommittee(
+  wanted: string,
+  ctx: AppContext,
+  handlers: HandlerMap
+): Promise<{ committee: Committee } | { refusal: ToolOutcome }> {
+  const committees = await handlers['committees.list'](ctx)
+  const needle = wanted.trim()
+
+  const byId = committees.find((committee) => committee.id === needle)
+  const candidates =
+    byId !== undefined
+      ? [byId]
+      : committees.filter((committee) => committee.name.toLowerCase() === needle.toLowerCase())
+
+  if (candidates.length === 0) {
+    return {
+      refusal: refuse(
+        `There is no committee called "${wanted}". Available committees: ${
+          committees.map((committee) => committee.name).join(', ') || 'none'
+        }. Call list_committees to see them with their members, or name the agents yourself in \`agents\`.`
+      )
+    }
+  }
+  if (candidates.length > 1) {
+    return {
+      refusal: refuse(
+        `"${wanted}" matches more than one committee: ${candidates
+          .map((committee) => `${committee.name} (${committee.id})`)
+          .join(', ')}. Pass the id instead of the name.`
+      )
+    }
+  }
+
+  return { committee: candidates[0] as Committee }
+}
+
+/* -------------------------------------------------------------------------- */
+/* wait_for_discussion                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Keep waiting for a discussion that is already going.
+ *
+ * `afterSeq` is "the seq of the chat's last **user** message minus one", which
+ * is the index of that message in the ascending transcript: the discussion this
+ * result describes is the question *and* everything said after it, not just the
+ * replies. A chat nobody has written to yet answers from position 0.
+ *
+ * The idle check is made after the transcript has been read and **before** the
+ * subscription, both synchronously, so there is no window in which a run could
+ * finish unobserved: either the runner was idle and the transcript already holds
+ * the answer, or the watcher was attached while it was still going.
+ */
+async function waitForDiscussion(
+  args: ToolArgs<'wait_for_discussion'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  const deadlineMs = deadlineFor(args.maxWaitSeconds)
+
+  await handlers['chats.get'](ctx, { id: args.chatId })
+  const afterSeq = lastQuestionAt(await loadTranscript(ctx, handlers, args.chatId))
+
+  if (ctx.runners.getState(args.chatId) === null) {
+    return discussion(await readDiscussion(ctx, handlers, { chatId: args.chatId, afterSeq }))
+  }
+
+  const watch = watchDiscussion(ctx, handlers, {
+    chatId: args.chatId,
+    afterSeq,
+    deadlineMs,
+    signal: call.signal,
+    ...(call.progress === undefined ? {} : { progress: call.progress })
+  })
+  return discussion(await watch.result)
+}
+
+/**
+ * The position of the last user message: where the current discussion began.
+ *
+ * `0` for a chat with no user message at all, which reads the whole transcript —
+ * the honest answer for a chat nobody has asked anything in.
+ */
+function lastQuestionAt(transcript: Message[]): number {
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    if (transcript[index]?.senderType === 'user') return index
+  }
+  return 0
+}
+
+/* -------------------------------------------------------------------------- */
+/* get_discussion                                                              */
+/* -------------------------------------------------------------------------- */
+
+async function getDiscussion(
+  args: ToolArgs<'get_discussion'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  const chat = await handlers['chats.get'](ctx, { id: args.chatId })
+  const transcript = await loadTranscript(ctx, handlers, args.chatId)
+
+  let from = 0
+  if (args.afterMessageId !== undefined) {
+    const index = transcript.findIndex((message) => message.id === args.afterMessageId)
+    if (index < 0) {
+      return refuse(
+        `afterMessageId ${args.afterMessageId} is not a message of chat ${args.chatId}. Use an id from an earlier transcript of this chat, or leave it out.`
+      )
+    }
+    from = index + 1
+  }
+
+  if (args.detail === 'transcript') {
+    const said = transcript.slice(from)
+    const markdown = await renderChatTranscript(ctx, handlers, chat, said)
+    const last = said[said.length - 1]
+    const hint =
+      'This is what was said, not a verdict. Call get_discussion with detail "conclusion" for the result, or pass the last message id as afterMessageId to read only what follows.'
+    return {
+      ok: true,
+      structured: {
+        chatId: args.chatId,
+        url: chatUrl(args.chatId),
+        detail: 'transcript',
+        markdown,
+        messageCount: said.length,
+        ...(last === undefined ? {} : { lastMessageId: last.id }),
+        hint
+      },
+      text: `${markdown}\n\n${hint}`
+    }
+  }
+
+  // Without an `afterMessageId`, a conclusion is read from the last question
+  // onwards — the same window `wait_for_discussion` uses, so the two agree on a
+  // finished chat, which is what the tool's description promises.
+  const afterSeq = args.afterMessageId === undefined ? lastQuestionAt(transcript) : from
+  return discussion(await readDiscussion(ctx, handlers, { chatId: args.chatId, afterSeq }))
+}
+
+/* -------------------------------------------------------------------------- */
+/* stop_discussion                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * End a run. Idempotent, like the handler underneath it.
+ *
+ * It does not report the resulting `DiscussionResult`: the turns are still
+ * unwinding when `chat.stop` returns, so anything read here would describe a
+ * discussion mid-abort rather than the one the caller stopped. `get_discussion`
+ * a moment later is the honest way to see what was said.
+ */
+async function stopDiscussion(
+  args: ToolArgs<'stop_discussion'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  // `chat.stop` is idempotent and asks no questions, so the existence check is
+  // this tool's: a chat id the model invented must come back as `not_found`
+  // rather than as a successful stop of nothing.
+  await handlers['chats.get'](ctx, { id: args.chatId })
+  const wasRunning = ctx.runners.getState(args.chatId) !== null
+  await handlers['chat.stop'](ctx, { chatId: args.chatId })
+
+  const hint = wasRunning
+    ? 'The run was cancelled. Everything said so far is still in Witena — read it with get_discussion.'
+    : 'That discussion was not running, so nothing was cancelled. Read it with get_discussion.'
+
+  return {
+    ok: true,
+    structured: { chatId: args.chatId, url: chatUrl(args.chatId), wasRunning, hint },
+    text: [`Discussion ${args.chatId}`, chatUrl(args.chatId), '', hint].join('\n')
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared rendering                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** `Date.now()` plus the caller's budget, defaulted. */
+function deadlineFor(maxWaitSeconds: number | undefined): number {
+  return Date.now() + (maxWaitSeconds ?? DEFAULT_WAIT_SECONDS) * 1000
+}
+
+/** Agent id → name, read once per call through the handler. */
+async function agentNames(ctx: AppContext, handlers: HandlerMap): Promise<Map<string, string>> {
+  const agents = await handlers['agents.list'](ctx)
+  return new Map(agents.map((agent) => [agent.id, agent.name]))
+}
+
+/**
+ * Some messages of a chat, as the markdown a model reads.
+ *
+ * Exported because WP-15's `witena://chat/<id>` resource is *the same document*
+ * as `get_discussion { detail: 'transcript' }` — Claude Code fetches it as an
+ * `@`-mention body, Codex fetches it through its own `read_mcp_resource` tool,
+ * and both of them are the reader `transcript.ts` was written for. Two
+ * renderings of one transcript would be two things to keep in step, and the one
+ * a user sees after `@witena:` would be the copy that drifted.
+ */
+export async function renderChatTranscript(
+  ctx: AppContext,
+  handlers: HandlerMap,
+  chat: Chat,
+  messages: Message[]
+): Promise<string> {
+  return renderTranscript(messages, { title: chat.title, names: await agentNames(ctx, handlers) })
+}
+
+/**
+ * A `DiscussionResult` as the three waiting tools return it.
+ *
+ * The structured half is the result verbatim — one shape for `start_discussion`,
+ * `wait_for_discussion` and `get_discussion`, so a caller that learned to read
+ * one has learned all three — and the text half is the same value rendered for a
+ * model that reads the text block first. It ends with the `hint`, which is the
+ * line that says what to do next.
+ */
+function discussion(result: DiscussionResult): ToolOutcome {
+  const lines = [`Discussion ${result.status} — round ${result.round}`, result.url]
+
+  if (result.conclusion !== undefined) {
+    lines.push('', `Conclusion by ${result.conclusion.agentName}:`, '', result.conclusion.markdown)
+  }
+
+  if (result.positions !== undefined && result.positions.length > 0) {
+    lines.push('', 'Positions:')
+    for (const position of result.positions) {
+      lines.push(
+        '',
+        `**${position.agentName}**${position.truncated ? ' (truncated)' : ''}`,
+        position.markdown
+      )
+    }
+  }
+
+  if (result.error !== undefined) lines.push('', `Error: ${result.error}`)
+
+  if (result.usage !== undefined) {
+    lines.push(
+      '',
+      `Tokens: ${result.usage.inputTokens} in, ${result.usage.outputTokens} out, ${result.usage.totalTokens} total.`
+    )
+  }
+
+  lines.push('', result.hint)
+  return { ok: true, structured: result, text: lines.join('\n') }
+}

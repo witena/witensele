@@ -3204,6 +3204,103 @@ question came out of building it.
   is no way to share one function without putting chat-creation logic into
   `src/shared`. Worth revisiting if a third caller appears.
 
+### MCP endpoint (Phase 10)
+
+Phase 10 makes Witena an MCP *server* a coding agent can consult. Everything it
+built is merged and covered by `npm test`; what is below is the work it named as
+out of scope, plus every claim it could not check on this machine. The dividing
+line is the same one four work packages hit — WP-0b, WP-14, WP-15 and WP-16:
+nothing here has ever been run
+inside a real Claude Code or Codex session, because the CLI on the development
+machine is not logged in and no package was permitted to write `~/.claude.json`,
+`~/.codex/config.toml` or `~/.claude/`.
+
+**Verification owed (nothing new to build; somebody has to run it).**
+
+- **Follow the README section on a logged-in machine** (S10.7's acceptance).
+  Install the dmg, open Settings → Integrations, press Connect for Claude Code,
+  and ask it to consult two agents. This is the first thing to run, because it
+  is also the acceptance criterion of S10.2 (the shim registered by hand lists
+  the tools and completes a `start_discussion`), of S10.4 (the message in Witena
+  is marked "via claude-code") and of S10.6 (`@witena:` offers recent chats and
+  `/mcp__witena__consult` starts a discussion). All four are asserted through the
+  SDK client in `contract.test.ts`, `src/mcp-shim/index.test.ts` and
+  `shim.spawn.test.ts`; what is untested is the last hop, each client's own UI.
+- **Wake a quit Witena with a tool call** (S10.3's acceptance, and the open
+  question `docs/features/mcp-endpoint/context.md` carries). `build/witena-mcp`,
+  `src/mcp-shim/launch.ts`, `--background` and the discovery file are each
+  tested and the launcher has been run four ways against a signed `dist:dir`
+  bundle, but the three have never met in one piece: reproducing it here means a
+  *second* signed copy with a fresh `WITENA_USER_DATA`, which is the macOS
+  Keychain prompt WP-0a measured. On an *installed* app the prompt does not
+  arise, so the README procedure above exercises it for free.
+- **`npm run e2e:packaged` has never been run** (S10.3), for the same reason: the
+  spec launches a second signed copy and Playwright then waits on `firstWindow()`
+  while a human answers a Keychain dialog. Its fourth case — the bundled
+  `bin/witena-mcp` answering `initialize` and `tools/list` — was written by WP-9
+  to pass without the app at all and verified by hand instead. A fix is an
+  opt-out that skips `createSafeStorageStore()`, which is a change to
+  `src/main/index.ts` no work package has asked for.
+- **Claude Code's per-tool-call timeout is unmeasured** (WP-0b item 4). The
+  startup timeout is 30 000 ms and progress notifications do not extend a call;
+  the *limit* on a call was never reached, so `DEFAULT_WAIT_SECONDS = 50` is
+  chosen against Codex's ~60 s, which is the tighter of the two known numbers.
+  If Claude Code turns out to be tighter still, that constant is the one dial.
+- **`shellcheck` has never read `build/witena-mcp`** (S10.3). It is not installed
+  here and no CI job runs one; the script has been held to `sh -n`, the text
+  assertions in `packaging.test.ts` and four runs against a signed bundle,
+  including one from a path containing a space. A linter job would touch
+  `.github/workflows/`.
+
+**Deferred, and what it waits on.**
+
+- **`@committee` in Claude Code** — S10.5's last bullet, deferred by WP-14.
+  First, on a logged-in machine, verify S10.0 item 4: that a user-level subagent
+  file `~/.claude/agents/<name>.md` whose `tools:` is only `mcp__witena__*` can
+  be `@`-mentioned and can actually call them. Only then build it: an
+  Integrations checkbox, "Create a Claude Code agent for each committee", and
+  `integrations.syncCommittees` writing `~/.claude/agents/witena-<slug>.md` per
+  committee — tools limited to `mcp__witena__*`, a body that calls
+  `start_discussion` with that committee and loops on `wait_for_discussion` —
+  re-synced on committee create / rename / delete and removing the files of
+  deleted committees. Only files carrying a `generated-by: witena` frontmatter
+  marker are ever overwritten or deleted. Codex has no equivalent; its card shows
+  the prompt to type instead. Nothing is stranded in the meantime: a session
+  reaches every committee through `list_committees` and
+  `start_discussion({ committee })` today, and what is missing is the shorthand.
+
+**Named out of scope while Phase 10 was built.**
+
+- **A menu-bar item and idle-quit for background launches.** A tool call can
+  start Witena with no window (S10.3), and nothing then tells the user it is
+  running or offers to quit it; it stays up until they notice the Dock icon. A
+  status item, and a rule that quits an app nobody opened once it has been idle
+  for long enough, are the two halves of that.
+- **MCP elicitation as a remote permission prompt.** An endpoint-started
+  discussion whose chat has an executor cannot answer a permission request — the
+  watcher returns `needs-attention` and the user has to go to the window. MCP's
+  `elicitation/create` is the protocol's own answer, and would let the *calling*
+  agent put the prompt in front of the user. It needs a client that implements
+  it, and a decision about whether a grant given through another agent is a
+  grant Witena should accept at all.
+- **An update that wants to install while an endpoint-started run is in flight.**
+  The updater restarts the app, and nothing consults the endpoint before it
+  does. A shim holding a `wait_for_discussion` loses the request; the shim's
+  re-read of the discovery file covers the *next* call, not the one in flight,
+  so the caller is told only that the tool failed. Deferring the install while a
+  run started over MCP is live, or telling the waiting caller what happened, is
+  the step.
+- **The endpoint on the server host.** `src/server/` mounts `POST /api/<method>`
+  and the WebSocket and nothing else: `createMcpEndpoint` is never constructed
+  there, and `integrations.status` reports the feature absent honestly
+  (`launcherPath: null`, both clients not installed). Mounting it at `/mcp` needs
+  S8.2's accounts first — the desktop guard is "loopback plus a per-start token",
+  which is exactly the guard a public host cannot use.
+- **Cursor and Claude Desktop cards** in Settings → Integrations. Both are
+  reachable today through the JSON snippet; a card means a CLI (or a config file)
+  to register with, per client, and the status trio — installed, connected,
+  stale — computed for it.
+
 ### Open questions carried from the feature documents
 
 - `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
@@ -4298,3 +4395,458 @@ naming: the `Dialog` primitive's own behaviour is covered in
 `aria-modal`, focus inside the panel, Escape, the backdrop, and a review
 screenshot in each appearance — because what is being tested there is the
 shell's primitive and not what the New chat dialog does with it.
+
+## Phase 10: MCP endpoint (PLAN "Witena as an MCP server") `[~]`
+
+Everything in this phase is built and merged, and none of its acceptance
+criteria that needs a real Claude Code or Codex session has been run — the CLI
+on the development machine is not logged in, and the work packages were not
+permitted to write `~/.claude.json`, `~/.codex/config.toml` or `~/.claude/`. One
+bullet is deliberately deferred (S10.5's per-committee subagent files). Phase 6,
+"MCP endpoint (Phase 10)", carries the complete list; the phase stays `[~]`
+until somebody with a logged-in client walks the README procedure.
+
+Witena as an MCP server, so that Claude Code, Codex and any other MCP client can
+ask a group chat and get its conclusion back. Read the PLAN section first: the
+shape, the decision table and the tool table there are the specification, and the
+steps below only slice them.
+
+**Relation to Phase 9 (committees).** Phase 9 — the reusable expert group, a
+*committee* — is being built in parallel by someone else: S9.1 data and API
+(both dialects' migration, repository, handlers, shared types, the expansion of a
+committee into members inside `chats.create` with de-duplication and the
+second-executor rule), S9.2 the committees page, S9.3 the new-chat dialog. This
+phase does not touch that work and S10.0–S10.4 do not depend on it. S10.5 is the
+one step that does: it exposes committees through the endpoint by calling Phase
+9's handlers, and must not start before S9.1 is merged. It may add committee
+*API* (a handler or a field Phase 9 did not need) but never a second expansion
+rule — `chats.create` stays the only place a committee becomes members.
+
+Feature folder: `docs/features/mcp-endpoint/`. **Each step below is executed as
+the work packages in `docs/features/mcp-endpoint/tasks.md`** — WP-0a … WP-16, each
+sized for one subagent in its own worktree, with the contracts between them
+frozen up front, the existing files it may touch, and the commands that prove it
+done. The step says *what*; the package says *exactly how and how to check*. The existing `mcp` feature stays
+what it is — Witena as an MCP *client*.
+
+### S10.0 Spike: what the design assumes `[~]`
+*(2026-09-20, WP-16: the marker was stale — WP-0a and WP-0b answered every
+bullet and the findings are in `context.md`. It stays `[~]` rather than `[x]`
+because the last half of item 4, the `@`-mention of a tools-restricted Claude
+Code subagent, could not be run on a CLI that is not logged in; that is what
+S10.5's deferred bullet waits on and what the Phase 6 backlog carries.)*
+What: the design rests on platform behaviour nobody has run yet. Find out before
+building on it; throwaway code, kept out of `src/`. Write the findings into
+`docs/features/mcp-endpoint/context.md` ("What the spike found"), and change PLAN
+first if any of them fails.
+- [x] **Run-as-node from the shipped bundle.** (2026-09-20, WP-0a) With a signed, notarized
+  `Witena.app` (`npm run dist:dir` plus the v0.1.0 dmg):
+  `ELECTRON_RUN_AS_NODE=1 Witena.app/Contents/MacOS/Witena script.cjs` runs the
+  script, reads stdin / writes stdout unbuffered, shows no Dock icon and no
+  window, and is not blocked by the hardened runtime. Confirm no Electron fuse
+  config disables `RunAsNode` today and record that it must stay enabled.
+- [x] **Hidden launch.** (2026-09-20, WP-0a) `open -g -j -a <bundle> --args --background` starts the
+  app without stealing focus; `process.argv` carries `--background` in a packaged
+  build; how long from `open` to "HTTP port listening" on a cold start (this
+  bounds the shim's launch timeout).
+- [x] **Single-instance lock and the e2e harness.** (2026-09-20, WP-0a) `requestSingleInstanceLock()`
+  is keyed by `userData`; confirm that with `WITENA_USER_DATA` applied *before*
+  the lock, parallel Playwright launches do not evict each other.
+- [x] **What the clients really do.** (2026-09-20, WP-0b) Against a ten-line stdio
+  MCP server with a tool that sleeps: Claude Code's and Codex's actual startup and
+  tool-call timeouts and how each is configured; whether progress notifications are
+  shown or at least reset the timeout; what `claude mcp add` / `codex mcp add`
+  accept (scope, env, args) and where they write; how Claude Code surfaces MCP
+  resources (`@server:uri`) and prompts (`/mcp__server__prompt`), and whether Codex
+  surfaces either; and that a user-level Claude Code subagent file
+  (`~/.claude/agents/<name>.md`) whose tools are only `mcp__<server>__*` can be
+  `@`-mentioned and can call them (S10.5 stands on this). Findings in
+  `context.md` → "WP-0b clients": Claude Code's startup timeout is 30 000 ms and
+  its per-call limit is not extended by progress; Codex has no default tool-call
+  timeout (130 s succeeded with progress *and* without it) and does not block the
+  turn on server startup, so a slow shim loses its tools silently;
+  `DEFAULT_WAIT_SECONDS` stays 50. The subagent file and Claude Code's tool-call
+  path could not be exercised — that CLI was not logged in — and are carried into
+  "Open questions" for WP-14/WP-15.
+Acceptance: `context.md` answers each bullet with what was run and what happened;
+the default `maxWaitSeconds` and the shim's launch timeout are chosen from
+measured numbers, not from memory. Docs: `mcp-endpoint` (context only — the other
+three files say "not built yet").
+
+### S10.1 The endpoint and the discussion tools `[x]` (2026-09-20)
+What: the transport-free core, testable without Electron or a shim.
+- [x] (2026-09-20, WP-1) `src/shared/mcp-tools.ts`: the six tool definitions (name, description,
+  JSON Schema input, result types, the `DiscussionStatus` union). Shared because
+  the shim serves `tools/list` from it without the app (S10.2). Descriptions are
+  written for a model: they say when to call `wait_for_discussion` again and that
+  the caller, not Witena, applies the conclusion.
+- [x] (2026-09-20, WP-2) `src/main/mcp-endpoint/discussion.ts`: `watchDiscussion` — subscribes to
+  the `EventBus` **before** sending, resolves on `run.finished`, on
+  `permission.requested` for that chat (`needs-attention`), at the deadline
+  (`running`) or on the request's `signal` (`running`, without stopping the run);
+  then builds the result from `messages.list`: the latest
+  `ConclusionPart` message after the question, else `positions` (each
+  participant's last `done` message, truncated at `MAX_POSITION_CHARS`), plus
+  `messages.usageSummary`. Maps `RunFinishReason` → status (`completed` with a
+  conclusion → `concluded`; `completed` without / `max-rounds` → `ended`;
+  `stopped`; `error`). `readDiscussion` answers the same shape without waiting.
+- [x] (2026-09-20, WP-3) `src/main/mcp-endpoint/tools.ts`: the six tools over `HandlerMap` +
+  `AppContext` — never over repositories directly. `start_discussion`: resolve
+  `agents` by id or case-insensitive name (ambiguous or unknown → a validation
+  error that lists the candidates); refuse `executor` agents; `chats.create` with
+  `memberAgentIds`, `title` (default: first line of the question), `workdir`
+  (absolute, must exist; creation only); refuse `busy` when
+  `ctx.runners` reports `isRunning` for an existing chat; compose the message as
+  question + context (cap the total, say the cap in the error); `chat.send` with
+  `rounds`. `BackendFailure` → an MCP tool error (`isError: true`) carrying the
+  `BackendErrorCode`. *(Plus `transcript.ts`, the markdown `get_discussion`
+  renders. The live run state is read from `ctx.runners.getState`, which is on
+  the context and in no repository; the `workdir` check is left to
+  `chats.create`, which refuses before it writes the row.)*
+- [x] (2026-09-20, WP-4) `src/main/mcp-endpoint/server.ts`: `createMcpEndpoint({ ctx, handlers,
+  token })` → a `node:http` request handler. A low-level SDK `Server` +
+  `StreamableHTTPServerTransport` in stateless mode (one server+transport per
+  request). Guards before the SDK sees anything: bearer token (constant-time
+  compare), no `Origin` header, loopback `Host` on the socket's own port, body
+  cap. Progress notifications on `run.round` and on each agent `message.updated`
+  when the request carries a `progressToken`. *(The registry is taken by
+  injection; the `createTools()` default is one named seam WP-3 fills. `Server`
+  rather than `McpServer`, per the context.md decision WP-1 recorded.)*
+- [x] (2026-09-20, WP-4) Extend the no-electron scanner (`src/server/no-electron.test.ts`, or a
+  sibling) to the import closure of `src/main/mcp-endpoint/`. *(A sibling:
+  importing one `*.test.ts` from another would collect the server's suite
+  twice.)*
+- Tests: tool-level unit tests with the AI SDK mock model injected through
+  `runner.createModel` as `http.test.ts` does — concluded, ended-with-positions,
+  deadline-then-wait-again, stop, busy, executor refused, name resolution, a
+  pending permission; a contract test with a real endpoint on an ephemeral port
+  and the SDK `Client`, including the three refusals (no token, `Origin` present,
+  foreign `Host`). *(WP-6: `src/main/mcp-endpoint/contract.test.ts` — the real
+  `createTools()` behind the real endpoint, the status mapping row by row, and
+  401 / 403 through the socket. The foreign `Host` needs a header `fetch` will
+  not send, so it stays where it can be written honestly, in
+  `server.test.ts`'s `rawNodeRequest`.)*
+Acceptance: the contract test creates a chat from two agent names, asks a
+question and receives the mock group's conclusion through MCP; `npm test` and
+`npm run typecheck` pass. Docs: `mcp-endpoint` (all four), `orchestration`
+(nothing changes — say so in one line if the watcher leans on an ordering
+guarantee of `run.finished`).
+
+### S10.2 The shim `[x]` (2026-09-20)
+What: `witena-mcp`, the command an IDE runs.
+- [x] (2026-09-20, WP-5) `src/mcp-shim/`: a low-level SDK `Server` on `StdioServerTransport`.
+  `initialize` and `tools/list` answered locally from `@shared/mcp-tools`;
+  `tools/call` forwarded through an SDK `Client` +
+  `StreamableHTTPClientTransport`, relaying progress and cancellation. Captures
+  `clientInfo.name` from `initialize` and sends it as `X-Witena-Client`.
+  *(One `Client` per forwarded call, closed in a `finally`: the endpoint is
+  stateless, so only dropping the HTTP request cancels a running tool, and the
+  SDK has one `AbortController` per transport. The forwarded request's timeout
+  is `maxWaitSeconds` + 30 s, or the SDK's 60 s default would abort every long
+  wait.)*
+- [x] (2026-09-20, WP-1 + WP-5) Discovery: `src/shared/mcp-discovery.ts` — the file name, its schema and
+  the `userData` path rule (honouring `WITENA_USER_DATA`), used by both sides.
+  *(The shared half is WP-1's: `DISCOVERY_FILE`, `DISCOVERY_VERSION`,
+  `McpDiscovery`, `parseDiscovery`, `userDataDirFor`.)*
+  The shim reads it, checks `pid` is alive, connects; on `ECONNREFUSED` / `401`
+  re-reads once (app restarted) before failing. *(WP-5: `src/mcp-shim/connect.ts`,
+  which also caches the file between calls and drops the cache on either error.)*
+- [x] (2026-09-20, WP-5) Lazy launch (macOS, packaged only): derive the bundle from
+  `process.execPath`, `open -g -j -a <bundle> --args --background`, poll for the
+  discovery file up to the timeout S10.0 measured. In dev, and when the endpoint
+  is switched off, return a tool error that says exactly that — the text is for
+  the calling model, in English, and is not UI copy.
+  *(`src/mcp-shim/launch.ts`, 20 s against WP-0a's 2.9 s worst cold start. The
+  three sentences are `SHIM_ERROR_TEXT`; "the app is up" is read from the
+  `SingletonLock` symlink Electron keeps in `userData`.)*
+- [x] (2026-09-20, WP-5) Build: a fourth Vite target → one bundled `out/mcp-shim/witena-mcp.cjs`
+  with the SDK inlined (no `node_modules` lookup at run time). Nothing but
+  `@shared/*` and the SDK may be imported — a test walks the closure and fails on
+  `electron`, `better-sqlite3` or anything under `src/main/`.
+  *(`vite.mcp-shim.config.ts`, `npm run mcp-shim:build`; `npm run build` ends
+  with it.)*
+- [x] (2026-09-20, WP-5) Tests: spawn the built shim with `node` against the S10.1 test endpoint and a
+  fake discovery file; drive it with the SDK's stdio client: `tools/list` with no
+  app, a forwarded call, the stale-file re-read, the endpoint-off error.
+  *(`src/mcp-shim/shim.spawn.test.ts`, plus cancellation reaching the endpoint's
+  `signal` and progress relayed across both hops.)*
+Acceptance: `node out/mcp-shim/witena-mcp.cjs`, registered by hand in Claude Code
+against `npm run dev`, lists the tools and completes a `start_discussion`. Docs:
+`mcp-endpoint` (all four).
+
+### S10.3 Hosting it in the desktop app `[x]` (2026-09-20)
+What: the app listens, can start in the background, and ships the shim.
+- [x] `AppSettings.mcpEndpoint: { enabled: boolean }` (default `false`).
+  `src/main/index.ts`: when enabled, a `node:http` server on `127.0.0.1:0`
+  mounting `createMcpEndpoint`, a fresh random token, the discovery file written
+  `0600` after `listen` and removed in `before-quit`; toggling the setting starts
+  / stops it without a restart. (2026-09-20, WP-7: `src/main/mcp-endpoint/host.ts`
+  and `AppContext.mcpEndpoint`, built only when `AppContextOptions.mcpEndpoint`
+  is passed — the Node host and every test get `null` and open nothing. The
+  token is fresh per `start()` rather than per launch; `stop()` removes the file
+  synchronously before it awaits anything, because `before-quit` cannot await,
+  and only when the file's `pid` is ours. The host starts after the context and
+  independently of the window: `--background` has none.)
+- [x] `app.requestSingleInstanceLock()` after the `WITENA_USER_DATA` override;
+  `second-instance` shows / creates the window. `--background` skips
+  `createWindow()`; the existing `activate` handler opens it from the Dock.
+  (2026-09-20, WP-8: `src/main/launch-args.ts` + `e2e/launch.spec.ts`. The order
+  matters — S10.0 measured the lock as keyed by `userData`, so asking before the
+  override would make every parallel Playwright run fight over one lock, and the
+  losing instance never reaches `ready`, so `app.quit()` is all it may do.)
+- [x] `witena://chat/<id>`: `protocols` in `electron-builder.yml`,
+  `setAsDefaultProtocolClient`, `open-url` (and the `second-instance` argv) →
+  show the window and emit a new `ui.open-chat` event on the bus; the renderer
+  navigates on it through `BackendClient.subscribe` (rule 6). (2026-09-20, WP-8.
+  `setAsDefaultProtocolClient` in packaged builds only; the emit waits for the
+  window's `did-finish-load`, and the chats store holds an id that arrives
+  before `chats.list` answers. An id the list does not have is ignored with no
+  error.)
+- [x] (2026-09-20, WP-9) Packaging: `out/mcp-shim/witena-mcp.cjs` →
+  `Contents/Resources/mcp/`, and a `Contents/Resources/bin/witena-mcp` POSIX
+  launcher that resolves the bundle from its own path and `exec`s the app binary
+  with `ELECTRON_RUN_AS_NODE=1`. `packaging.test.ts` asserts both entries.
+  (`build/witena-mcp`, mode 755 **in git** — asserted from the index, because a
+  local `chmod` does not travel. `src/main/index.ts` also computes
+  `mcpLauncherPath()` — `process.resourcesPath/bin/witena-mcp` when packaged,
+  `null` otherwise — which S10.4's Integrations section registers. Verified
+  against a Developer ID signed `dist:dir` bundle: the launcher answers
+  `initialize` and `tools/list` from the ordinary path, from a path containing a
+  space and through a symlink, and registers nothing with LaunchServices. The
+  **acceptance** below is still unproven: waking a quit app means launching a
+  second signed copy, which with a fresh `WITENA_USER_DATA` raises the Keychain
+  prompt WP-0a measured, and that cannot be exercised unattended.)
+- Tests: unit — the settings default and toggle, the discovery file's mode and
+  removal, deep-link parsing. e2e — `e2e/mcp-endpoint.spec.ts`: launch with the
+  switch on, run the built shim with `node`, `list_chats` answers, a
+  `start_discussion` message appears in the open window. `e2e/packaged.spec.ts`
+  gains one case: the bundled `bin/witena-mcp` answers `tools/list`.
+  (2026-09-20, WP-10: `e2e/mcp-endpoint.spec.ts` done — the switch is thrown
+  through `settings.update` because there is no launch-time override, the shim
+  is spawned with plain `node` so it can never launch a second app, and the
+  switched-off case asserts `SHIM_ERROR_TEXT['endpoint-off']` exactly, which is
+  the sentence an unpackaged app's `SingletonLock` earns. 2026-09-20, WP-9: the
+  `e2e/packaged.spec.ts` case spawns `Contents/Resources/bin/witena-mcp` the way
+  a client does and asserts `initialize` plus `tools/list` — the offline half on
+  purpose, since anything that waited for the app would wait for the Keychain
+  prompt a second signed copy raises.)
+Acceptance: with Witena quit, a tool call from Claude Code launches it with no
+window, the discussion runs, the conclusion returns, and clicking the Dock icon
+shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`
+(all four each).
+
+### S10.4 Settings → Integrations, and provenance `[x]` (2026-09-20)
+What: a user turns this on and connects an IDE without a terminal; the transcript
+says who typed what.
+- [x] Handlers `integrations.status` / `integrations.connect` /
+  `integrations.disconnect` over an injected `IdeClients` interface
+  (`node:child_process`; reuse the binary lookup the `ant` / `gcloud` wrappers
+  use, because a GUI app does not inherit the shell's `PATH`). Status per client:
+  installed, connected, and whether the registered command still points at this
+  bundle (the app was moved) → "Repair". Connect runs the client's own CLI with
+  the forms S10.0 recorded. `system.capabilities` reports the feature absent on the
+  server host.
+  (2026-09-20, WP-11. `resolveCliBinary` from `providers/cli-process.ts` is
+  reused unchanged; Claude Code's install directory is versioned, so its
+  candidates are globbed and sorted **numerically** highest-first. Every command
+  is an argument vector, never a shell line — a bundle path can contain spaces.
+  `connect` also **enables the endpoint**, through `handlers['settings.update']`
+  and before it registers anything: an IDE pointed at a closed door is not
+  connected, and that handler is what starts the host. It is also Repair — a
+  registration naming another installation is removed and added again, because
+  `mcp add` over an existing name is an error in both CLIs. The two refusals are
+  new `ValidationReason`s, `integrations_no_launcher` (a checkout, the Node host)
+  and `integrations_client_not_installed`. **No `system.capabilities` was
+  added**: the method does not exist in `BackendApi`, and `integrations.status`
+  already reports the absence honestly on the server host — `launcherPath: null`,
+  both clients not installed — which is what that bullet wanted. `npm test`
+  never runs a real `claude` or `codex`: the real implementation is tested as
+  argument vectors against an injected `execFile`, and `createTestAppContext`
+  injects `absentIdeClients()`.)
+- [x] Settings page, new "Integrations" section: the enable switch with one
+  sentence on what it opens; endpoint status; a card each for Claude Code and
+  Codex (Connect / Disconnect / Repair); a generic copyable JSON + TOML snippet
+  for any other client. Every string through `t()`, both locales.
+  (2026-09-20, WP-12. The section sits directly under MCP servers in the nav,
+  which is the same subject from the other end. The switch is driven from
+  `IntegrationStatus.endpoint.enabled` rather than from the settings row,
+  because `integrations.connect` enables the endpoint server-side and a switch
+  bound to the row would sit at "off" after a successful Connect; the toggle
+  still *writes* through the settings store — a new `setMcpEndpoint` beside
+  `setEditor` and `setExecutor` — because that write is what starts and stops
+  the host, and the status is re-read afterwards for `listening`, which
+  `settings.update` cannot report. The endpoint line is therefore **two facts in
+  three states**: off, listening on a port, and on-but-not-listening. The
+  snippets are shown even when `launcherPath` is `null`, with the command
+  `node <witena-repo>/out/mcp-shim/witena-mcp.cjs` and a note explaining the
+  placeholder — a checkout's endpoint works, only the command has no stable
+  spelling. `e2e/integrations.spec.ts` **never presses Connect, Disconnect or
+  Repair**: the app is launched with `WITENA_CLAUDE_BIN` / `WITENA_CODEX_BIN`
+  pointing at a path that does not exist, so both cards render "not installed"
+  and there is no action button on the screen to click — those buttons rewrite
+  `~/.claude.json` and `~/.codex/config.toml`, which belong to whoever runs the
+  suite. Everything after a press is covered by `stores/integrations.test.ts`
+  and `components/settings/integration-display.test.ts` against a fake backend.)
+- [x] `OriginPart` (`{ type: 'origin', client: string }`): `chat.send` accepts an
+  optional `origin`, the endpoint fills it from `X-Witena-Client`, the message
+  row renders a "via {{client}}" chip, the history converter ignores it (test, as
+  for `ConclusionPart`). (2026-09-20, WP-13. The flag is stored **first** in
+  `parts`, where `markConclusion` puts the other one, and only on a user message;
+  `chat.send` **sanitises** `client` rather than validating it — `\p{C}` stripped,
+  trimmed, capped at `MAX_ORIGIN_CLIENT_CHARS`, and an empty result means no flag
+  — because it is the one string on the backend surface whose text a remote party
+  chose, and failing a discussion over a label would be worse than dropping the
+  label. A caller that sends no header is labelled `mcp`, not left unmarked. The
+  converter needed no code change; a test now pins that the converted messages
+  are byte-identical with and without the flag. `src/shared/backend.ts` had to be
+  touched beyond the package's list: `HandlerMap` is derived from `BackendApi`,
+  so `origin` could not be passed without the contract declaring it.)
+- Tests: handler tests with a fake `IdeClients`; the chip's row model; the
+  converter; the locale guard tests. e2e: the Integrations section toggles the
+  endpoint and shows the snippet (no real IDE needed).
+Acceptance: on a clean account — enable, click Connect for Claude Code, open
+Claude Code, ask it to consult two agents: works, and the message in Witena is
+marked "via claude-code". Docs: `mcp-endpoint`, `chats`, `agent-turn`, `i18n`
+(all four each).
+
+### S10.5 Committees through the endpoint `[~]`
+Depends on: S9.1 merged (S9.3 for the e2e). Read `docs/features/` for the
+committee feature first and use its names; the ones below are this plan's guess
+and Phase 9's real ones win. *(They were `committees.list`, `Committee` with an
+ordered `memberAgentIds`, `ChatCreateInput.committeeId` and `initialMembers()`
+in `src/main/handlers/chats.ts`.)*
+What: "summon an expert group" from the IDE — the reason the endpoint exists.
+- [x] (2026-09-20, WP-14) Tool `list_committees` → `id`, `name`, description, member names in order
+  (from Phase 9's list handler). Added to `@shared/mcp-tools`. *(Plus
+  `hasExecutor`, the one property that changes what the caller should expect;
+  the structured answer is `{ committees, hint }`, an object like the other two
+  list tools.)*
+- [x] (2026-09-20, WP-14) `start_discussion` gains `committee?: string` (id or case-insensitive
+  name), allowed **together with** `agents` — the same "a committee plus single
+  agents" shape as S9.3's dialog. The tool resolves the name and passes the
+  committee id and the extra agent ids to `chats.create`; expansion, order and
+  de-duplication are Phase 9's. The endpoint's own rule stays on top: if the
+  expanded membership contains an `executor`, the chat is still created (it is
+  the user's committee) but the endpoint never hands off, and the result says
+  the caller is expected to apply the conclusion.
+  *(The first refinement was widened from "exactly one of `chatId` or `agents`"
+  to "exactly one of `chatId` or a new group (`committee`, `agents`, or both)" —
+  the one sanctioned change to `tasks.md`'s frozen contracts, made in WP-14 and
+  nowhere else. `committee?` was added to the `consult` prompt in the same
+  commit, which is what WP-15 deliberately left for this step. An executor named
+  individually in `agents` is still refused; only an inherited one is convened,
+  and the result's `hint` names it and says nothing was handed off.)*
+- [x] (2026-09-20, WP-14) If Phase 9 has no way to ask "what would this committee expand to" and the
+  tool needs it for a useful error (unknown member, empty committee), add it to
+  Phase 9's handler file as a new method with its own tests, in agreement with
+  that feature's owner, and update that feature's four documents.
+  *(Not needed: `committees.list` already carries `memberAgentIds`, so an empty
+  committee is refused — naming it, and only when no `agents` were given either —
+  without asking Phase 9 for anything. No committee API was added or changed.)*
+- [ ] **Deferred** (WP-14, 2026-09-20) `@committee` in Claude Code (only if S10.0 found subagent files work as
+  assumed): Settings → Integrations gains "Create a Claude Code agent for each
+  committee". `integrations.syncCommittees` writes
+  `~/.claude/agents/witena-<slug>.md` per committee — tools limited to
+  `mcp__witena__*`, a body that tells the subagent to call `start_discussion`
+  with that committee and loop on `wait_for_discussion` — and removes files for
+  deleted committees. Only files carrying a `generated-by: witena` frontmatter
+  marker are ever overwritten or deleted. Re-synced on committee create / rename
+  / delete (a bus event if Phase 9 emits one, else on the handlers' success
+  path). Codex has no equivalent; its card shows the prompt to type instead.
+  *(The condition was not met. S10.0 item 4 reads "could not be run here" — the
+  `claude` CLI on this machine is not logged in, so an `@`-mention of a subagent
+  restricted to `mcp__witena__*` has never been exercised. WP-14 therefore wrote
+  nothing under `~/.claude/`, touched no file in `src/main/integrations/`, added
+  no `integrations.*` method and reserved no locale key. Nothing is stranded: a
+  Claude Code session reaches every committee through `list_committees` and
+  `start_discussion` today, and what is missing is the shorthand. S10.7's
+  backlog carries it, together with the verification it waits on.)*
+- [~] Tests: tool tests — by name, by id, committee + agents with a duplicate,
+  unknown committee lists candidates, empty committee; ~~the sync — create, rename
+  (old file removed), delete, a hand-written file with the same name left alone~~
+  (deferred with the bullet above).
+  Contract test: `list_committees` then `start_discussion({ committee })`
+  returns the mock group's conclusion.
+  *(2026-09-20, WP-14: `tools.test.ts` gained `describe('list_committees')` and
+  `describe('committees (WP-14)')` — the listing in the committee's own order,
+  an executor flagged, an empty library pointed at `list_agents`; convening by
+  name, by case and by id, extras appended with a duplicate kept in the
+  committee's place, the default title, and the four refusals — and
+  `contract.test.ts` gained the round trip through the real socket, asserting
+  the new chat's `committeeId` and its members. `mcp-tools.test.ts` covers the
+  widened refinement and the prompt's new argument. Every test that pins the
+  tool-name list imports `MCP_TOOL_NAMES`, so none needed editing.)*
+Acceptance: in Claude Code, `@witena-<committee> <question>` starts a chat whose
+members are that committee's, visible in Witena with the committee's badge
+(S9.3), and the conclusion comes back. **Not met, and it cannot be while the
+subagent bullet is deferred** — the reachable form today is a session calling
+`start_discussion({ committee })`, whose chat does carry the badge (the tool
+passes `committeeId` to `chats.create`). Docs: `mcp-endpoint` and the committee
+feature (all four each) — done.
+
+### S10.6 Resources and prompts `[x]` (2026-09-20, WP-15)
+What: the parts of MCP beyond tools, scoped by what S10.0 found the clients
+actually surface. Drop any half no client shows.
+- [x] (2026-09-20, WP-15) Resources: `witena://chat/<id>` → the transcript as
+  markdown (the `get_discussion` renderer); `resources/list` = recent chats. The
+  shim answers an empty list when the app is not running rather than launching
+  it. (`src/main/mcp-endpoint/resources.ts`: the twenty most recent chats and no
+  cursor. The body comes from `renderChatTranscript`, which `get_discussion`
+  now calls too, so the `@`-mention body and the tool result are one document. A
+  uri `parseChatUrl` rejects is `InvalidParams`; a well-formed link to a chat
+  that is not there is `-32002`. `resources/read` does not launch the app
+  either, by the same reasoning as the listing — see `backend.md`, "Which
+  methods may launch Witena".)
+- [x] (2026-09-20, WP-15) Prompts: `consult` (`question`, `chat?` / `committee?` /
+  `agents?`)
+  expanding to an instruction that makes the caller use `start_discussion`, pass
+  the relevant code as `context`, and loop on `wait_for_discussion`. (Defined in
+  `src/shared/mcp-tools.ts` and rendered by `renderPrompt`, so the **shim
+  answers `prompts/list` and `prompts/get` with no I/O at all** — WP-0b measured
+  Claude Code asking for both on every session start, and Codex never asking at
+  all. `committee?` was left to S10.5: `start_discussion` had no `committee`
+  field yet, and a prompt that told a model to pass one would teach it to fail.
+  S10.5 added both in one commit, 2026-09-20, WP-14, and the expansion obeys the
+  tool's rule — `chat` continues a discussion, `committee` and `agents` start
+  one, and the two sides do not mix.)
+- Tests: contract tests for both; the shim's no-launch rule.
+Acceptance: in Claude Code, `@witena:` offers recent chats and
+`/mcp__witena__consult` starts a discussion. **Not exercised by hand** — the
+`claude` CLI on this machine is not logged in, which is the wall WP-0b hit; the
+equivalent claims are asserted through the SDK client in `contract.test.ts`,
+`src/mcp-shim/index.test.ts` and `shim.spawn.test.ts`, and S10.7's README
+procedure is where a logged-in machine meets them. Docs: `mcp-endpoint` (all
+four).
+
+### S10.7 Documentation and the demo `[~]`
+- [x] (2026-09-20, WP-16) `README.md` and `docs/readme/README.zh-CN.md`: a "Use it
+  from your coding agent" section, kept in step — between Install and How It
+  Works in both. Switch on in Settings → Integrations, Connect (or paste the
+  `mcpServers` snippet naming
+  `/Applications/Witena.app/Contents/Resources/bin/witena-mcp`), then ask the
+  coding agent to consult a group. It names the seven tools, the
+  `witena://chat/<id>` resource, the `consult` prompt as a Claude Code extra
+  Codex never asks for, the read-only group whose conclusion the caller applies,
+  the loopback-only endpoint behind a per-start token that is closed by default,
+  and the background launch on the first tool call. It promises nothing the code
+  does not do: no `@committee` shorthand, no hand-off, no endpoint on the server
+  host.
+- [x] (2026-09-20, WP-16) Backlog entries under Phase 6, "MCP endpoint (Phase 10)"
+  — the six this bullet listed, plus one per thing Phase 10 left open: the
+  deferred per-committee subagent files and the `@`-mention check they wait on,
+  the lazy launch that has never run in one piece, the `npm run e2e:packaged`
+  suite that cannot run unattended here, every acceptance criterion that needs a
+  real Claude Code session, Claude Code's unmeasured tool-call timeout, and
+  `shellcheck` on `build/witena-mcp`.
+- [ ] The demo. `npm run demo` still films the S1–S7 tour; nothing in it goes
+  through the endpoint, and no asset under `docs/assets/` shows a coding agent
+  consulting a group. The README section is text only.
+Acceptance: a new user can follow the README section alone and get a conclusion
+back in their IDE. **Not met — not run here.** Following it literally needs a
+`claude` (or `codex`) CLI logged in on this machine, and pressing Connect writes
+`~/.claude.json` / `~/.codex/config.toml`, which belong to whoever runs it; WP-16
+was explicitly not allowed to do either, and the CLI on this machine is not
+logged in anyway — the same wall WP-0b, WP-14 and WP-15 hit. Every claim in the
+section was instead checked against the merged source, and the procedure is
+carried into the backlog below as the thing a logged-in machine runs first.
+Docs: `mcp-endpoint`, `packaging` (the README is packaging's).

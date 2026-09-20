@@ -186,6 +186,24 @@ The plan for S1.7, recorded here so it is not rediscovered:
   language is on screen — and the `deliver` hand-off's quoted conclusion beside
   the `handoffDeliver` notice is the group's **own** words, quoted verbatim, not
   copy the app wrote.
+- Since **S10.4** there is a second such flag, and it carries one value:
+  `OriginPart`'s `client`, the name the calling IDE gave itself. The word around
+  it is a key (`chat.viaClient`) and the name is **data**, interpolated verbatim
+  in whichever language is on screen — the same division a working directory, a
+  tool name and a model id are already on. The backend never writes "via": it
+  writes the flag, and the renderer writes the sentence. Note what the backend
+  *does* do to the value, which is the other half of this rule: it is text a
+  remote client chose, so `chat.send` strips its control characters, trims it and
+  caps it before it is stored ([`../chats/backend.md`](../chats/backend.md)).
+- **S10.4's Integrations section needed nothing from the backend**, and that is
+  the rule working rather than an exception to it. `integrations.status` answers
+  with booleans, ids and a filesystem path; every sentence on the screen is
+  chosen by the renderer, and the two ways `connect` can be refused travel as
+  `ValidationReason`s (`integrations_no_launcher`,
+  `integrations_client_not_installed`) rather than as text. The one string a CLI
+  itself produces — `stderr` from a `claude mcp add` that failed — is carried in
+  `BackendError.message` and drawn in the dimmed detail line, never as the
+  sentence: it is a third party's words in whatever language that party speaks.
 - Since **S5.10** the same line runs through the chat's **goal**: the briefing's
   sentences about it are written in both `briefing.en.ts` and `briefing.zh-CN.ts`
   and follow the same setting, while the user's own `description` and the

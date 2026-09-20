@@ -16,7 +16,10 @@ Three layers, each the ordinary shape of its neighbours:
 - **Convening.** `chats.create` is the one place the two features meet: given a
   `committeeId` it reads the committee **once**, merges its members with the
   caller's extras, and stores the id on the chat as provenance. Nothing reads
-  the committee afterwards — that is what makes joining a snapshot.
+  the committee afterwards — that is what makes joining a snapshot. Since S10.5
+  it has a second caller: the MCP endpoint's `start_discussion`, which resolves
+  a committee by name or id and passes `committeeId` here rather than expanding
+  anything of its own.
 - **The page (S9.2).** `stores/committees.ts` on `stores/agents.ts`' pattern —
   a `CommitteeInput` draft, `dirty`, and one write on Save — and
   `pages/committees-page.tsx` on the Agents page's layout. The member list is
@@ -55,7 +58,8 @@ Orchestration, `AgentTurn` and the supervisor are untouched: they read
 
 ## Data flow
 
-Convening a topic. Since S9.3 the New chat dialog is what drives it:
+Convening a topic. Since S9.3 the New chat dialog drives it, and since S10.5 the
+MCP endpoint's `start_discussion` drives the *same* call from an IDE:
 
 ```
 chats.create({ committeeId, memberAgentIds })
@@ -186,6 +190,7 @@ provenance, which `chat.updated` already carries.
 | `src/renderer/src/lib/theme.test.ts` | **S9.3**: `--color-overlay` joins `--color-bg-subtle` as a token with an alpha channel, so the palette, the light override and `prefers-reduced-transparency` are all held to a two-entry list rather than a one-entry one |
 | `src/renderer/src/i18n/locales.test.ts` / `used-keys.test.ts` | **S9.2**: `committees` is an expected namespace, the two trees match, and every `t('committees.…')` resolves |
 | `e2e/committees.spec.ts` | **S9.2**, offline: the page starts empty and Save is disabled until the name is filled; two agents added through the picker and counted on the list row; a drag reordering them, saved, and still in that order after the app is relaunched; the move-up / move-down buttons doing the same thing without a pointer; a removal; deleting an *agent* removing it from the committee; the two-step delete. **S9.3** inserts two: "New topic" arriving with the committee preselected and the committee's member locked, one extra ticked, the count going 1 → 2, and the created chat listing committee-then-extra with the badge in both places; then an agent added to the committee, the `data-missing` count on the sync button, and the append |
+| `src/main/mcp-endpoint/tools.test.ts`, `contract.test.ts` | **S10.5** (owned by [`../mcp-endpoint/`](../mcp-endpoint/implement.md)): `list_committees` over `committees.list`, and `start_discussion({ committee })` resolving by name, by case and by id, appending extras, refusing an unknown, an ambiguous and an empty committee, and convening one that contains an executor. They assert the endpoint's side; `chats.test.ts` above stays the authority on the merge |
 | `e2e/ui-shell.spec.ts` | **S9.3**: the `Dialog` primitive itself — `role`, `aria-modal`, focus inside the panel on open, Escape and a backdrop press dismissing it, and a review screenshot in each appearance |
 | Every other `e2e/*.spec.ts` | **S9.3**: fourteen files had `chats-new` clicked into them; they all go through `createChat(page)` in `e2e/helpers.ts` now, which is the dialog opened and Create pressed with nothing chosen |
 
@@ -204,8 +209,9 @@ provenance, which `chat.updated` already carries.
   cheapest guard available — there is no way to share one function across the
   process boundary without putting chat-creation logic in `src/shared`.
 - **`committees.get` still has no caller.** The Committees page holds the list
-  it edits and the chats page reads `committees.list` for names; the method
-  exists for the server host.
+  it edits, the chats page reads `committees.list` for names, and S10.5's
+  `list_committees` and `start_discussion` read the list too (they need the
+  candidates for a refusal anyway); the method exists for the server host.
 - **The dialog does not offer to *create* anything it is missing.** An empty
   agent library or an empty committee list is a sentence pointing at the page
   that fixes it, not a link — the dialog would have to be dismissed to follow
@@ -217,3 +223,12 @@ provenance, which `chat.updated` already carries.
   is `updatedAt desc` and a save does not re-sort the row it updated; see
   [`frontend.md`](./frontend.md) for why a row that jumped under the cursor
   would be the worse of the two.
+- **A committee is now reachable from an IDE, but not as `@committee`.** S10.5
+  built the tools half — `list_committees` and `start_discussion`'s `committee`
+  — and **deferred** the generated Claude Code subagent per committee
+  (`~/.claude/agents/witena-<slug>.md`), because the assumption it rests on,
+  that a subagent restricted to `mcp__witena__*` can be `@`-mentioned and reach
+  those tools, has never been run: the `claude` CLI on the machine WP-0b and
+  WP-14 ran on is not logged in. Nothing was written under `~/.claude/`. Owned
+  by [`../mcp-endpoint/`](../mcp-endpoint/implement.md); carried in S10.7's
+  backlog.

@@ -28,6 +28,7 @@
  * has no `@types/node` — `node:fs` does not resolve there. Nothing here imports
  * electron (CLAUDE.md rule 5); it reads two files off disk.
  */
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -96,6 +97,64 @@ describe('electron-builder.yml', () => {
       expect(scripts[hook]).toBe('npm run ant:fetch')
     }
     expect(scripts['prebuild']).toContain('ant:fetch -- --optional')
+  })
+
+  it('ships the MCP shim and its launcher where both halves look for them (S10.3)', () => {
+    // Three spellings of the same two paths have to agree, and nothing at
+    // runtime notices when they stop agreeing — a client would simply fail to
+    // start a server nobody tests by hand.
+    const resources = config['extraResources'] as { from: string; to: string }[]
+    const shim = resources.find((entry) => entry.from === 'out/mcp-shim/witena-mcp.cjs')
+    const launcher = resources.find((entry) => entry.from === 'build/witena-mcp')
+
+    // `npm run build` emits the shim (`vite.mcp-shim.config.ts`); this entry is
+    // what puts a *plain file* copy of it beside the asar's, because the
+    // launcher hands it to the binary as a script path.
+    expect(shim?.to).toBe('mcp/witena-mcp.cjs')
+    // `src/main/index.ts` answers `process.resourcesPath/bin/witena-mcp` when
+    // packaged, which is the command an IDE's configuration stores.
+    expect(launcher?.to).toBe('bin/witena-mcp')
+
+    const script = readFileSync(join(repoRoot, 'build', 'witena-mcp'), 'utf8')
+    // The launcher derives both paths from its own location: `bin` -> Resources
+    // -> Contents. `productName` is what names the executable inside
+    // `Contents/MacOS`, so a rename there would leave this script exec'ing
+    // nothing — that is the failure this assertion exists to catch.
+    expect(config['productName']).toBe('Witena')
+    expect(script).toContain('$contents_dir/MacOS/Witena')
+    expect(script).toContain('$resources_dir/mcp/witena-mcp.cjs')
+    // Not `node`: `bundlePathFor` in `src/mcp-shim/launch.ts` derives the bundle
+    // to wake up from `process.execPath`, and a `node` from the user's PATH
+    // would serve every call that arrives while Witena runs and silently lose
+    // the lazy launch. WP-0a measured that run-as-node works from a notarized,
+    // hardened bundle and registers no Dock tile.
+    expect(script).toContain('export ELECTRON_RUN_AS_NODE')
+    expect(script).toMatch(/^exec "\$binary" "\$shim" "\$@"$/m)
+    // POSIX `sh`, because it runs before anything of ours does.
+    expect(script.split('\n')[0]).toBe('#!/bin/sh')
+    expect(script).not.toContain('[[')
+  })
+
+  it('keeps the launcher executable in git, where the build copies it from', () => {
+    // electron-builder copies the file with its mode, and a file checked in as
+    // 644 is a server no client can spawn — on the machine that packages it,
+    // which is never the machine that finds out. The index is the authority: a
+    // local `chmod` after a clone would not travel.
+    const entry = execFileSync('git', ['ls-files', '--stage', '--', 'build/witena-mcp'], {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    })
+    expect(entry.split(' ')[0]).toBe('100755')
+  })
+
+  it('declares the `witena://` scheme the deep link needs (S10.3)', () => {
+    // electron-builder turns this into `CFBundleURLTypes` in the Info.plist,
+    // which is what makes LaunchServices hand a `witena://chat/<id>` URL to
+    // Witena at all; `app.setAsDefaultProtocolClient` only claims a scheme the
+    // bundle already declares. The scheme's other two spellings — `chatUrl` in
+    // `src/shared/mcp-tools.ts` and `CHAT_URL_SCHEME` — are pinned to each other
+    // by `src/main/launch-args.test.ts`; this is the third.
+    expect(config['protocols']).toEqual([{ name: 'Witena chat link', schemes: ['witena'] }])
   })
 
   it('publishes draft GitHub Releases', () => {

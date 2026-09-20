@@ -701,6 +701,40 @@ export interface ConclusionPart {
   type: 'conclusion'
 }
 
+/**
+ * The mark on a user message a tool sent on the user's behalf (S10.4).
+ *
+ * The transcript has to say what a human typed and what an IDE typed for them.
+ * A question that arrived through the MCP endpoint is an ordinary user message —
+ * the runner schedules it, the agents read it, the composer could have produced
+ * the same row — and after the fact the difference is the answer to "why is
+ * there a discussion here I do not remember starting".
+ *
+ * A **flag part**, for the reasons `ConclusionPart` is one: `parts` is the open,
+ * migration-free place where a message says what it is made of, so a new member
+ * of this union costs no schema change and a row written before S10.4 simply has
+ * none. Stored **first** in `parts`, and only ever on a `user` message.
+ *
+ * `client` is **display data from an untrusted header**. The shim fills it from
+ * the calling IDE's `initialize.clientInfo.name`, a string that client chose, so
+ * the `chat.send` handler trims it, strips control characters and caps it at
+ * `MAX_ORIGIN_CLIENT_CHARS` before it is stored. Nothing branches on its value:
+ * it is rendered inside a chip and read nowhere else.
+ *
+ * Everything that reads a message treats it as invisible unless it is looking
+ * for it: `partsToText` (the history transform) skips it, so the model is never
+ * told which of the user's questions a machine asked; `messageText` in the
+ * renderer skips it, so it is never drawn as text.
+ */
+export interface OriginPart {
+  type: 'origin'
+  /** The calling client's own name, sanitised. Never empty. */
+  client: string
+}
+
+/** How much of an `OriginPart.client` survives sanitising. See `OriginPart`. */
+export const MAX_ORIGIN_CLIENT_CHARS = 40
+
 /** Everything a message can be made of, discriminated on `type`. */
 export type MessagePart =
   | TextPart
@@ -710,6 +744,7 @@ export type MessagePart =
   | DiffPart
   | FileRefPart
   | ConclusionPart
+  | OriginPart
   | SystemNoticePart
 
 /** Token accounting for one message, as reported by the provider. */
@@ -936,6 +971,76 @@ export interface EditorSettings {
   command: string
 }
 
+/**
+ * The local MCP endpoint's switch (S10.3).
+ *
+ * One boolean, deliberately: the port is ephemeral and the bearer token is
+ * regenerated on every `start()`, so there is nothing else about the endpoint a
+ * user could sensibly configure — and nothing worth persisting, since neither
+ * number survives a restart. PLAN.md's decision table is why it exists at all:
+ * the endpoint is a local door that can spend the user's provider money and read
+ * their chats, so it is **off until somebody says otherwise**.
+ *
+ * A group rather than a top-level `mcpEndpointEnabled`, because WP-11's
+ * "Connect" button and later work (a chosen port, an idle-quit timer) belong
+ * beside it, and a group merges field by field on a write.
+ */
+export interface McpEndpointSettings {
+  enabled: boolean
+}
+
+/* -------------------------------------------------------------------------- */
+/* IDE integrations (S10.4)                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The coding agents Witena can install itself into, as data (S10.4).
+ *
+ * An array rather than a bare union so the handler can iterate it and the
+ * settings section can render one card per entry without repeating the list;
+ * `IdeClientId` is derived from it, so a third client is one line here.
+ */
+export const IDE_CLIENT_IDS = ['claude-code', 'codex'] as const
+
+/** One coding agent Witena knows how to register itself with. */
+export type IdeClientId = (typeof IDE_CLIENT_IDS)[number]
+
+/**
+ * What Witena knows about one coding agent on this machine (S10.4).
+ *
+ * Three independent facts, none of which implies another: whether the client's
+ * own CLI is on the machine at all, whether it has a `witena` MCP server
+ * registered, and whether that registration still names *this* installation's
+ * launcher. The third is what makes "the user moved the app, or installed a
+ * second copy" a repairable state rather than a tool list that mysteriously
+ * stopped working.
+ */
+export interface IdeClientStatus {
+  id: IdeClientId
+  installed: boolean
+  connected: boolean
+  /** The command the IDE has registered, when connected. */
+  command?: string
+  /** Connected, but `command` is not this installation's launcher. */
+  stale: boolean
+}
+
+/**
+ * Everything Settings → Integrations draws, in one read (S10.4).
+ *
+ * `endpoint.enabled` is the stored setting and `endpoint.listening` is what this
+ * process is actually doing, and they are reported separately because they can
+ * honestly disagree: the row is the user's intent, while `ctx.mcpEndpoint` is
+ * `null` on the Node host and in every test, where nothing listens. One "on"
+ * would have to lie about one of the two.
+ */
+export interface IntegrationStatus {
+  endpoint: { enabled: boolean; listening: boolean; port?: number }
+  /** Absolute path of `bin/witena-mcp`; null in a build that ships none. */
+  launcherPath: string | null
+  clients: IdeClientStatus[]
+}
+
 export interface AppSettings {
   /** `'system'` follows the OS language, which is the first-launch default. */
   language: Language | 'system'
@@ -945,6 +1050,8 @@ export interface AppSettings {
   editor: EditorSettings
   /** How `run_command` is confined (S5.15). */
   executor: ExecutorSettings
+  /** Whether the local MCP endpoint listens (S10.3). Off on a fresh install. */
+  mcpEndpoint: McpEndpointSettings
   timeouts: AppTimeouts
   /**
    * True once the user pressed Skip on the first-run card (S7.5).
@@ -970,6 +1077,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   executor: {
     sandbox: 'workdir-write'
   },
+  mcpEndpoint: {
+    enabled: false
+  },
   timeouts: {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,
@@ -992,6 +1102,14 @@ export interface AppSettingsPatch {
   theme?: AppSettings['theme']
   editor?: Partial<EditorSettings>
   executor?: Partial<ExecutorSettings>
+  /**
+   * The endpoint's switch (S10.3).
+   *
+   * Partial like the other groups, and the one patch key with a **side effect**:
+   * the `settings.update` handler starts or stops the listening host after it has
+   * stored the row, so the switch takes effect without a restart.
+   */
+  mcpEndpoint?: Partial<McpEndpointSettings>
   timeouts?: Partial<AppTimeouts>
   onboardingDismissed?: boolean
 }
@@ -1200,7 +1318,17 @@ export const VALIDATION_REASONS = [
   /** A material that is not on disk (S5.10). */
   'goal_material_missing',
   /** A `document` or `codebase` goal on a chat bound to no folder (S5.10). */
-  'goal_needs_workdir'
+  'goal_needs_workdir',
+  /**
+   * `integrations.connect` in a build that ships no launcher (S10.4).
+   *
+   * A development checkout and the Node host, not a failure: there is no stable
+   * absolute command to hand a client, so the section offers the copyable
+   * `node <repo>/out/mcp-shim/witena-mcp.cjs` snippet instead of a button.
+   */
+  'integrations_no_launcher',
+  /** `integrations.connect` / `disconnect` for a client whose CLI is absent (S10.4). */
+  'integrations_client_not_installed'
 ] as const
 
 export type ValidationReason = (typeof VALIDATION_REASONS)[number]

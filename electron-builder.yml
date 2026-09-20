@@ -67,6 +67,45 @@ extraResources:
   # release archive does not carry one, so the text is committed beside the pin.
   - from: build/ant.LICENSE
     to: bin/ant.LICENSE
+  # The MCP stdio shim (S10.3) and the launcher an IDE registers as its Witena
+  # server. `npm run build` ends with the shim's own Vite target, so
+  # `out/mcp-shim/witena-mcp.cjs` exists before electron-builder starts. The
+  # `files: out/**` list above already puts a copy inside `app.asar`, and it is
+  # the wrong copy: the shim is started as a *script argument* to the binary, by
+  # a shell script that has to name a real path, and asar support is not part of
+  # what `ELECTRON_RUN_AS_NODE=1` promises. So it is shipped a second time, as a
+  # plain file under `Contents/Resources` — 700 kB in a 200 MB bundle.
+  #
+  # Both destinations are promises other code keeps: `build/witena-mcp` derives
+  # `Contents/Resources/mcp/witena-mcp.cjs` from its own location, and
+  # `src/main/index.ts` computes the launcher's path as
+  # `process.resourcesPath/bin/witena-mcp` for the Integrations settings section
+  # to show. `src/main/packaging.test.ts` pins all three spellings together.
+  #
+  # The launcher is a shell script, so osx-sign ignores it (it walks Mach-O
+  # files); it is covered by the bundle's seal all the same, because the
+  # signature is computed over `Contents/Resources` as a whole.
+  - from: out/mcp-shim/witena-mcp.cjs
+    to: mcp/witena-mcp.cjs
+  - from: build/witena-mcp
+    to: bin/witena-mcp
+
+# The `witena://chat/<id>` deep link (S10.3). Every MCP tool result carries one,
+# so a coding agent's answer can end with a link that opens the discussion in
+# the app. electron-builder turns this block into a `CFBundleURLTypes` entry in
+# the bundle's Info.plist, which is what makes LaunchServices hand the URL to
+# Witena at all; `app.setAsDefaultProtocolClient('witena')` in
+# `src/main/index.ts` only claims a scheme the bundle already declares, and it
+# runs in packaged builds only — a development checkout must never become the
+# machine's handler for a scheme.
+#
+# `name` is the human-readable `CFBundleURLName`. The scheme has to stay in step
+# with `chatUrl` in `src/shared/mcp-tools.ts`; `src/main/launch-args.test.ts`
+# pins those two together, and this file is the third spelling.
+protocols:
+  - name: Witena chat link
+    schemes:
+      - witena
 
 # S7.4 added the **zip** beside the dmg. It is not a second download offered to
 # anyone: `electron-updater`'s macOS updater can only apply a zip — it unpacks

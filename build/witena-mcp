@@ -1,0 +1,82 @@
+#!/bin/sh
+# The command an IDE registers as its Witena MCP server (S10.3).
+#
+# `electron-builder.yml` copies this file to
+# `Witena.app/Contents/Resources/bin/witena-mcp`, which is the one absolute path
+# a client's configuration ever holds:
+#
+#   claude mcp add --scope user witena /Applications/Witena.app/Contents/Resources/bin/witena-mcp
+#
+# All it does is start the stdio shim (`out/mcp-shim/witena-mcp.cjs`, shipped
+# beside it as `Contents/Resources/mcp/witena-mcp.cjs`) on a Node runtime. There
+# is exactly one Node the bundle is allowed to assume exists: its own Electron
+# binary, run with `ELECTRON_RUN_AS_NODE=1`. WP-0a measured that path on both a
+# locally signed and a notarized, stapled bundle — the script runs, stdio is
+# unbuffered through a pipe, and the process never registers with LaunchServices,
+# so no Dock tile and no menu bar appear while a client holds the server open.
+#
+# Two things make the choice of binary load-bearing rather than incidental:
+#
+#   * `bundlePathFor` in `src/mcp-shim/launch.ts` derives the bundle to wake up
+#     from `process.execPath`, matching exactly `<x>.app/Contents/MacOS/<name>`.
+#     Executing the shim with a `node` from the user's PATH would still serve
+#     every call that arrives while Witena is running, and would silently lose
+#     the lazy launch that is the whole point of the shim.
+#   * The user may not have a `node` at all. Witena is a double-clicked
+#     application, not a checkout.
+#
+# POSIX `sh`, no bashisms, and every expansion is quoted: the bundle may sit in
+# `/Users/…/My Applications/Witena.app`, and an unquoted word split there would
+# look for a binary called `/Users/…/My`.
+set -eu
+
+# Where this script really is, symlinks and all. A client's configuration is
+# written once and then lives for months: the path in it may be a symlink a user
+# dropped in `~/bin`, and what has to be derived from it is the *bundle*, not the
+# link's directory. `readlink -f` would do the whole job in one call, but it is a
+# GNU extension that only reached macOS recently; the loop below is the portable
+# form of it, and `cd -P` at the end resolves any symlinked directory component
+# that is left.
+target=$0
+hops=0
+while [ -L "$target" ]; do
+  hops=$((hops + 1))
+  if [ "$hops" -gt 40 ]; then
+    echo "witena-mcp: too many symbolic links to resolve '$0'" >&2
+    exit 1
+  fi
+  link=$(readlink "$target")
+  case "$link" in
+    /*) target=$link ;;
+    *) target=$(dirname "$target")/$link ;;
+  esac
+done
+
+# …/Contents/Resources/bin -> …/Contents/Resources -> …/Contents
+bin_dir=$(cd -P -- "$(dirname -- "$target")" && pwd)
+resources_dir=$(dirname -- "$bin_dir")
+contents_dir=$(dirname -- "$resources_dir")
+
+# `Witena` is `productName` in `electron-builder.yml`, which is what names the
+# executable inside `Contents/MacOS`; `src/main/packaging.test.ts` pins the two
+# spellings together so a rename cannot leave this script pointing at nothing.
+binary=$contents_dir/MacOS/Witena
+shim=$resources_dir/mcp/witena-mcp.cjs
+
+# Both messages go to stderr — stdout is the JSON-RPC stream — and are written
+# for the place they will actually be read: an IDE's MCP server log, by someone
+# who has just been told the server failed to start.
+if [ ! -x "$binary" ]; then
+  echo "witena-mcp: no Witena application at '$contents_dir'; reinstall Witena" >&2
+  exit 1
+fi
+if [ ! -f "$shim" ]; then
+  echo "witena-mcp: the MCP shim is missing from '$resources_dir'; reinstall Witena" >&2
+  exit 1
+fi
+
+# `exec`: the client's stdin and stdout become the shim's, with no shell left in
+# between to buffer them or to survive the process it started.
+ELECTRON_RUN_AS_NODE=1
+export ELECTRON_RUN_AS_NODE
+exec "$binary" "$shim" "$@"

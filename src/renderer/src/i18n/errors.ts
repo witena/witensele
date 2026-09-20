@@ -128,6 +128,10 @@ export function validationReasonMessage(t: TranslateFn, reason: ValidationReason
       return t('errors.goal_material_missing')
     case 'goal_needs_workdir':
       return t('errors.goal_needs_workdir')
+    case 'integrations_no_launcher':
+      return t('errors.integrations_no_launcher')
+    case 'integrations_client_not_installed':
+      return t('errors.integrations_client_not_installed')
   }
 }
 

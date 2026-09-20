@@ -327,6 +327,82 @@ describe('ChatRunner', () => {
       code: 'not_found'
     })
   })
+
+  /**
+   * S10.4: a message a tool sent on the user's behalf says so, and says it in
+   * exactly one place — the user message's own parts.
+   */
+  describe('provenance (S10.4)', () => {
+    const userMessages = (): Message[] =>
+      ctx.repos.messages
+        .listForContext(chat.id, ctx.userId)
+        .filter((message) => message.senderType === 'user')
+
+    it('stores the origin flag first, on the user message and on nothing else', async () => {
+      await handlers['chat.send'](ctx, {
+        chatId: chat.id,
+        text: 'Hi there',
+        origin: { client: 'claude-code' }
+      })
+      await settle()
+
+      const stored = ctx.repos.messages.listForContext(chat.id, ctx.userId)
+      expect(stored).toHaveLength(2)
+      expect(stored[0]?.parts).toEqual([
+        { type: 'origin', client: 'claude-code' },
+        { type: 'text', text: 'Hi there' }
+      ])
+      // The agent answered an ordinary question: the mark is about who asked,
+      // and nothing the group writes carries it.
+      expect(stored[1]?.parts.some((part) => part.type === 'origin')).toBe(false)
+    })
+
+    it('leaves a typed message unmarked', async () => {
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Hi there' })
+      await settle()
+
+      expect(userMessages()[0]?.parts).toEqual([{ type: 'text', text: 'Hi there' }])
+    })
+
+    it('changes nothing else about the run', async () => {
+      await handlers['chat.send'](ctx, {
+        chatId: chat.id,
+        text: `Hi @${agent.name}`,
+        origin: { client: 'claude-code' }
+      })
+      await settle()
+
+      // The same events, the same mentions, the same round: a question from an
+      // IDE is scheduled and answered exactly like one that was typed.
+      expect(types()).toEqual([
+        'message.created',
+        'run.started',
+        'run.round',
+        'message.created',
+        'presence.changed',
+        'message.delta',
+        'message.delta',
+        'message.updated',
+        'presence.changed',
+        'run.finished'
+      ])
+      expect(userMessages()[0]).toMatchObject({ round: 0, status: 'done', mentions: [agent.id] })
+      expect(finished()[0]).toMatchObject({ reason: 'completed' })
+    })
+
+    it('never shows the flag to a model', async () => {
+      await handlers['chat.send'](ctx, {
+        chatId: chat.id,
+        text: 'Hi there',
+        origin: { client: 'claude-code' }
+      })
+      await settle()
+
+      const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt ?? null)
+      expect(prompt).toContain('Hi there')
+      expect(prompt).not.toContain('claude-code')
+    })
+  })
 })
 
 /**

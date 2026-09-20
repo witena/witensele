@@ -35,16 +35,38 @@
  * | The shell renders | `files` missing the renderer, or the asar not being found |
  * | The shipped skill is listed under Settings → Skills | `extraResources` missing, or `bundledSkillsDir()` resolving to the wrong path under `app.isPackaged` |
  * | One real model reply completes | `better-sqlite3` still inside the asar (`dlopen` cannot read one), or the migrations not reaching the bundle |
+ * | `Contents/Resources/bin/witena-mcp` answers `initialize` (S10.3) | The launcher or the shim missing from `extraResources`, the launcher checked in without its executable bit, or `ELECTRON_RUN_AS_NODE` no longer starting a script from the signed, hardened bundle |
  *
- * The reply is the strongest of the three: it writes messages, so the database
- * had to open, the migrations had to run and the native module had to load.
+ * The reply is the strongest of the first three: it writes messages, so the
+ * database had to open, the migrations had to run and the native module had to
+ * load.
+ *
+ * ## The launcher case runs no application
+ *
+ * The fourth is deliberately the *offline* half of the shim: `initialize` and
+ * `tools/list` are answered from the shim's own tables, with no socket and no
+ * `open(1)`. That is not a weaker test chosen for speed — it is the only one
+ * that can be run unattended on a machine with a Developer ID certificate.
+ * WP-0a measured that launching a second signed copy of Witena with a *fresh*
+ * `WITENA_USER_DATA` raises a macOS Keychain prompt from `safeStorage` that
+ * `whenReady` blocks on, so a case that waited for a discovery file would wait
+ * for a dialog on somebody's screen. What stays unproven here is therefore the
+ * lazy launch end to end (shim → `open -g -j` → discovery file → forwarded
+ * call); the pieces of it are covered by `src/mcp-shim/launch.test.ts` and, over
+ * a real socket with the app already running, by `e2e/mcp-endpoint.spec.ts`.
  *
  * Every assertion is on a `data-testid` or a `data-*` value, never on rendered
  * copy, so none of them depends on the active language — and no Chinese appears
  * in this file (CLAUDE.md rule #1).
  */
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import {
+  StdioClientTransport,
+  getDefaultEnvironment
+} from '@modelcontextprotocol/sdk/client/stdio.js'
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import {
   expect,
   test,
@@ -52,6 +74,7 @@ import {
   type ElectronApplication,
   type Page
 } from '@playwright/test'
+import { MCP_SERVER_NAME, MCP_TOOL_NAMES } from '@shared/mcp-tools'
 import {
   addOllamaProvider,
   createChat,
@@ -92,6 +115,11 @@ let modelAvailable = false
 /** The executable inside the bundle, which is what Playwright has to launch. */
 function executableInside(bundle: string): string {
   return join(bundle, 'Contents', 'MacOS', 'Witena')
+}
+
+/** The command an IDE registers, as `electron-builder.yml` ships it (S10.3). */
+function launcherInside(bundle: string): string {
+  return join(bundle, 'Contents', 'Resources', 'bin', 'witena-mcp')
 }
 
 async function probeOllamaModel(model: string): Promise<boolean> {
@@ -224,4 +252,44 @@ test('one real model reply completes inside the packaged build', async () => {
   await expect(window.getByTestId('composer-send')).toBeVisible({ timeout: REPLY_MS })
 
   await window.screenshot({ path: join(SHOTS_DIR, 'packaged.png') })
+})
+
+test('the bundled launcher runs the MCP shim out of the bundle (S10.3)', async () => {
+  test.skip(!appPath, `${APP_PATH_ENV} is not set`)
+
+  const launcher = launcherInside(appPath)
+  // 755 in git, copied with its mode by electron-builder. A launcher shipped
+  // without the bit is a server no client can spawn, and the packaging machine
+  // is never the one that finds out.
+  expect(existsSync(launcher)).toBe(true)
+  expect(statSync(launcher).mode & 0o111).not.toBe(0)
+  expect(existsSync(join(appPath, 'Contents', 'Resources', 'mcp', 'witena-mcp.cjs'))).toBe(true)
+
+  // Spawned exactly as `claude mcp add` spawns it: the absolute path, no
+  // arguments and no PATH of ours. Everything asked below is answered from the
+  // shim's own tables, so this starts no application and opens no socket — see
+  // the header for why that limit is deliberate.
+  const client = new Client({ name: 'witena-packaged-e2e', version: '0.0.0-e2e' })
+  const transport = new StdioClientTransport({
+    command: launcher,
+    args: [],
+    env: { ...getDefaultEnvironment(), [USER_DATA_ENV]: userDataDir },
+    stderr: 'pipe'
+  })
+
+  try {
+    // `connect` *is* the `initialize` round trip: a reply here proves the
+    // launcher resolved its own path, found `Contents/MacOS/Witena`, and that
+    // the signed, hardened binary ran a script under `ELECTRON_RUN_AS_NODE=1`
+    // with its stdio unbuffered.
+    await client.connect(transport as unknown as Transport)
+    expect(client.getServerVersion()?.name).toBe(MCP_SERVER_NAME)
+
+    const tools = await client.listTools()
+    expect(tools.tools.map((tool) => tool.name).sort()).toEqual([...MCP_TOOL_NAMES].sort())
+  } finally {
+    // Closing the client closes the transport, which kills the child it started
+    // — and only that child.
+    await client.close().catch(() => undefined)
+  }
 })

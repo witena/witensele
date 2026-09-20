@@ -42,6 +42,7 @@ kind of thing that goes stale.
 | `asarUnpack` | `**/node_modules/better-sqlite3/**` | `dlopen` takes a filesystem path. A `.node` binary inside an asar archive is not at one, and the app would fail to open its database on the first launch |
 | `extraResources` | `resources` → `resources` | Ships `resources/skills/`. See the path note below |
 | `extraResources` (second entry) | `vendor/ant/${arch}` → `bin`, filtered to `ant`; plus `build/ant.LICENSE` → `bin/ant.LICENSE` | The Anthropic CLI, so Sign in opens a browser on a machine that never installed it. `${arch}` gives each dmg its own architecture's binary. `src/main/index.ts` hands `process.resourcesPath/bin` to the CLI wrapper, which searches it last — see [`../providers/backend.md`](../providers/backend.md) |
+| `extraResources` (third and fourth entries, S10.3) | `out/mcp-shim/witena-mcp.cjs` → `mcp/witena-mcp.cjs`; `build/witena-mcp` → `bin/witena-mcp` | The MCP server an IDE runs. `npm run build` ends with the shim's own Vite target, so the first source exists before electron-builder starts; the second is a POSIX shell script committed with mode 755. Both destinations are promises other code keeps — see "The MCP launcher" |
 | `mac.target` | `dmg` and `zip`, both `arch: [arm64, x64]` | Two dmgs, not a universal binary: each download is half the size, and the native module is per-architecture either way (PLAN.md, "Local release"). The **zip is S7.4's** and is not a second download offered to anyone: macOS's `Squirrel.Mac` replaces a bundle from a zip and nothing else, and `latest-mac.yml` lists whatever targets were built — a release with only a dmg is a feed the updater downloads and then cannot apply |
 | `mac.category` | `public.app-category.developer-tools` | `LSApplicationCategoryType` in the Info.plist |
 | `mac.icon` | `build/icon.icns` | Copied to `Contents/Resources/icon.icns` |
@@ -53,6 +54,7 @@ kind of thing that goes stale.
 | `dmg.artifactName` | `${productName}-${version}-${arch}.${ext}` | `Witena-0.1.0-arm64.dmg` and `Witena-0.1.0-x64.dmg` — `${arch}` is what keeps two builds of one version from overwriting each other in `dist/` and in the Release |
 | `publish.provider` | `github` | electron-builder uploads the artifacts itself and writes the `latest-mac.yml` feed S7.4's `electron-updater` reads. `owner` / `repo` are deliberately absent: they are inferred from the checkout's git remote, so a tag pushed on a fork publishes to that fork. The block is also copied verbatim into the bundle as `Contents/Resources/app-update.yml`, which is why it must never gain a `token:` — see "Auto-update" |
 | `publish.releaseType` | `draft` | The review step. CI packages; a human reads the artifacts and presses Publish |
+| `protocols` (S10.3) | `[{ name: Witena chat link, schemes: [witena] }]` | electron-builder writes it into the bundle's Info.plist as `CFBundleURLTypes`, which is what makes LaunchServices hand a `witena://chat/<id>` URL to Witena at all. `app.setAsDefaultProtocolClient('witena')` in `src/main/index.ts` runs in packaged builds only and merely *claims* a scheme the bundle already declares — without this block there is nothing to claim. The scheme has to stay in step with `chatUrl` in `src/shared/mcp-tools.ts`; `src/main/launch-args.test.ts` pins them together. See [`../mcp-endpoint/backend.md`](../mcp-endpoint/backend.md) |
 
 ## The resources path
 
@@ -94,6 +96,70 @@ Go binary launches under the app's entitlements, and that `codesign --verify
 --deep --strict` still passes. Check both the first time `npm run dist:signed`
 runs with this entry.
 
+## The MCP launcher (S10.3)
+
+`build/witena-mcp` is the command a coding agent's configuration holds:
+
+```
+/Applications/Witena.app/Contents/Resources/bin/witena-mcp
+```
+
+It is a POSIX `sh` script of about twenty lines that resolves its own real path,
+walks up to `Contents`, and `exec`s the bundle's **own binary** on the shim
+beside it:
+
+```sh
+binary=$contents_dir/MacOS/Witena
+shim=$resources_dir/mcp/witena-mcp.cjs
+ELECTRON_RUN_AS_NODE=1
+export ELECTRON_RUN_AS_NODE
+exec "$binary" "$shim" "$@"
+```
+
+Four properties, each of which something else depends on:
+
+| Property | Why it is not incidental |
+|---|---|
+| The binary is the bundle's, never a `node` from `PATH` | `bundlePathFor` in `src/mcp-shim/launch.ts` derives the bundle to wake from `process.execPath`, matching exactly `<x>.app/Contents/MacOS/<name>`. A `node` would still serve every call that arrives while Witena runs, and would silently lose the lazy launch. A user who double-clicked a dmg may also have no `node` at all |
+| Symlinks are resolved first | A configuration written once lives for months, and the path in it may be a symlink in `~/bin`. `readlink -f` is a GNU extension macOS only gained recently, so the script loops over `readlink` and finishes with `cd -P`, which also resolves symlinked directory components |
+| Every expansion is quoted, and there are no bashisms | The bundle may sit in `/Users/…/My Applications/Witena.app`. Verified there by hand, and `#!/bin/sh` is asserted by `packaging.test.ts` |
+| `Witena` is `productName` | It is what names the executable inside `Contents/MacOS`. `packaging.test.ts` pins the two spellings together, because a rename would leave the script `exec`ing nothing and no test would otherwise notice |
+
+Both failure paths write one sentence to **stderr** and exit 1 — stdout is the
+JSON-RPC stream — and they are written for where they will be read: an IDE's MCP
+server log, by somebody who has just been told the server did not start.
+
+`src/main/index.ts` answers the same path from the other side:
+
+```ts
+function mcpLauncherPath(): string | null {
+  return app.isPackaged ? join(process.resourcesPath, 'bin', MCP_LAUNCHER) : null
+}
+```
+
+`null` is the development answer and is honest rather than missing: a checkout
+has no bundle and therefore no stable command to hand a client. Settings →
+Integrations shows `node <repo>/out/mcp-shim/witena-mcp.cjs` as a copyable
+snippet instead (S10.4).
+
+### What was verified by hand (2026-09-20)
+
+Against `dist/mac-arm64/Witena.app` from `npm run dist:dir` on this machine —
+Developer ID signed, hardened runtime, not notarized:
+
+| Check | Result |
+|---|---|
+| Both files in the bundle, modes preserved | `-rwxr-xr-x bin/witena-mcp`, `-rw-r--r-- mcp/witena-mcp.cjs` |
+| `printf '<initialize>' \| …/bin/witena-mcp` | One JSON-RPC result, `serverInfo.name = witena`, exit 0 |
+| The same through a **path containing a space** (`…/My Applications/Witena.app`) | Identical result |
+| The same through a **symlink** to the launcher, plus `tools/list` | Identical result; the six tool names |
+| `lsappinfo list \| grep -c 'bundleID="com.witena.app"'` while it ran | Unchanged (1, the user's own app): no Dock tile, no menu bar |
+
+What this does **not** prove is the lazy launch end to end — a tool call waking
+a quit app. See "Open questions" in [`context.md`](./context.md): it needs a
+second signed copy launched with a fresh `WITENA_USER_DATA`, which WP-0a
+measured as raising a Keychain prompt that `whenReady` blocks on.
+
 ## Database
 
 None. Packaging reads and writes no table and adds no migration. It does decide
@@ -128,8 +194,16 @@ Witena.app/Contents/
     resources/skills/architecture-review/       extraResources
     bin/ant                                     extraResources, this arch's Anthropic CLI
     bin/ant.LICENSE                             its MIT notice; committed as build/ant.LICENSE, the archive has none
+    bin/witena-mcp                              extraResources, 755: the MCP launcher an IDE registers (S10.3)
+    mcp/witena-mcp.cjs                          extraResources, a plain-file copy of the shim for it to run
     icon.icns
 ```
+
+The shim is in the bundle twice — `app.asar` has its own copy from `files:
+out/**` — because the launcher hands it to the binary as a script path and asar
+support is not part of what `ELECTRON_RUN_AS_NODE=1` promises. 700 kB inside
+200 MB, against a directory name (`app.asar.unpacked`) that a shell script would
+otherwise have to spell.
 
 Outside it, unchanged: the app still writes only to `app.getPath('userData')` —
 `witena.db`, `skills/`, `memory/` and, since S7.6, `secrets.key` — and the

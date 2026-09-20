@@ -52,6 +52,9 @@ const EXPECTED_METHODS = [
   'system.installUpdate',
   'settings.get',
   'settings.update',
+  'integrations.status',
+  'integrations.connect',
+  'integrations.disconnect',
   'providers.list',
   'providers.get',
   'providers.create',
@@ -133,6 +136,11 @@ describe('BACKEND_METHODS', () => {
       'chats',
       // Phase 9: standing groups of agents a topic can be convened from.
       'committees',
+      // S10.4. Its own namespace rather than `settings.integrations.*`: the
+      // three methods run the *clients'* CLIs and probe the machine, and folding
+      // them into the settings namespace would suggest they read and write the
+      // settings row, which only `connect`'s side effect does.
+      'integrations',
       'mcp',
       'memory',
       'messages',
@@ -197,6 +205,13 @@ describe('defaults', () => {
       // the command the profile is too tight for, not the other way round.
       executor: {
         sandbox: 'workdir-write'
+      },
+      // S10.3: the local MCP endpoint is a door that can spend the user's
+      // provider money and read their chats, so it is off until somebody says
+      // otherwise — including on an installation that updates into the version
+      // that has it, which the repository's read merge is what guarantees.
+      mcpEndpoint: {
+        enabled: false
       },
       timeouts: {
         stallTimeoutMs: 30000,

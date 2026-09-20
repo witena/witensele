@@ -26,6 +26,7 @@ export type Page = 'chats' | 'committees' | 'agents' | 'settings'
 export type SettingsSection =
   | 'providers'
   | 'mcp'
+  | 'integrations'
   | 'skills'
   | 'timeouts'
   | 'appearance'
@@ -53,10 +54,15 @@ export const PAGES = [
  * i18n smoke surface the end-to-end tests drive, not a user-facing feature.
  * `about` (S7.5) sits directly above it — the version, the repository and the
  * licences are the end of the list on every desktop app there is.
+ *
+ * `integrations` (S10.4) sits directly under `mcp`, because the two are the same
+ * subject from opposite ends: MCP servers is the tools Witena *calls*, and
+ * Integrations is Witena being the tool something else calls.
  */
 export const SETTINGS_SECTIONS = [
   'providers',
   'mcp',
+  'integrations',
   'skills',
   'timeouts',
   'appearance',

@@ -58,6 +58,13 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
   [`../packaging/context.md`](../packaging/context.md) and
   [`../backend-client/context.md`](../backend-client/context.md); what this
   feature owns is `stores/updates.ts`, `lib/updates.ts` and the two surfaces.
+- **Two facts about how the window comes into existence (S10.3).** A launch
+  with `--background` creates none, and a `witena://chat/<id>` link creates or
+  raises one and then asks the shell to show that chat. Both are the MCP
+  endpoint's reasons, not the shell's, so the mechanism lives in
+  [`../mcp-endpoint/context.md`](../mcp-endpoint/context.md); what this feature
+  owns is the consequence — `createWindow()` is conditional, and
+  `lib/event-bridge.ts` may now navigate.
 
 ## Out of scope
 
@@ -121,6 +128,8 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | **S7.4: the bar is dismissable per version, in the renderer** | Not dismissable; a settings row like `onboardingDismissed`; one boolean | "Not now" has to mean something or the strip is nagging, and it has to stop meaning it when a *newer* version arrives — hence per version, not a boolean. It stays in the store rather than the database because it is a fact about this window: a dismissal that survived a restart would hide an update the restart did not install, since Electron installs the pending update on quit either way |
 | **S7.4: About re-reads the status on mount** | Trust the bootstrap read and the two events | The events carry `available` and `downloaded` and nothing else — there is deliberately no progress or error event — so a window that has been open for hours has a status that is right about what the user can do and possibly stale about the rest. `system.updateStatus` is a cached read with no network behind it, so the mount costs one IPC round trip |
 | The leftmost column headers sit 32px from the top, not 14px | Keep the mockup's 14px; use a custom title bar | macOS draws the traffic lights over the top-left of the content. The mockup has no window chrome to design around; something had to give (see [frontend.md](./frontend.md)) |
+| **S10.3: a deep link navigates through the existing `ui` store, not a router** | Add a router library now that the app has addressable links; give `stores/ui.ts` a `deepLink` field | `stores/ui.ts` has said since S1.5 that if deep links ever mattered, "the router becomes the thing that writes these two fields and nothing else has to change". One link that selects one chat is not a routing table: `lib/event-bridge.ts` calls `setPage('chats')` and the chats store selects, and `stores/ui.ts` itself is untouched. A router stays available for the day there is more than one destination worth addressing |
+| **S10.3: a launch may create no window at all** | Always create the window and hide it; a separate headless entry point | `--background` is how the MCP shim starts Witena for a coding agent (see [`../mcp-endpoint/context.md`](../mcp-endpoint/context.md)). A hidden window would still cost a renderer, and the app already has a "no windows" state on macOS — closing the last one — with `activate` as the way back. Skipping `createWindow()` reuses that state instead of inventing a second one |
 
 ## Open questions
 

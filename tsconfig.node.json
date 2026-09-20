@@ -4,11 +4,13 @@
     "electron.vite.config.ts",
     "vitest.config.ts",
     "vite.server.config.ts",
+    "vite.mcp-shim.config.ts",
     "playwright.config.ts",
     "playwright.packaged.config.ts",
     "playwright.demo.config.ts",
     "e2e/**/*",
     "src/main/**/*",
+    "src/mcp-shim/**/*",
     "src/server/**/*",
     "src/preload/**/*",
     "src/shared/**/*"

@@ -181,6 +181,33 @@ npm run server
 
 ---
 
+## 在编码智能体里使用
+
+Witena 本身也是一个 **MCP 服务端**，Claude Code、Codex 或任何其他 MCP 客户端都可以向你的小组提问并拿回结论，无需离开终端。
+
+1. **设置 → 集成 → 打开 MCP 端点。** 默认是关闭的：只监听回环地址，并且有一个每次启动都重新生成的 bearer token。
+2. **点击 Claude Code 或 Codex 卡片上的"连接"。** Witena 通过运行该智能体自己的命令行工具完成注册，它的配置文件仍归它自己管。其他客户端可以从同一个界面复制配置片段：
+
+   ```json
+   {
+     "mcpServers": {
+       "witena": {
+         "command": "/Applications/Witena.app/Contents/Resources/bin/witena-mcp"
+       }
+     }
+   }
+   ```
+
+3. **让编码智能体去咨询一个小组** —— "让 Witena 的架构委员会看看这次迁移"。它会用 `list_committees` 或 `list_agents` 选定小组，发起讨论，并一直等到小组给出结果。
+
+七个工具：`list_chats`、`list_agents`、`list_committees`、`start_discussion`、`wait_for_discussion`、`get_discussion` 和 `stop_discussion`。每个聊天同时也是一个资源 `witena://chat/<id>`，可以按引用取用对话记录；Claude Code 还会拿到一个 `consult` 提示词，而 Codex 从不索取提示词。
+
+**小组只读，你来写。** 不会有任何东西交给 Witena 的执行者 —— 结论回到调用方的智能体，由它来落地。讨论就是一个普通的聊天：运行时在 Witena 窗口里实时可见，结束后留在侧栏中，并且每个结果都带一个 `witena://chat/<id>` 链接可以打开它。Witena 不需要事先运行 —— 第一次工具调用就会在后台把它启动起来，不开窗口，也不抢焦点。
+
+[文档 →](../features/mcp-endpoint/context.md)
+
+---
+
 ## 工作原理
 
 - **消息流是唯一的事实来源。** 没有任何智能体持有长期的会话对象。每次发言前，它都从共享的对话记录重建自己的视角，其他成员的消息以 `[名字]:` 为前缀。

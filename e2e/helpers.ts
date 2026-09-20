@@ -143,6 +143,17 @@ export async function openMcpSettings(window: Page): Promise<void> {
 }
 
 /**
+ * Opens Settings → Integrations (S10.4).
+ *
+ * Settings opens on Providers, so the section click is never optional here.
+ */
+export async function openIntegrationsSettings(window: Page): Promise<void> {
+  await window.getByTestId('nav-settings').click()
+  await window.getByTestId('settings-section-integrations').click()
+  await expect(window.getByTestId('settings-section-title')).toBeVisible()
+}
+
+/**
  * Opens Settings → Skills.
  *
  * Settings opens on Providers, so the section click is never optional here.

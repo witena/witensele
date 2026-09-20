@@ -13,6 +13,7 @@ import { buildHandlers } from './handlers'
 import { createSafeStorageStore } from './ipc/secret-store'
 import { forwardEvents, registerIpc } from './ipc/register'
 import { createElectronUpdater, UPDATE_FEED_ENV } from './ipc/updater'
+import { CHAT_URL_SCHEME, parseLaunchArgs } from './launch-args'
 import { migrateProviderSecrets } from './providers/migrate-secrets'
 import { createFileKeySecretStore, isSignedBuild, rewrapKeyFile, SECRETS_KEY_FILE } from './secrets'
 import { seedSkills } from './skills/loader'
@@ -27,6 +28,14 @@ const RESOURCES_DIR = 'resources'
 
 /** Folder of the skills shipped with the application, inside `resources/`. */
 const BUNDLED_SKILLS = 'skills'
+
+/**
+ * The MCP launcher's file name inside `Contents/Resources/bin` (S10.3).
+ *
+ * `build/witena-mcp` in the repository, copied there by `electron-builder.yml`;
+ * `src/main/packaging.test.ts` pins this spelling to that entry's `to`.
+ */
+const MCP_LAUNCHER = 'witena-mcp'
 
 /**
  * Where the skills bundled with the build live.
@@ -65,6 +74,28 @@ function bundledAntDir(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'bin')
     : join(app.getAppPath(), 'vendor', 'ant', process.arch)
+}
+
+/**
+ * The MCP launcher shipped with this build, or `null` when there is none (S10.3).
+ *
+ * `build/witena-mcp` is copied into `Contents/Resources/bin` by the
+ * `extraResources` entry beside `ant`'s, and this absolute path is what an IDE's
+ * MCP configuration ends up holding: it is what Settings → Integrations
+ * registers, and what "the registered command is not this installation's
+ * launcher" is compared against.
+ *
+ * `null` in development and in the end-to-end harness, and that is the honest
+ * answer rather than a missing feature: a checkout has no bundle, so it has no
+ * stable command to hand a client — the shim is reached there as
+ * `node <repo>/out/mcp-shim/witena-mcp.cjs`, which only the person who built it
+ * can know. The Integrations section shows that as a copyable snippet instead.
+ *
+ * Resolved here for the same reason as the two above: this file is the only one
+ * allowed to ask electron where anything is (CLAUDE.md rule #5).
+ */
+function mcpLauncherPath(): string | null {
+  return app.isPackaged ? join(process.resourcesPath, 'bin', MCP_LAUNCHER) : null
 }
 
 /**
@@ -207,10 +238,131 @@ function createWindow(): BrowserWindow {
   return window
 }
 
+/**
+ * Brings the window forward, creating it if this launch has none (S10.3).
+ *
+ * The single window is a deliberate simplification: `second-instance`, a deep
+ * link and the Dock's `activate` all mean "show me the app", and the app has one
+ * thing to show. `restore` before `show` because a minimized window is visible
+ * to `getAllWindows` but not to the user.
+ */
+function showOrCreateWindow(): BrowserWindow {
+  const existing = BrowserWindow.getAllWindows().find((window) => !window.isDestroyed())
+  if (!existing) return createWindow()
+  if (existing.isMinimized()) existing.restore()
+  existing.show()
+  existing.focus()
+  return existing
+}
+
+/**
+ * A chat link that arrived before the backend existed (S10.3).
+ *
+ * macOS delivers `open-url` to a *cold* process as well as to a running one, and
+ * for the cold case it can fire before `whenReady` — the handler has to be
+ * registered before `ready` to receive it at all. There is no bus to emit on
+ * yet, so the id waits here and the ready handler drains it.
+ */
+let pendingOpenChatId: string | null = null
+
+/**
+ * Asks the window to show a chat, from whichever direction the request came.
+ *
+ * Three subtleties, all of them about timing:
+ *
+ * - **Before the context exists**, the id is buffered rather than dropped. This
+ *   is the cold-launch path, and it is the one that matters most: the app was
+ *   not running when the user clicked the link.
+ * - **The event is emitted after the window has loaded.** `forwardEvents` sends
+ *   to the windows that exist at the moment of the emit, and a window created
+ *   one line earlier has no renderer yet — the event would reach nobody. The
+ *   renderer starts its subscription before the first render, so
+ *   `did-finish-load` is late enough.
+ * - **Nothing here checks that the chat exists.** The main process would have to
+ *   reach past the handlers to find out, and the window can answer the question
+ *   better anyway: it ignores an id it does not know, which is also the right
+ *   answer for a chat that was deleted between the link being written and being
+ *   clicked.
+ */
+function requestOpenChat(chatId: string): void {
+  if (!context) {
+    pendingOpenChatId = chatId
+    return
+  }
+
+  const window = showOrCreateWindow()
+  const deliver = (): void => {
+    context?.events.emit({ type: 'ui.open-chat', chatId })
+  }
+
+  if (window.webContents.isLoading()) window.webContents.once('did-finish-load', deliver)
+  else deliver()
+}
+
 app.setName(APP_NAME)
 applyUserDataOverride()
 
+/** `--background` and a `witena://chat/<id>` argument; see `./launch-args.ts`. */
+const launch = parseLaunchArgs(process.argv)
+
+/**
+ * One app per `userData` directory (S10.3).
+ *
+ * Asked immediately after the override, because WP-0a measured that the lock is
+ * keyed by `userData`: two instances pointed at different directories both get
+ * `true` and run side by side — which is what lets the Playwright specs launch
+ * several apps at once — while a second instance on the same directory gets
+ * `false`. That second instance **never reaches `ready`**; it parks until
+ * something ends it, so `app.quit()` here is the thing that ends it, and nothing
+ * below may be assumed to run in that process.
+ *
+ * It matters now because the app can be started by a machine rather than by a
+ * person: the MCP shim launches it when a coding agent calls a tool, and a
+ * second copy of Witena over the same SQLite file would mean two `ChatRunner`s
+ * on one chat.
+ */
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
+
+/**
+ * Someone tried to start a second copy: they wanted the one that is running.
+ *
+ * The argument vector is the second process's, so a `witena://` link passed on a
+ * command line arrives here rather than through `open-url`.
+ */
+app.on('second-instance', (_event, argv) => {
+  const { openChatId } = parseLaunchArgs(argv)
+  if (openChatId) requestOpenChat(openChatId)
+  else showOrCreateWindow()
+})
+
+/**
+ * The deep link, registered before `ready` because macOS delivers it that early.
+ *
+ * `preventDefault` is what tells Electron the URL has been dealt with. An
+ * unparseable one is still "dealt with" — it is refused silently, because a link
+ * the app does not understand is not a dialog the user asked for.
+ */
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  const { openChatId } = parseLaunchArgs(['', url])
+  if (openChatId) requestOpenChat(openChatId)
+})
+
 void app.whenReady().then(() => {
+  // Belt and braces: WP-0a measured that a second instance for the same
+  // `userData` never gets here at all, and this costs one comparison to make
+  // that a guarantee of this file rather than of a platform note.
+  if (!hasSingleInstanceLock) return
+
+  // Only a packaged build may claim the scheme. In development the "app" is the
+  // electron binary in `node_modules`, and registering it would point every
+  // `witena://` link on the machine at a checkout that moves, gets deleted, or
+  // is a different branch by the time the link is clicked. `protocols` in
+  // `electron-builder.yml` is the other half: LaunchServices reads the bundle's
+  // Info.plist, and this call only claims a scheme the bundle already declares.
+  if (app.isPackaged) app.setAsDefaultProtocolClient(CHAT_URL_SCHEME)
+
   const userDataDir = app.getPath('userData')
   const databasePath = join(userDataDir, DATABASE_FILE)
 
@@ -262,12 +414,26 @@ void app.whenReady().then(() => {
     ...(process.env[UPDATE_FEED_ENV] ? { feedUrl: process.env[UPDATE_FEED_ENV] } : {})
   })
 
+  // Built once and used twice: the IPC transport registers it, and the MCP
+  // endpoint's tools call it. One map, so a discussion started by a coding agent
+  // and one typed in the window go through exactly the same handlers (S10.3).
+  const handlers = buildHandlers()
+
+  // S10.4: where an IDE points its MCP configuration. Computed here because
+  // this file is the only one allowed to ask electron where anything is
+  // (CLAUDE.md rule #5), and handed to the context so that `integrations.*` can
+  // register it with a coding agent and tell a stale registration from a current
+  // one. `null` in a checkout, which is what makes `connect` refuse there.
+  const launcherPath = mcpLauncherPath()
+
   context = createAppContext({
     databasePath,
     userDataDir,
     secrets,
     updates: updater,
-    bundledAntDir: bundledAntDir()
+    bundledAntDir: bundledAntDir(),
+    mcpEndpoint: { handlers },
+    mcpLauncherPath: launcherPath
   })
   console.log(`[witena] database: ${databasePath}`)
   if (updater.updater) {
@@ -300,8 +466,20 @@ void app.whenReady().then(() => {
 
   // The transport is up before the first window exists, so a renderer that calls
   // `invoke` in its first effect can never race the registration.
-  registerIpc(ipcMain, context, buildHandlers())
+  registerIpc(ipcMain, context, handlers)
   stopForwarding = forwardEvents(context.events, () => BrowserWindow.getAllWindows())
+
+  // S10.3: the endpoint comes up with the backend and **not** with the window.
+  // `--background` is a launch that has no window at all — a coding agent's shim
+  // started it and is polling for the discovery file — so anything hanging off
+  // `createWindow()` would be a door that only opens when somebody is looking.
+  // Off unless the user switched it on; the switch itself is live, in
+  // `settings.update`.
+  if (context.repos.settings.get().mcpEndpoint.enabled) {
+    void context.mcpEndpoint?.start().catch((cause: unknown) => {
+      console.warn(`[witena] the MCP endpoint could not start: ${String(cause)}`)
+    })
+  }
 
   // The window chrome the renderer cannot paint — the traffic lights of
   // `titleBarStyle: 'hiddenInset'` and the native dialogs — follows the stored
@@ -310,7 +488,12 @@ void app.whenReady().then(() => {
   // working with no listener of our own (see `src/main/ipc/theme.ts`).
   nativeTheme.themeSource = currentThemeSetting()
 
-  createWindow()
+  // `--background` is the shim's launch (S10.3): the app comes up with its Dock
+  // icon, its endpoint and no window, so a tool call from a coding agent never
+  // takes over the screen. Clicking the Dock icon opens the window through the
+  // `activate` handler below, which is the same path a user who closed the
+  // window already takes — there is no second code path and no new UI.
+  if (!launch.background) createWindow()
 
   // After the window, so the `update.available` a launch check can produce
   // reaches a renderer rather than an empty window list. The status is cached
@@ -321,6 +504,14 @@ void app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+
+  // A link that was waiting for the backend, or one that came in on this
+  // launch's own argument vector. Last, so the window it may create is built
+  // after the transport is registered and the theme is set — and so a launch
+  // that is *only* a deep link still gets its window, `--background` or not.
+  const requested = pendingOpenChatId ?? launch.openChatId
+  pendingOpenChatId = null
+  if (requested) requestOpenChat(requested)
 })
 
 app.on('window-all-closed', () => {
@@ -331,6 +522,10 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   stopForwarding?.()
   stopForwarding = null
+  // First, because this listener cannot await and the discovery file is the one
+  // piece of endpoint state that outlives the process: `stop()` removes it
+  // synchronously and closes the socket on the way out (S10.3).
+  void context?.mcpEndpoint?.stop().catch(() => undefined)
   context?.close()
   context = null
 })

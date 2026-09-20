@@ -2,8 +2,8 @@
 
 ## Approach
 
-Eight pieces, none of which touches runtime behaviour except the third and the
-seventh:
+Ten pieces, none of which touches runtime behaviour except the third, the
+seventh and the ninth:
 
 1. **`electron-builder.yml`** at the repository root. electron-builder reads it
    without being told to; `package.json` carries no `build` key, so there is one
@@ -40,7 +40,14 @@ seventh:
    licence list Settings → About renders. It reads `node_modules`, which a
    packaged app does not have, which is exactly why it runs at build time. See
    [`../ui-shell/implement.md`](../ui-shell/implement.md).
-9. **`scripts/fetch-ant.mjs`**, which also runs from `prebuild` (optionally)
+9. **`build/witena-mcp`** (S10.3), the POSIX launcher that is the *command* an
+   IDE registers, and the two `extraResources` entries that ship it and the shim
+   into `Contents/Resources`. It is the second runtime-visible piece in this
+   list: `src/main/index.ts` gained `mcpLauncherPath()` beside
+   `bundledSkillsDir()` and `bundledAntDir()`, the third function whose answer
+   differs between a checkout and a bundle. See [`backend.md`](./backend.md),
+   "The MCP launcher".
+10. **`scripts/fetch-ant.mjs`**, which also runs from `prebuild` (optionally)
    and from the three `predist*` hooks (strictly). It fills `vendor/ant/<arch>/`
    from the release pinned in `build/ant-release.json`, and the second
    `extraResources` entry copies this architecture's folder to
@@ -56,13 +63,16 @@ npm run dist
   └─ predist                          scripts/fetch-ant.mjs → vendor/ant/{arm64,x64}/ant (sha256-checked)
   └─ npm run build
        ├─ prebuild                      scripts/generate-licenses.mjs → licenses.json
-       └─ electron-vite build           → out/{main,preload,renderer}
+       ├─ electron-vite build           → out/{main,preload,renderer}
+       └─ mcp-shim:build                → out/mcp-shim/witena-mcp.cjs (S10.2)
   └─ electron-builder --mac             once per arch: arm64, then x64
        ├─ @electron/rebuild             better-sqlite3 checked for electron 44 / <arch>
        ├─ collect files                 out/** + package.json + production node_modules
        ├─ asar pack                     → Contents/Resources/app.asar
        │    └─ asarUnpack               better-sqlite3 → app.asar.unpacked/
        ├─ extraResources                resources/ → Contents/Resources/resources/
+       │                                out/mcp-shim/witena-mcp.cjs → Resources/mcp/ (S10.3)
+       │                                build/witena-mcp → Resources/bin/ (S10.3, mode 755)
        ├─ icon                          build/icon.icns → Contents/Resources/icon.icns
        └─ dmg                           → dist/Witena-<version>-{arm64,x64}.dmg
                                           + .dmg.blockmap + latest-mac.yml
@@ -489,7 +499,7 @@ channel and no event. The only runtime symbol it touches is the private
 
 | File | Covers |
 |---|---|
-| `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran) |
+| `e2e/packaged.spec.ts` | The shipped bundle: the shell renders out of the asar; the shipped skill is listed under Settings → Skills (so `extraResources` and the packaged path resolution both work); one real Ollama reply completes (so `better-sqlite3` loaded from `app.asar.unpacked` and the migrations ran). **S10.3** adds a fourth case that needs no window: `Contents/Resources/bin/witena-mcp` exists and is executable, `mcp/witena-mcp.cjs` is beside it, and spawning the launcher the way a client does answers `initialize` and `tools/list` — so the launcher resolved its own path and the signed binary ran a script under `ELECTRON_RUN_AS_NODE=1`. Deliberately the shim's *offline* half: anything that waited for the app would wait for the Keychain prompt a second signed copy raises (see [`context.md`](./context.md), "Open questions") |
 | `src/main/packaging.test.ts` | The release manifest: `electron-builder.yml` names a dmg **and a zip** for both architectures (**S7.4** — the zip is what `electron-updater` applies), an `artifactName` carrying `${arch}` so the two cannot collide, `publish: github` / `releaseType: draft`, and that the publish block holds **nothing else** — a `token:` added there would ship inside every dmg. **S7.3** adds the signing shape — no `identity` key at all, `hardenedRuntime: true`, `gatekeeperAssess: false`, `notarize: true`, both entitlements options pointing at `build/entitlements.mac.plist` — plus that plist's exact grant list, and that `-c.extraMetadata.witenaSignedBuild=true` is passed by `dist:signed` and by neither `dist` nor `dist:dir`. Also that `release.yml`'s packaging step is given neither `CSC_LINK` nor `CSC_KEY_PASSWORD`, and that the step before it imports the `.p12` into a keychain of its own and sets the partition list with **that keychain's** password (electron-builder 26 passes the `.p12`'s there, and an empty `CSC_LINK` is a path to it) — and that `APP_VERSION` equals `package.json`'s version, which is what notices if `npm version` ever runs without its lifecycle script |
 | `src/main/nightly-tag.test.ts` | `scripts/nightly-tag.mjs`'s pure half: the version is the next patch with a UTC date stamp; `decide` tags only when no `v*` tag points at `main` and today's nightly does not exist; `staleNightlyDrafts` keeps the newest three and never names a published or a stable release. And that `release.yml` agrees with it — its bash pattern matches the version the script produces and not a stable one, a mismatched stable tag is refused, and a nightly draft is flagged `--prerelease` |
 | `src/main/secrets.test.ts` | **S7.3** adds `isSignedBuild` over a parsed manifest (boolean and string forms, and everything uncertain answering "not signed"), and `rewrapKeyFile`'s five outcomes with a fake wrapper: a plain file moved under the wrapper with the same 32 bytes and every stored ciphertext still readable; an already-wrapped file untouched; a refusing wrapper leaving the plain file and no temp file behind; no-ops on an unsigned build, a missing file and a missing key store; and a refusal to rewrite a file it does not recognise. Owned by [`../providers/implement.md`](../providers/implement.md) |
@@ -500,12 +510,35 @@ channel and no event. The only runtime symbol it touches is the private
 Run with `npm run e2e:packaged` and `WITENA_APP_PATH` pointing at a copy of
 `Witena.app`. It is skipped — explicitly, in the report — when that variable is
 not set, and its third case is skipped when Ollama does not hold
-`qwen2.5:1.5b`.
+`qwen2.5:1.5b`. **On a machine that holds a Developer ID it cannot be run
+unattended at all** (S10.3): the launch in `beforeAll` raises a Keychain prompt
+that `whenReady` blocks on, so the file's four cases have been proven by hand
+rather than by Playwright — the commands and their output are in
+[`backend.md`](./backend.md), "The MCP launcher".
 
 What the unit test deliberately does not do is re-describe the build: asar
 unpacking, the extra resources and the icon are claims about a filesystem, and
 the only honest assertion about those is made against a real bundle, which is
 `e2e/packaged.spec.ts`'s job. It covers exactly the fields a workflow reads.
+
+**S10.3 added three assertions that bend that rule slightly, and say why.** The
+`protocols` block is now pinned entry for entry (`name: Witena chat link`,
+`schemes: [witena]`) — it produces a `CFBundleURLTypes` array in the packaged
+Info.plist, which is a claim about a filesystem, but the *entry* is what
+`src/main/launch-args.test.ts` pins the scheme against from the other end, and
+the two spellings are worth holding together. The MCP entries are pinned the
+same way, and beside them two facts that no build could catch:
+
+- **`build/witena-mcp`'s mode comes from the git index**, `git ls-files
+  --stage`, not from `statSync`. electron-builder copies the file with the mode
+  it finds on disk, so a `chmod` after a clone would make a working-tree check
+  pass on the packaging machine and ship a launcher no client can spawn to
+  everyone else.
+- **The script's own text**: `#!/bin/sh`, `export ELECTRON_RUN_AS_NODE`,
+  `exec "$binary" "$shim" "$@"`, the two derived paths, and `productName ===
+  'Witena'` — because the executable inside `Contents/MacOS` is named after
+  `productName`, and a rename there would leave the launcher `exec`ing nothing
+  with every other test still green.
 
 `electron-builder.yml` is parsed there with **gray-matter**, by wrapping the
 document in `---` delimiters. gray-matter is already a dependency (it is how
@@ -594,6 +627,18 @@ parser to `devDependencies` for one assertion would have been the wrong trade.
   dmg and a zip per architecture, roughly 150 MB each. The zip is not a second
   download for a human — it is the only form the updater can apply — but it does
   double the time and the disk a local packaging run costs.
+- **`build/witena-mcp` has never been through `shellcheck`** (S10.3). It is not
+  installed on this machine and no CI job runs one, so what the script has been
+  held to instead is `sh -n`, the text assertions in `packaging.test.ts`, and
+  four runs against a real signed bundle — including one from a path containing
+  a space, which is the class of bug shellcheck would have caught by reading.
+  Adding a linter job would touch `.github/workflows/`, which S10.3 does not.
+- **The lazy launch has not been exercised end to end.** The launcher runs the
+  shim, and the shim's `open(1)` call is unit-tested with an injected `spawn`,
+  but "a tool call wakes a quit Witena" has never happened in one piece — it
+  needs the Keychain prompt in [`context.md`](./context.md)'s open questions out
+  of the way, and it is the acceptance criterion of STEPS.md S10.3 and the
+  README procedure S10.7 will follow by hand.
 - **The release notes are written by hand** in the draft. Nothing generates
   them from the commits.
 - **The demo recording needs a warm machine.** It expects `qwen2.5:3b` and
