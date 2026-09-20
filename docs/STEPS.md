@@ -3030,9 +3030,14 @@ adds a line here in the same commit.
   (1) the five signing secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`,
   `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) exist since 2026-09-19 but
   `CSC_LINK` was created **empty**, so the first `v0.1.0` tag took the unsigned
-  branch, which then died on the empty variable (`<project dir> not a file` —
-  fixed by unsetting it; `packaging/backend.md`, "The signing gate"). The owner
-  has to set `CSC_LINK` again from a `.p12` that exists; (2) a
+  branch, which then died on the empty variable (`<project dir> not a file`).
+  With the real `.p12` in place two more runs failed: a `CSC_KEY_PASSWORD` that
+  was not the export password, and then electron-builder 26 itself, which passes
+  the `.p12`'s password where `security set-key-partition-list -k` wants the
+  password of the keychain it just created. `release.yml` now imports the
+  certificate into its own keychain and never gives electron-builder `CSC_LINK`
+  (`packaging/backend.md`, "The signing gate, and who imports the certificate").
+  Signing and notarization on a runner are still unproven; (2) a
   `v*` tag and a human publishing the draft, since a draft is invisible to the
   unauthenticated request. Until then a check ends in `state: 'error'` with
   GitHub's own 404 sentence under it in Settings → About. A `token:` in

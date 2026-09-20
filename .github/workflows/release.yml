@@ -99,6 +99,50 @@ jobs:
             echo 'No CSC_LINK secret: building unsigned (S7.3 adds the certificate).' >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # The certificate goes into a keychain **this workflow** makes, and
+      # electron-builder is never given `CSC_LINK`. Both halves were learned
+      # from failed `v0.1.0` runs (2026-09-19):
+      #
+      # - electron-builder 26 can import a `.p12` itself, but after importing it
+      #   runs `security set-key-partition-list … -k <the .p12's password>`,
+      #   where `-k` wants the password of the *keychain* it created with a
+      #   random one. The macOS runner answers "SecKeychainUnlock: The user name
+      #   or passphrase you entered is not correct" and the build dies. Here
+      #   `-k` gets the keychain's own password.
+      # - A missing secret arrives as an **empty string**, not unset, and
+      #   electron-builder only asks `cscLink == null`: it resolves '' against
+      #   the project directory and dies with "<project dir> not a file". With
+      #   the variable absent from the packaging step there is nothing to
+      #   misread, signed or not.
+      #
+      # The keychain is put first in the user search list, which is where
+      # `CSC_IDENTITY_AUTO_DISCOVERY` looks, and the decoded `.p12` is deleted
+      # before anything else runs.
+      - name: Import the Developer ID certificate into a temporary keychain
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/witena-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          trap 'rm -f "$certificate"' EXIT
+
+          printf '%s' "$CSC_LINK" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          # shellcheck disable=SC2046 -- one argument per existing keychain is the point
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$keychain" | grep -q 'Developer ID Application'
+
       # `npm run dist` is `npm run build && electron-builder --mac`; npm appends
       # the arguments after `--` to the end of that string, so `--publish
       # always` lands on electron-builder. Both architectures come from
@@ -122,8 +166,6 @@ jobs:
       - name: Package both architectures and upload them to a draft Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -134,13 +176,6 @@ jobs:
           if [ "${SIGNING_ENABLED:-false}" = 'true' ]; then
             npm run dist -- --publish always -c.extraMetadata.witenaSignedBuild=true
           else
-            # An absent secret arrives as an **empty string**, not as an unset
-            # variable, and electron-builder only asks `cscLink == null`: it
-            # resolves '' against the project directory and dies with
-            # "<project dir> not a file" before packaging anything. The first
-            # `v*` tag (2026-09-19) found this. Unset them so the unsigned build
-            # is the unsigned build.
-            unset CSC_LINK CSC_KEY_PASSWORD
             npm run dist -- --publish always
           fi
 
