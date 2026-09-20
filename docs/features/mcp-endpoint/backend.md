@@ -6,7 +6,7 @@
 |---|---|
 | `src/shared/mcp-tools.ts`, `src/shared/mcp-discovery.ts` | WP-1 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/discussion.ts` — `watchDiscussion`, `readDiscussion` | WP-2 `[x]` (2026-09-20) |
-| `src/main/mcp-endpoint/tools.ts`, `transcript.ts` — the six tools | WP-3 |
+| `src/main/mcp-endpoint/tools.ts`, `transcript.ts` — the six tools | WP-3 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/server.ts`, `guards.ts`, `tool-types.ts` — transport and refusals | WP-4 `[x]` (2026-09-20) |
 | `src/mcp-shim/` and its Vite target | WP-5 |
 | `src/main/mcp-endpoint/host.ts`, `AppSettings.mcpEndpoint` | WP-7 |
@@ -252,3 +252,64 @@ to translate.
 directory quits: the losing process never reaches `ready`, so driving it through
 Playwright would be a race against its own teardown. WP-0a measured that case
 directly instead.
+
+## Tools (WP-3)
+
+`src/main/mcp-endpoint/tools.ts` (`createTools()`, plus the three contract types
+re-exported from `./tool-types`) and `src/main/mcp-endpoint/transcript.ts`
+(`renderTranscript`). No new table, no new handler, no IPC method: the tools are
+a caller over `HandlerMap`, and `transcript.ts` is a pure renderer.
+
+The seam WP-4 left is closed: `missingToolRegistry()` in `server.ts` is now
+`defaultToolRegistry()`, whose body is `return createTools()`, so
+`createMcpEndpoint({ ctx, handlers, token })` without `tools` serves the real six.
+That, plus the re-export line at the top of `tools.ts`, is the whole of the
+hand-over; nothing else in `server.ts` changed.
+
+**Handlers each tool calls.** Nothing reaches a repository, with one deliberate
+exception noted below.
+
+| Tool | Handlers |
+|---|---|
+| `list_chats` | `chats.list`, `chats.members.list` (per chat), `agents.list` |
+| `list_agents` | `agents.list`, `providers.list` |
+| `start_discussion` | `agents.list` (name resolution), `chats.get` **or** `chats.create`, `messages.list` (via `loadTranscript`), `chat.send`, and everything `watchDiscussion` reads |
+| `wait_for_discussion` | `chats.get`, `messages.list`, then `watchDiscussion` or `readDiscussion` |
+| `get_discussion` | `chats.get`, `messages.list`, `agents.list`, and `readDiscussion` for `detail: 'conclusion'` |
+| `stop_discussion` | `chats.get`, `chat.stop` |
+
+The exception is `ctx.runners.getState(chatId)`, read by `list_chats` (the
+`running` flag), by `start_discussion` (the `busy` refusal) and by
+`stop_discussion` (`wasRunning`). It is not a repository: the live run state is
+in memory on the context and no handler exposes it, which is the same reason
+`discussion.ts` reads it.
+
+Pitfalls for the packages that build on this one:
+
+- **A tool never throws, and `server.ts` relies on it.** Every implementation is
+  wrapped by `tool(name, …)`, which parses with `MCP_TOOL_INPUTS[name]` and turns
+  anything thrown into an outcome — a `BackendFailure` keeps its
+  `BackendErrorCode`, everything else is `internal` with the message and no
+  stack. A new tool added outside that wrapper loses both halves.
+- **`structured` is always an object.** `server.ts` drops a non-object rather
+  than inventing a wrapper key, so the list tools answer `{ chats, hint }` /
+  `{ agents, hint }` rather than a bare array. The three waiting tools answer the
+  frozen `DiscussionResult` verbatim.
+- **`busy` is the only code that is not a `BackendErrorCode`.** It is raised in
+  exactly one place — `start_discussion` on a chat whose runner has live state —
+  and reaches the caller as `busy: <message>` in the `isError` text.
+- **`chats.create` owns the `workdir` check**, not the tool. It validates
+  absolute / exists / is-a-directory *before* the row is written, so a refused
+  `workdir` leaves no half-created chat, and its message already names the path.
+  WP-14, which changes how the member list is built, must keep that ordering:
+  validation before creation.
+- **Duplicate members are folded, not refused.** A caller that names the same
+  agent by name and by id meant one seat, and `setMembers` would reject the
+  duplicate outright.
+- **`transcript.ts` is pure and is the renderer WP-15 wants.** `resources/read`
+  is specified as "`transcript.ts`'s markdown", so it calls `renderTranscript`
+  with `loadTranscript`'s rows and the same `agentId → name` map; there is
+  nothing else to build.
+- **WP-13 passes `call.client`** into the `chat.send` in `start_discussion`
+  (`origin: { client: call.client ?? 'mcp' }`). That is the only line of this
+  file it needs; `ToolCallContext.client` is already threaded in by `server.ts`.

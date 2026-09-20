@@ -8,14 +8,9 @@
  * exists. Splitting the three declarations out is the smallest change that lets
  * both packages compile — the contract's shapes are reproduced below verbatim.
  *
- * **What WP-3 does when it lands `tools.ts`:**
- *
- * 1. `export type { ToolCallContext, ToolOutcome, ToolRegistry } from './tool-types'`
- *    at the top of `tools.ts`, so every reader of the contract finds them where
- *    "Frozen contracts" says they are.
- * 2. Replace the body of `missingToolRegistry()` in `./server.ts` with
- *    `return createTools()` and delete the `import`-free placeholder comment
- *    there. That is the one seam; nothing else in `server.ts` changes.
+ * `tools.ts` re-exports all three, so every reader of the contract finds them
+ * where "Frozen contracts" says they are, and `server.ts` defaults its registry
+ * to `createTools()`.
  *
  * No electron here or anywhere under `src/main/mcp-endpoint/` (CLAUDE.md rule 5),
  * which `no-electron.test.ts` in this folder proves.

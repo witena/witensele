@@ -42,6 +42,25 @@ are **not** UI copy and never reach the renderer: they are written in English fo
 the calling model's progress notifications, for the same reason the tool
 descriptions are (below).
 
+## Tools (WP-3)
+
+Still nothing in the renderer, and the table above is unchanged. Two things the
+window will meet indirectly:
+
+- **A discussion started through the endpoint is an ordinary chat.**
+  `start_discussion` creates it with `chats.create` and writes to it with
+  `chat.send`, so the left column, the message list and the member panel show it
+  the moment it exists, with no new event and no store field. The only thing that
+  will ever mark it as not typed by the user is WP-13's "via {{client}}" chip.
+- **A chat the endpoint created is titled from the question's first line**, cut
+  at 60 characters, which is what the user sees in the sidebar until they rename
+  it. That title is *content*, like every other chat title, and so is outside
+  i18n — the same rule that keeps `DEFAULT_CHAT_TITLE` a plain string.
+
+The hints and the markdown `get_discussion` renders are, like the tool
+descriptions and the watcher's progress lines, written in English for the calling
+model and never drawn in the window.
+
 One boundary worth stating, because `src/shared/mcp-tools.ts` is importable from
 the renderer and its strings are English: the tool `title` and `description`
 fields are **not** UI copy and must never be rendered. Their reader is the
