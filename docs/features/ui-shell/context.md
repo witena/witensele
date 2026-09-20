@@ -17,10 +17,16 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
 - `stores/ui.ts`: the current page and the selected settings section.
 - `AppShell` + `NavRail`: the frame, the rail, the active state, and the window
   drag regions required by `titleBarStyle: 'hiddenInset'`.
-- The three pages as static shells: `ChatsPage` (list / conversation / member
-  panel), `AgentsPage` (list / editor), `SettingsPage` (section nav / content).
+- The pages as static shells: `ChatsPage` (list / conversation / member
+  panel), `AgentsPage` (list / editor), `SettingsPage` (section nav / content),
+  and since S9.2 `CommitteesPage` (list / editor), owned by
+  [`committees`](../committees/context.md) and routed here.
 - The primitives under `components/ui/` and the layout helpers under
-  `components/layout/`.
+  `components/layout/`. Since S9.3 that includes `Dialog`, the shell's
+  first modal — the scrim, the focus trap, Escape and the backdrop. What any
+  particular dialog *says* belongs to the feature that opens it; the New chat
+  dialog is [`chats`](../chats/context.md)' and
+  [`committees`](../committees/context.md)'.
 - **The two palettes and the appearance setting (S5.8).** The dark tokens
   from the mockup are the base; a light palette overrides all of them under
   `:root[data-theme='light']`, and `lib/theme.ts` decides which one is
@@ -103,6 +109,7 @@ Depending on it in return: every feature with a UI. `providers`, `agents`,
 | The eight legacy hexes stay in `agent-display.ts` as a named table (S5.17) | Delete them and default an index-less record to neutral; move them into a database migration | Deleting them would repaint every agent written before this step as grey — the one outcome the no-migration design exists to avoid. As a table they do two jobs: they resolve an old record, and they are the compatibility shadow a *new* record still writes into `avatar.color` for any consumer that has never heard of `palette`. It is the one file besides `index.css` and the brand mark where `hex-literals.test.ts` allows a colour |
 | Provider tiles reuse the agent palette rather than keeping a list of their own (S5.17) | Give providers their own eight theme-aware pairs | Two eight-entry lists that were copies of each other had already drifted in two slots. One list is one thing to tune, and the hash that assigns a preset to a slot is unchanged, so a provider keeps its swatch number |
 | `prefers-contrast` and `prefers-reduced-transparency` are written **twice**, once per appearance (S5.17) | One unqualified `:root` block | `:root[data-theme='light']` has higher specificity than `:root` whatever the source order, so a single block would strengthen the dark theme and silently do nothing in the light one. `theme.test.ts` asserts both halves name the same tokens |
+| A modal scrim is a **token**, `--color-overlay` (S9.3) | `bg-black/50` in the component | It is the app's second translucent surface, and a literal alpha in a component is the one colour no stylesheet can answer for. As a token it has a light override and something for `prefers-reduced-transparency` to replace — the media query now names two tokens, and `theme.test.ts` holds the palette and the query to exactly that list in both directions |
 | `drag-region` / `no-drag` as `@utility` in `index.css` | Tailwind arbitrary properties `[-webkit-app-region:drag]`, inline styles | The leading `-` of the vendor prefix collides with Tailwind's negative-value syntax, and `WebkitAppRegion` is not in React's `CSSProperties` |
 | The licence list is generated at build time, gitignored, and imported as JSON (S7.5) | A hand-maintained Markdown list; a runtime scan of `node_modules`; committing the generated file | The list is derived from the installed tree, so a hand-written copy is wrong the first time a dependency moves and **nothing fails** — a stale licence list looks exactly like a correct one. A packaged app has no `node_modules` to scan at runtime. Committing it would mean reviewing a 244-entry diff on every `npm update`, so it is produced by `pretypecheck` / `pretest` / `prebuild` instead and ignored by git |
 | About prints the version, the package names and the repository URL as data, never through `t()` (S7.5) | Translate "Witena {{version}}" | Every label around them *is* translated; the values are identifiers. `0.1.0`, `react@19.3.0` and a URL are the same in both languages, and a placeholder would only add a way for them to differ |

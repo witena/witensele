@@ -75,9 +75,18 @@ keep tiny.
 
 **Primitives.** `components/ui/` holds the vocabulary: `Button`, `IconButton`,
 `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Avatar`,
-`PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, `BrandMark`. They are presentational and
+`PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, `BrandMark`,
+`ReorderableList`, `Dialog`. They are presentational and
 stateless — every one takes already-translated strings, so no primitive imports
 `react-i18next` and none of them can leak an untranslated literal.
+`Dialog` (S9.3) is the only one with behaviour worth the name, and all of it is
+mechanical: the focus trap, Escape and the backdrop. The Escape listener is
+**capturing and on the document**, because a text field inside the panel would
+otherwise consume the key; the backdrop closes on `mousedown` and only when the
+press started on the scrim, because a `click` would also fire for a drag that
+began on a label inside the panel and ended outside it. There is no portal —
+the app is one window with no transformed ancestors, so `fixed inset-0` is
+already relative to the viewport.
 `SegmentedControl`'s options carry an optional per-option `disabled` since S5.10,
 on top of the control's own: the chat Goal block needs two of its three segments
 disabled while the chat has no folder, and a segment that disappeared would
@@ -197,7 +206,9 @@ Everything new is renderer-local; no shared type and no IPC channel was added.
 
 | Export | Where | Notes |
 |---|---|---|
-| `Page`, `SettingsSection`, `PAGES`, `SETTINGS_SECTIONS`, `useUiStore` | `stores/ui.ts` | `SETTINGS_SECTIONS` is the render order of the settings nav |
+| `Page`, `SettingsSection`, `PAGES`, `SETTINGS_SECTIONS`, `useUiStore` | `stores/ui.ts` | Both constants are render order: `PAGES` is the rail top to bottom (`chats`, `committees` since S9.2, `agents`, `settings`), `SETTINGS_SECTIONS` the settings nav |
+| `ReorderableList` | `components/ui/reorderable-list.tsx` | S9.2. The drag-to-reorder rows, extracted from the member panel for the committee editor. Generic in the item, no container element, `onReorder(from, to)` — the arithmetic stays in `lib/reorder.ts` |
+| `Dialog` | `components/ui/dialog.tsx` | S9.3. The first modal: scrim, titled panel, optional footer, `role="dialog"` + `aria-modal`, focus trapped and restored, Escape and backdrop dismiss. No `open` prop — the caller mounts it |
 | `presenceColorClass(state)` | `components/ui/presence-dot.tsx` | `PresenceState` → `bg-presence-*`. Pure, total, unit-tested |
 | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` | `components/layout/window-chrome.ts` | Class names, not styles |
 | `applyLanguageSetting(setting)` | `pages/settings/language.ts` | The single handler both language controls call |

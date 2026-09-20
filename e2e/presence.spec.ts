@@ -42,6 +42,7 @@ import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import {
   addOllamaProvider,
+  createChat,
   createUserDataDir,
   launchWitena,
   locale,
@@ -248,7 +249,7 @@ test.beforeAll(async () => {
   await createAgent('Ghost', 'Black hole', GHOST_MODEL)
 
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('chat-item')).toHaveCount(1)
   await addMember('Reviewer')
   await addMember('Ghost')

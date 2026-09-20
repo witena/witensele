@@ -1,7 +1,7 @@
 /**
  * The guard that makes "two schema files" a safe choice.
  *
- * `../schema.ts` and `./schema.ts` describe the same eight tables in two
+ * `../schema.ts` and `./schema.ts` describe the same ten tables in two
  * dialects. A column added to one and forgotten in the other would be a bug that
  * only appears in production on whichever dialect was missed, so the two are
  * compared here through drizzle's own table metadata rather than by reading:
@@ -57,9 +57,9 @@ describe('the SQLite and Postgres schemas stay in step', () => {
   const sqliteTables = tablesOf(sqliteSchema as unknown as Record<string, unknown>)
   const postgresTables = tablesOf(postgresSchema as unknown as Record<string, unknown>)
 
-  it('declares the same eight tables', () => {
+  it('declares the same ten tables', () => {
     expect([...postgresTables.keys()].sort()).toEqual([...sqliteTables.keys()].sort())
-    expect(sqliteTables.size).toBe(8)
+    expect(sqliteTables.size).toBe(10)
   })
 
   for (const name of [...tablesOf(sqliteSchema as unknown as Record<string, unknown>).keys()].sort()) {

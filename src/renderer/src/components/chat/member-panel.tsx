@@ -2,16 +2,22 @@
  * The right column's member list: the mockup's `.member` rows, plus the three
  * things S2.2 makes real — add, remove and reorder.
  *
- * ## Why drag-and-drop uses the native HTML5 events
+ * ## Where the picker and the drag-to-reorder live now (S9.2)
  *
- * A list of at most a handful of rows, reordered by dragging, inside an Electron
- * window that is always Chromium: `draggable` plus `dragstart` / `dragover` /
- * `drop` is about twenty lines and no dependency. A drag-and-drop library would
- * add a package, a provider component and its own keyboard model to a control
- * that already has a keyboard-accessible alternative in the works (the speaking
- * order is also the member order, which S2.3 will let the user set from the
- * agent list). The index arithmetic — the only part that can silently be wrong —
- * lives in `lib/reorder.ts` and is unit-tested there.
+ * Both were written here and both are now shared: the popover is
+ * `components/agents/agent-picker.tsx` and the draggable rows are
+ * `components/ui/reorderable-list.tsx`, because the committee editor needs the
+ * same two interactions on the same kind of list. Nothing about this panel
+ * changed in the move — the same DOM, the same classes, the same test ids — and
+ * the two pieces it kept are the ones that are its own: the picker's **open
+ * state**, closed by a `mousedown` anywhere outside the panel, and the whole
+ * `chats.members.set` write below.
+ *
+ * The reasoning that produced the drag interaction is in `ReorderableList`'s own
+ * header; the short of it is that a handful of rows in a window that is always
+ * Chromium needs `draggable` and three events, not a library, and that the index
+ * arithmetic — the only part that can silently be wrong — lives in
+ * `lib/reorder.ts` where a unit test covers it.
  *
  * ## Why the panel writes the whole list
  *
@@ -27,6 +33,16 @@
  * column up entirely to the "Retry" button, which is the manual half of S2.4's
  * recovery loop.
  *
+ * ## Sync committee members (S9.3)
+ *
+ * A chat convened from a committee holds a **snapshot** of its members, so a
+ * committee that has gained somebody since leaves the chat behind. The button
+ * under the list is the whole answer to that: it appears only when there is a
+ * gap, it appends the missing members in committee order, and it never removes
+ * anyone — a member the user took out of this chat took themselves out of this
+ * chat. The page works out who is missing (`lib/committee-members.ts`); the
+ * panel draws the button and calls back.
+ *
  * ## Presence
  *
  * The dot and the label under the name come from `stores/presence`, seeded by
@@ -35,17 +51,25 @@
  * computed here from `lastActivityAt` and ticked by a one-second timer that only
  * exists while some member is actually `away`.
  */
-import clsx from 'clsx'
 import type { TFunction } from 'i18next'
-import { Plus, UserPlus, X } from 'lucide-react'
+import { Plus, UserPlus, UsersRound, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatTokens } from '@shared/pricing'
 import type { Agent, AgentPresence, PresenceState, Provider } from '@shared/types'
-import { agentModelLabel, avatarStyle, hasExecutor, isExecutor } from '../agents/agent-display'
+import { agentModelLabel, avatarStyle, isExecutor } from '../agents/agent-display'
+import { AgentPicker } from '../agents/agent-picker'
 import { useIsRetrying, usePresence, usePresenceStore } from '../../stores/presence'
 import { useChatUsage } from '../../stores/usage'
-import { Avatar, Badge, Button, EmptyState, IconButton, SectionTitle } from '../ui'
+import {
+  Avatar,
+  Badge,
+  Button,
+  EmptyState,
+  IconButton,
+  ReorderableList,
+  SectionTitle
+} from '../ui'
 
 /** Literal `t()` calls, so `used-keys.test.ts` can verify all four labels. */
 function presenceLabel(t: TFunction, state: PresenceState): string {
@@ -104,10 +128,20 @@ export interface MemberPanelProps {
   /** Every agent in the library, for the picker. */
   agents: readonly Agent[]
   providers: readonly Provider[]
+  /**
+   * Committee members this chat was never given (S9.3), or empty.
+   *
+   * The page computes it with `lib/committee-members.ts`; the panel only draws
+   * the button. Non-empty is what makes the drift visible at all, and it is the
+   * *only* thing that does — nothing here reconciles anything on its own.
+   */
+  missingCommitteeMemberIds?: readonly string[]
   onAdd: (agentId: string) => void
   onRemove: (agentId: string) => void
   /** Called with the dragged row's index and the index it was dropped on. */
   onReorder: (from: number, to: number) => void
+  /** Appends the missing committee members. Never removes anyone. */
+  onSyncCommittee?: (() => void) | undefined
 }
 
 export function MemberPanel({
@@ -115,13 +149,14 @@ export function MemberPanel({
   members,
   agents,
   providers,
+  missingCommitteeMemberIds = [],
   onAdd,
   onRemove,
-  onReorder
+  onReorder,
+  onSyncCommittee
 }: MemberPanelProps): React.JSX.Element {
   const { t } = useTranslation()
   const [picking, setPicking] = useState(false)
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
   const panel = useRef<HTMLElement>(null)
   // Read once for the whole panel rather than once per row: it is one object in
   // the store and a selector per row would resubscribe every member to it.
@@ -142,13 +177,6 @@ export function MemberPanel({
     return () => document.removeEventListener('mousedown', close)
   }, [picking])
 
-  const candidates = agents.filter((agent) => !members.some((member) => member.id === agent.id))
-  // PLAN.md: one writer per chat. The picker says so before the click rather
-  // than letting the backend refuse it — the refusal is still the authority
-  // (see `assertOneExecutor` in `src/main/handlers/chats.ts`), this is the
-  // explanation.
-  const executorTaken = hasExecutor(members)
-
   return (
     <section ref={panel} className="relative flex flex-col gap-1.5">
       <div className="flex items-center justify-between px-1">
@@ -167,57 +195,19 @@ export function MemberPanel({
       </div>
 
       {picking ? (
-        <div
-          data-testid="member-picker"
-          className="absolute top-7 right-0 z-10 flex w-[264px] flex-col gap-0.5 rounded-lg border border-border-strong bg-bg-elevated p-1.5 shadow-lg"
-        >
-          {candidates.length === 0 ? (
-            <p className="px-2 py-2 text-[11px] text-fg-faint">
-              {agents.length === 0 ? t('chat.addMemberEmpty') : t('chat.addMemberAll')}
-            </p>
-          ) : (
-            candidates.map((agent) => {
-              const blocked = executorTaken && isExecutor(agent)
-              return (
-                <button
-                  key={agent.id}
-                  type="button"
-                  data-testid="member-candidate"
-                  data-agent-id={agent.id}
-                  data-blocked={blocked ? 'true' : 'false'}
-                  disabled={blocked}
-                  onClick={() => {
-                    setPicking(false)
-                    onAdd(agent.id)
-                  }}
-                  className={clsx(
-                    'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
-                    blocked ? 'cursor-not-allowed opacity-55' : 'hover:bg-bg-hover'
-                  )}
-                >
-                  <Avatar
-                    text={agent.avatar.text}
-                    {...avatarStyle(agent.avatar)}
-                    size="md"
-                  />
-                  <span className="flex min-w-0 flex-col gap-px">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="truncate text-[13px] text-fg">{agent.name}</span>
-                      {isExecutor(agent) ? (
-                        <Badge tone="accent" font="sans" data-testid="member-candidate-executor">
-                          {t('agents.executorBadge')}
-                        </Badge>
-                      ) : null}
-                    </span>
-                    <span className="truncate font-mono text-[11px] text-fg-faint">
-                      {blocked ? t('chat.executorTaken') : agentModelLabel(agent, providers)}
-                    </span>
-                  </span>
-                </button>
-              )
-            })
-          )}
-        </div>
+        <AgentPicker
+          agents={agents}
+          selected={members}
+          providers={providers}
+          testIdPrefix="member"
+          emptyLabel={t('chat.addMemberEmpty')}
+          allAddedLabel={t('chat.addMemberAll')}
+          className="absolute top-7 right-0 z-10 w-[264px]"
+          onPick={(agentId) => {
+            setPicking(false)
+            onAdd(agentId)
+          }}
+        />
       ) : null}
 
       {members.length === 0 ? (
@@ -235,24 +225,48 @@ export function MemberPanel({
           ) : null}
         </>
       ) : (
-        members.map((agent, index) => (
-          <MemberRow
-            key={agent.id}
-            chatId={chatId}
-            agent={agent}
-            tokens={usage.perAgent[agent.id]?.usage.totalTokens ?? 0}
-            providers={providers}
-            dragging={dragIndex === index}
-            onDragStart={() => setDragIndex(index)}
-            onDragEnd={() => setDragIndex(null)}
-            onDrop={() => {
-              if (dragIndex !== null) onReorder(dragIndex, index)
-              setDragIndex(null)
-            }}
-            onRemove={() => onRemove(agent.id)}
-          />
-        ))
+        <ReorderableList
+          items={members}
+          itemId={(agent) => agent.id}
+          onReorder={onReorder}
+          rowTestId="member-row"
+          rowTitle={t('chat.reorderMember')}
+          rowClassName="group flex items-center gap-2.5 rounded-lg p-2 transition-colors hover:bg-bg-muted"
+        >
+          {(agent) => (
+            <MemberRow
+              chatId={chatId}
+              agent={agent}
+              tokens={usage.perAgent[agent.id]?.usage.totalTokens ?? 0}
+              providers={providers}
+              onRemove={() => onRemove(agent.id)}
+            />
+          )}
+        </ReorderableList>
       )}
+
+      {/*
+        The other end of the snapshot (S9.3). A topic keeps the members it was
+        convened with, so a committee that has gained someone since leaves this
+        chat behind — and the only honest way to close that gap is to offer it,
+        once, where the membership is. It **appends**: a member the user removed
+        from this chat stays removed, and the existing speaking order is not
+        touched. A `second_executor` refusal lands in the chat list's error line
+        through the same path every other member write uses.
+      */}
+      {chatId && missingCommitteeMemberIds.length > 0 && onSyncCommittee ? (
+        <Button
+          size="sm"
+          data-testid="member-sync-committee"
+          data-missing={missingCommitteeMemberIds.length}
+          className="mx-1 mt-1 justify-center"
+          title={t('chat.syncCommitteeTitle')}
+          onClick={onSyncCommittee}
+        >
+          <UsersRound aria-hidden="true" className="h-3 w-3" />
+          {t('chat.syncCommittee', { members: missingCommitteeMemberIds.length })}
+        </Button>
+      ) : null}
     </section>
   )
 }
@@ -263,22 +277,18 @@ interface MemberRowProps {
   /** This agent's total tokens in this chat; `0` means it has not spoken yet. */
   tokens: number
   providers: readonly Provider[]
-  dragging: boolean
-  onDragStart: () => void
-  onDragEnd: () => void
-  onDrop: () => void
   onRemove: () => void
 }
 
+/**
+ * The **contents** of one member row: `ReorderableList` owns the wrapper that
+ * carries `data-testid="member-row"`, the drag handlers and the classes.
+ */
 function MemberRow({
   chatId,
   agent,
   tokens,
   providers,
-  dragging,
-  onDragStart,
-  onDragEnd,
-  onDrop,
   onRemove
 }: MemberRowProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -289,33 +299,7 @@ function MemberRow({
   const label = presenceText(t, record, now)
 
   return (
-    <div
-      data-testid="member-row"
-      data-agent-id={agent.id}
-      draggable
-      title={t('chat.reorderMember')}
-      onDragStart={(event) => {
-        // Chromium refuses to start a drag without payload; the index itself is
-        // kept in React state because the drop target needs it synchronously.
-        event.dataTransfer.setData('text/plain', agent.id)
-        event.dataTransfer.effectAllowed = 'move'
-        onDragStart()
-      }}
-      onDragEnd={onDragEnd}
-      onDragOver={(event) => {
-        // Without this the drop event never fires: the default is "not a target".
-        event.preventDefault()
-        event.dataTransfer.dropEffect = 'move'
-      }}
-      onDrop={(event) => {
-        event.preventDefault()
-        onDrop()
-      }}
-      className={clsx(
-        'group flex items-center gap-2.5 rounded-lg p-2 transition-colors hover:bg-bg-muted',
-        dragging && 'opacity-50'
-      )}
-    >
+    <>
       <Avatar
         text={agent.avatar.text}
         {...avatarStyle(agent.avatar)}
@@ -386,6 +370,6 @@ function MemberRow({
       >
         <X aria-hidden="true" className="h-3.5 w-3.5" />
       </IconButton>
-    </div>
+    </>
   )
 }

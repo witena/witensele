@@ -28,6 +28,7 @@ const EXPECTED_NAMESPACES = [
   'common',
   'nav',
   'chat',
+  'committees',
   'agents',
   'settings',
   'presence',

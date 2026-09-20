@@ -182,3 +182,56 @@ test('the rail shows the brand mark in both themes', async () => {
 
   await window.getByTestId('theme-dark').click()
 })
+
+/**
+ * The first modal primitive (S9.3).
+ *
+ * Here rather than in `committees.spec.ts` because what is being checked is the
+ * `Dialog` itself — `role`, `aria-modal`, where focus lands, and the two ways
+ * out that are not a button — and this is the spec that owns the shell. What
+ * the New chat dialog *does* is `committees.spec.ts`'s subject.
+ *
+ * The two screenshots are review material in the habit of this file: every
+ * colour in the panel is a token, so "it works in both themes" is a thing a
+ * human confirms from the shots rather than something Playwright can assert.
+ */
+test('the New chat dialog is modal, and closes without a button', async () => {
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chats-new').click()
+
+  const dialog = window.getByTestId('new-chat-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toHaveAttribute('role', 'dialog')
+  await expect(dialog).toHaveAttribute('aria-modal', 'true')
+
+  // Focus is inside the panel, so a keyboard user does not start their first
+  // Tab at the top of a window the dialog is covering.
+  // `ownerDocument`, not the `document` global: `tsconfig.node.json` compiles
+  // `e2e/` without the DOM library, and only the page's own types come along.
+  expect(
+    await dialog.evaluate((panel) => panel.contains(panel.ownerDocument.activeElement))
+  ).toBe(true)
+  await window.screenshot({ path: join(SHOTS_DIR, 'new-chat-dialog-dark.png') })
+
+  await window.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+
+  await window.getByTestId('chats-new').click()
+  await expect(dialog).toBeVisible()
+  // The scrim, not the panel: a press that *starts* outside dismisses.
+  await window.getByTestId('new-chat-dialog-backdrop').click({ position: { x: 6, y: 6 } })
+  await expect(dialog).toHaveCount(0)
+
+  await window.getByTestId('nav-settings').click()
+  await window.getByTestId('settings-section-appearance').click()
+  await window.getByTestId('theme-light').click()
+  await window.getByTestId('nav-chats').click()
+  await window.getByTestId('chats-new').click()
+  await expect(dialog).toBeVisible()
+  await window.screenshot({ path: join(SHOTS_DIR, 'new-chat-dialog-light.png') })
+
+  await window.getByTestId('new-chat-cancel').click()
+  await expect(dialog).toHaveCount(0)
+  await window.getByTestId('nav-settings').click()
+  await window.getByTestId('theme-dark').click()
+})

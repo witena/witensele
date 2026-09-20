@@ -941,7 +941,13 @@ describe('handlers/stubs', () => {
       // `unsupported` rather than rejecting. Their cases are above.
       'system.updateStatus',
       'system.checkForUpdates',
-      'system.installUpdate'
+      'system.installUpdate',
+      // S9.1
+      'committees.list',
+      'committees.get',
+      'committees.create',
+      'committees.update',
+      'committees.delete'
     ])
     const ctx = { userId: LOCAL_USER_ID } as AppContext
 

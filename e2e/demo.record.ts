@@ -53,7 +53,13 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
-import { createUserDataDir, launchWitena, removeUserDataDir, repoRoot } from './helpers'
+import {
+  createChat,
+  createUserDataDir,
+  launchWitena,
+  removeUserDataDir,
+  repoRoot
+} from './helpers'
 
 /** Where the frames, `recording.json` and the four PNGs land. */
 const OUT_DIR = process.env['WITENA_DEMO_DIR'] ?? join(repoRoot, 'test-results', 'demo')
@@ -277,7 +283,9 @@ test('records the product tour', async () => {
     await mark('discussion', async () => {
       await window.getByTestId('nav-chats').click()
       await beat(800)
-      await window.getByTestId('chats-new').click()
+      // Two clicks since S9.3 — open the New chat dialog, press Create with
+      // nothing chosen — which is the same empty chat the "+" used to make.
+      await createChat(window)
       await beat(900)
 
       for (const name of ['Architect', 'Reviewer']) {

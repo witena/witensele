@@ -3,6 +3,9 @@
 **This feature has no main-process code.** S1.5 added no module under
 `src/main/`, no table, no migration, no IPC handler and no event. The shell is
 renderer-only; see [frontend.md](./frontend.md).
+Still true after S9.3: `Dialog`, the first modal primitive, is CSS, a focus
+trap and two event listeners — there is no native window, no `BrowserWindow`
+option and no main-process involvement of any kind.
 
 One main-process fact it depends on, and one it does not want changed:
 

@@ -59,8 +59,10 @@ src/
 - `providers`: id, type (anthropic | openai | google | openai-compatible), name, baseUrl, apiKeyEncrypted, models (json), presetId
 - `agents`: id, name, avatar, description, systemPrompt, providerId, modelId, params (json: temperature, maxTokens), skillNames (json), mcpServerIds (json), memoryEnabled
 - `mcp_servers`: id, name, transport (stdio | http), command, args (json), env (json), url, enabled
-- `chats`: id, title, settings (json: mode = roundrobin | mention-only, speaking = sequential | parallel, maxAutoRounds, memberOrder)
+- `chats`: id, title, committeeId (nullable, `ON DELETE SET NULL`: the committee this topic was convened from), settings (json: mode = roundrobin | mention-only, speaking = sequential | parallel, maxAutoRounds, memberOrder)
 - `chat_members`: chatId, agentId, position
+- `committees`: id, name, description — a named, ordered standing group of agents (Phase 9)
+- `committee_members`: committeeId, agentId, position (both foreign keys cascade)
 - `messages`: id, chatId, seq, senderType (user | agent | system), senderId, parts (json: text | reasoning | tool-call | tool-result), status (streaming | done | error | passed | skipped), round, mentions (json), inReplyTo (json, nullable: who asked for this reply), usage (json), error, createdAt
 - `settings`: userId, data (json: the whole `AppSettings` object), updatedAt
 
@@ -149,9 +151,10 @@ never the writing ones, and no permission prompt is needed for a read.
 
 ## User interface
 
-- **Navigation rail**: Chats, Agents, Settings.
+- **Navigation rail**: Chats, Committees, Agents, Settings.
 - **Main view**: left column chat list (new, rename, delete, search); middle column message stream (avatar, name, model badge, collapsible reasoning and tool calls, streaming cursor, dimmed passed messages) and composer (`@` autocomplete for members, Enter to send, Shift+Enter for newline, Stop button while running); right column member panel (each agent's state, token usage in this chat; add / remove members from the agent library; chat settings: mode, sequential or parallel, max auto rounds, drag-to-reorder speaking order).
 - **Agent configuration page**: agent list on the left, form on the right: basic info, provider and model dropdowns, system prompt, skills multi-select, MCP servers multi-select, memory toggle and viewer. The form asks for no sampling parameters (S5.9): a user picks a model and writes a prompt, and the provider's defaults decide the rest. `agents.params` keeps `temperature` / `maxTokens` for records written before that and for API callers, and the reasoning toggle stays.
+- **Committees page** (Phase 9): committee list on the left; on the right the name, the description, the ordered member list (add from the agent library, remove, drag to reorder — the order is the speaking order a chat inherits) and the committee's topics, i.e. the chats convened from it, with "New topic". A committee only assembles people; it never holds a conversation itself. A chat is a *topic*: the "+" in the chat list opens a **New chat dialog** where the user picks at most one committee and any number of individual agents. Joining is a **snapshot**: the committee's members are expanded into `chat_members` when the chat is created and `chats.committeeId` records where they came from, so orchestration reads membership exactly as before and an old topic does not change when the committee does. When the committee later gains members the chat lacks, the member panel offers "Sync committee members", which only adds. The one-executor rule holds for a committee and for the merged list. Deliberately later: a committee charter in the system prompt, committee-level default chat settings, several committees in one chat, grouping the chat list by committee.
 - **Settings page**: providers (preset picker, key, model list), MCP servers (stdio command or HTTP URL, test connection), skills (list, import), timeouts and heartbeat, appearance and language, data and backup.
 - **Presence dots**: both the member panel and the avatar of every message show a presence dot (green / red / orange / grey). Colours come from AgentSupervisor events; the dot on a message reflects the agent's *current* state, not its state when the message was sent.
 - **UI mockup**: https://claude.ai/code/artifact/6730ad03-5843-4e6a-8adb-7b70bfa3405e (three artboards: group chat, agent configuration, settings). It is the visual reference for implementation.
@@ -259,6 +262,7 @@ Language rule: everything committed to the repository (docs, code comments, comm
 6. **Backlog**: decided work that is not yet scheduled (STEPS.md Phase 6).
 7. **Local release**: the brand mark, a signed and notarized dmg built by CI, auto-update, a first-run experience (STEPS.md Phase 7; see "Local release and online version").
 8. **Online version**: the same product served from AWS with accounts, the agents and chats stored on the server, and a web client — plus the desktop app able to sign in to it (STEPS.md Phase 8).
+9. **Committees**: standing groups of agents, a page to build them, and a New chat dialog that convenes one committee plus any individual agents into a topic (STEPS.md Phase 9).
 
 ## Verification
 

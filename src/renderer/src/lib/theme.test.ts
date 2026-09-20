@@ -229,6 +229,19 @@ function valueOf(block: string, token: string): string | undefined {
  */
 const CONSTANT_TOKENS = new Set(['--color-brand-point'])
 
+/**
+ * Every token whose value carries an alpha channel, and which
+ * `prefers-reduced-transparency` therefore has to replace with an opaque
+ * colour.
+ *
+ * Two of them: the hover tint a list row leaves behind (S5.17) and the scrim
+ * behind a modal (S9.3). The two assertions at the bottom of this file hold the
+ * palette and the media query to exactly this list, in both directions, so a
+ * third translucent surface cannot be added without deciding what it looks like
+ * when transparency is switched off.
+ */
+const TRANSLUCENT_TOKENS = ['--color-bg-subtle', '--color-overlay']
+
 describe('the light palette', () => {
   const dark = tokensIn(themeBlock())
   const light = tokensIn(lightBlock())
@@ -434,22 +447,25 @@ describe('the accessibility preferences', () => {
     }
   })
 
-  it('makes the one translucent surface opaque under prefers-reduced-transparency', () => {
+  it('makes every translucent surface opaque under prefers-reduced-transparency', () => {
     const { dark, light } = blocksInside(mediaBlock('prefers-reduced-transparency: reduce'))
     for (const block of [dark, light]) {
-      expect(tokensIn(block)).toEqual(['--color-bg-subtle'])
+      expect([...tokensIn(block)].sort()).toEqual([...TRANSLUCENT_TOKENS].sort())
       // Six digits, not eight: the whole point is that no alpha channel is left.
-      expect(valueOf(block, '--color-bg-subtle')).toMatch(/^#[0-9a-f]{6}$/)
+      for (const token of TRANSLUCENT_TOKENS) {
+        expect(valueOf(block, token), token).toMatch(/^#[0-9a-f]{6}$/)
+      }
     }
   })
 
-  it('has exactly one token with an alpha channel to answer for', () => {
-    // If a second translucent token appears, the media query above has to grow
+  it('has exactly the declared tokens with an alpha channel to answer for', () => {
+    // If a third translucent token appears, the media query above has to grow
     // with it — and this is the assertion that says so, rather than a reviewer
-    // noticing a `/60` in a diff.
+    // noticing a `/60` in a diff. S9.3 added the second, `--color-overlay`: the
+    // scrim behind a modal.
     const withAlpha = (block: string): string[] =>
       tokensIn(block).filter((token) => /^#[0-9a-f]{8}$/.test(valueOf(block, token) ?? ''))
-    expect(withAlpha(themeBlock())).toEqual(['--color-bg-subtle'])
-    expect(withAlpha(lightBlock())).toEqual(['--color-bg-subtle'])
+    expect([...withAlpha(themeBlock())].sort()).toEqual([...TRANSLUCENT_TOKENS].sort())
+    expect([...withAlpha(lightBlock())].sort()).toEqual([...TRANSLUCENT_TOKENS].sort())
   })
 })

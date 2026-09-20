@@ -24,6 +24,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import {
+  createChat,
   createUserDataDir,
   launchWitena,
   locale,
@@ -88,8 +89,8 @@ const agentMessages = () =>
 const userMessages = () => window.locator('[data-testid="message-item"][data-sender="user"]')
 
 /**
- * Creates a chat with the "+" button, waits for it to be selected, and makes sure
- * it has a member.
+ * Creates a chat through the New chat dialog (`createChat`, S9.3), waits for it
+ * to be selected, and makes sure it has a member.
  *
  * Since S2.2 only the **first** chat of an empty install gets the bootstrap agent
  * automatically; once the agent library is non-empty, a new chat starts with
@@ -99,7 +100,7 @@ const userMessages = () => window.locator('[data-testid="message-item"][data-sen
  */
 async function newChat(): Promise<void> {
   const before = await window.getByTestId('chat-item').count()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
   await expect(window.getByTestId('composer-input')).toBeEnabled()
 

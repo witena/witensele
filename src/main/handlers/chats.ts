@@ -8,13 +8,16 @@
  *
  * Two decisions worth reading before changing anything:
  *
- * - **`chats.create` seeds members in exactly two ways.** `ChatCreateInput`
- *   carries `memberAgentIds`, and when it is given those agents become the chat's
- *   members in that order. When it is not, the chat is created **empty** — unless
- *   the agent library is still empty too, in which case `ensureDefaultAgent`
- *   writes the bootstrap agent and puts it in, so a fresh installation can still
- *   hold a conversation before anyone visits the Agents page. Once the user owns
- *   agents, picking who is in a chat is theirs to decide, not the handler's.
+ * - **`chats.create` seeds members from a committee, a list, or neither.**
+ *   `ChatCreateInput` carries `committeeId` (Phase 9) and `memberAgentIds`: the
+ *   chat's members are the committee's, in its own order, followed by the named
+ *   agents, de-duplicated keeping the first occurrence. With neither the chat is
+ *   created **empty** — unless the agent library is still empty too, in which
+ *   case `ensureDefaultAgent` writes the bootstrap agent and puts it in, so a
+ *   fresh installation can still hold a conversation before anyone visits the
+ *   Agents page. Once the user owns agents, picking who is in a chat is theirs to
+ *   decide, not the handler's. `committeeId` is recorded on the chat as
+ *   provenance and is **not** patchable afterwards; see `ChatCreateInput`.
  * - **A chat with no members refuses `chat.send`.** The composer stays enabled —
  *   the fix is one click away in the member panel — but the run is rejected with
  *   `validation` rather than silently producing no answer.
@@ -318,8 +321,13 @@ function goalStatus(goal: ChatGoal | null, workdir: string | null): ChatGoalStat
  *
  * Every id has already been resolved by the caller, so `agents.get` here is a
  * repeat read of rows that are certainly present.
+ *
+ * Exported since S9.1: `committees.*` applies the same rule to a committee's
+ * members, because a group whose members cannot legally sit in one chat is a
+ * group that refuses to convene. One function rather than two so the refusal
+ * and its `second_executor` reason cannot drift apart.
  */
-function assertOneExecutor(ctx: AppContext, agentIds: string[]): void {
+export function assertOneExecutor(ctx: AppContext, agentIds: string[]): void {
   const executors = agentIds.filter(
     (agentId) => ctx.repos.agents.get(agentId, ctx.userId).role === 'executor'
   )
@@ -401,7 +409,18 @@ function assertAgentIds(value: unknown): asserts value is string[] {
 /**
  * The member list a new chat is born with.
  *
- * An explicit list wins. Without one the chat is empty, *except* on an
+ * Since S9.1 it has two sources, in this order: the committee this topic is
+ * convened from, in its own `position` order, then the individual agents the
+ * caller named. Duplicates are dropped keeping the **first** occurrence, so an
+ * agent who is both a committee member and an extra keeps the committee's
+ * place in the speaking order rather than being pushed to the end.
+ *
+ * Expanding the committee here is what makes joining a **snapshot**: the ids
+ * land in `chat_members` and nothing reads the committee again, so editing the
+ * committee tomorrow cannot change a topic convened today. `Chat.committeeId`
+ * records only where they came from.
+ *
+ * When the merged list is empty the chat is empty too, *except* on an
  * installation whose agent library has never been used: there `ensureDefaultAgent`
  * writes the bootstrap agent so the very first chat of a fresh install can still
  * be talked to. That fallback rejects with `validation` when no provider has a
@@ -410,9 +429,19 @@ function assertAgentIds(value: unknown): asserts value is string[] {
  */
 async function initialMembers(
   ctx: AppContext,
+  committeeId: string | undefined,
   memberAgentIds: string[] | undefined
 ): Promise<string[]> {
-  if (memberAgentIds) return memberAgentIds
+  // `not_found` for a committee that is gone or belongs to another user.
+  const fromCommittee =
+    committeeId === undefined ? [] : ctx.repos.committees.get(committeeId, ctx.userId).memberAgentIds
+
+  const merged: string[] = []
+  for (const agentId of [...fromCommittee, ...(memberAgentIds ?? [])]) {
+    if (!merged.includes(agentId)) merged.push(agentId)
+  }
+  if (merged.length > 0) return merged
+
   if (ctx.repos.agents.list(ctx.userId).length > 0) return []
   return [(await ensureDefaultAgent(ctx)).id]
 }
@@ -454,17 +483,24 @@ export const chatHandlers: HandlerModule = {
 
   'chats.create': async (ctx, input) => {
     const create: ChatCreateInput = input?.input ?? {}
-    const { memberAgentIds, ...patch } = create
+    const { memberAgentIds, committeeId, ...patch } = create
     // No row yet, so a goal can only be validated against the folder this same
     // call is binding.
     assertChatPatch(patch, () => null)
     if (memberAgentIds !== undefined) assertAgentIds(memberAgentIds)
+    if (committeeId !== undefined && (typeof committeeId !== 'string' || committeeId.length === 0)) {
+      throw validation('committeeId must be a committee id')
+    }
 
-    const members = await initialMembers(ctx, memberAgentIds)
-    // Before the row exists: a chat created with two executors would otherwise
-    // be written and then left half-built when `setMembers` refused.
+    const members = await initialMembers(ctx, committeeId, memberAgentIds)
+    // Before the row exists: a chat created with two executors — from the
+    // committee, from the extras, or one of each — would otherwise be written
+    // and then left half-built when `setMembers` refused.
     assertOneExecutor(ctx, members)
-    const chat = ctx.repos.chats.create(patch, ctx.userId)
+    const chat = ctx.repos.chats.create(
+      { ...patch, ...(committeeId === undefined ? {} : { committeeId }) },
+      ctx.userId
+    )
     // `setMembers` validates that every agent exists and rejects duplicates.
     ctx.repos.chats.setMembers(ctx.userId, chat.id, members)
 

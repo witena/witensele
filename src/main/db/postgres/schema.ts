@@ -1,5 +1,5 @@
 /**
- * The Postgres schema: the same seven tables as `../schema.ts`, in the dialect
+ * The Postgres schema: the same ten tables as `../schema.ts`, in the dialect
  * the server version stores them in.
  *
  * **Two files, kept in step by a test**, rather than one description that emits
@@ -107,6 +107,36 @@ export const mcpServers = pgTable('mcp_servers', {
 })
 
 /* -------------------------------------------------------------------------- */
+/* Committees                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** A named, ordered standing group of agents (Phase 9). Mirrors `committees`
+ * in `../schema.ts`. */
+export const committees = pgTable('committees', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  createdAt: epochMs('created_at').notNull(),
+  updatedAt: epochMs('updated_at').notNull()
+})
+
+/** Committee membership; `position` is the speaking order a chat inherits. */
+export const committeeMembers = pgTable(
+  'committee_members',
+  {
+    committeeId: text('committee_id')
+      .notNull()
+      .references(() => committees.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull()
+  },
+  (table) => [primaryKey({ columns: [table.committeeId, table.agentId] })]
+)
+
+/* -------------------------------------------------------------------------- */
 /* Chats and membership                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -116,6 +146,8 @@ export const chats = pgTable('chats', {
   title: text('title').notNull(),
   workdir: text('workdir'),
   goal: jsonb('goal').$type<ChatGoal>(),
+  /** Provenance only; `ON DELETE SET NULL` keeps the topic when the committee goes. */
+  committeeId: text('committee_id').references(() => committees.id, { onDelete: 'set null' }),
   settings: jsonb('settings').$type<ChatSettings>().notNull(),
   createdAt: epochMs('created_at').notNull(),
   updatedAt: epochMs('updated_at').notNull()
@@ -203,6 +235,8 @@ export const settings = pgTable('settings', {
 export type ProviderRow = typeof providers.$inferSelect
 export type AgentRow = typeof agents.$inferSelect
 export type McpServerRow = typeof mcpServers.$inferSelect
+export type CommitteeRow = typeof committees.$inferSelect
+export type CommitteeMemberRow = typeof committeeMembers.$inferSelect
 export type ChatRow = typeof chats.$inferSelect
 export type ChatMemberRow = typeof chatMembers.$inferSelect
 export type MessageRow = typeof messages.$inferSelect

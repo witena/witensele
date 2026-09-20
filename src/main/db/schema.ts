@@ -102,6 +102,45 @@ export const mcpServers = sqliteTable('mcp_servers', {
 })
 
 /* -------------------------------------------------------------------------- */
+/* Committees                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A named, ordered standing group of agents (Phase 9).
+ *
+ * Declared before `chats` because `chats.committee_id` points at it; drizzle's
+ * references are lazy callbacks, so the order is for the reader rather than the
+ * compiler.
+ */
+export const committees = sqliteTable('committees', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull()
+})
+
+/**
+ * Committee membership, shaped exactly like `chat_members`: a pure join table
+ * whose `position` is the speaking order a chat inherits, ascending from 0.
+ * Both foreign keys cascade, so deleting a committee or an agent cleans it up.
+ */
+export const committeeMembers = sqliteTable(
+  'committee_members',
+  {
+    committeeId: text('committee_id')
+      .notNull()
+      .references(() => committees.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull()
+  },
+  (table) => [primaryKey({ columns: [table.committeeId, table.agentId] })]
+)
+
+/* -------------------------------------------------------------------------- */
 /* Chats and membership                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -119,6 +158,16 @@ export const chats = sqliteTable('chats', {
    * which the shared type documents as "no goal".
    */
   goal: text('goal', { mode: 'json' }).$type<ChatGoal>(),
+  /**
+   * The committee this topic was convened from (Phase 9), or null.
+   *
+   * `ON DELETE SET NULL` rather than `CASCADE`: a topic outlives the committee
+   * it was convened from — its members were snapshotted into `chat_members` and
+   * the conversation is the user's — so deleting the committee may only erase
+   * the provenance, never the chat. Nullable with no default, like every column
+   * added after the initial schema.
+   */
+  committeeId: text('committee_id').references(() => committees.id, { onDelete: 'set null' }),
   settings: text('settings', { mode: 'json' }).$type<ChatSettings>().notNull(),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull()
@@ -238,6 +287,8 @@ export const settings = sqliteTable('settings', {
 export type ProviderRow = typeof providers.$inferSelect
 export type AgentRow = typeof agents.$inferSelect
 export type McpServerRow = typeof mcpServers.$inferSelect
+export type CommitteeRow = typeof committees.$inferSelect
+export type CommitteeMemberRow = typeof committeeMembers.$inferSelect
 export type ChatRow = typeof chats.$inferSelect
 export type ChatMemberRow = typeof chatMembers.$inferSelect
 export type PermissionGrantRow = typeof permissionGrants.$inferSelect

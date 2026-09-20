@@ -50,6 +50,7 @@ import { GoalSettings } from '../components/chat/goal-settings'
 import { GrantsList } from '../components/chat/grants-list'
 import { HandoffButton } from '../components/chat/handoff-button'
 import { MemberPanel } from '../components/chat/member-panel'
+import { NewChatDialog } from '../components/chat/new-chat-dialog'
 import { OnboardingCard, useOnboarding } from '../components/onboarding/onboarding-card'
 import { MessageList } from '../components/chat/message-list'
 import { PermissionCard } from '../components/chat/permission-card'
@@ -70,12 +71,15 @@ import {
 import { translateFailure } from '../i18n/errors'
 import { useAgentsStore } from '../stores/agents'
 import { useChatGoalStatus, useChatMemberIds, useChatsStore } from '../stores/chats'
+import { useCommitteesStore } from '../stores/committees'
 import { useChatMessages, useMessagesStore } from '../stores/messages'
 import { usePresenceStore } from '../stores/presence'
 import { usePendingPermissions } from '../stores/permissions'
 import { useIsRunning, useRunStore } from '../stores/run'
 import { useProvidersStore } from '../stores/providers'
+import { useUiStore } from '../stores/ui'
 import { useChatUsage, useUsageStore } from '../stores/usage'
+import { missingCommitteeMembers } from '../lib/committee-members'
 import { reorder } from '../lib/reorder'
 import { folderName } from '../lib/workdir'
 
@@ -135,6 +139,11 @@ export function ChatsPage(): React.JSX.Element {
   const chatsErrorDetails = useChatsStore((state) => state.errorDetails)
   const agents = useAgentsStore((state) => state.agents)
   const providers = useProvidersStore((state) => state.providers)
+  // Committees are read here for three things S9.3 added: the dialog's list, the
+  // provenance badge on a row and in the header, and the "Sync committee
+  // members" button. All three are name lookups by `Chat.committeeId`.
+  const committees = useCommitteesStore((state) => state.committees)
+  const newChatDialogOpen = useUiStore((state) => state.newChatDialog.open)
 
   const messages = useChatMessages(selectedId)
   const memberIds = useChatMemberIds(selectedId)
@@ -181,6 +190,10 @@ export function ChatsPage(): React.JSX.Element {
     void useChatsStore.getState().load()
     void useAgentsStore.getState().load()
     void useProvidersStore.getState().load()
+    // S9.3: the fourth list. A committee is never read *while* a chat runs — the
+    // members were snapshotted at creation — so this is only ever names and
+    // membership for the dialog, the badge and the sync button.
+    void useCommitteesStore.getState().load()
   }, [])
 
   // Transcripts are loaded per chat, the first time one is opened. Later visits
@@ -246,6 +259,20 @@ export function ChatsPage(): React.JSX.Element {
   const memberCounts = Object.fromEntries(
     Object.entries(membersByChat).map(([chatId, ids]) => [chatId, ids.length])
   )
+
+  // Provenance, resolved to a name (S9.3). A chat whose committee was deleted
+  // has `committeeId: null` already — the backend emits `chat.updated` for
+  // exactly that — so an id that resolves to nothing means the list is one tick
+  // behind, and no badge is the right answer either way.
+  const committeeNames = Object.fromEntries(
+    committees.map((committee) => [committee.id, committee.name])
+  )
+  const selectedCommittee = selected?.committeeId
+    ? (committees.find((committee) => committee.id === selected.committeeId) ?? null)
+    : null
+  // The gap the snapshot leaves: members the committee has gained since this
+  // topic was convened. Empty is the normal case, and it hides the button.
+  const missingMembers = missingCommitteeMembers(selectedCommittee, memberIds)
 
   // The chat list's preview lines (S5.16). Only chats whose transcript has been
   // read can have one — the store holds a page per opened chat, and a preview
@@ -331,7 +358,9 @@ export function ChatsPage(): React.JSX.Element {
               label={t('chat.newChat')}
               data-testid="chats-new"
               className={NO_DRAG}
-              onClick={() => void useChatsStore.getState().create()}
+              // S9.3: the button opens the dialog instead of creating. Pressing
+              // Create with nothing chosen is the call this used to make.
+              onClick={() => useUiStore.getState().openNewChatDialog()}
             >
               <Plus aria-hidden="true" strokeWidth={2.2} className="h-4 w-4" />
             </IconButton>
@@ -370,6 +399,7 @@ export function ChatsPage(): React.JSX.Element {
               chats={visibleChats}
               selectedId={selectedId}
               memberCounts={memberCounts}
+              committeeNames={committeeNames}
               conclusionPreviews={conclusionPreviews}
               onSelect={(id) => {
                 useRunStore.getState().clearError()
@@ -396,6 +426,21 @@ export function ChatsPage(): React.JSX.Element {
           badge={
             <>
               <Badge data-testid="chat-settings-badge">{orchestrationSummary}</Badge>
+              {/* Where this topic came from (S9.3). The committee's own name,
+                  because a name is data; the sentence explaining what the chip
+                  means is the tooltip. It disappears on its own when the
+                  committee is deleted — the backend nulls `committeeId` and
+                  emits `chat.updated`. */}
+              {selectedCommittee ? (
+                <Badge
+                  tone="accent"
+                  font="sans"
+                  data-testid="chat-committee-chip"
+                  title={t('chat.committeeBadgeTitle', { name: selectedCommittee.name })}
+                >
+                  {selectedCommittee.name}
+                </Badge>
+              ) : null}
               {/* The folder's own name, with the whole path in the tooltip: the
                   interesting half of a path is its last segment, and the rest
                   does not fit beside a title. */}
@@ -534,9 +579,14 @@ export function ChatsPage(): React.JSX.Element {
             members={members}
             agents={agents}
             providers={providers}
+            missingCommitteeMemberIds={missingMembers}
             onAdd={(agentId) => setMembers([...memberIds, agentId])}
             onRemove={(agentId) => setMembers(memberIds.filter((id) => id !== agentId))}
             onReorder={(from, to) => setMembers(reorder(memberIds, from, to))}
+            // Append only. A member the user took out of this chat stays out —
+            // `missingCommitteeMembers` never proposes a removal, and the order
+            // the chat already has is left exactly as it is.
+            onSyncCommittee={() => setMembers([...memberIds, ...missingMembers])}
           />
 
           <div className="h-px shrink-0 bg-border" />
@@ -719,6 +769,11 @@ export function ChatsPage(): React.JSX.Element {
           />
         </div>
       </Column>
+
+      {/* The New chat dialog (S9.3). Rendered last so it is over the three
+          columns, and mounted only while it is open so its draft is a fresh
+          form every time rather than state that outlives a Cancel. */}
+      {newChatDialogOpen ? <NewChatDialog /> : null}
     </>
   )
 }

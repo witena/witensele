@@ -4,6 +4,15 @@
 
 Three layers, each ignorant of the one above it:
 
+0. **Convening (S9.3).** Before any of the three, there is now a dialog:
+   `components/chat/new-chat-dialog.tsx` over the `Dialog` primitive, with its
+   open state in `stores/ui` so the Committees page can open it across a
+   navigation. It composes a title, at most one committee and any number of
+   individual agents into **one** `chats.create`, and sends only the extras —
+   expanding the committee is the handler's job, and a renderer that sent the
+   expanded list would be taking a snapshot the backend is supposed to take.
+   The renderer's `lib/committee-members.ts` duplicates the merge rule only to
+   *count*, for the "n members will join" line and the locked rows.
 1. **Storage.** `ChatRepository` and `MessageRepository` (S1.2) already hold
    everything: chats ordered by `updatedAt`, membership replaced in one
    transaction, messages ordered by a per-chat `seq`.
@@ -24,21 +33,34 @@ before deciding what to do with it) without the store having to guess.
 
 ## Data flow
 
-### Creating a chat
+### Creating a chat (S9.3 put a dialog in front of it)
 
 ```
-"+" button
-  → useChatsStore.create()
-  → invoke('chats.create', { input: {} })
-  → handler: initialMembers(ctx, undefined)
-               agents table empty → ensureDefaultAgent(ctx), that agent
-               otherwise        → []          // the user picks in the panel
+"+" button                 → ui.openNewChatDialog()      // no longer a write
+"New topic" on a committee → ui.openNewChatDialog(id) then ui.setPage('chats')
+
+NewChatDialog              title?, at most one committee, any extras
+  Create
+  → useChatsStore.create({ title?, committeeId?, memberAgentIds: extras })
+       every empty field is omitted, so choosing nothing sends `{}`
+  → invoke('chats.create', { input })
+  → handler: initialMembers(ctx, committeeId, memberAgentIds)
+               committee members in position order, then the extras,
+                 first occurrence wins                  // S9.1
+               merged empty + agents table empty → ensureDefaultAgent(ctx)
+               merged empty + library non-empty  → []   // pick in the panel
+             assertOneExecutor(merged)                  // before the row exists
              chats.create() + chats.setMembers()
              emit chat.updated
   → store: applyUpdated(chat), select(chat.id), loadMembers(), agents.load()
-  → the row appears under "Today"; the composer is usable, but a send is
-    refused until the chat has a member
+  → dialog closes; the row appears under "Today" with its committee badge.
+    A refusal instead keeps the dialog open with the reason inside it
 ```
+
+The `{}` on the "choose nothing" path is load-bearing: it is the exact payload
+the "+" button sent before S9.3, so the bootstrap-agent branch and every
+end-to-end spec that used to click "+" behave identically. `createChat(page)` in
+`e2e/helpers.ts` is that path, and fourteen specs go through it.
 
 ### The first run, which is the same flow with the steps drawn (S7.5)
 
@@ -508,6 +530,11 @@ The `run.*` and `presence.changed` events are emitted by `orchestration` and
 | `src/renderer/src/stores/chats.test.ts` (S5.12) | `loadGoalStatus` keeping the **same object** when the answer has not changed, and writing a new one the moment `delivered` really flips |
 | `src/renderer/src/lib/onboarding.test.ts` | `onboardingState` (S7.5): the first step of an empty installation, staying hidden while the settings row is still loading, hidden after Skip, hidden once a chat has a member, **still visible** with a provider saved, each of the five steps becoming current in turn, a local preset passing the credential step with an empty field, the models step needing a *stored* provider rather than a full draft, and a user who added a provider in Settings never being asked for one. Plus `credentialReady` over the sign-in states and a whitespace-only key |
 | `src/renderer/src/stores/chats.test.ts` (S7.5) | `create(['agent-1'])` sending `memberAgentIds` and `create()` still sending `{}` |
+| `src/renderer/src/stores/chats.test.ts` (S9.3) | The widened `create`: a title trimmed and a committee and extras sent as three fields; `create({})` and a draft of only blanks both sending `{ input: {} }` — the "+" button's original call, which is what makes "Create having chosen nothing" the old behaviour rather than a near-miss |
+| `src/renderer/src/lib/committee-members.test.ts` | S9.3: `mergeMembers` against the same examples `src/main/handlers/chats.test.ts` holds the real rule to, and `missingCommitteeMembers` over the gap, no gap, a chat with extras the committee does not have, and no committee at all |
+| `src/renderer/src/stores/ui.test.ts` (S9.3) | The dialog's open state: closed at start, opened with and without a committee, the committee forgotten on close, and no navigation of its own |
+| `e2e/ui-shell.spec.ts` (S9.3) | The `Dialog` primitive: `role`, `aria-modal`, focus inside the panel on open, Escape and a backdrop press dismissing it, and a review screenshot in each appearance |
+| `e2e/committees.spec.ts` (S9.3) | Convening a topic from a committee with one extra agent — the preselection, the locked member, the live count, the member order and both badges — and the sync button appending the member the committee gained afterwards. Owned by [`committees`](../committees/implement.md) |
 | `src/renderer/src/components/chat/handoff.test.ts` | `handoffBlocker` (S5.6): the enabled case, each of the three refusals, a blank `workdir`, and the order the rules are applied in when more than one is broken |
 | `src/renderer/src/i18n/errors.test.ts` | Every `BackendErrorCode` and every `ValidationReason` resolving to distinct real copy; `validationReasonOf` narrowing a known reason and ignoring everything else; `translateFailure` preferring a reason only under `validation` |
 | `src/shared/pricing.test.ts` | The price table's shape, the specific-before-general match order, `estimateCost` (including a local preset costing nothing and an unknown model costing `null`), `contextWindowFor` and both formatters |
