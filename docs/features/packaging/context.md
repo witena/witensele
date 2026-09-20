@@ -65,7 +65,7 @@ database that opens on the first launch.
 | **Producing** a signed and notarized build | S7.3 configured it; nothing has exercised it. There is no certificate on this machine and no GitHub secrets, so the signed path is reasoning checked against electron-builder's source. See "Open questions" and STEPS.md S7.3 |
 | Wrapping the secrets key file on a real signed build | Same reason. `rewrapKeyFile` is unit-tested against a fake `safeStorage`; the real Keychain on a real Developer ID bundle has never been asked |
 | Windows and Linux targets | PLAN.md scopes the MVP to macOS. The layout has never been reviewed on another platform (`titleBarStyle: 'hiddenInset'` is macOS-only), so shipping a build there would be a promise nobody has checked |
-| **Updates from the real GitHub feed** | S7.4 built and proved the whole mechanism against a **local generic feed**. The repository is public as of 2026-09-19, which removes what blocked the GitHub provider, but a signed, notarized `v0.1.0` draft exists since 2026-09-20 (the eighth attempt; the first seven are in `backend.md`) but a draft is invisible to the updater, so until it is published the real feed has still never been read. The first published, signed Release is the first test of it; recorded in STEPS.md's Phase 6 |
+| **Updates from the real GitHub feed** | S7.4 built and proved the whole mechanism against a **local generic feed**. The repository is public as of 2026-09-19, which removes what blocked the GitHub provider, but a signed, notarized `v0.1.0` was published on 2026-09-20 (the eighth attempt; the first seven are in `backend.md`) and its feed reads correctly without a token. What has not happened yet is an update applied from it — that needs a second release. The first published, signed Release is the first test of it; recorded in STEPS.md's Phase 6 |
 | A universal binary | Two dmgs instead: each is half the download, and the native module is compiled per architecture either way (PLAN.md, "Local release") |
 | Windows and Linux in CI | Same reason as the targets themselves. `ci.yml` runs on `macos-latest` only |
 | e2e in CI | `npm run e2e` drives the real Electron binary and the specs that matter talk to a local Ollama. A hosted runner has neither, and a suite that skips its own assertions is worse than one that is honestly local |
@@ -130,12 +130,12 @@ Nothing depends on packaging in return: no runtime code branches on it except
   Actions have never been enabled, and validated only by `actionlint`. The
   first tag will be the first execution; what it is most likely to trip over is
   listed in `implement.md`, "Known limitations", and in STEPS.md's Phase 6.
-- **The GitHub feed has never been read** (S7.4). The download-and-install path
-  was proven end to end on 2026-09-17 against a **local** generic feed with two
-  locally built, signed bundles — see [`backend.md`](./backend.md),
-  "Auto-update". What has never happened is the same walk against a real draft
-  Release: the repository was private until 2026-09-19 and no Release has been
-  published since. The first published release is the first test of that half.
+- **No update has been applied from the GitHub feed** (S7.4). The
+  download-and-install path was proven end to end on 2026-09-17 against a
+  **local** generic feed — see [`backend.md`](./backend.md), "Auto-update" — and
+  on 2026-09-20 the published `v0.1.0` feed was read anonymously and its arm64
+  zip matched the manifest's `sha512`. What is left is an installed 0.1.0
+  finding a newer published version; the second release is that test.
 - Whether the dmg's 150 MB is worth attacking. Most of it is the Electron
   runtime; the biggest avoidable share is `node_modules` dependencies that only
   the renderer bundle uses and that are therefore shipped twice.

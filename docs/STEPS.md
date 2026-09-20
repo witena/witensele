@@ -3021,8 +3021,10 @@ adds a line here in the same commit.
 
 ### Auto-update (S7.4)
 
-- **The GitHub feed has never been read, because no Release has been
-  published.** The repository was private when S7.4 landed, and GitHub answers
+- **`v0.1.0` is published and its feed reads (2026-09-20); no update has been
+  applied from it yet.** Read anonymously: `latest-mac.yml`, both blockmaps, both
+  dmgs, and the arm64 zip's `sha512` recomputed from a full download. An installed
+  0.1.0 finding a newer published version is the remaining test. History: The repository was private when S7.4 landed, and GitHub answers
   404 for a private repository's release assets whether or not they exist; it
   is **public as of 2026-09-19**, so `provider: github` is now correct with no
   edit. What remains between S7.4 and a user who never downloads a dmg again:
