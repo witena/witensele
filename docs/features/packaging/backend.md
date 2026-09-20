@@ -558,7 +558,19 @@ secret into `$RUNNER_TEMP`, creates a keychain with a password from
 `openssl rand`, imports the `.p12` with `-T /usr/bin/codesign`, sets the
 partition list with **that keychain's** password, prepends the keychain to the
 user search list — the only place `CSC_IDENTITY_AUTO_DISCOVERY` looks — and
-fails unless `security find-identity` then shows a `Developer ID Application`. A
+fails unless `security find-identity` then shows a `Developer ID Application`.
+Before the check it also imports Apple's two Developer ID intermediates
+(`DeveloperIDCA.cer`, `DeveloperIDG2CA.cer`, from
+`apple.com/certificateauthority/`): a `.p12` exported from Keychain Access
+carries the leaf and its key but not its issuer, and an identity whose chain
+cannot be built is *imported* but not *valid*. The owner's certificate is issued
+by the first-generation CA, which expires with it on **2027-02-01** — renewing
+before then is a calendar item, not a code change. That check captures the listing and matches it with `case`; its first form piped
+into `grep -q`, and under `set -o pipefail` that fails *because* it matched —
+grep exits at the first hit, `security` dies of SIGPIPE, and the fifth `v0.1.0`
+run stopped right after `1 identity imported.` with no message. The listing is
+also printed, so "imported but not valid" (a missing intermediate) is
+distinguishable from "not imported". A
 `trap … EXIT` deletes the decoded `.p12`; the keychain dies with the runner.
 `src/main/packaging.test.ts` asserts the packaging step's `env` names neither
 variable, the two `security` invocations, the trap and the step order.

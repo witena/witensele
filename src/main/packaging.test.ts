@@ -302,6 +302,13 @@ describe('the release workflow’s signing steps', () => {
     expect(script).toMatch(/set-key-partition-list [^\n]*-k "\$keychain_password" "\$keychain"/)
     // The decoded .p12 is a signing identity on disk; it must not outlive the step.
     expect(script).toContain(`trap 'rm -f "$certificate"' EXIT`)
+    // The .p12 has no intermediate in it; without one the identity imports
+    // but is not valid on a machine that lacks Xcode's copy.
+    expect(script).toContain('https://www.apple.com/certificateauthority/$ca.cer')
+    // `… | grep -q` under `pipefail` fails on success: grep exits at the first
+    // match and the producer dies of SIGPIPE. The check must not be a pipe.
+    expect(script).not.toMatch(/find-identity[^\n]*\|\s*grep/)
+    expect(script).toContain('identities="$(security find-identity -v -p codesigning "$keychain")"')
     // Auto-discovery only searches the user list.
     expect(script).toContain('security list-keychains -d user -s "$keychain"')
 
