@@ -4079,7 +4079,7 @@ the default `maxWaitSeconds` and the shim's launch timeout are chosen from
 measured numbers, not from memory. Docs: `mcp-endpoint` (context only — the other
 three files say "not built yet").
 
-### S10.1 The endpoint and the discussion tools `[~]`
+### S10.1 The endpoint and the discussion tools `[x]` (2026-09-20)
 What: the transport-free core, testable without Electron or a shim.
 - [x] (2026-09-20, WP-1) `src/shared/mcp-tools.ts`: the six tool definitions (name, description,
   JSON Schema input, result types, the `DiscussionStatus` union). Shared because
@@ -4127,7 +4127,11 @@ What: the transport-free core, testable without Electron or a shim.
   deadline-then-wait-again, stop, busy, executor refused, name resolution, a
   pending permission; a contract test with a real endpoint on an ephemeral port
   and the SDK `Client`, including the three refusals (no token, `Origin` present,
-  foreign `Host`).
+  foreign `Host`). *(WP-6: `src/main/mcp-endpoint/contract.test.ts` — the real
+  `createTools()` behind the real endpoint, the status mapping row by row, and
+  401 / 403 through the socket. The foreign `Host` needs a header `fetch` will
+  not send, so it stays where it can be written honestly, in
+  `server.test.ts`'s `rawNodeRequest`.)*
 Acceptance: the contract test creates a chat from two agent names, asks a
 question and receives the mock group's conclusion through MCP; `npm test` and
 `npm run typecheck` pass. Docs: `mcp-endpoint` (all four), `orchestration`
