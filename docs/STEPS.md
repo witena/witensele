@@ -2971,6 +2971,16 @@ adds a line here in the same commit.
   renaming it there leaves every pull request waiting for a check that no longer
   reports. Settings written out in `docs/features/packaging/backend.md`,
   "Merging a pull request".
+- **The branch an auto-merge leaves behind is swept hourly.**
+  `delete_branch_on_merge` does not fire for a merge performed with
+  `GITHUB_TOKEN` (#36, #39 and #40 kept their branches), and no workflow run
+  starts for such a merge, so `.github/workflows/sweep-merged-branches.yml`
+  runs on `schedule` / `workflow_dispatch` and deletes an unprotected branch
+  only when a merged pull request from this repository had it as its head at
+  the commit it still points at and no open pull request uses it.
+  `src/main/packaging.test.ts` asserts the triggers, the permissions and those
+  conditions. **Not yet run on a runner** (2026-09-19); its own branch is the
+  first thing it should delete.
 - **CI does not sign yet (S7.3).** The Developer ID certificate lives only in
   the developer's login keychain. `release.yml` signs and notarizes as soon as
   `CSC_LINK` (the exported `.p12`, base64), `CSC_KEY_PASSWORD`, `APPLE_ID`,

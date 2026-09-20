@@ -2,7 +2,8 @@
  * The release manifest: what `.github/workflows/release.yml` will build when a
  * `v*` tag is pushed (S7.2), and — at the end of the file — the guards in
  * `.github/workflows/auto-merge.yml` that decide whose pull requests may merge
- * themselves.
+ * themselves, and the conditions under which
+ * `.github/workflows/sweep-merged-branches.yml` deletes a branch afterwards.
  *
  * The subject is a YAML file rather than a module, so this asserts only the
  * facts something else depends on and a careless edit could silently drop: both
@@ -262,6 +263,56 @@ describe('.github/workflows/auto-merge.yml', () => {
     expect(steps).toHaveLength(1)
     expect(steps[0]).not.toHaveProperty('uses')
     expect(steps[0]?.['run']).toContain('gh pr merge --auto --merge')
+  })
+})
+
+describe('.github/workflows/sweep-merged-branches.yml', () => {
+  // GitHub's `delete_branch_on_merge` does not fire for a merge performed with
+  // `GITHUB_TOKEN`, which is every merge auto-merge.yml queues, and no workflow
+  // can react to that merge either. So the clean-up is a sweep on a timer, and
+  // it is the second workflow that writes to the repository unattended: what is
+  // asserted here is that it can only ever run from the default branch, and
+  // that every condition standing between it and somebody's unmerged work is
+  // still in the script.
+  const workflow = readYaml('.github/workflows/sweep-merged-branches.yml')
+  const job = (workflow['jobs'] as Record<string, Record<string, unknown>>)['sweep']
+  const steps = job['steps'] as Record<string, string>[]
+  const script = String(steps[0]?.['run'])
+
+  it('runs on a timer or by hand, never for a pull request', () => {
+    // `schedule` and `workflow_dispatch` both run the default branch's copy of
+    // the file. A `pull_request` trigger would run the head branch's copy with
+    // a token that can delete refs.
+    expect(Object.keys(workflow['on'] as object).sort()).toEqual(['schedule', 'workflow_dispatch'])
+  })
+
+  it('asks for the two permissions it needs and no others', () => {
+    expect(workflow['permissions']).toEqual({ contents: 'write', 'pull-requests': 'read' })
+  })
+
+  it('checks nothing out and runs no third-party action', () => {
+    expect(steps).toHaveLength(1)
+    expect(steps[0]).not.toHaveProperty('uses')
+  })
+
+  it('deletes only a branch a merged pull request left exactly as it merged it', () => {
+    // Protected branches and the default branch are skipped; the branch must
+    // still point at the merged pull request's head commit, in this repository
+    // rather than a fork of the same name; and no open pull request may be
+    // using it.
+    expect(script).toContain('select(.protected == false)')
+    expect(script).toContain('"$name" == "$default_branch"')
+    expect(script).toContain('--state merged --head "$name"')
+    expect(script).toContain('.headRefOid == \\"$sha\\"')
+    expect(script).toContain('.headRepositoryOwner.login == \\"$OWNER\\"')
+    expect(script).toContain('--state open --head "$name"')
+    expect(script).toContain('"$merged" -gt 0 && "$open" -eq 0')
+  })
+
+  it('deletes through the one call, after those checks', () => {
+    const deletes = script.match(/-X DELETE/g) ?? []
+    expect(deletes).toHaveLength(1)
+    expect(script.indexOf('-X DELETE')).toBeGreaterThan(script.indexOf('"$merged" -gt 0'))
   })
 })
 

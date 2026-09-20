@@ -39,7 +39,9 @@ database that opens on the first launch.
 - **Since S7.2**, the GitHub Actions workflows: `ci.yml` (the gate on every
   push and pull request) and `release.yml` (a `v*` tag → two dmgs in a draft
   Release), joined later by `auto-merge.yml` (a pull request the owner opens
-  merges itself once the required checks pass) and by the repository
+  merges itself once the required checks pass), by
+  `sweep-merged-branches.yml` (an hourly sweep that deletes the branch such a
+  merge leaves behind, which GitHub's own setting does not) and by the repository
   configuration that workflow depends on — auto-merge enabled, branch
   protection on `main` naming `ci.yml`'s two jobs. That configuration lives in
   GitHub's settings rather than in the repository, so
@@ -72,6 +74,7 @@ database that opens on the first launch.
 | Publishing the Release | Deliberate: the workflow uploads a **draft**. A human reads the artifacts and presses Publish |
 | Auto-merging anybody else's pull request | Deliberate, and the reason the guards are asserted by a unit test. A contributor's pull request is read and merged by a human; `auto-merge.yml` only takes the wait out of the maintainer's own branches |
 | A `push` run of `main` after an auto-merge | Not possible with `GITHUB_TOKEN`, which does not trigger further workflow runs. What `main` is proven by is written out in [`backend.md`](./backend.md), "Merging a pull request" |
+| Deleting the merged branch the moment it merges | Not possible either, for the same reason: no workflow run starts for a merge `GITHUB_TOKEN` performed, and `delete_branch_on_merge` does not fire for one. `sweep-merged-branches.yml` does it within the hour instead |
 
 ## Dependencies
 
@@ -112,6 +115,7 @@ Nothing depends on packaging in return: no runtime code branches on it except
 | **Auto-merge is a flag the workflow sets, not a merge it performs** | A workflow that polls the check runs and merges when they are green; a merge queue; `--admin` to merge past the checks | `gh pr merge --auto` hands the decision to GitHub: branch protection holds the merge until the required checks pass and drops it if they fail, so the workflow has no loop to get wrong, no token that merges a red branch, and nothing to re-implement when the set of checks changes. A merge queue is the right answer for a repository with contention; this one has one maintainer |
 | **The auto-merge guard hard-codes the owner's login** | `github.repository_owner`; an `author_association` check; a team or a `CODEOWNERS` file | The repository is public, so the guard is the whole security story and it has to be exact. `github.repository_owner` is the *organisation* (`witena`), which every fork's pull request also targets; `author_association == 'OWNER'` is a property GitHub computes and would be a second thing to trust. A login is checkable by reading, and a second maintainer is a one-line diff and a code review |
 | **`pull_request`, never `pull_request_target`** | `pull_request_target`, which is what most auto-merge recipes use because it gets a writable token | `pull_request_target` runs the base branch's workflow with a **writable** token for pull requests opened from **any fork**. For a workflow whose only action is "merge this", that is the merge button handed to a stranger, guarded only by an `if:` — one editing mistake from a public repository merging arbitrary code. `pull_request` gives a fork's run a read-only token, so the guard is the second line of defence rather than the only one. The cost is nothing: an owner's own branch is not a fork |
+| **Merged branches are swept on a timer** | An `on: pull_request: types: [closed]` job; `gh pr merge --auto --delete-branch`; merging with a personal access token so GitHub's own setting fires | A `closed` event caused by `GITHUB_TOKEN` starts no run, and `gh` ignores `--delete-branch` when `--auto` defers the merge. A personal token would work and would also give `main` its `push` run, at the price of a long-lived secret that can merge — too much for tidiness. A `schedule` runs the default branch's copy of the file, so the sweep needs no fork or author guard, and it deletes only a branch still pointing at the commit its merged pull request merged |
 | `actionlint` as a pinned, checksummed release binary | An npm devDependency; `rhysd/actionlint@v1` | Nothing in the product needs a workflow linter in `node_modules`, and pinning a third-party action by tag trusts a pointer somebody else can move. A version plus a SHA-256 is the strongest pin available without vendoring the binary |
 | `npm version` bumps, and a `version` lifecycle script rewrites `APP_VERSION` | Reading `package.json` from `src/shared/`; bumping the constant by hand | `src/shared/` is imported by all three processes, so pulling the manifest in to read one field would put it in every bundle. A hand-edited constant is the classic thing to forget in a release, so the bump is scripted and `src/main/packaging.test.ts` fails if the two ever disagree |
 
