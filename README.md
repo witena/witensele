@@ -181,6 +181,50 @@ npm run server
 
 ---
 
+## Use It from Your Coding Agent
+
+Witena is also an **MCP server**, so Claude Code, Codex or any other MCP client
+can put a question to one of your groups and get the conclusion back without
+leaving the terminal.
+
+1. **Settings → Integrations → Open the MCP endpoint.** It is closed until you
+   open it: loopback only, behind a bearer token generated afresh every time it
+   starts.
+2. **Click Connect** on the Claude Code or Codex card. Witena registers itself by
+   running that agent's own command-line tool, so its configuration file stays
+   its own. Any other client takes the snippet from the same screen:
+
+   ```json
+   {
+     "mcpServers": {
+       "witena": {
+         "command": "/Applications/Witena.app/Contents/Resources/bin/witena-mcp"
+       }
+     }
+   }
+   ```
+
+3. **Ask the coding agent to consult a group** — "have the Witena architecture
+   committee look at this migration". It picks the group with `list_committees`
+   or `list_agents`, starts the discussion, and keeps waiting until the group
+   settles.
+
+Seven tools: `list_chats`, `list_agents`, `list_committees`, `start_discussion`,
+`wait_for_discussion`, `get_discussion` and `stop_discussion`. Every chat is also
+a resource, `witena://chat/<id>`, so a transcript can be pulled in by reference;
+Claude Code additionally gets a `consult` prompt, which Codex never asks for.
+
+**The group reads, you write.** Nothing is handed to Witena's executor — the
+conclusion comes back to the calling agent, which is the one that applies it. The
+discussion is an ordinary chat: live in the Witena window while it runs, in the
+sidebar afterwards, and every result carries a `witena://chat/<id>` link that
+opens it. Witena does not have to be running first — the first tool call starts
+it in the background, with no window and without taking focus.
+
+[Docs →](docs/features/mcp-endpoint/context.md)
+
+---
+
 ## How It Works
 
 - **The message stream is the source of truth.** No agent holds a long-lived conversation. Before every turn it rebuilds its own view from the shared transcript, with the other members' messages prefixed `[Name]:`.

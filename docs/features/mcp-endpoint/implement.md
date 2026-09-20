@@ -1,11 +1,14 @@
 # mcp-endpoint — Implementation
 
-> Partly built. `backend.md`'s table is the authority on which work package has
-> landed; the Integrations section (WP-12) and its backend (WP-11) are both
-> here. The design is PLAN.md
-> "Witena as an MCP server (the MCP endpoint)"; the types every package codes
-> against are under "Frozen contracts" in [`tasks.md`](./tasks.md). Each work
-> package replaces part of this file with what it actually built.
+> Built. Every work package WP-1 … WP-16 has landed — contracts, endpoint, shim,
+> host, packaging, Integrations, provenance, committees, resources and the
+> prompt — with one bullet of S10.5 deliberately deferred. What is *not* proven
+> is listed in "Known limitations and TODOs" below and, in full, in STEPS.md
+> Phase 6, "MCP endpoint (Phase 10)": no acceptance criterion that needs a real
+> Claude Code or Codex session has been run here. `backend.md`'s table is the
+> authority on which package owns which file. The design is PLAN.md "Witena as an
+> MCP server (the MCP endpoint)"; the types every package codes against are under
+> "Frozen contracts" in [`tasks.md`](./tasks.md).
 
 ## Approach
 
@@ -48,9 +51,10 @@ was running in the background with no window, the link is what makes one.
 
 ## Key types and contracts
 
-"Frozen contracts" in `tasks.md` is still the list of everything Phase 10 will
-have. What exists in code today is WP-1's two shared modules, which the shim and
-the endpoint both import.
+"Frozen contracts" in `tasks.md` is the list Phase 10 was built against, and the
+code now matches it — with the one sanctioned widening WP-14 made to
+`start_discussion`'s cross-field rule. The two shared modules below are what the
+shim and the endpoint both import.
 
 ### `src/shared/mcp-tools.ts`
 
@@ -756,9 +760,27 @@ everything that decides what a request *means* is in `server.ts`.
 
 ## Known limitations and TODOs
 
-Listed in STEPS.md S10.7's backlog bullet, plus one this feature has to carry
-until somebody runs it by hand:
+The complete list is STEPS.md Phase 6, "MCP endpoint (Phase 10)", which WP-16
+wrote: the verification this feature owes, the one deferred bullet, and the five
+capabilities named out of scope. The four that constrain how the merged code
+should be read are repeated here.
 
+- **Nothing has run inside a real Claude Code or Codex session** (WP-0b, WP-14,
+  WP-15, WP-16). The `claude` CLI on the development machine is not logged in,
+  and no package was permitted to write `~/.claude.json`, `~/.codex/config.toml`
+  or `~/.claude/`. Every protocol-level claim is asserted through the SDK client
+  in `contract.test.ts`, `src/mcp-shim/index.test.ts` and `shim.spawn.test.ts`;
+  what is untested is the last hop, each client's own UI. That is the acceptance
+  criterion of S10.2, S10.4, S10.6 and S10.7 at once, and the README's
+  "Use it from your coding agent" procedure is the one walk that meets all four.
+- **`stopped` is only ever seen by a wait that was already in flight.** The
+  status comes from a `run.finished` settlement with reason `stopped`
+  (`discussion.ts`, `finishedStatus`); a `get_discussion` afterwards reads the
+  chat through the `now` settlement, finds an idle runner and no
+  `ConclusionPart`, and answers `ended`. A caller polling rather than waiting
+  therefore cannot tell a stopped discussion from one that finished without
+  agreeing. Both `hint`s say nothing more is coming, which is the fact that
+  matters.
 - **Lazy launch has never run in one piece** (WP-9). The launcher, `launch.ts`,
   `--background` and the discovery file are each tested; "a tool call wakes a
   quit Witena" is not, because reproducing it means a second signed copy of the

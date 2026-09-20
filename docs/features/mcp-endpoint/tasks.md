@@ -689,3 +689,13 @@ file exists**; otherwise empty lists — listing must never launch the app.
 entries S10.7 lists), `docs/README.md` status column.
 **Verify** the README section followed literally on this machine produces a
 conclusion in Claude Code; `npm test` (the docs-reading tests) · gate.
+
+*(2026-09-20. Done, except the first half of Verify, which **could not be run
+here**: it needs a logged-in `claude` CLI and pressing Connect writes
+`~/.claude.json`, which the package was told not to touch. Every claim in the
+section was checked against the merged source instead, and the unrun procedure
+is the first entry of the backlog the package wrote — STEPS.md Phase 6, "MCP
+endpoint (Phase 10)". `docs/README.md` also lost a stale duplicate `packaging`
+row while its status column was updated; the duplicated `backend-client`,
+`database`, `i18n` and `ui-shell` rows in that table are the same class of merge
+artifact and were left alone as outside this package.)*

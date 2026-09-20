@@ -1,6 +1,9 @@
 # mcp-endpoint — Backend
 
-> Partly built. Surface by work package (`tasks.md`):
+> Built. Every surface below has landed; the one thing S10.5 named and did not
+> build is the per-committee Claude Code subagent generator, which owns no file
+> here. WP-16 added no surface at all, only documentation. Surface by work
+> package (`tasks.md`):
 
 | Surface | Package |
 |---|---|

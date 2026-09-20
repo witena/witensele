@@ -31,10 +31,10 @@ and verification commands — is [`tasks.md`](./tasks.md).
 | Not here | Owner |
 |---|---|
 | Committees themselves: data, page, new-chat dialog, and the expansion of a committee into a chat's members | STEPS.md Phase 9 and its feature folder. This feature only *calls* them (WP-14), and never re-implements the merge |
-| A generated Claude Code subagent per committee (`~/.claude/agents/witena-<slug>.md`) | **Deferred** by WP-14 — the assumption it stands on could not be verified here. S10.7's backlog |
+| A generated Claude Code subagent per committee (`~/.claude/agents/witena-<slug>.md`) | **Deferred** by WP-14 — the assumption it stands on could not be verified here. STEPS.md Phase 6, "MCP endpoint (Phase 10)" |
 | Witena as an MCP *client* | `../mcp/` |
-| The endpoint on the online server (`/mcp` behind accounts) | After S8.2; backlog |
-| A menu-bar item, idle-quit, MCP elicitation as a remote permission prompt | Backlog (S10.7 records them) |
+| The endpoint on the online server (`/mcp` behind accounts) | After S8.2; the same backlog section. `src/server/` never constructs `createMcpEndpoint` |
+| A menu-bar item, idle-quit, MCP elicitation as a remote permission prompt, Cursor / Claude Desktop cards | The same backlog section (WP-16 wrote it) |
 | Handing off to Witena's executor from the IDE | Never: the calling agent is the executor |
 
 ## Dependencies
@@ -522,6 +522,10 @@ restored byte-for-byte because the Codex app was running and owns that file.
 
 ## Open questions
 
+All of these are now also entries in STEPS.md Phase 6, "MCP endpoint (Phase
+10)", which WP-16 wrote as Phase 10's closing act; that section is the list to
+work from, and this one says why each question is open.
+
 - ~~The real names of Phase 9's handlers and types (WP-14 reads them, never
   guesses).~~ Answered by WP-14: `committees.list`, `Committee.memberAgentIds`
   (ordered), `ChatCreateInput.committeeId`, and `initialMembers()` in
@@ -555,4 +559,16 @@ restored byte-for-byte because the Codex app was running and owns that file.
   a logged-in machine. WP-15 built to WP-0b's protocol-level measurements (which
   methods each client sends, and when) and asserted every claim under them
   through the SDK client; what is untested is the last hop, the client's own UI.
-  S10.7's README procedure is where that is met.
+  S10.7's README procedure is where that is met. **WP-16 wrote that procedure and
+  could not run it either**, for the two reasons above plus one of its own: the
+  package was not allowed to run `claude mcp add` / `codex mcp add` or to touch
+  `~/.claude.json` and `~/.codex/config.toml`, which belong to whoever runs it.
+  Every sentence of the README section was instead checked against the merged
+  source. It is the first item in the backlog section.
+- **`stopped` is a status only a wait in flight can see** (WP-2, noticed while
+  WP-16 checked the README against the code). It comes from a `run.finished`
+  settlement; a later `get_discussion` reads the chat with no run to have
+  finished, finds an idle runner and no conclusion, and answers `ended`. Whether
+  a poller should be able to tell the two apart is a question for whoever wants
+  it — the run's finish reason is not on the chat row, so answering it means
+  storing something new. Both `hint`s already say nothing more is coming.

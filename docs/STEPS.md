@@ -3204,6 +3204,103 @@ question came out of building it.
   is no way to share one function without putting chat-creation logic into
   `src/shared`. Worth revisiting if a third caller appears.
 
+### MCP endpoint (Phase 10)
+
+Phase 10 makes Witena an MCP *server* a coding agent can consult. Everything it
+built is merged and covered by `npm test`; what is below is the work it named as
+out of scope, plus every claim it could not check on this machine. The dividing
+line is the same one four work packages hit — WP-0b, WP-14, WP-15 and WP-16:
+nothing here has ever been run
+inside a real Claude Code or Codex session, because the CLI on the development
+machine is not logged in and no package was permitted to write `~/.claude.json`,
+`~/.codex/config.toml` or `~/.claude/`.
+
+**Verification owed (nothing new to build; somebody has to run it).**
+
+- **Follow the README section on a logged-in machine** (S10.7's acceptance).
+  Install the dmg, open Settings → Integrations, press Connect for Claude Code,
+  and ask it to consult two agents. This is the first thing to run, because it
+  is also the acceptance criterion of S10.2 (the shim registered by hand lists
+  the tools and completes a `start_discussion`), of S10.4 (the message in Witena
+  is marked "via claude-code") and of S10.6 (`@witena:` offers recent chats and
+  `/mcp__witena__consult` starts a discussion). All four are asserted through the
+  SDK client in `contract.test.ts`, `src/mcp-shim/index.test.ts` and
+  `shim.spawn.test.ts`; what is untested is the last hop, each client's own UI.
+- **Wake a quit Witena with a tool call** (S10.3's acceptance, and the open
+  question `docs/features/mcp-endpoint/context.md` carries). `build/witena-mcp`,
+  `src/mcp-shim/launch.ts`, `--background` and the discovery file are each
+  tested and the launcher has been run four ways against a signed `dist:dir`
+  bundle, but the three have never met in one piece: reproducing it here means a
+  *second* signed copy with a fresh `WITENA_USER_DATA`, which is the macOS
+  Keychain prompt WP-0a measured. On an *installed* app the prompt does not
+  arise, so the README procedure above exercises it for free.
+- **`npm run e2e:packaged` has never been run** (S10.3), for the same reason: the
+  spec launches a second signed copy and Playwright then waits on `firstWindow()`
+  while a human answers a Keychain dialog. Its fourth case — the bundled
+  `bin/witena-mcp` answering `initialize` and `tools/list` — was written by WP-9
+  to pass without the app at all and verified by hand instead. A fix is an
+  opt-out that skips `createSafeStorageStore()`, which is a change to
+  `src/main/index.ts` no work package has asked for.
+- **Claude Code's per-tool-call timeout is unmeasured** (WP-0b item 4). The
+  startup timeout is 30 000 ms and progress notifications do not extend a call;
+  the *limit* on a call was never reached, so `DEFAULT_WAIT_SECONDS = 50` is
+  chosen against Codex's ~60 s, which is the tighter of the two known numbers.
+  If Claude Code turns out to be tighter still, that constant is the one dial.
+- **`shellcheck` has never read `build/witena-mcp`** (S10.3). It is not installed
+  here and no CI job runs one; the script has been held to `sh -n`, the text
+  assertions in `packaging.test.ts` and four runs against a signed bundle,
+  including one from a path containing a space. A linter job would touch
+  `.github/workflows/`.
+
+**Deferred, and what it waits on.**
+
+- **`@committee` in Claude Code** — S10.5's last bullet, deferred by WP-14.
+  First, on a logged-in machine, verify S10.0 item 4: that a user-level subagent
+  file `~/.claude/agents/<name>.md` whose `tools:` is only `mcp__witena__*` can
+  be `@`-mentioned and can actually call them. Only then build it: an
+  Integrations checkbox, "Create a Claude Code agent for each committee", and
+  `integrations.syncCommittees` writing `~/.claude/agents/witena-<slug>.md` per
+  committee — tools limited to `mcp__witena__*`, a body that calls
+  `start_discussion` with that committee and loops on `wait_for_discussion` —
+  re-synced on committee create / rename / delete and removing the files of
+  deleted committees. Only files carrying a `generated-by: witena` frontmatter
+  marker are ever overwritten or deleted. Codex has no equivalent; its card shows
+  the prompt to type instead. Nothing is stranded in the meantime: a session
+  reaches every committee through `list_committees` and
+  `start_discussion({ committee })` today, and what is missing is the shorthand.
+
+**Named out of scope while Phase 10 was built.**
+
+- **A menu-bar item and idle-quit for background launches.** A tool call can
+  start Witena with no window (S10.3), and nothing then tells the user it is
+  running or offers to quit it; it stays up until they notice the Dock icon. A
+  status item, and a rule that quits an app nobody opened once it has been idle
+  for long enough, are the two halves of that.
+- **MCP elicitation as a remote permission prompt.** An endpoint-started
+  discussion whose chat has an executor cannot answer a permission request — the
+  watcher returns `needs-attention` and the user has to go to the window. MCP's
+  `elicitation/create` is the protocol's own answer, and would let the *calling*
+  agent put the prompt in front of the user. It needs a client that implements
+  it, and a decision about whether a grant given through another agent is a
+  grant Witena should accept at all.
+- **An update that wants to install while an endpoint-started run is in flight.**
+  The updater restarts the app, and nothing consults the endpoint before it
+  does. A shim holding a `wait_for_discussion` loses the request; the shim's
+  re-read of the discovery file covers the *next* call, not the one in flight,
+  so the caller is told only that the tool failed. Deferring the install while a
+  run started over MCP is live, or telling the waiting caller what happened, is
+  the step.
+- **The endpoint on the server host.** `src/server/` mounts `POST /api/<method>`
+  and the WebSocket and nothing else: `createMcpEndpoint` is never constructed
+  there, and `integrations.status` reports the feature absent honestly
+  (`launcherPath: null`, both clients not installed). Mounting it at `/mcp` needs
+  S8.2's accounts first — the desktop guard is "loopback plus a per-start token",
+  which is exactly the guard a public host cannot use.
+- **Cursor and Claude Desktop cards** in Settings → Integrations. Both are
+  reachable today through the JSON snippet; a card means a CLI (or a config file)
+  to register with, per client, and the status trio — installed, connected,
+  stale — computed for it.
+
 ### Open questions carried from the feature documents
 
 - `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
@@ -4299,7 +4396,15 @@ naming: the `Dialog` primitive's own behaviour is covered in
 screenshot in each appearance — because what is being tested there is the
 shell's primitive and not what the New chat dialog does with it.
 
-## Phase 10: MCP endpoint (PLAN "Witena as an MCP server")
+## Phase 10: MCP endpoint (PLAN "Witena as an MCP server") `[~]`
+
+Everything in this phase is built and merged, and none of its acceptance
+criteria that needs a real Claude Code or Codex session has been run — the CLI
+on the development machine is not logged in, and the work packages were not
+permitted to write `~/.claude.json`, `~/.codex/config.toml` or `~/.claude/`. One
+bullet is deliberately deferred (S10.5's per-committee subagent files). Phase 6,
+"MCP endpoint (Phase 10)", carries the complete list; the phase stays `[~]`
+until somebody with a logged-in client walks the README procedure.
 
 Witena as an MCP server, so that Claude Code, Codex and any other MCP client can
 ask a group chat and get its conclusion back. Read the PLAN section first: the
@@ -4324,7 +4429,12 @@ frozen up front, the existing files it may touch, and the commands that prove it
 done. The step says *what*; the package says *exactly how and how to check*. The existing `mcp` feature stays
 what it is — Witena as an MCP *client*.
 
-### S10.0 Spike: what the design assumes `[ ]`
+### S10.0 Spike: what the design assumes `[~]`
+*(2026-09-20, WP-16: the marker was stale — WP-0a and WP-0b answered every
+bullet and the findings are in `context.md`. It stays `[~]` rather than `[x]`
+because the last half of item 4, the `@`-mention of a tools-restricted Claude
+Code subagent, could not be run on a CLI that is not logged in; that is what
+S10.5's deferred bullet waits on and what the Phase 6 backlog carries.)*
 What: the design rests on platform behaviour nobody has run yet. Find out before
 building on it; throwaway code, kept out of `src/`. Write the findings into
 `docs/features/mcp-endpoint/context.md` ("What the spike found"), and change PLAN
@@ -4708,18 +4818,35 @@ equivalent claims are asserted through the SDK client in `contract.test.ts`,
 procedure is where a logged-in machine meets them. Docs: `mcp-endpoint` (all
 four).
 
-### S10.7 Documentation and the demo `[ ]`
-- [ ] `README.md` and `docs/readme/README.zh-CN.md`: a "Use it from Claude Code /
-  Codex" section, kept in step.
-- [ ] Backlog entries under Phase 6, "MCP endpoint": a menu-bar item and
-  idle-quit for background launches; MCP elicitation as a remote permission
-  prompt; an update that wants to install while an endpoint-started run is in
-  flight; mounting the endpoint at `/mcp` on the server host after S8.2; Cursor /
-  Claude Desktop cards; **and S10.5's deferred `@committee` half** — verify on a
-  logged-in machine that a user-level Claude Code subagent whose `tools:` is only
-  `mcp__witena__*` can be `@`-mentioned and reach them (S10.0 item 4, still
-  unrun), and only then build `integrations.syncCommittees`, the generated
-  `~/.claude/agents/witena-<slug>.md` per committee and the Integrations
-  checkbox that drives them.
+### S10.7 Documentation and the demo `[~]`
+- [x] (2026-09-20, WP-16) `README.md` and `docs/readme/README.zh-CN.md`: a "Use it
+  from your coding agent" section, kept in step — between Install and How It
+  Works in both. Switch on in Settings → Integrations, Connect (or paste the
+  `mcpServers` snippet naming
+  `/Applications/Witena.app/Contents/Resources/bin/witena-mcp`), then ask the
+  coding agent to consult a group. It names the seven tools, the
+  `witena://chat/<id>` resource, the `consult` prompt as a Claude Code extra
+  Codex never asks for, the read-only group whose conclusion the caller applies,
+  the loopback-only endpoint behind a per-start token that is closed by default,
+  and the background launch on the first tool call. It promises nothing the code
+  does not do: no `@committee` shorthand, no hand-off, no endpoint on the server
+  host.
+- [x] (2026-09-20, WP-16) Backlog entries under Phase 6, "MCP endpoint (Phase 10)"
+  — the six this bullet listed, plus one per thing Phase 10 left open: the
+  deferred per-committee subagent files and the `@`-mention check they wait on,
+  the lazy launch that has never run in one piece, the `npm run e2e:packaged`
+  suite that cannot run unattended here, every acceptance criterion that needs a
+  real Claude Code session, Claude Code's unmeasured tool-call timeout, and
+  `shellcheck` on `build/witena-mcp`.
+- [ ] The demo. `npm run demo` still films the S1–S7 tour; nothing in it goes
+  through the endpoint, and no asset under `docs/assets/` shows a coding agent
+  consulting a group. The README section is text only.
 Acceptance: a new user can follow the README section alone and get a conclusion
-back in their IDE.
+back in their IDE. **Not met — not run here.** Following it literally needs a
+`claude` (or `codex`) CLI logged in on this machine, and pressing Connect writes
+`~/.claude.json` / `~/.codex/config.toml`, which belong to whoever runs it; WP-16
+was explicitly not allowed to do either, and the CLI on this machine is not
+logged in anyway — the same wall WP-0b, WP-14 and WP-15 hit. Every claim in the
+section was instead checked against the merged source, and the procedure is
+carried into the backlog below as the thing a logged-in machine runs first.
+Docs: `mcp-endpoint`, `packaging` (the README is packaging's).

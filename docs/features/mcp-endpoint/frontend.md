@@ -2,7 +2,11 @@
 
 > The feature's own screen is built. WP-12 added Settings → Integrations; WP-8's
 > deep-link handler and WP-13's provenance chip are the two surfaces it has
-> outside that section.
+> outside that section. Nothing is outstanding here: the one renderer surface
+> S10.5 named — a "Create a Claude Code agent for each committee" checkbox — is
+> deferred with its backend and reserved no locale key, and WP-16 added no
+> component. The user-facing procedure those controls exist for is written up in
+> `README.md`, "Use it from your coding agent".
 
 Surface, by work package (`tasks.md`):
 
