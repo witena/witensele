@@ -512,7 +512,7 @@ exactly that feed.
 Authentication is `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` plus
 `permissions: contents: write` on the job. No personal token is involved.
 
-### The signing gate (S7.3 adds secrets, not workflow steps)
+### The signing gate, and who imports the certificate
 
 The `secrets` context is **not** available to an `if:` expression — not at job
 level and not at step level — so `if: ${{ secrets.CSC_LINK != '' }}` is not a
@@ -536,15 +536,32 @@ that is allowed to see it and publishes the *answer* as a step output:
 --strict` / `spctl --assess` verification, and it is also what
 `CSC_IDENTITY_AUTO_DISCOVERY` is set to — false on an unsigned build, so
 electron-builder cannot quietly sign with whatever identity a runner's keychain
-happens to hold. The `CSC_*` and `APPLE_*` secrets are passed to the packaging
-step unconditionally; absent, they arrive as **empty strings**, and that is not
-the same as absent. electron-builder tests `cscLink == null`, so an empty
-`CSC_LINK` is resolved as a path against the project directory and the build
-dies with `<project dir> not a file` before anything is packaged — which is what
-the first `v*` tag did on 2026-09-19, when the `CSC_LINK` secret had been created
-empty. The unsigned branch of the packaging step therefore runs
-`unset CSC_LINK CSC_KEY_PASSWORD` first, and `src/main/packaging.test.ts`
-asserts that it does.
+happens to hold. The `APPLE_*` secrets are passed to the packaging step unconditionally; absent,
+they arrive as empty strings and notarization is skipped. **`CSC_LINK` and
+`CSC_KEY_PASSWORD` are not passed to it at all**, and the certificate is imported
+by a step of the workflow's own. Both halves come from failed `v0.1.0` runs on
+2026-09-19:
+
+| Run | What electron-builder did with `CSC_LINK` | Error |
+|---|---|---|
+| The secret existed but was **empty** | It tests `cscLink == null`, so `''` was resolved as a path against the project directory | `<project dir> not a file`, before anything was packaged |
+| The secret held the real `.p12` | It created a keychain with a random password, imported the `.p12`, then ran `security set-key-partition-list … -k <the .p12's password>` — `-k` wants the **keychain's** password (`app-builder-lib/out/codeSign/macCodeSign.js`, `importCerts`, 26.15.3) | `SecKeychainUnlock: The user name or passphrase you entered is not correct` |
+
+The second was reproduced off the runner with a throwaway self-signed `.p12` in
+a temporary keychain: the partition list is refused with the `.p12`'s password
+and accepted with the keychain's. A local `dist:signed` never reaches that code —
+it signs from the login keychain — which is why S7.3's verification did not find
+it.
+
+So "Import the Developer ID certificate into a temporary keychain" decodes the
+secret into `$RUNNER_TEMP`, creates a keychain with a password from
+`openssl rand`, imports the `.p12` with `-T /usr/bin/codesign`, sets the
+partition list with **that keychain's** password, prepends the keychain to the
+user search list — the only place `CSC_IDENTITY_AUTO_DISCOVERY` looks — and
+fails unless `security find-identity` then shows a `Developer ID Application`. A
+`trap … EXIT` deletes the decoded `.p12`; the keychain dies with the runner.
+`src/main/packaging.test.ts` asserts the packaging step's `env` names neither
+variable, the two `security` invocations, the trap and the step order.
 
 What S7.3 still has to change is `electron-builder.yml` — `identity`,
 `hardenedRuntime: true`, an entitlements file and a `notarize` block — the

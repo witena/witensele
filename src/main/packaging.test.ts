@@ -273,18 +273,41 @@ describe('the released version number', () => {
   })
 })
 
-describe('the release workflow’s unsigned branch', () => {
-  it('unsets the empty signing variables before packaging', () => {
-    // A missing secret reaches the step as '' rather than unset, and
-    // electron-builder only tests `cscLink == null`: it resolves '' against the
-    // project directory and fails with "<project dir> not a file". The first
-    // `v*` tag died this way, so the `else` branch has to clear them.
-    const workflow = readFileSync(join(repoRoot, '.github/workflows/release.yml'), 'utf8')
-    const unsigned = workflow.slice(workflow.indexOf("if [ \"${SIGNING_ENABLED:-false}\" = 'true' ]"))
-    const elseBranch = unsigned.slice(unsigned.indexOf('else'), unsigned.indexOf('fi\n'))
+describe('the release workflow’s signing steps', () => {
+  const workflow = readYaml('.github/workflows/release.yml')
+  const steps = (workflow['jobs'] as { release: { steps: Record<string, unknown>[] } }).release.steps
+  const named = (fragment: string): Record<string, unknown> => {
+    const step = steps.find((candidate) => String(candidate['name'] ?? '').includes(fragment))
+    if (!step) throw new Error(`release.yml has no step named like "${fragment}"`)
+    return step
+  }
 
-    const unset = elseBranch.indexOf('unset CSC_LINK CSC_KEY_PASSWORD')
-    expect(unset).toBeGreaterThan(-1)
-    expect(elseBranch.indexOf('npm run dist')).toBeGreaterThan(unset)
+  it('never hands the certificate to electron-builder', () => {
+    // Two failed `v0.1.0` runs, one variable. Empty, electron-builder resolves
+    // it against the project directory ("<project dir> not a file"); set, it
+    // imports the .p12 and then passes the .p12's password where
+    // `set-key-partition-list -k` wants the keychain's. Absent, neither happens.
+    const env = named('Package both architectures')['env'] as Record<string, string>
+    expect(Object.keys(env)).not.toContain('CSC_LINK')
+    expect(Object.keys(env)).not.toContain('CSC_KEY_PASSWORD')
+    expect(env['CSC_IDENTITY_AUTO_DISCOVERY']).toBe('${{ steps.signing.outputs.enabled }}')
+  })
+
+  it('imports it into its own keychain, unlocked with that keychain’s password', () => {
+    const step = named('Import the Developer ID certificate')
+    expect(step['if']).toBe("steps.signing.outputs.enabled == 'true'")
+
+    const script = String(step['run']).replace(/\\\n\s*/g, ' ')
+    expect(script).toMatch(/security import "\$certificate" -k "\$keychain" -P "\$CSC_KEY_PASSWORD"/)
+    expect(script).toMatch(/set-key-partition-list [^\n]*-k "\$keychain_password" "\$keychain"/)
+    // The decoded .p12 is a signing identity on disk; it must not outlive the step.
+    expect(script).toContain(`trap 'rm -f "$certificate"' EXIT`)
+    // Auto-discovery only searches the user list.
+    expect(script).toContain('security list-keychains -d user -s "$keychain"')
+
+    const order = steps.map((candidate) => String(candidate['name'] ?? ''))
+    expect(order.findIndex((name) => name.includes('Import the Developer ID'))).toBeLessThan(
+      order.findIndex((name) => name.includes('Package both architectures'))
+    )
   })
 })
