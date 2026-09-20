@@ -175,6 +175,27 @@ export interface UpdateDownloadedEvent {
   version: string
 }
 
+/**
+ * The window should show a chat, because something outside it asked (S10.3).
+ *
+ * Emitted by `src/main/index.ts` when the operating system hands the app a
+ * `witena://chat/<id>` link — from `open-url`, or from the argument vector of a
+ * second launch. It is the one event whose subject is the *user interface*
+ * rather than the data, and it exists because the alternative is worse: a second
+ * IPC channel for navigation, or the main process reaching into the renderer.
+ * The renderer receives it on the same subscription as everything else
+ * (CLAUDE.md rule 6) and decides for itself what "open" means.
+ *
+ * It carries no promise that the chat exists. `parseChatUrl` proves the *shape*
+ * of the link and nothing more, so a stale or hand-typed link reaches the window
+ * like any other and is ignored there — an unrecognised link is not a mistake
+ * the user needs to be told about.
+ */
+export interface UiOpenChatEvent {
+  type: 'ui.open-chat'
+  chatId: string
+}
+
 /** Round-trip probe used by the S1.3 acceptance test; carries no domain meaning. */
 export interface SystemTestEvent {
   type: 'system.test'
@@ -196,6 +217,7 @@ export type BackendEvent =
   | PermissionResolvedEvent
   | UpdateAvailableEvent
   | UpdateDownloadedEvent
+  | UiOpenChatEvent
   | SystemTestEvent
 
 /** The `type` tag of any backend event. */

@@ -137,6 +137,19 @@ click the repository link (target="_blank")
   → { action: 'deny' }                     no second BrowserWindow, ever
 ```
 
+The shell's one inbound navigation path, added by S10.3:
+
+```
+a witena://chat/<id> link, from anywhere on the machine
+  → open-url (or second-instance argv)      src/main/index.ts
+  → show or create the window
+  → ui.open-chat on the event bus           after did-finish-load
+  → applyBackendEvent                       lib/event-bridge.ts
+      useChatsStore.applyOpenRequest(id)
+        selected? → useUiStore.setPage('chats')
+        not this window's chat? → nothing at all, and no error
+```
+
 The appearance setting, the shell's second backend path (S5.8):
 
 ```
@@ -243,6 +256,8 @@ first event pair this feature listens to (`update.available`,
 | `src/renderer/src/stores/updates.test.ts` | S7.4: the mirror, a backend with no such method not breaking the screen, the busy flag, both events through `applyBackendEvent`, an `available` event never undoing a finished download, and the dismissal rule — closed for this version, open again for the next |
 | `e2e/updates.spec.ts` | S7.4: an ordinary launch is a checkout, so About says why there is nothing to check and the button is disabled; with `WITENA_UPDATE_FEED` the offered version travels all the way to the sentence on screen |
 | `e2e/ui-shell.spec.ts` | Rail navigation with one page mounted at a time, section switching, the section surviving a page change, and the three 1440×900 screenshots |
+| `e2e/launch.spec.ts` | S10.3, and the shell's stake in it: a `--background` launch has no window and `activate` still opens one; a `witena://` link opens one; two apps with different `WITENA_USER_DATA` run side by side. Owned by [`../mcp-endpoint/backend.md`](../mcp-endpoint/backend.md) |
+| `src/renderer/src/stores/chats.test.ts` | S10.3: `describe('ui.open-chat')` — the only place `setPage` is driven by an event rather than a click. Owned by [`../mcp-endpoint/frontend.md`](../mcp-endpoint/frontend.md) |
 | `e2e/smoke.spec.ts` | Unchanged assertions, now reached through Settings → Developer |
 | `e2e/i18n.spec.ts` | The quick toggle, the Appearance select as the same setting, and survival across a restart |
 

@@ -507,6 +507,15 @@ unpacking, the extra resources and the icon are claims about a filesystem, and
 the only honest assertion about those is made against a real bundle, which is
 `e2e/packaged.spec.ts`'s job. It covers exactly the fields a workflow reads.
 
+**The `protocols` block (S10.3) is not asserted there yet.** It is one entry —
+`name: Witena chat link`, `schemes: [witena]` — and what it produces is a
+`CFBundleURLTypes` array in the packaged Info.plist, which is again a claim
+about a filesystem rather than about the YAML. WP-9 is the package that next
+touches both `electron-builder.yml` and `packaging.test.ts`, and it is the right
+place to pin the entry alongside the two `extraResources` paths it adds. The
+scheme itself is already pinned, from the other end, by
+`src/main/launch-args.test.ts`.
+
 `electron-builder.yml` is parsed there with **gray-matter**, by wrapping the
 document in `---` delimiters. gray-matter is already a dependency (it is how
 `SKILL.md` frontmatter is read) and it carries js-yaml; adding a second YAML

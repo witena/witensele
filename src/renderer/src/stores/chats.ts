@@ -164,6 +164,16 @@ export interface ChatsState {
    * state when it turns up nothing, the first never does.
    */
   matchIds: string[] | null
+  /**
+   * A chat a `ui.open-chat` event named before the list could honour it (S10.3).
+   *
+   * The deep link that opens a *closed* app is the reason this field exists: the
+   * main process creates the window, waits for it to finish loading and emits —
+   * and `load()` is still in flight at that moment, so the id is not in `chats`
+   * yet and selecting it would select nothing. It is held here for exactly one
+   * `load`, which either honours it or drops it.
+   */
+  pendingOpenId: string | null
 
   /** Reads the list and every chat's members. Never rejects. */
   load: () => Promise<void>
@@ -255,6 +265,21 @@ export interface ChatsState {
   /** Event handlers, called by `lib/event-bridge.ts`. Upserts by id. */
   applyUpdated: (chat: Chat) => void
   applyDeleted: (chatId: string) => void
+  /**
+   * Selects the chat a `witena://chat/<id>` link named, if this window has it.
+   *
+   * Returns whether it did, which is what tells `lib/event-bridge.ts` whether to
+   * bring the Chats page forward: navigating to a chat that was not selected
+   * would take a user off whatever they were doing and show them nothing.
+   *
+   * An id the list does not contain is **ignored without an error**. The link
+   * came from outside the app — a stale tool result, a note, a message — so "no
+   * such chat" is not a failure the user has to be told about, and the main
+   * process deliberately does not check first (see `src/main/index.ts`). The
+   * exception is a list that has not loaded yet: the id is then remembered
+   * rather than judged, because the window cannot yet know what it has.
+   */
+  applyOpenRequest: (chatId: string) => boolean
 }
 
 export const useChatsStore = create<ChatsState>()((set, get) => ({
@@ -268,17 +293,26 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
   selectedId: null,
   searchQuery: '',
   matchIds: null,
+  pendingOpenId: null,
 
   async load() {
     set({ status: 'loading', error: undefined, errorCode: undefined, errorDetails: undefined })
     try {
       const chats = await getBackend().invoke('chats.list')
+      // A deep link that arrived while this call was in flight is answered here,
+      // where the list finally exists. Cleared either way: an id that is still
+      // not in the list after a full read is not going to appear later.
+      const pending = get().pendingOpenId
       set({
         chats: sortChats(chats),
         status: 'ready',
         error: undefined,
         errorCode: undefined,
-        errorDetails: undefined
+        errorDetails: undefined,
+        pendingOpenId: null,
+        ...(pending !== null && chats.some((chat) => chat.id === pending)
+          ? { selectedId: pending }
+          : {})
       })
       // One call per chat. Cheap over local IPC for a desktop-sized list, and the
       // alternative — a member count on `Chat` — would put a derived field in the
@@ -517,6 +551,17 @@ export const useChatsStore = create<ChatsState>()((set, get) => ({
         ...(state.selectedId === chatId ? { selectedId: null } : {})
       }
     })
+  },
+
+  applyOpenRequest(chatId) {
+    if (get().chats.some((chat) => chat.id === chatId)) {
+      set({ selectedId: chatId, pendingOpenId: null })
+      return true
+    }
+    // `error` is not a reason to wait: the list failed and `load` is what
+    // retries, so the id is worth holding on to until one of them succeeds.
+    if (get().status !== 'ready') set({ pendingOpenId: chatId })
+    return false
   }
 }))
 

@@ -23,6 +23,12 @@ database that opens on the first launch.
 - `asarUnpack` for `better-sqlite3`, whose `.node` binary cannot be `dlopen`ed
   out of an asar archive.
 - `npm run dist` and `npm run dist:dir`.
+- **Since S10.3**, the `protocols` block: the bundle declares the `witena://`
+  scheme so macOS can hand a chat link to the app. It is one entry in
+  `electron-builder.yml` and it has no build step of its own; everything the
+  link then does belongs to
+  [`../mcp-endpoint/context.md`](../mcp-endpoint/context.md). Shipping the MCP
+  shim into `Contents/Resources` is a separate, later change (WP-9).
 - `e2e/packaged.spec.ts`, run on its own by `npm run e2e:packaged`, which drives
   the shipped binary rather than `out/`.
 - The demo recording (`e2e/demo.record.ts`), the script that renders it

@@ -15,6 +15,7 @@ import { applyBackendEvent } from '../lib/event-bridge'
 import { BackendClientError } from '../lib/backend'
 import { resetBackend, setBackend } from '../lib/backend-provider'
 import { groupChats, useChatsStore } from './chats'
+import { useUiStore } from './ui'
 
 function chat(id: string, updatedAt: number, title = id): Chat {
   return {
@@ -43,8 +44,13 @@ beforeEach(() => {
     error: undefined,
     errorCode: undefined,
     errorDetails: undefined,
-    selectedId: null
+    selectedId: null,
+    pendingOpenId: null
   })
+  // The deep-link tests read the page the shell is on, and zustand stores are
+  // module singletons: without this they would inherit whatever the previous
+  // test navigated to.
+  useUiStore.setState({ page: 'chats' })
 })
 
 afterEach(() => {
@@ -493,5 +499,78 @@ describe('chats store', () => {
     await useChatsStore.getState().rename('a', '   ')
 
     expect(called).toBe(false)
+  })
+})
+
+/**
+ * The renderer's half of the `witena://chat/<id>` deep link (S10.3).
+ *
+ * The event is driven through `applyBackendEvent` rather than by calling the
+ * store method directly, because the wiring is half of what is being tested: a
+ * link that selects a chat has to bring the Chats page forward too, and a link
+ * that selects nothing must leave the user where they were.
+ */
+describe('ui.open-chat', () => {
+  it('selects the chat the link names and brings the page forward', () => {
+    useChatsStore.setState({ chats: [chat('a', 5), chat('b', 7)], status: 'ready' })
+    useUiStore.setState({ page: 'settings' })
+
+    applyBackendEvent({ type: 'ui.open-chat', chatId: 'a' })
+
+    expect(useChatsStore.getState().selectedId).toBe('a')
+    expect(useUiStore.getState().page).toBe('chats')
+  })
+
+  it('ignores an id the loaded list does not have, silently and without navigating', () => {
+    useChatsStore.setState({ chats: [chat('a', 5)], status: 'ready', selectedId: 'a' })
+    useUiStore.setState({ page: 'agents' })
+
+    applyBackendEvent({ type: 'ui.open-chat', chatId: 'gone' })
+
+    // Not "no chat selected" either: a stale link must not close what is open.
+    expect(useChatsStore.getState().selectedId).toBe('a')
+    expect(useChatsStore.getState().pendingOpenId).toBeNull()
+    expect(useChatsStore.getState().error).toBeUndefined()
+    expect(useUiStore.getState().page).toBe('agents')
+  })
+
+  it('holds a link that arrives before the list and honours it when the list lands', async () => {
+    // The cold-launch path: the app was not running, the main process created
+    // the window and emitted as soon as it had loaded — which is while `load`
+    // is still in flight.
+    setBackend({
+      invoke: (async (method: BackendMethod) => {
+        if (method === 'chats.list') return [chat('a', 5), chat('b', 7)]
+        if (method === 'chats.members.list') return []
+        throw new Error(`unexpected method ${method}`)
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    applyBackendEvent({ type: 'ui.open-chat', chatId: 'b' })
+    expect(useChatsStore.getState().selectedId).toBeNull()
+    expect(useChatsStore.getState().pendingOpenId).toBe('b')
+
+    await useChatsStore.getState().load()
+
+    expect(useChatsStore.getState().selectedId).toBe('b')
+    expect(useChatsStore.getState().pendingOpenId).toBeNull()
+  })
+
+  it('drops a held link the list turns out not to contain', async () => {
+    setBackend({
+      invoke: (async (method: BackendMethod) => {
+        if (method === 'chats.list') return [chat('a', 5)]
+        if (method === 'chats.members.list') return []
+        throw new Error(`unexpected method ${method}`)
+      }) as BackendClient['invoke'],
+      subscribe: () => () => {}
+    })
+
+    applyBackendEvent({ type: 'ui.open-chat', chatId: 'deleted' })
+    await useChatsStore.getState().load()
+
+    expect(useChatsStore.getState().selectedId).toBeNull()
+    expect(useChatsStore.getState().pendingOpenId).toBeNull()
   })
 })

@@ -68,6 +68,23 @@ extraResources:
   - from: build/ant.LICENSE
     to: bin/ant.LICENSE
 
+# The `witena://chat/<id>` deep link (S10.3). Every MCP tool result carries one,
+# so a coding agent's answer can end with a link that opens the discussion in
+# the app. electron-builder turns this block into a `CFBundleURLTypes` entry in
+# the bundle's Info.plist, which is what makes LaunchServices hand the URL to
+# Witena at all; `app.setAsDefaultProtocolClient('witena')` in
+# `src/main/index.ts` only claims a scheme the bundle already declares, and it
+# runs in packaged builds only — a development checkout must never become the
+# machine's handler for a scheme.
+#
+# `name` is the human-readable `CFBundleURLName`. The scheme has to stay in step
+# with `chatUrl` in `src/shared/mcp-tools.ts`; `src/main/launch-args.test.ts`
+# pins those two together, and this file is the third spelling.
+protocols:
+  - name: Witena chat link
+    schemes:
+      - witena
+
 # S7.4 added the **zip** beside the dmg. It is not a second download offered to
 # anyone: `electron-updater`'s macOS updater can only apply a zip — it unpacks
 # the new `Witena.app`, verifies its signature against the running one and swaps

@@ -25,6 +25,13 @@ The screen itself, the notice bar and the store belong to
 [`../ui-shell/frontend.md`](../ui-shell/frontend.md); what this feature owns is
 the fact the two of them render.
 
+S10.3's `protocols` entry adds none either, and what it enables is worth one
+sentence for the same reason: a `witena://chat/<id>` link handed to the packaged
+bundle **does** reach the renderer, but not as anything this feature owns. The
+bundle only declares the scheme; `src/main/index.ts` turns a link into a
+`ui.open-chat` event and the chats store selects the chat. See
+[`../mcp-endpoint/frontend.md`](../mcp-endpoint/frontend.md).
+
 Shipping the Anthropic CLI added no renderer code either. Its only visible
 effects are one more row in Settings → About's licence list (`ant`, MIT, written
 by `scripts/generate-licenses.mjs` from the same pin the download uses) and a
