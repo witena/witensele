@@ -64,6 +64,16 @@ can hold a real conversation and still holds it after a restart.
   chat-list preview line and the "Closing speaker" select in the group settings.
   What *produces* a conclusion is [`orchestration`](../orchestration/context.md)'s
   closing turn; this feature owns everything the user does with one.
+- **How a chat is created** (S9.3): the "+" button opens the New chat dialog
+  rather than writing a chat, and the dialog composes a title, at most one
+  committee and any number of individual agents into one `chats.create`.
+  Pressing Create having chosen nothing is exactly what "+" used to do. The
+  dialog and the `Dialog` primitive under it are drawn here; what a *committee*
+  is belongs to [`committees`](../committees/context.md).
+- **A chat's provenance** (S9.3): `Chat.committeeId` resolved to a name, as a
+  badge on the chat-list row and in the chat header, and the member panel's
+  **Sync committee members** — which appends the members the committee has
+  gained since and never removes anyone.
 - The three renderer surfaces the executor needs (S5.5): the **permission card**
   above the composer (`stores/permissions.ts` plus `permission-card.tsx`), the
   **diff block** a `DiffPart` renders as, and the `path:line` chip a

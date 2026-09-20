@@ -14,6 +14,15 @@
 | `src/main/db/repositories/messages.ts` | Unchanged from S1.2; `seq` ordering, the `before` cursor, `listForContext` for the runner |
 | `src/main/testing.ts` | `createTestAppContext`: a context over the temporary database, the recording bus and the insecure secret store. Not imported by production code |
 
+**S9.3 added no main-process code.** The New chat dialog, the provenance badge
+and "Sync committee members" are built on `chats.create` (which learnt
+`committeeId` in S9.1) and on `chats.members.set` exactly as it already was — a
+sync is an ordinary membership write, and the one-executor rule refuses one
+that would seat a second writer without knowing a committee was involved. The
+merge rule `initialMembers` applies is duplicated in the renderer, as
+`mergeMembers`, purely so the dialog can count before it calls; this file is
+the authority and both are held to the same examples.
+
 None of them imports electron (CLAUDE.md rule #5). `handlers/chats.ts` does read
 `node:fs` and `node:path` since S5.2, which the rule permits: it is about
 electron, not about Node, and the `workdir` check is worthless if it does not

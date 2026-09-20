@@ -1,6 +1,11 @@
 /**
- * The S9.2 acceptance test: a committee is built, ordered, persisted and
- * deleted.
+ * The Phase 9 acceptance test: a committee is built, ordered, persisted,
+ * convened on a topic, synced and deleted.
+ *
+ * S9.2 wrote the first five tests — everything up to "removes a member". S9.3
+ * added the two in the middle, which are the point of the whole feature: **New
+ * topic** opens the New chat dialog with this committee picked, and the member
+ * panel's **Sync committee members** closes the gap a snapshot leaves behind.
  *
  * Entirely **offline**, like `agents.spec.ts` and `members.spec.ts`: a committee
  * never runs, so nothing here needs a model. The Ollama provider is added with
@@ -153,9 +158,72 @@ test('removes a member and has no topics yet', async () => {
   await window.getByTestId('committee-save').click()
   await expect(window.getByTestId('committee-save')).toBeDisabled()
 
-  // "New topic" arrives with the dialog in S9.3; until then the block is a
-  // read-only list, and nothing has been convened from this committee.
+  // Nothing has been convened from this committee yet; the next test does it.
   await expect(window.getByTestId('committee-topic')).toHaveCount(0)
+})
+
+test('convenes a topic from the committee, with one extra agent', async () => {
+  await window.getByTestId('committee-new-topic').click()
+
+  // The button navigates *and* arrives with this committee already picked,
+  // which is the whole reason the dialog's open state lives in `stores/ui`.
+  await expect(window.getByTestId('page-chats')).toBeVisible()
+  const dialog = window.getByTestId('new-chat-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByTestId('new-chat-committee')).toHaveAttribute('data-selected', 'true')
+
+  // Architect rides in with the committee: ticked, and not untickable.
+  const architect = dialog.getByTestId('new-chat-agent').filter({ hasText: 'Architect' })
+  await expect(architect).toHaveAttribute('data-selected', 'true')
+  await expect(architect).toHaveAttribute('data-locked', 'true')
+  await expect(dialog.getByTestId('new-chat-summary')).toHaveAttribute('data-members', '1')
+
+  // Reviewer is the individual agent, on top of the committee.
+  await dialog.getByTestId('new-chat-agent').filter({ hasText: 'Reviewer' }).click()
+  await expect(dialog.getByTestId('new-chat-summary')).toHaveAttribute('data-members', '2')
+
+  await window.getByTestId('new-chat-title').fill('Retrospective')
+  await window.getByTestId('new-chat-create').click()
+  await expect(dialog).toHaveCount(0)
+
+  // Committee members in committee order, then the extra — the one rule
+  // `mergeMembers` and the handler's `initialMembers` both state.
+  await expect(window.getByTestId('member-name').nth(0)).toHaveText('Architect')
+  await expect(window.getByTestId('member-name').nth(1)).toHaveText('Reviewer')
+
+  // Provenance, in the header and on the row.
+  await expect(window.getByTestId('chat-committee-chip')).toHaveText('Architecture review')
+  await expect(window.getByTestId('chat-item-committee')).toHaveText('Architecture review')
+  await expect(window.getByTestId('chat-item-title')).toHaveText('Retrospective')
+})
+
+test('syncing appends the member the committee has gained since', async () => {
+  await openAgents(window)
+  await createAgent('Scribe', FIRST_MODEL)
+
+  await openCommittees()
+  await window.getByTestId('committee-item').click()
+  await addMember('Scribe')
+  await window.getByTestId('committee-save').click()
+  await expect(window.getByTestId('committee-save')).toBeDisabled()
+
+  // The topic kept the snapshot it was convened with, so it is now one member
+  // behind its committee. The list on this page is how we get back to it.
+  await window.getByTestId('committee-topic').click()
+  await expect(window.getByTestId('page-chats')).toBeVisible()
+
+  const sync = window.getByTestId('member-sync-committee')
+  await expect(sync).toHaveAttribute('data-missing', '1')
+  await sync.click()
+
+  // Appended, not reconciled: the extra the chat was convened with keeps its
+  // place, and the new member joins at the end.
+  await expect(window.getByTestId('member-row')).toHaveCount(3)
+  await expect(window.getByTestId('member-name').nth(0)).toHaveText('Architect')
+  await expect(window.getByTestId('member-name').nth(1)).toHaveText('Reviewer')
+  await expect(window.getByTestId('member-name').nth(2)).toHaveText('Scribe')
+  // Nothing left to sync, so the button is gone rather than disabled.
+  await expect(sync).toHaveCount(0)
 })
 
 test('deleting an agent removes it from the committee', async () => {
@@ -166,7 +234,10 @@ test('deleting an agent removes it from the committee', async () => {
 
   await openCommittees()
   await window.getByTestId('committee-item').click()
-  await expect(memberRows()).toHaveCount(0)
+  // Architect is gone from the committee; Scribe, added in the previous test,
+  // is not.
+  await expect(memberRows()).toHaveCount(1)
+  await expect(memberNames()).toHaveText('Scribe')
 })
 
 test('deletes the committee in two clicks', async () => {

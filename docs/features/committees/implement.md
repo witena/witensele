@@ -34,12 +34,28 @@ Three layers, each the ordinary shape of its neighbours:
   container element, so the panel's DOM, classes and test ids are byte for byte
   what they were and `e2e/members.spec.ts` needed no edit.
 
+- **Convening it (S9.3).** `components/chat/new-chat-dialog.tsx` over a new
+  `components/ui/dialog.tsx`, with the dialog's open state in `stores/ui` so
+  the Committees page can open it across a navigation. The dialog composes
+  three choices into one `chats.create`, and sends only the **extras** — the
+  committee expansion stays the handler's job, because a renderer that sent the
+  expanded list would be asserting a snapshot the backend is supposed to take.
+  What the renderer *does* duplicate is the merge rule, as
+  `lib/committee-members.ts`, and only to count: the live "n members will join"
+  line and the ticked, locked rows both need the answer before the call.
+
+  The same file answers the other half of the snapshot. `missingCommitteeMembers`
+  is what the member panel's "Sync committee members" is drawn from — committee
+  members this chat never got, in committee order — and the button writes
+  `chats.members.set` with the chat's current list plus those appended. It
+  cannot remove anyone, by construction rather than by policy.
+
 Orchestration, `AgentTurn` and the supervisor are untouched: they read
 `chat_members`, which now simply has members in it sooner.
 
 ## Data flow
 
-Convening a topic (the path S9.3 will drive from the New chat dialog):
+Convening a topic. Since S9.3 the New chat dialog is what drives it:
 
 ```
 chats.create({ committeeId, memberAgentIds })
@@ -64,6 +80,36 @@ committees.update({ id, patch })
     duplicates; at most one executor
   → one transaction: UPDATE committees, DELETE then INSERT committee_members
   → the caller gets the re-read entity, members in position order
+```
+
+Convening one from the UI (S9.3). Two entry points, one dialog:
+
+```
+"+" on the chat list      → ui.openNewChatDialog()
+"New topic" on a committee → ui.openNewChatDialog(id) then ui.setPage('chats')
+                             ↑ open first: this component is unmounted by the
+                               page change, and ChatsPage reads the request on
+                               mount
+
+NewChatDialog mounts        committeeId = seed, extras = [], title = ''
+  pick a committee        → single select; picking again clears it, and extras
+                            the committee brings (or an executor it collides
+                            with) are dropped rather than left to be refused
+  tick an agent           → extras; a committee member's row is locked
+  mergeMembers(…)         → the ticks, the greyed-out executors and the count
+Create                    → chats.create({ title?, committeeId?, extras })
+     ↳ refused            → the panel stays open, `new-chat-error` inside it
+     ↳ created            → applyUpdated + select + closeNewChatDialog
+```
+
+Closing the drift (S9.3):
+
+```
+ChatsPage renders          missingCommitteeMembers(committee, memberIds)
+  non-empty               → member-sync-committee, with the count
+  click                   → chats.members.set(chatId, [...members, ...missing])
+                            append only; the existing order is untouched
+     ↳ second_executor    → the usual error line under the chat list
 ```
 
 Deleting a committee:
@@ -134,9 +180,14 @@ provenance, which `chat.updated` already carries.
 | `src/main/db/migrations.test.ts` | `committees` and `committee_members` are created when the database is opened |
 | `src/shared/contracts.test.ts` | The five methods are in `BACKEND_METHODS`, and `committees` is a namespace |
 | `src/renderer/src/stores/committees.test.ts` | **S9.2**, against a fake `BackendClient`: load and a failed load; `validateDraft` (blank, whitespace-only and over-cap names, measured trimmed); create from an empty draft, which trims the name and leaves the editor on the row it produced; an invalid draft calling nothing; add / move / remove writing one `committees.update` with the whole list in order; `dirty` going back to false when an edit is undone, the member list included; a `second_executor` refusal kept as `errorCode` + `errorDetails` with the list untouched; delete closing the editor only when it was the open record |
-| `src/renderer/src/stores/ui.test.ts` | **S9.2**: `PAGES` is `['chats', 'committees', 'agents', 'settings']` — rail order, Settings last |
+| `src/renderer/src/stores/ui.test.ts` | **S9.2**: `PAGES` is `['chats', 'committees', 'agents', 'settings']` — rail order, Settings last. **S9.3**: the dialog starts closed, opens with and without a committee, forgets the committee on close, and navigates to nothing on its own |
+| `src/renderer/src/lib/committee-members.test.ts` | **S9.3**: `mergeMembers` (committee first, first occurrence wins, duplicates within each list, either list alone, neither, and no mutation of its arguments) and `missingCommitteeMembers` (the gap in committee order, nothing when the chat has everyone, ignoring members the committee does not have, and an empty answer for a chat with no committee) |
+| `src/renderer/src/stores/chats.test.ts` | **S9.3**: the widened `create` — a title trimmed, a committee and extras sent as three fields; `create({})` and a draft of only blanks both sending `{ input: {} }`, which is the "+" button's call unchanged |
+| `src/renderer/src/lib/theme.test.ts` | **S9.3**: `--color-overlay` joins `--color-bg-subtle` as a token with an alpha channel, so the palette, the light override and `prefers-reduced-transparency` are all held to a two-entry list rather than a one-entry one |
 | `src/renderer/src/i18n/locales.test.ts` / `used-keys.test.ts` | **S9.2**: `committees` is an expected namespace, the two trees match, and every `t('committees.…')` resolves |
-| `e2e/committees.spec.ts` | **S9.2**, offline: the page starts empty and Save is disabled until the name is filled; two agents added through the picker and counted on the list row; a drag reordering them, saved, and still in that order after the app is relaunched; the move-up / move-down buttons doing the same thing without a pointer; a removal; deleting an *agent* emptying the committee; the two-step delete |
+| `e2e/committees.spec.ts` | **S9.2**, offline: the page starts empty and Save is disabled until the name is filled; two agents added through the picker and counted on the list row; a drag reordering them, saved, and still in that order after the app is relaunched; the move-up / move-down buttons doing the same thing without a pointer; a removal; deleting an *agent* removing it from the committee; the two-step delete. **S9.3** inserts two: "New topic" arriving with the committee preselected and the committee's member locked, one extra ticked, the count going 1 → 2, and the created chat listing committee-then-extra with the badge in both places; then an agent added to the committee, the `data-missing` count on the sync button, and the append |
+| `e2e/ui-shell.spec.ts` | **S9.3**: the `Dialog` primitive itself — `role`, `aria-modal`, focus inside the panel on open, Escape and a backdrop press dismissing it, and a review screenshot in each appearance |
+| Every other `e2e/*.spec.ts` | **S9.3**: fourteen files had `chats-new` clicked into them; they all go through `createChat(page)` in `e2e/helpers.ts` now, which is the dialog opened and Create pressed with nothing chosen |
 
 ## Known limitations and TODOs
 
@@ -147,13 +198,21 @@ provenance, which `chat.updated` already carries.
 - **The Postgres migration has not been executed here** — no Docker on the
   machine S9.1 was written on, so `0002_committees.sql` is checked by reading
   and by `schema-drift.test.ts`, like `0001_permission_grants.sql` before it.
-- **The page cannot convene anything yet.** S9.2 builds and orders a committee;
-  the **New topic** button, the New chat dialog, the committee badge and "Sync
-  committee members" are all S9.3. Until then `Chat.committeeId` is read in
-  exactly one place — the topics list — and a topic can only be created the way
-  it always was.
-- **`committees.get` has no caller.** The page holds the list it edits, so the
-  method exists for the server host and for S9.3.
+- **The merge rule exists twice.** `initialMembers` in the handler is the
+  authority; `mergeMembers` in the renderer is a copy that only counts and
+  ticks. They are held to the same examples in two test files, which is the
+  cheapest guard available — there is no way to share one function across the
+  process boundary without putting chat-creation logic in `src/shared`.
+- **`committees.get` still has no caller.** The Committees page holds the list
+  it edits and the chats page reads `committees.list` for names; the method
+  exists for the server host.
+- **The dialog does not offer to *create* anything it is missing.** An empty
+  agent library or an empty committee list is a sentence pointing at the page
+  that fixes it, not a link — the dialog would have to be dismissed to follow
+  one, and dismissing it is already one Escape away.
+- **The chat's committee cannot be changed after creation**, by design
+  (`chats.update` omits `committeeId`). A topic convened on the wrong committee
+  is recreated, not re-pointed.
 - **The committee list is one reload behind its own ordering.** `committees.list`
   is `updatedAt desc` and a save does not re-sort the row it updated; see
   [`frontend.md`](./frontend.md) for why a row that jumped under the cursor

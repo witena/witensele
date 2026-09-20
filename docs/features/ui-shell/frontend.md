@@ -14,7 +14,7 @@ main-process fact it depends on.
 | `src/renderer/src/components/layout/column.tsx` | One vertical strip: fixed width, one border, its own scroll context |
 | `src/renderer/src/components/layout/page-header.tsx` | The 52px title bar; drag region, with `actions` opted back out |
 | `src/renderer/src/components/layout/window-chrome.ts` | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` and why they exist |
-| `src/renderer/src/components/ui/*` | `Button`, `IconButton`, `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Chip`, `Avatar`, `PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, `StatusPill`, `Spinner`, `BrandMark`, `ReorderableList`, plus the `index.ts` barrel. S9.2 added `ReorderableList` — the member panel's native HTML5 drag-to-reorder, extracted so the committee editor reorders its members the same way; it is generic in the item, renders no container of its own (the caller's flex column and its `gap` lay the rows out) and takes no translated string, like every other primitive. S7.1 added `BrandMark` — the tile-less Aperture mark the rail shows, inlined as SVG so its blades can be `currentColor`. S2.5 added no primitive: the code block, the tool card and the mention popover are chat-specific and live under `components/chat/`. S5.10 added no primitive either, and widened one: a `SegmentedOption` may now be `disabled` on its own, so the chat Goal block can offer Document and Codebase while a chat has no folder to write into — disabled with the reason under them, rather than hidden |
+| `src/renderer/src/components/ui/*` | `Button`, `IconButton`, `Input`, `TextArea`, `Select`, `Toggle`, `SegmentedControl`, `Badge`, `Chip`, `Avatar`, `PresenceDot`, `EmptyState`, `SectionTitle`, `Field`, `StatusPill`, `Spinner`, `BrandMark`, `ReorderableList`, `Dialog`, plus the `index.ts` barrel. S9.3 added `Dialog`, the shell's **first modal** — the scrim, a titled panel with a close button and an optional footer, `role="dialog"` + `aria-modal`, a focus trap that restores focus on close, Escape from a capturing document listener, and dismissal on a `mousedown` that started on the backdrop. It has no `open` prop: the caller renders it or does not, so "open" stays one fact in one store. Its scrim is a new token, `--color-overlay`, declared in both palettes and made opaque under `prefers-reduced-transparency`. S9.2 added `ReorderableList` — the member panel's native HTML5 drag-to-reorder, extracted so the committee editor reorders its members the same way; it is generic in the item, renders no container of its own (the caller's flex column and its `gap` lay the rows out) and takes no translated string, like every other primitive. S7.1 added `BrandMark` — the tile-less Aperture mark the rail shows, inlined as SVG so its blades can be `currentColor`. S2.5 added no primitive: the code block, the tool card and the mention popover are chat-specific and live under `components/chat/`. S5.10 added no primitive either, and widened one: a `SegmentedOption` may now be `disabled` on its own, so the chat Goal block can offer Document and Codebase while a chat has no folder to write into — disabled with the reason under them, rather than hidden |
 | `src/renderer/src/pages/chats-page.tsx` | Chat list (264px) · conversation · member panel (288px), with the composer and the group-settings block |
 | `src/renderer/src/pages/agents-page.tsx` | Agent list (264px) and the editor area's empty state |
 | `src/renderer/src/pages/committees-page.tsx` | **S9.2**: committee list (264px) and the committee editor, deliberately the Agents page's layout down to the column width, the "+" and the two-step delete. See [`../committees/frontend.md`](../committees/frontend.md) |
@@ -277,9 +277,13 @@ floor in both appearances.
 - Focus is visible everywhere: `focus-visible:ring-1 focus-visible:ring-accent`
   on every interactive element.
 - Tab order follows the DOM: rail → column header → column body → next column.
-  No focus traps. (S1.7 added the composer's own Enter / Shift+Enter handling; the
-  shell itself still has none.) Enter/Shift+Enter in the composer is
-  S2.5.
+  The one focus trap in the app is `Dialog`'s (S9.3), which is what a modal is:
+  focus moves inside on open, Tab and Shift+Tab cycle within the panel, Escape
+  dismisses, and focus returns to whatever held it before — without the last
+  part, closing a dialog would drop focus on `<body>` and the next Tab would
+  start at the top of the window. (S1.7 added the composer's own Enter /
+  Shift+Enter handling; the shell itself still has none.) Enter/Shift+Enter in
+  the composer is S2.5.
 
 ### Opening an external link
 

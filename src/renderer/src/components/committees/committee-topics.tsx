@@ -11,13 +11,18 @@
  *
  * Clicking a row selects that chat and navigates to Chats, which is the whole
  * point of the block: a committee is a place to get back to its conversations
- * from. The **New topic** button that starts one arrives with the dialog in
- * S9.3; until then this list is read-only.
+ * from.
+ *
+ * **New topic** (S9.3) is the other direction, and it is why the dialog's open
+ * state lives in `stores/ui` rather than in the chats page: the button has to
+ * navigate *and* arrive with this committee already picked, and this component
+ * is unmounted the instant `setPage('chats')` runs. Opening first and then
+ * navigating means the page mounts with the dialog already asked for.
  */
 import type { Chat } from '@shared/types'
-import { MessagesSquare } from 'lucide-react'
+import { MessagesSquare, Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { EmptyState, SectionTitle } from '../ui'
+import { Button, EmptyState, SectionTitle } from '../ui'
 import { useChatsStore } from '../../stores/chats'
 import { useUiStore } from '../../stores/ui'
 
@@ -41,11 +46,33 @@ export function CommitteeTopics({ committeeId }: CommitteeTopicsProps): React.JS
     useUiStore.getState().setPage('chats')
   }
 
+  const convene = (): void => {
+    if (!committeeId) return
+    // Ask for the dialog *before* navigating: this component does not survive
+    // the page change, and the chats page reads the request on mount.
+    useUiStore.getState().openNewChatDialog(committeeId)
+    useUiStore.getState().setPage('chats')
+  }
+
   return (
     <section className="flex flex-col gap-2.5">
-      <SectionTitle level={3} count={topics.length}>
-        {t('committees.topics')}
-      </SectionTitle>
+      <div className="flex items-center justify-between">
+        <SectionTitle level={3} count={topics.length}>
+          {t('committees.topics')}
+        </SectionTitle>
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="committee-new-topic"
+          // A committee that has not been saved yet has no id to convene on.
+          disabled={committeeId === null}
+          className="text-accent hover:text-accent"
+          onClick={convene}
+        >
+          <Plus aria-hidden="true" strokeWidth={2.2} className="h-3 w-3" />
+          {t('committees.newTopic')}
+        </Button>
+      </div>
 
       <div className="overflow-hidden rounded-lg border border-border-strong bg-bg-elevated">
         {topics.length === 0 ? (

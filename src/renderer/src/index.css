@@ -38,6 +38,18 @@
    */
   --color-bg-subtle: #2a282599;
 
+  /*
+   * The scrim behind a modal (S9.3), and the app's second translucent surface.
+   *
+   * A token rather than `bg-black/50` for the reason `bg-subtle` is one: a
+   * literal alpha written into a component is a colour no stylesheet can answer
+   * for, and this one has to darken two very different palettes. It is deep and
+   * neutral in both — a scrim is a shadow over the window, not a tint of it —
+   * and `prefers-reduced-transparency` at the bottom of this file replaces it
+   * with the opaque colour it composites to.
+   */
+  --color-overlay: #0c0b0aa6;
+
   /* Borders */
   --color-border: #262421;
   --color-border-strong: #2e2c28;
@@ -189,6 +201,7 @@
   --color-bg-hover: #e7e0d4;
   --color-bg-muted: #eee8dd;
   --color-bg-subtle: #e7e0d499;
+  --color-overlay: #38322aa6;
 
   /* Borders */
   --color-border: #e3dcd0;
@@ -277,11 +290,14 @@
  * does not need would only make the two appearances disagree about what green
  * means.
  *
- * `prefers-reduced-transparency: reduce` has exactly one surface to answer for,
- * `--color-bg-subtle`, and replaces its 50% alpha with the colour that alpha
- * composites to over `bg-panel`. Element `opacity` is not touched: a disabled
- * button and a superseded message are *states*, and the preference is about
- * see-through materials, not about the interface hiding what it means.
+ * `prefers-reduced-transparency: reduce` has two surfaces to answer for.
+ * `--color-bg-subtle` loses its 50% alpha for the colour it composites to over
+ * `bg-panel`; `--color-overlay` (S9.3) loses its 65% for the colour it
+ * composites to over the window, which makes a modal's scrim solid — the page
+ * behind a dialog stops showing through, which is exactly what the preference
+ * asks for. Element `opacity` is not touched: a disabled button and a
+ * superseded message are *states*, and the preference is about see-through
+ * materials, not about the interface hiding what it means.
  */
 @media (prefers-contrast: more) {
   :root {
@@ -304,10 +320,12 @@
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --color-bg-subtle: #232220;
+    --color-overlay: #0c0b0a;
   }
 
   :root[data-theme='light'] {
     --color-bg-subtle: #f1ece3;
+    --color-overlay: #38322a;
   }
 }
 

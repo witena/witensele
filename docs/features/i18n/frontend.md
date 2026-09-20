@@ -81,6 +81,10 @@ rule #6).
 
 This feature *is* the copy. The namespaces are `common`, `nav`, `chat`,
 `committees` (S9.2), `agents`, `settings`, `presence`, `errors` and `notices` —
+S9.3 added no namespace: the New chat dialog's copy is `chat.newChat*` because
+what it creates is a chat, `committees.newTopic` is the button on the
+Committees page, and `common.close` belongs to the `Dialog` primitive rather
+than to any one screen —
 see the key-tree table in
 [implement.md](./implement.md). S1.5 removed the ninth, `smoke`: the screen it
 belonged to became Settings -> Developer and its strings moved under
@@ -122,12 +126,17 @@ Things the guards will refuse: an English sentence in `zh-CN.json`, any CJK in
 `en.json`, an empty value, a key that exists in one file only, a key that no
 locale file defines, and a literal in JSX.
 
-One more thing the JSX guard refuses, discovered again in S5.16: a **generic
-argument in a `.tsx` file**. `conclusionPreviews?: Record<string, string>` in a
-props interface reads to the heuristic as a tag followed by a text node, so the
-prop takes a named alias (`ConclusionPreviews`, declared in a `.ts` module)
-instead. The guard's header documents the trade-off; the alias costs a line and
-the workaround would have cost an allowlist entry.
+One more thing the JSX guard refuses, discovered again in S5.16 and once more
+in S9.3: a **generic argument in a `.tsx` file**.
+`conclusionPreviews?: Record<string, string>` in a props interface reads to the
+heuristic as a tag followed by a text node, so the prop takes a named alias
+(`ConclusionPreviews`) instead. S9.3 added `committeeNames?: CommitteeNames` to
+the same interface and hit it from the other side: the *new* `Record<…>` closed
+a run of text that had been harmless, and the prop above it was suddenly
+reported. The fix is the same and the lesson is worth stating plainly — **a
+props interface in a `.tsx` file should not spell a generic out**. The guard's
+header documents the trade-off; the alias costs a line and the workaround would
+have cost an allowlist entry.
 
 One thing they are *not* meant to refuse: a value that is genuinely the same in
 both languages. A shell command (S5.3's `brew install anthropics/tap/ant`,
@@ -139,6 +148,16 @@ directory path and a model id, and S7.5 added three more: the version string and
 the repository URL in Settings → About, every `name@version · licence` row of
 its generated licence list, and an agent template's **name**, which is stored in
 `agents.name` and resolved against by `@mentions`.
+
+**Reuse beats a second translation**, and S9.3 is the clearest case of it so
+far. The New chat dialog draws four sentences it did not write: `nav.committees`
+for its committee heading (the rail's own word), `chat.executorTaken` under a
+blocked executor, `agents.executorBadge` on an executor's row and
+`chat.addMemberEmpty` for an empty agent library. Each is the same rule or the
+same tag said in the same words somewhere else; a copy would have been free to
+drift, and the two guards cannot catch a drift between two keys that both
+resolve. The test for "is this reuse or coincidence?" is whether the two places
+would have to change **together** — they would.
 
 A **flag part** needs no copy at all, which is S5.16's contribution to this
 feature's rules: `ConclusionPart` says "this message is the answer" and the

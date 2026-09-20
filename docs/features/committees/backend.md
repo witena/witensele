@@ -1,9 +1,22 @@
 # committees — Backend
 
-Everything here is S9.1. **S9.2 added no backend code at all**: the Committees
-page is built entirely on the five methods below, and the one thing it might
-have wanted — an event when a committee changes — is deliberately still absent
-(see "Events emitted").
+Everything here is S9.1. **S9.2 and S9.3 added no backend code at all**: the
+Committees page, the New chat dialog, the provenance badge and "Sync committee
+members" are built entirely on the five methods below plus `chats.create` and
+`chats.members.set`, and the one thing the page might have wanted — an event
+when a committee changes — is deliberately still absent (see "Events emitted").
+
+Two S9.3 notes about calls the frontend now makes:
+
+- The **merge rule below is duplicated in the renderer**, as
+  `mergeMembers` in `src/renderer/src/lib/committee-members.ts`, so the New chat
+  dialog can say "4 members will join" before the call. It is a copy for
+  display; this file is the authority, and both are held to the same examples
+  (`src/main/handlers/chats.test.ts` and `committee-members.test.ts`).
+- **Sync committee members is `chats.members.set`, nothing new.** The renderer
+  sends the chat's current members with the missing ones appended; the handler
+  sees an ordinary membership write and applies the same one-executor rule to
+  it, which is how a sync that would seat a second executor is refused.
 
 ## Modules
 

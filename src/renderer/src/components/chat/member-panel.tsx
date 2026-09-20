@@ -33,6 +33,16 @@
  * column up entirely to the "Retry" button, which is the manual half of S2.4's
  * recovery loop.
  *
+ * ## Sync committee members (S9.3)
+ *
+ * A chat convened from a committee holds a **snapshot** of its members, so a
+ * committee that has gained somebody since leaves the chat behind. The button
+ * under the list is the whole answer to that: it appears only when there is a
+ * gap, it appends the missing members in committee order, and it never removes
+ * anyone — a member the user took out of this chat took themselves out of this
+ * chat. The page works out who is missing (`lib/committee-members.ts`); the
+ * panel draws the button and calls back.
+ *
  * ## Presence
  *
  * The dot and the label under the name come from `stores/presence`, seeded by
@@ -42,7 +52,7 @@
  * exists while some member is actually `away`.
  */
 import type { TFunction } from 'i18next'
-import { Plus, UserPlus, X } from 'lucide-react'
+import { Plus, UserPlus, UsersRound, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatTokens } from '@shared/pricing'
@@ -118,10 +128,20 @@ export interface MemberPanelProps {
   /** Every agent in the library, for the picker. */
   agents: readonly Agent[]
   providers: readonly Provider[]
+  /**
+   * Committee members this chat was never given (S9.3), or empty.
+   *
+   * The page computes it with `lib/committee-members.ts`; the panel only draws
+   * the button. Non-empty is what makes the drift visible at all, and it is the
+   * *only* thing that does — nothing here reconciles anything on its own.
+   */
+  missingCommitteeMemberIds?: readonly string[]
   onAdd: (agentId: string) => void
   onRemove: (agentId: string) => void
   /** Called with the dragged row's index and the index it was dropped on. */
   onReorder: (from: number, to: number) => void
+  /** Appends the missing committee members. Never removes anyone. */
+  onSyncCommittee?: (() => void) | undefined
 }
 
 export function MemberPanel({
@@ -129,9 +149,11 @@ export function MemberPanel({
   members,
   agents,
   providers,
+  missingCommitteeMemberIds = [],
   onAdd,
   onRemove,
-  onReorder
+  onReorder,
+  onSyncCommittee
 }: MemberPanelProps): React.JSX.Element {
   const { t } = useTranslation()
   const [picking, setPicking] = useState(false)
@@ -222,6 +244,29 @@ export function MemberPanel({
           )}
         </ReorderableList>
       )}
+
+      {/*
+        The other end of the snapshot (S9.3). A topic keeps the members it was
+        convened with, so a committee that has gained someone since leaves this
+        chat behind — and the only honest way to close that gap is to offer it,
+        once, where the membership is. It **appends**: a member the user removed
+        from this chat stays removed, and the existing speaking order is not
+        touched. A `second_executor` refusal lands in the chat list's error line
+        through the same path every other member write uses.
+      */}
+      {chatId && missingCommitteeMemberIds.length > 0 && onSyncCommittee ? (
+        <Button
+          size="sm"
+          data-testid="member-sync-committee"
+          data-missing={missingCommitteeMemberIds.length}
+          className="mx-1 mt-1 justify-center"
+          title={t('chat.syncCommitteeTitle')}
+          onClick={onSyncCommittee}
+        >
+          <UsersRound aria-hidden="true" className="h-3 w-3" />
+          {t('chat.syncCommittee', { members: missingCommitteeMemberIds.length })}
+        </Button>
+      ) : null}
     </section>
   )
 }

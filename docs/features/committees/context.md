@@ -25,8 +25,11 @@ Phase 9, in three steps:
   removed, and the topics it has been convened on are listed. The member picker
   and the drag-to-reorder list are extracted from the chat's member panel so
   both screens behave identically.
-- **S9.3** — the New chat dialog, the committee badge on a topic, and "Sync
-  committee members" in the member panel.
+- **S9.3 (done)** — the New chat dialog: the chat list's "+" and the
+  Committees page's **New topic** both open it, a topic is convened from a
+  committee, individual agents, or both, the committee shows as a badge on the
+  chat row and in the chat header, and the member panel offers **Sync committee
+  members** when the committee has moved on.
 
 Settled before the phase started, and true of all three steps:
 
@@ -47,7 +50,8 @@ Settled before the phase started, and true of all three steps:
 | Several committees in one chat | Phase 6 backlog; the column is single-valued on purpose |
 | Grouping or filtering the chat list by committee | Phase 6 backlog; [`chats`](../chats/context.md) |
 | Anything a running chat does with its members | [`orchestration`](../orchestration/context.md) — it keeps reading `chat_members` and does not know committees exist |
-| The New chat dialog, "New topic", the committee badge, "Sync committee members" | S9.3. S9.2's page builds a committee; it cannot yet start a conversation with one |
+| Automatic reconciliation of a topic with its committee | Nowhere. Drift is the price of the snapshot and "Sync committee members" is the whole answer: explicit, append-only, and pressed by the user |
+| Removing members during a sync | Nowhere, for the same reason — a member the user took out of a chat took themselves out of that chat |
 
 ## Dependencies
 
@@ -60,8 +64,10 @@ Settled before the phase started, and true of all three steps:
 | [`ui-shell`](../ui-shell/context.md) | S9.2's rail button, the `Page` union and the primitives the page is built from |
 | [`i18n`](../i18n/context.md) | S9.2's `nav.committees` and the `committees.*` namespace |
 
-Depending on this feature in return: nothing yet. S9.3 adds the New chat dialog;
-orchestration never will.
+Depending on this feature in return: [`chats`](../chats/context.md), for the
+New chat dialog, the provenance badge and the sync button — all three read
+`Committee` and none of them is reachable while a chat runs. Orchestration
+never will.
 
 ## Decisions and trade-offs
 
@@ -73,7 +79,21 @@ orchestration never will.
 | `chats.update` does not accept `committeeId` | Allow re-pointing a topic at another committee | Provenance is a fact about how the chat was born. A topic that changed committee would be a snapshot of a group it never contained |
 | The one-executor rule applies to a committee too | Check only when a chat is convened | A group whose members cannot legally sit in one chat is a group that refuses to convene, and the refusal would arrive when the user opens a topic rather than when they build the group. The **same** `assertOneExecutor` is exported from `handlers/chats.ts`, so the rule and its `second_executor` reason cannot drift |
 | A committee name is a label, not an identity | Reject duplicates case-insensitively, as agent names are | Nothing resolves `@Review`; two committees may reasonably be called "Review" while holding different people. Only the trimmed-non-empty and length rules apply |
+| **S9.3**: a modal for New chat, where everything else in the app is in place | Keep creating on "+" and choose members afterwards in the panel | Convening is one decision made of three parts (a title, a committee, a set of agents) that only make sense written together. The in-place patterns the app prefers — two-step Delete, the rename row, the member popover — each edit one field of a record that already exists; there is no record here yet. Pressing Create with nothing chosen is still exactly the old "+" |
+| **S9.3**: the dialog's open state is in `stores/ui` | Local state in `ChatsPage`, with a prop from the Committees page | "New topic" has to navigate *and* preselect, and the component that pressed it is unmounted before the dialog renders. One boolean in the store is the whole mechanism |
+| **S9.3**: sync **appends** | Reconcile (add and remove), or offer a diff to approve | The committee is not an authority over a chat that has already started — it is where the chat came from. Appending is the only operation that cannot destroy a decision the user made inside the conversation |
 
 ## Open questions
 
-None. The three backlog entries above are deferrals, not questions.
+- **Does a committee want to own a chat's settings, or only its people?** A
+  committee today contributes members and nothing else — the topic it convenes
+  gets `DEFAULT_CHAT_SETTINGS` like any other chat, so a group assembled for
+  long design arguments still starts at three automatic rounds. "Committee
+  default chat settings" is on the Phase 6 backlog as a capability; what is
+  genuinely undecided is whether those defaults should be *copied* at creation
+  (a snapshot, like the members) or *read* from the committee at run time (an
+  authority, unlike the members). Copying is consistent; reading is what a user
+  editing a committee would probably expect. Neither answer is owed before the
+  backlog entry is picked up.
+
+The backlog entries in "Out of scope" are deferrals, not questions.

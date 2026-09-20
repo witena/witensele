@@ -16,6 +16,7 @@ import { expect, test, type ElectronApplication, type Locator, type Page } from 
 import {
   addOllamaProvider,
   addProviderModel,
+  createChat,
   createUserDataDir,
   launchWitena,
   locale,
@@ -74,10 +75,10 @@ async function addMember(name: string): Promise<void> {
   await expect(memberRows()).toHaveCount(before + 1)
 }
 
-/** Creates a chat with the "+" button and waits for it to be selected. */
+/** Creates a chat through the New chat dialog and waits for it to be selected. */
 async function newChat(): Promise<void> {
   const before = await window.getByTestId('chat-item').count()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('chat-item')).toHaveCount(before + 1)
 }
 

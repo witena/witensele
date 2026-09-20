@@ -6,6 +6,13 @@ user, saying it as a key. S1.4 changed no main-process file: `settings.update`
 already accepted `'zh-CN' | 'en' | 'system'`, and `SystemNoticePart` was defined
 in S1.1.
 
+Still true after Phase 9. Committees added five handlers and `chats.create`
+grew a `committeeId`, and none of them produces a sentence: a committee's
+**name** travels as stored data, a refusal travels as a `BackendErrorCode` plus
+a `ValidationReason`, and the badge that says where a chat came from is drawn
+from the name with its explanation translated in the renderer
+(`chat.committeeBadgeTitle`). No `notices.*` key was added.
+
 ## Modules
 
 | File | Responsibility |

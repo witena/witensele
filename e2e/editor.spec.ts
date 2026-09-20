@@ -42,6 +42,7 @@ import { join } from 'node:path'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import {
   addOllamaProvider,
+  createChat,
   createUserDataDir,
   launchWitena,
   openAgents,
@@ -143,7 +144,7 @@ test('the editor choice and its template survive a restart', async () => {
 
 test('a path inside the chat folder becomes a chip, and one outside it does not', async () => {
   await window.getByTestId('nav-chats').click()
-  await window.getByTestId('chats-new').click()
+  await createChat(window)
   await expect(window.getByTestId('composer-input')).toBeEnabled()
 
   await window.getByTestId('member-add').click()

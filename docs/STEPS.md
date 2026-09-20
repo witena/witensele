@@ -3167,6 +3167,43 @@ adds a line here in the same commit.
   update) rather than the certain one. Telling them apart would mean storing the
   key file's identity beside every ciphertext.
 
+### Committees (Phase 9)
+
+Phase 9 makes a committee a standing group of agents a topic is convened on.
+Four capabilities were named as out of scope while it was planned, and one
+question came out of building it.
+
+- **A committee charter in the system prompt.** A committee has a
+  `description`, and nothing reads it: it is a note to the user. The charter
+  version would put "what this group is for, and how it works" into every
+  member's system prompt for a chat convened from it — which is
+  [`agent-turn`](docs/features/agent-turn/context.md)'s to assemble, and which
+  has to decide what happens when a topic drifts away from the charter it
+  inherited.
+- **Committee default chat settings.** A committee assembled for long design
+  arguments still convenes a topic on `DEFAULT_CHAT_SETTINGS` — three automatic
+  rounds, round-robin, in turn. The capability is to store a `ChatSettings`
+  patch on the committee. The undecided part is whether those defaults are
+  **copied** at creation, like the members, or **read** from the committee at
+  run time: copying is consistent with the snapshot, reading is what a user
+  editing a committee probably expects.
+- **Several committees in one chat.** `chats.committee_id` is single-valued on
+  purpose, and the New chat dialog's committee list is single-select because of
+  it. Supporting more means a join table for provenance, a merge order across
+  committees, and deciding what the badge says when there are three.
+- **A chat list grouped or filtered by committee.** The badge on a row
+  (S9.3) is as far as provenance goes today. Grouping the left column by
+  committee, or filtering it to one, is the obvious next thing to want from
+  twenty topics; it interacts with the Today / Yesterday / Earlier buckets,
+  which are the column's current grouping and cannot simply be replaced.
+- **Open question — the merge rule exists twice.** `initialMembers` in
+  `src/main/handlers/chats.ts` is the authority; `mergeMembers` in
+  `src/renderer/src/lib/committee-members.ts` is a copy that exists only so the
+  New chat dialog can count and tick before it calls. They are held to the same
+  examples in two test files, which is the cheapest guard available, but there
+  is no way to share one function without putting chat-creation logic into
+  `src/shared`. Worth revisiting if a third caller appears.
+
 ### Open questions carried from the feature documents
 
 - `mcp`: subscribe to `notifications/tools/list_changed`; per-tool selection
@@ -4175,7 +4212,7 @@ and not the product's"; "this case measures a small local model reading it"). A
 renderer-only change cannot move either. Re-running `committees`, `members`,
 `ui-shell` and `presence` together is 20/20.
 
-### S9.3 New chat dialog and committee-aware chats `[ ]`
+### S9.3 New chat dialog and committee-aware chats `[x]` (2026-09-20)
 What: a topic is convened from a committee, individual agents, or both.
 - `components/ui/dialog.tsx`: the first modal primitive — focus trap, Escape
   closes, backdrop click closes, `role="dialog"` + `aria-modal`, theme tokens
@@ -4219,3 +4256,45 @@ it mentions it. Docs: `committees` (all four), `chats` (`context.md` scope,
 After this step, record under Phase 6 a "Committees" backlog entry: charter in
 the system prompt, committee default chat settings, several committees per chat,
 chat list grouped / filtered by committee.
+Done: `components/ui/dialog.tsx`, `components/chat/new-chat-dialog.tsx`,
+`lib/committee-members.ts`, the dialog state in `stores/ui.ts`, the widened
+`stores/chats.create`, **New topic** on the Committees page, the committee badge
+in two places and **Sync committee members** in the member panel — 1979 unit
+tests and the typecheck green, and `npm run e2e` at 117 passed. Five things
+worth knowing. **The scrim needed a new token**, `--color-overlay`: `bg-black/50`
+would have been the one colour in the app no stylesheet could answer for, so it
+is declared in both palettes and made opaque under
+`prefers-reduced-transparency` — which `lib/theme.test.ts` had pinned to a
+one-entry list ("has exactly one token with an alpha channel to answer for"),
+and that assertion plus the media-query one were widened to the two-entry
+`TRANSLUCENT_TOKENS`, in the direction their own comments asked for.
+**`used-keys.test.ts` fired on a props interface again**, the trap S5.16 already
+recorded: adding `committeeNames?: Record<string, string>` to `ChatListProps`
+put a `<` after a run of text that had been harmless, and the *previous* prop
+was reported as a hard-coded JSX node. The fix is S5.16's — a named alias,
+`CommitteeNames` — and `docs/features/i18n/frontend.md` now states the rule
+plainly: a props interface in a `.tsx` file should not spell a generic out.
+**The merge rule is deliberately duplicated.** `mergeMembers` in the renderer
+mirrors `initialMembers` in `handlers/chats.ts` so the dialog can count and tick
+before it calls; the backend stays the authority, both are held to the same
+examples, and the duplication is written down as an open question in the Phase 6
+entry below. **Create with nothing chosen is byte for byte the old "+"**:
+`createInput` omits every empty field, so `create({})` sends `{ input: {} }`,
+which is what keeps the bootstrap-agent path and fourteen end-to-end specs
+unchanged — they all go through the new `createChat(page)` helper, which is
+"click `chats-new`, click `new-chat-create`". `e2e/demo.record.ts` and
+`e2e/packaged.spec.ts` were edited the same way and, as the step said, not run.
+**The e2e suite has one failure and it is the known one.**
+`executor.spec.ts`'s "a participant answers from the materials, and reads an
+unmarked file when asked" failed with `tool-card` expected 0, received 1 —
+character for character what S9.2 recorded — and reproduces on its own; its
+serial file then skipped the two tests after it, both of which pass when the
+run excludes it (15/15 with `--grep-invert`). The other two known-flaky cases,
+`presence.spec.ts`'s third test and `closure.spec.ts`'s closure case, passed in
+this run. The README needed no change: neither language describes how a chat is
+created, and "pull members into any chat" is still true. One deviation worth
+naming: the `Dialog` primitive's own behaviour is covered in
+`e2e/ui-shell.spec.ts` rather than in `e2e/committees.spec.ts` — `role`,
+`aria-modal`, focus inside the panel, Escape, the backdrop, and a review
+screenshot in each appearance — because what is being tested there is the
+shell's primitive and not what the New chat dialog does with it.
