@@ -115,3 +115,25 @@ selects and navigates; an unknown one selects nothing, navigates nowhere, leaves
 `error` unset and does not clear the current selection; an id that arrives
 before `load` is honoured when the list lands, and dropped when the list turns
 out not to contain it.
+
+## Shim (WP-5)
+
+Still nothing in the renderer, and the table above is unchanged: `src/mcp-shim/`
+is a separate process that never sees the window, has no store field and adds no
+event.
+
+Two things WP-12 will want when it writes Settings → Integrations:
+
+- **The shim's three refusals are English text for the calling model**, exported
+  as `SHIM_ERROR_TEXT` from `src/mcp-shim/connect.ts`. They are read by an IDE
+  and never by the Witena window, so they are outside i18n by the same rule that
+  puts the tool descriptions and the endpoint's JSON-RPC errors outside it. One
+  of them tells the user's agent to say "open Witena → Settings → Integrations
+  and turn the MCP endpoint on" — when that section exists it says the same
+  thing in the user's own language, with its own `settings.integrations.*` key,
+  rather than showing this sentence.
+- **`out/mcp-shim/witena-mcp.cjs` is what the snippet block points at.** The
+  copyable fallback WP-12 shows is built from WP-9's `launcherPath`, and in a
+  build that ships none (development) the honest command is
+  `node <repo>/out/mcp-shim/witena-mcp.cjs` — which `npm run build` and
+  `npm run mcp-shim:build` both produce.
