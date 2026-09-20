@@ -4241,7 +4241,7 @@ window, the discussion runs, the conclusion returns, and clicking the Dock icon
 shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`
 (all four each).
 
-### S10.4 Settings → Integrations, and provenance `[~]`
+### S10.4 Settings → Integrations, and provenance `[x]` (2026-09-20)
 What: a user turns this on and connects an IDE without a terminal; the transcript
 says who typed what.
 - [x] Handlers `integrations.status` / `integrations.connect` /
@@ -4269,10 +4269,30 @@ says who typed what.
   never runs a real `claude` or `codex`: the real implementation is tested as
   argument vectors against an injected `execFile`, and `createTestAppContext`
   injects `absentIdeClients()`.)
-- [ ] Settings page, new "Integrations" section: the enable switch with one
+- [x] Settings page, new "Integrations" section: the enable switch with one
   sentence on what it opens; endpoint status; a card each for Claude Code and
   Codex (Connect / Disconnect / Repair); a generic copyable JSON + TOML snippet
   for any other client. Every string through `t()`, both locales.
+  (2026-09-20, WP-12. The section sits directly under MCP servers in the nav,
+  which is the same subject from the other end. The switch is driven from
+  `IntegrationStatus.endpoint.enabled` rather than from the settings row,
+  because `integrations.connect` enables the endpoint server-side and a switch
+  bound to the row would sit at "off" after a successful Connect; the toggle
+  still *writes* through the settings store — a new `setMcpEndpoint` beside
+  `setEditor` and `setExecutor` — because that write is what starts and stops
+  the host, and the status is re-read afterwards for `listening`, which
+  `settings.update` cannot report. The endpoint line is therefore **two facts in
+  three states**: off, listening on a port, and on-but-not-listening. The
+  snippets are shown even when `launcherPath` is `null`, with the command
+  `node <witena-repo>/out/mcp-shim/witena-mcp.cjs` and a note explaining the
+  placeholder — a checkout's endpoint works, only the command has no stable
+  spelling. `e2e/integrations.spec.ts` **never presses Connect, Disconnect or
+  Repair**: the app is launched with `WITENA_CLAUDE_BIN` / `WITENA_CODEX_BIN`
+  pointing at a path that does not exist, so both cards render "not installed"
+  and there is no action button on the screen to click — those buttons rewrite
+  `~/.claude.json` and `~/.codex/config.toml`, which belong to whoever runs the
+  suite. Everything after a press is covered by `stores/integrations.test.ts`
+  and `components/settings/integration-display.test.ts` against a fake backend.)
 - [x] `OriginPart` (`{ type: 'origin', client: string }`): `chat.send` accepts an
   optional `origin`, the endpoint fills it from `X-Witena-Client`, the message
   row renders a "via {{client}}" chip, the history converter ignores it (test, as

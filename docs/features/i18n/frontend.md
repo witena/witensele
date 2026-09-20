@@ -16,6 +16,8 @@ This feature is almost entirely frontend: the backend only stores a string (see
 | `src/renderer/src/main.tsx` | Bootstrap: load settings → resolve → `initI18n` → set `<html lang>` → render inside `I18nextProvider` |
 | `src/renderer/src/pages/settings-page.tsx` | S1.5: the language quick toggle at the bottom of the settings nav (`lang-system` / `lang-zh-CN` / `lang-en`) |
 | `src/renderer/src/pages/settings/appearance-section.tsx` | S1.5: the same setting again as a `Select`, under Settings -> Appearance & language. S5.8 put the appearance `SegmentedControl` above it, built the same way: a handler module, a stored `'system'`, no local state |
+| `src/renderer/src/pages/settings/integrations-section.tsx` | S10.4: Settings → Integrations. Every label a key under `settings.integrations.*`; the command and the two snippets printed as data |
+| `src/renderer/src/components/settings/integration-display.ts` | S10.4: the state, action and client-name labels as a `switch` of literal `t()` calls, plus the snippet builders |
 | `src/renderer/src/pages/settings/language.ts` | S1.5: `applyLanguageSetting` — the single handler both controls call; it puts a failed write into the store's `error` field |
 | `src/renderer/src/App.tsx` | S1.5: a composition root only. The smoke screen it used to hold is now Settings -> Developer |
 | `src/renderer/index.html` | `lang="en"` as the pre-bootstrap default; the bootstrap overwrites it |

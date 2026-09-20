@@ -103,7 +103,7 @@ Top-level keys are the plan's namespaces and are asserted by `locales.test.ts`:
 | `nav` | The three navigation rail entries |
 | `chat` | Chat list, date groups, member panel, composer, run controls, `passed` / `skipped`, since S5.5 the executor's permission card, the diff block and the file-reference chip, and since S5.15 the `commandRisk.*` subtree (one line per `CommandRiskReason`) and the Always allowed block's four keys |
 | `agents` | Agent list and configuration form labels, plus the `templates.*` subtree (S7.5): one description per entry of `@shared/agent-templates`, looked up by a **runtime** key, so `locales.test.ts` checks the subtree against the table in both directions the way it already does for the MCP presets |
-| `settings` | Section names, the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` S5.7 extended with the Editor block's seven `editor*` keys and S5.15 with the Sandbox block's four — plus, under `timeouts`, S5.15's `permission` / `permissionHint` |
+| `settings` | Section names (S10.4 added `sections.integrations`), the language switcher's own copy, the appearance switcher's (S5.8: `theme`, `themeSystem`, `themeLight`, `themeDark`, `themeHint`), the placeholder copy of the sections not built yet, and the `developer.*` subtree that S1.5 moved out of `smoke` S5.7 extended with the Editor block's seven `editor*` keys and S5.15 with the Sandbox block's four — plus, under `timeouts`, S5.15's `permission` / `permissionHint` ; S10.4 added the `integrations.*` subtree, twenty-eight keys for Settings → Integrations |
 | `presence` | The four presence states |
 | `errors` | One entry per `BackendErrorCode`, so a rejected `invoke` is rendered from `errors.<code>` — plus, since S5.2, one per `ValidationReason`, for the `validation` refusals that name which rule was broken (`errors.<reason>`). `errors.test.ts` asserts the namespace holds **exactly** the codes plus the reasons, in both directions, so a code added to the shared union without copy fails there rather than on screen (S5.3 added two of each; S5.13 three more codes, one per way the Google Cloud SDK can be unready; S5.6 three more reasons, for the hand-off's three refusals; S5.7 two more, for the two ways a path can be refused by `system.openInEditor`; S5.10 nine more, one per field of a chat goal that can be wrong — two of which the **renderer** raises itself, because a native dialog cannot be confined to a folder and the conversion is where that is noticed; S7.6 one more code, `key_unreadable`, for an API key encrypted by a previous installation) |
 | `notices` | Backend-authored notices — the keys `SystemNoticePart.key` may take |
@@ -208,6 +208,26 @@ sends no notice and no sentence: the message carries an `OriginPart`, a flag who
 only content is that name, exactly as `ConclusionPart` carries none at all — the
 backend says *what the message is*, and the renderer chooses every word around it
 in the language that is on screen now.
+
+S10.4's second half added the `settings.integrations.*` subtree — twenty-eight
+keys for the Integrations section — and it is the clearest case this feature has
+of the **data / copy** line, because the screen prints four different things and
+only two of them are keys:
+
+| On the screen | What it is | How it is rendered |
+|---|---|---|
+| "Coding agents", "Not connected", "Repair", every hint | Copy | `settings.integrations.*` |
+| `Claude Code`, `Codex` | Copy that is *identical* in both languages | `settings.integrations.clientClaudeCode` / `clientCodex`, the same string in both files — which `locales.test.ts` explicitly allows |
+| The registered command, `/Applications/Witena.app/…/bin/witena-mcp` | Data | Printed verbatim, in mono, like About's version string |
+| The JSON and TOML snippets | Data | Built by `components/settings/integration-display.ts`; a translated `mcpServers` key would be wrong in both languages |
+
+Two mechanics are worth naming. The state and action labels are reached by a
+`switch` of **literal** `t()` calls in `integration-display.ts` — the rule
+`lib/updates.ts` set, so `used-keys.test.ts` resolves every one of them and a
+typo cannot ship. And `snippetDevNote` interpolates `{{placeholder}}` with the
+`<witena-repo>` constant rather than spelling it inside the sentence, so the note
+and the snippet above it cannot drift apart; `escapeValue: false` is what lets an
+angle bracket through unmangled.
 
 S5.8 added five `settings.theme*` keys next to the language ones, and nothing
 else: the theme is an attribute on `<html>`, so the only translated text it

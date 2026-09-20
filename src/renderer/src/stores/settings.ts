@@ -20,6 +20,7 @@ import type {
   AppTimeouts,
   EditorSettings,
   ExecutorSettings,
+  McpEndpointSettings,
   ThemeSetting
 } from '@shared/types'
 import { getNavigatorLanguage, i18n, resolveLanguage } from '../i18n'
@@ -75,6 +76,17 @@ export interface SettingsState {
    * second setting added beside it must not have to change this signature.
    */
   setExecutor: (patch: Partial<ExecutorSettings>) => Promise<void>
+  /**
+   * Opens or closes the local MCP endpoint (S10.4).
+   *
+   * A partial, for the same reason the three above are. Nothing is optimistic:
+   * this write is what **starts or stops the listening host** in the main
+   * process (WP-7), so the switch must not claim to be on before the update has
+   * come back — and `stores/integrations.ts`, which owns the section, re-reads
+   * `integrations.status` afterwards to find out whether anything is actually
+   * listening. The two are different facts.
+   */
+  setMcpEndpoint: (patch: Partial<McpEndpointSettings>) => Promise<void>
   /**
    * Hides the first-run card for this installation (S7.5).
    *
@@ -146,6 +158,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
   async setExecutor(patch) {
     const settings = await getBackend().invoke('settings.update', { patch: { executor: patch } })
+    set({ settings, status: 'ready', error: undefined })
+  },
+
+  async setMcpEndpoint(patch) {
+    const settings = await getBackend().invoke('settings.update', { patch: { mcpEndpoint: patch } })
     set({ settings, status: 'ready', error: undefined })
   },
 

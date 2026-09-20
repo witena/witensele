@@ -1,13 +1,16 @@
 # mcp-endpoint — Frontend
 
-> Two surfaces so far: WP-8's deep-link handler and WP-13's provenance chip. The
-> Settings section is still to come.
+> The feature's own screen is built. WP-12 added Settings → Integrations; WP-8's
+> deep-link handler and WP-13's provenance chip are the two surfaces it has
+> outside that section.
 
 Surface, by work package (`tasks.md`):
 
 | Surface | Package |
 |---|---|
-| Settings → Integrations: the endpoint switch, status, Claude Code and Codex cards, the generic snippet | WP-12 |
+| Settings → Integrations: the endpoint switch, status, Claude Code and Codex cards, the generic snippet | WP-12 `[x]` (2026-09-20) |
+| `stores/integrations.ts` and the pure `components/settings/integration-display.ts` behind it | WP-12 `[x]` (2026-09-20) |
+| `settings.integrations.*` in both locale files, and `settings.sections.integrations` | WP-12 `[x]` (2026-09-20) |
 | `IntegrationStatus` and the three `integrations.*` calls the section is built from — backend only, no component yet | WP-11 `[x]` (2026-09-20) |
 | `errors.integrations_no_launcher`, `errors.integrations_client_not_installed` in both locale files | WP-11 `[x]` (2026-09-20) |
 | The "via {{client}}" chip on a message sent through the endpoint | WP-13 `[x]` (2026-09-20) |
@@ -297,3 +300,115 @@ snippet block shown instead, but if it is pressed the refusal is a translated
 sentence and not a crash. Nothing else about a development build is degraded —
 the endpoint listens, the shim works, and only the *command* has no stable
 spelling.
+
+## Settings → Integrations (WP-12)
+
+The section every package above was writing towards. Everything it draws comes
+from one call, `integrations.status`, and everything it does is the two calls
+beside it.
+
+| Piece | Where |
+|---|---|
+| The section | `src/renderer/src/pages/settings/integrations-section.tsx` |
+| The store | `src/renderer/src/stores/integrations.ts` |
+| The pure display rules and the snippets | `src/renderer/src/components/settings/integration-display.ts` |
+| The nav entry | `integrations` in `SETTINGS_SECTIONS` (`stores/ui.ts`), directly under `mcp` |
+| The copy | `settings.integrations.*` and `settings.sections.integrations`, both locale files |
+| The switch's write | `useSettingsStore.setMcpEndpoint({ enabled })` |
+
+It sits directly under **MCP servers** in the nav because the two are one
+subject from opposite ends: that section is the tools Witena *calls*, this one is
+Witena being the tool something else calls.
+
+### Three blocks
+
+**The endpoint** — a `Toggle`, a `StatusPill` and one sentence. The pill is
+*two* facts collapsed into three states by `endpointState`: `off` when the row is
+off, `listening` (with the port) when this process has a socket, and
+`not-listening` — the warn tone — when the row says on and nothing is listening.
+That third state is not hypothetical: WP-7 lets a host that fails to start leave
+the row `true`, and it is exactly the state a user would report. A pill that read
+only `enabled` would agree with the switch and tell them nothing.
+
+**The clients** — one card per entry of `IntegrationStatus.clients`, rendered in
+the order it arrives, which WP-11 guarantees is `IDE_CLIENT_IDS`. No card is
+matched by id and no id is written into the JSX, so a third client is a card with
+no change here. `ideClientState` collapses the three booleans into the four
+states, and `ideClientAction` maps each to its one button:
+
+| State | The card says | The button | The call |
+|---|---|---|---|
+| `not-installed` | Not installed, plus a line pointing at the snippets | none | — |
+| `not-connected` | Not connected | Connect | `integrations.connect` |
+| `connected` | Connected, with the registered command in mono | Disconnect | `integrations.disconnect` |
+| `stale` | Another copy, with what it points at and why | Repair | `integrations.connect`, the same call |
+
+**The snippets** — the universal fallback, in both shapes that exist: the
+`mcpServers` JSON object and Codex's `[mcp_servers.witena]` table, each with a
+Copy button. They are built from `launcherPath`, and they are shown **even when
+it is `null`**, because a development checkout's endpoint works perfectly well
+and it is only the *command* that has no stable spelling. The command is then
+`node <witena-repo>/out/mcp-shim/witena-mcp.cjs`, with `<witena-repo>` left as a
+placeholder that `settings.integrations.snippetDevNote` explains — the window
+genuinely does not know where the checkout is, and a guessed path would be wrong
+on every machine but one.
+
+### Decisions worth keeping
+
+- **The switch is driven from `status.endpoint.enabled`, not from the settings
+  store.** `integrations.connect` enables the endpoint server-side before it
+  registers anything (WP-11), so a switch reading `settings.mcpEndpoint.enabled`
+  would sit at off after a successful Connect. The status the store holds answers
+  both questions and arrives with every call.
+- **The settings store is kept in step anyway.** It is the app-wide mirror of
+  that row, so the toggle writes *through* it — `setMcpEndpoint`, the new sibling
+  of `setEditor` and `setExecutor`, and the write that actually starts and stops
+  the host — and a successful `connect` re-reads it. Two mirrors of one row that
+  disagree are worse than one extra call on a click.
+- **The snippets are data, not copy.** JSON, TOML and a filesystem path are the
+  same in every language; a translated `mcpServers` key would be wrong in both.
+  They are built by `integration-display.ts` with `JSON.stringify` and a TOML
+  string escaper, so a bundle path containing a space or a quote survives the
+  paste. The sentence *around* them goes through `t()` like everything else.
+- **Every label is a key, including the two product names.**
+  `settings.integrations.clientClaudeCode` is `Claude Code` in both locale files,
+  which `locales.test.ts` allows for a value that is deliberately identical. It
+  keeps the next client out of the JSX.
+- **Labels are literal `t()` calls inside a `switch`**, the discipline
+  `i18n/errors.ts` set: `t(KEYS[state])` is invisible to `used-keys.test.ts`, and
+  a `switch` with no `default` makes the compiler prove the mapping is total.
+- **The clipboard is not the backend.** `navigator.clipboard.writeText`, with the
+  failure swallowed, exactly as `code-block.tsx` and `conclusion-card.tsx` do
+  it — rule 6 is about reaching the *backend* past `BackendClient`, and the
+  clipboard belongs to the window.
+
+### Failures
+
+The store keeps the trio every other store keeps — `error`, `errorCode`,
+`errorDetails` — and the section draws it with `translateFailure`, so WP-11's two
+`ValidationReason`s (`integrations_no_launcher`,
+`integrations_client_not_installed`) become their own sentences with no mapping
+of this section's own. A CLI that ran and refused arrives as `internal` with its
+`stderr` in `message`: the generic sentence is the line, and the CLI's own words
+are the dimmed monospace line under it, never in place of it.
+
+Nothing in the store rejects. A refused Connect is a line under the cards.
+
+### Tests
+
+| File | What it owns |
+|---|---|
+| `components/settings/integration-display.test.ts` | Every state → label key, tone and action, including the absurd combination WP-11 never sends; the endpoint's three states; both snippets, their escaping and the development fallback |
+| `stores/integrations.test.ts` | The three calls against a fake backend: Repair *is* `integrations.connect`; the toggle writes through the settings store and re-reads the status; a successful connect follows the row the handler flipped; `disconnect` leaves the endpoint alone; every refusal lands in the trio rather than rejecting |
+| `e2e/integrations.spec.ts` | The section in the running app: a card per client, the switch publishing and removing the discovery file, and a snippet reaching the system clipboard |
+
+**The e2e never presses Connect, Disconnect or Repair, and it is built so that it
+cannot.** Those buttons run `claude mcp add` and `codex mcp remove`, which
+rewrite `~/.claude.json` and `~/.codex/config.toml` — files belonging to whoever
+is running the suite. The app is therefore launched with `WITENA_CLAUDE_BIN` and
+`WITENA_CODEX_BIN` pointing at a path that does not exist: `resolveCliBinary`
+returns an override without checking it, the `--version` probe fails, and both
+cards render *not installed* on every machine with no action button on the screen
+at all. The first test asserts that emptiness, which is both a check of the
+not-installed state and the guard that keeps the file safe. Everything after a
+button press is the two unit files' subject.

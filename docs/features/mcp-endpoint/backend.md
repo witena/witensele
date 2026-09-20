@@ -15,6 +15,7 @@
 | `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 `[x]` (2026-09-20) |
 | `src/main/integrations/ide-clients.ts`, `integrations.*` handlers | WP-11 `[x]` (2026-09-20) |
 | `OriginPart`, `ChatSendInput.origin` | WP-13 `[x]` (2026-09-20) |
+| `AppSettings.mcpEndpoint` reached from the renderer by `useSettingsStore.setMcpEndpoint` — no new backend surface | WP-12 `[x]` (2026-09-20) |
 
 Nothing under `src/main/mcp-endpoint/` or `src/mcp-shim/` imports electron; a
 closure test in each enforces it (rule 5). The shim's is stricter still: no
@@ -802,3 +803,28 @@ which belong to whoever is running the suite. Three things enforce it:
   records `detect:`/`registered:`/`register:`/`unregister:` calls in order — the
   only way to assert that connect does nothing when it is already right, and
   removes before adding when it is not.
+
+## What the Integrations section asked of the backend (WP-12)
+
+**Nothing**, and that is the point worth recording: WP-12 built Settings →
+Integrations without a new method, a new field or a new event. `integrations.status`
+answered every question the screen asks, and `connect` / `disconnect` answering
+with the same whole `IntegrationStatus` meant no click needed a follow-up read.
+The three shapes WP-11 froze were enough as frozen.
+
+Two things the section relies on, stated here so a later change to this layer
+knows they are load-bearing:
+
+- **`clients` is always the full `IDE_CLIENT_IDS` list, in that order.** The
+  section renders a card per entry without matching by id, so a handler that
+  started omitting a client — rather than reporting it as `installed: false` —
+  would silently drop its card.
+- **`connect` returning the *post-connect* status is what keeps the switch
+  honest.** It enables the endpoint before registering, and the renderer drives
+  the switch from `endpoint.enabled` in that answer rather than from the settings
+  row (`frontend.md`).
+
+The one write the section makes outside `integrations.*` is the endpoint switch,
+and it goes through the existing `settings.update` with
+`{ patch: { mcpEndpoint: { enabled } } }` — WP-7's handler, whose side effect is
+starting and stopping the host. No second method was added for it.

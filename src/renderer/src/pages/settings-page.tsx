@@ -19,6 +19,7 @@ import {
   Info,
   KeyRound,
   Palette,
+  Plug,
   Server,
   Sparkles,
   Terminal,
@@ -35,6 +36,7 @@ import { SETTINGS_SECTIONS, useUiStore, type SettingsSection } from '../stores/u
 import { AboutSection } from './settings/about-section'
 import { AppearanceSection } from './settings/appearance-section'
 import { DeveloperSection } from './settings/developer-section'
+import { IntegrationsSection } from './settings/integrations-section'
 import { McpSection } from './settings/mcp-section'
 import { ProvidersSection } from './settings/providers-section'
 import { SkillsSection } from './settings/skills-section'
@@ -44,6 +46,7 @@ import { applyLanguageSetting } from './settings/language'
 const SECTION_ICONS: Record<SettingsSection, LucideIcon> = {
   providers: KeyRound,
   mcp: Server,
+  integrations: Plug,
   skills: Sparkles,
   timeouts: Timer,
   appearance: Palette,
@@ -59,6 +62,8 @@ function sectionLabel(t: TFunction, section: SettingsSection): string {
       return t('settings.sections.providers')
     case 'mcp':
       return t('settings.sections.mcp')
+    case 'integrations':
+      return t('settings.sections.integrations')
     case 'skills':
       return t('settings.sections.skills')
     case 'timeouts':
@@ -81,6 +86,7 @@ function SectionBody({ section }: { section: SettingsSection }): React.JSX.Eleme
   if (section === 'developer') return <DeveloperSection />
   if (section === 'timeouts') return <TimeoutsSection />
   if (section === 'about') return <AboutSection />
+  if (section === 'integrations') return <IntegrationsSection />
 
   return (
     <EmptyState

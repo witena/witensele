@@ -1,8 +1,8 @@
 # mcp-endpoint — Implementation
 
 > Partly built. `backend.md`'s table is the authority on which work package has
-> landed; the Integrations *section* (WP-12) is still to come, its backend
-> (WP-11) is here. The design is PLAN.md
+> landed; the Integrations section (WP-12) and its backend (WP-11) are both
+> here. The design is PLAN.md
 > "Witena as an MCP server (the MCP endpoint)"; the types every package codes
 > against are under "Frozen contracts" in [`tasks.md`](./tasks.md). Each work
 > package replaces part of this file with what it actually built.
@@ -634,3 +634,59 @@ until somebody runs it by hand:
   quit Witena" is not, because reproducing it means a second signed copy of the
   app with a fresh `WITENA_USER_DATA` and therefore the Keychain prompt WP-0a
   measured. See [`backend.md`](./backend.md), "The bundled launcher".
+
+## Settings → Integrations (WP-12)
+
+The renderer half of WP-11, and the only screen this feature owns. Four files,
+none of which holds a decision the backend has already made.
+
+| File | Owns |
+|---|---|
+| `src/renderer/src/pages/settings/integrations-section.tsx` | The three blocks: the endpoint switch, a card per client, the two snippets |
+| `src/renderer/src/stores/integrations.ts` | `load`, `setEndpointEnabled`, `connect`, `disconnect`; the status mirror and the error trio |
+| `src/renderer/src/components/settings/integration-display.ts` | Pure: state, tone, action, every label key, and both snippets |
+| `src/renderer/src/stores/settings.ts` | One new action, `setMcpEndpoint`, beside `setEditor` and `setExecutor` |
+
+Data flow, in full:
+
+```
+mount → useIntegrationsStore.load()
+          → BackendClient.invoke('integrations.status')     one read, everything
+
+switch → setEndpointEnabled(enabled)
+          → useSettingsStore.setMcpEndpoint({ enabled })    the write that starts
+          →   settings.update { patch: { mcpEndpoint } }      or stops the host
+          → integrations.status                             `listening` is only
+                                                              knowable afterwards
+Connect / Repair → connect(client)
+          → integrations.connect { client }                 enables the endpoint
+          → the answer replaces the mirror                    server-side, so
+          → useSettingsStore.load()                           the row is re-read
+
+Disconnect → disconnect(client)
+          → integrations.disconnect { client }              the endpoint is left
+          → the answer replaces the mirror                    listening (WP-11)
+```
+
+Why the switch writes through the settings store rather than calling
+`settings.update` itself: that store is the app-wide mirror of the row, and the
+handler's side effect — storing it *and* starting or stopping the listening host,
+idempotently — is what makes the toggle live. Why the status is re-read
+afterwards: `settings.update` answers with `AppSettings`, which says nothing
+about whether anything is listening. The two are different facts and the section
+shows them as two.
+
+Why `connect` re-reads the settings row but `disconnect` does not: `connect`
+enables the endpoint on its way through the handler, so the row changed without
+the switch having been touched; `disconnect` deliberately leaves the endpoint
+listening, so it cannot have.
+
+`busyClient` is a single id rather than a set, because the two buttons are on one
+screen and a user presses one of them; every card's action is disabled while any
+call is in flight, and the card that was clicked is the one that redraws.
+
+The display rules and the snippet builders are a separate pure module for the
+reason `mcp-display.ts` is: the renderer suite runs in plain `node` with no DOM,
+so "a connected-but-stale client offers Repair" is a unit test rather than a
+mount. `frontend.md` has the state table and the copy rules; `context.md` has the
+decisions.
