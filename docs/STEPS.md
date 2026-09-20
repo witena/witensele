@@ -4058,15 +4058,22 @@ first if any of them fails.
 - [x] **Single-instance lock and the e2e harness.** (2026-09-20, WP-0a) `requestSingleInstanceLock()`
   is keyed by `userData`; confirm that with `WITENA_USER_DATA` applied *before*
   the lock, parallel Playwright launches do not evict each other.
-- [ ] **What the clients really do.** Against a ten-line stdio MCP server with a
-  tool that sleeps: Claude Code's and Codex's actual startup and tool-call
-  timeouts and how each is configured; whether progress notifications are shown
-  or at least reset the timeout; what `claude mcp add` / `codex mcp add` accept
-  (scope, env, args) and where they write; how Claude Code surfaces MCP resources
-  (`@server:uri`) and prompts (`/mcp__server__prompt`), and whether Codex
+- [x] **What the clients really do.** (2026-09-20, WP-0b) Against a ten-line stdio
+  MCP server with a tool that sleeps: Claude Code's and Codex's actual startup and
+  tool-call timeouts and how each is configured; whether progress notifications are
+  shown or at least reset the timeout; what `claude mcp add` / `codex mcp add`
+  accept (scope, env, args) and where they write; how Claude Code surfaces MCP
+  resources (`@server:uri`) and prompts (`/mcp__server__prompt`), and whether Codex
   surfaces either; and that a user-level Claude Code subagent file
   (`~/.claude/agents/<name>.md`) whose tools are only `mcp__<server>__*` can be
-  `@`-mentioned and can call them (S10.5 stands on this).
+  `@`-mentioned and can call them (S10.5 stands on this). Findings in
+  `context.md` → "WP-0b clients": Claude Code's startup timeout is 30 000 ms and
+  its per-call limit is not extended by progress; Codex has no default tool-call
+  timeout (130 s succeeded with progress *and* without it) and does not block the
+  turn on server startup, so a slow shim loses its tools silently;
+  `DEFAULT_WAIT_SECONDS` stays 50. The subagent file and Claude Code's tool-call
+  path could not be exercised — that CLI was not logged in — and are carried into
+  "Open questions" for WP-14/WP-15.
 Acceptance: `context.md` answers each bullet with what was run and what happened;
 the default `maxWaitSeconds` and the shim's launch timeout are chosen from
 measured numbers, not from memory. Docs: `mcp-endpoint` (context only — the other
