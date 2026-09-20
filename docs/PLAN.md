@@ -225,6 +225,100 @@ and sees their chats, the way any chat product works. The desktop app gains a
 
 What online deliberately does **not** do at first: stdio MCP servers (a child process on a shared host is not safe), CLI sign-in (both `ant` and `gcloud` are local), local folders. Each is either replaced (HTTP MCP, API keys, uploads) or waits for cloud workspaces.
 
+## Witena as an MCP server (the MCP endpoint)
+
+Many users live in an agentic coding tool — Claude Code, Codex, Cursor — and will
+not switch windows to ask a group. Every one of those tools speaks MCP. So Witena,
+which so far is only an MCP *client* (`MCPManager`), also becomes an MCP *server*:
+the coding agent calls a Witena tool, a group chat runs in the background app, and
+the group's conclusion comes back as the tool result. The discussion is an
+ordinary chat — visible live in the Witena window, stored, continuable there.
+
+**The role split is the one PLAN already made.** Participants are read-only and a
+single executor writes ("Future extension", point 2). Called from an IDE, *the IDE
+agent is the executor*: Witena returns a conclusion, the caller edits the files.
+The endpoint therefore never starts a hand-off and never needs Witena's executor.
+
+**Committees.** The reusable expert group — a *committee* — is its own feature
+(STEPS.md Phase 9), built separately. The endpoint addresses an existing chat, an
+ad-hoc list of agents, or a committee plus extra agents, and it never expands a
+committee itself: `chats.create` is the only place a committee becomes members.
+Everything but the committee tools works without Phase 9.
+
+### Shape
+
+```
+Claude Code / Codex / any MCP client
+        │  stdio (MCP)
+        ▼
+witena-mcp            the shim: a single bundled JS file shipped inside
+(src/mcp-shim/)       Witena.app, run by the app's own binary with
+        │             ELECTRON_RUN_AS_NODE=1 — the way VS Code's `code` runs
+        │  MCP over Streamable HTTP, 127.0.0.1:<ephemeral>, bearer token
+        ▼
+MCP endpoint          src/main/mcp-endpoint/ — no electron import (rule 5);
+        │             an SDK `McpServer` whose tools call the existing
+        ▼             `HandlerMap` and watch the existing `EventBus`
+AppContext · ChatRunner · repositories   (unchanged)
+```
+
+It is a third transport beside Electron IPC and `src/server/http.ts`, and like
+them it owns no business logic: tools validate nothing the handlers already
+validate, and reach storage only through handlers.
+
+| Decision | Why |
+|---|---|
+| A stdio shim in front of a local HTTP endpoint, not "point the IDE at a port" | stdio is the one transport every MCP client supports. The IDE's config is a stable command, so the port can be ephemeral and the token never sits in an IDE config file. And only a process can launch the app when it is not running |
+| The shim answers `initialize` and `tools/list` itself, from tool definitions in `src/shared/mcp-tools.ts`; it connects to the app on the first `tools/call` | Opening the IDE must not launch Witena, and Codex gives a server ~10 s to start. The app is launched lazily, only when a tool is actually used |
+| The app is the only owner of the database and the runners; the shim never opens SQLite | Two processes running `ChatRunner` over one chat would double-speak, and presence / permission state lives in memory |
+| Discovery by file: `<userData>/mcp-endpoint.json` = `{ version, port, token, pid }`, mode `0600`, written on listen, removed on quit; the token is random per launch | No fixed port to collide, nothing long-lived to leak. The shim re-reads the file on `ECONNREFUSED` / `401`, which is also how it survives an app restart |
+| The endpoint is **off by default**; a Settings switch (or the "Connect" button) turns it on | It is a local door that can spend the user's provider money and read their chats. Requests carrying an `Origin` header, or a `Host` other than loopback, are refused — a web page cannot reach it by DNS rebinding |
+| Streamable HTTP in **stateless** mode | A discussion's state is the chat, not the MCP session: an IDE that restarts mid-discussion picks it up again with `get_discussion`. No session table to expire |
+| The identity of a discussion is its `chatId` | A chat has at most one run at a time; a separate run id would be a second name for the same thing |
+| Long work is chunked: every waiting tool returns within `maxWaitSeconds` (default 50) with `status: "running"`, and the caller calls `wait_for_discussion` again | A multi-agent discussion takes minutes; Codex's default tool timeout is 60 s and no client's is unbounded. Progress notifications are sent when the caller supplied a `progressToken`, but nothing depends on them |
+| A background launch shows the Dock icon and no window (`open -g -j … --args --background`); clicking the icon opens the window through the existing `activate` handler. `requestSingleInstanceLock` is added | Visible and quittable with zero new UI and zero main-process copy (rule 4: main has no `t()`). A menu-bar item and idle-quit are backlog |
+| The message the endpoint sends is a normal user message plus an `OriginPart` flag (`{ type: 'origin', client }`), rendered as a "via Claude Code" chip | The transcript must say what a human typed and what a tool typed on their behalf. A flag part needs no migration and is invisible to the history converter, exactly like `ConclusionPart` |
+| Pending permission prompts are never auto-answered. A waiting tool returns `status: "needs-attention"` with the chat's `witena://` link | Only reachable on an existing chat that has an executor and `autoDeliver`. Answering for the user from outside the app would bypass S5.4 |
+| Chats created by the endpoint refuse `executor` agents and take `workdir` only at creation | The caller is the executor. `workdir` gives participants the read-only workspace tools (S5.11) over the IDE's project, and an outside caller must not repoint an existing chat's folder |
+| Installing into an IDE goes through the IDE's own CLI (`claude mcp add --scope user …`, `codex mcp add …`), with a copyable snippet as the universal fallback | Their config files are theirs; their CLIs are the supported way in. The handlers take an injected `IdeClients` interface (`node:child_process`, not electron) |
+
+### Tools
+
+Client-side names are already namespaced (`mcp__witena__*`), so the names are plain.
+
+| Tool | Input | Result |
+|---|---|---|
+| `list_chats` | `query?` | `id`, `title`, member names, goal kind, `updatedAt`, `running` |
+| `list_agents` | — | `id`, `name`, role, provider/model label; executors flagged as not invitable |
+| `list_committees` | — | `id`, `name`, description, member names in order (needs Phase 9) |
+| `start_discussion` | `question`, `context?`, and **either** `chatId` **or** a new chat from `committee?` (name or id, needs Phase 9) and / or `agents?: string[]` (names or ids), with `title?`, `workdir?`; `rounds?`, `maxWaitSeconds?` | Sends the message (creating the chat first unless `chatId` was given), then behaves as `wait_for_discussion`. Refused with `busy` while that chat has a run in flight |
+| `wait_for_discussion` | `chatId`, `maxWaitSeconds?` (5–600, default 50) | The discussion result below |
+| `get_discussion` | `chatId`, `detail: 'conclusion' \| 'transcript'`, `afterMessageId?` | The result, or the transcript as markdown, without waiting |
+| `stop_discussion` | `chatId` | `chat.stop` |
+
+The discussion result: `status` (`running` · `concluded` · `ended` · `stopped` ·
+`error` · `needs-attention`), `chatId`, `url` (`witena://chat/<id>`), `round`,
+`conclusion` (the markdown of the latest `ConclusionPart` message after the
+question — S5.16 already produces it), and when the run ended without consensus
+(`max-rounds`), `positions`: each participant's last message of the final round,
+so the caller still gets the disagreement instead of nothing. `usage` from
+`messages.usageSummary`. Structured content plus a readable text block.
+
+Later, on the same endpoint: MCP **resources** (`witena://chat/<id>` as a
+transcript — Claude Code's `@witena:…` mention) and MCP **prompts** (a `consult`
+prompt — `/mcp__witena__consult`). The literal `@committee` experience in
+Claude Code is a generated subagent file per committee
+(`~/.claude/agents/witena-<slug>.md`, tools limited to `mcp__witena__*`), written
+and kept in sync by Settings → Integrations; only files carrying Witena's
+frontmatter marker are ever overwritten or removed. Codex has no equivalent.
+
+### Online version
+
+`src/main/mcp-endpoint/` takes `AppContext` + `HandlerMap` and returns a request
+handler, so `src/server/http.ts` can mount the same thing at `/mcp` as a remote
+MCP server once accounts exist (S8.2): the shim, the discovery file and the
+launch logic are desktop-only, the tools are not. Not scheduled.
+
 ## Test gate
 
 Nothing ships before its own tests pass; failing tests mean the feature is not done.
@@ -259,6 +353,7 @@ Language rule: everything committed to the repository (docs, code comments, comm
 6. **Backlog**: decided work that is not yet scheduled (STEPS.md Phase 6).
 7. **Local release**: the brand mark, a signed and notarized dmg built by CI, auto-update, a first-run experience (STEPS.md Phase 7; see "Local release and online version").
 8. **Online version**: the same product served from AWS with accounts, the agents and chats stored on the server, and a web client — plus the desktop app able to sign in to it (STEPS.md Phase 8).
+10. **MCP endpoint**: Witena as an MCP server — a stdio shim shipped in the app, a local endpoint, discussion tools, and one-click install into Claude Code and Codex (STEPS.md Phase 10; see "Witena as an MCP server"). Milestone 9, committees, is added by that feature's own plan.
 
 ## Verification
 

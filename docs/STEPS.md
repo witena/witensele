@@ -4014,3 +4014,252 @@ messages live. Docs: `backend-client`, `ui-shell`.
 The executor online: a per-user container with the folder, the same seven
 tools over a small agent inside it, the permission prompt unchanged.
 
+
+## Phase 10: MCP endpoint (PLAN "Witena as an MCP server")
+
+Witena as an MCP server, so that Claude Code, Codex and any other MCP client can
+ask a group chat and get its conclusion back. Read the PLAN section first: the
+shape, the decision table and the tool table there are the specification, and the
+steps below only slice them.
+
+**Relation to Phase 9 (committees).** Phase 9 — the reusable expert group, a
+*committee* — is being built in parallel by someone else: S9.1 data and API
+(both dialects' migration, repository, handlers, shared types, the expansion of a
+committee into members inside `chats.create` with de-duplication and the
+second-executor rule), S9.2 the committees page, S9.3 the new-chat dialog. This
+phase does not touch that work and S10.0–S10.4 do not depend on it. S10.5 is the
+one step that does: it exposes committees through the endpoint by calling Phase
+9's handlers, and must not start before S9.1 is merged. It may add committee
+*API* (a handler or a field Phase 9 did not need) but never a second expansion
+rule — `chats.create` stays the only place a committee becomes members.
+
+Feature folder: `docs/features/mcp-endpoint/`. **Each step below is executed as
+the work packages in `docs/features/mcp-endpoint/tasks.md`** — WP-0a … WP-16, each
+sized for one subagent in its own worktree, with the contracts between them
+frozen up front, the existing files it may touch, and the commands that prove it
+done. The step says *what*; the package says *exactly how and how to check*. The existing `mcp` feature stays
+what it is — Witena as an MCP *client*.
+
+### S10.0 Spike: what the design assumes `[ ]`
+What: the design rests on platform behaviour nobody has run yet. Find out before
+building on it; throwaway code, kept out of `src/`. Write the findings into
+`docs/features/mcp-endpoint/context.md` ("What the spike found"), and change PLAN
+first if any of them fails.
+- [ ] **Run-as-node from the shipped bundle.** With a signed, notarized
+  `Witena.app` (`npm run dist:dir` plus the v0.1.0 dmg):
+  `ELECTRON_RUN_AS_NODE=1 Witena.app/Contents/MacOS/Witena script.cjs` runs the
+  script, reads stdin / writes stdout unbuffered, shows no Dock icon and no
+  window, and is not blocked by the hardened runtime. Confirm no Electron fuse
+  config disables `RunAsNode` today and record that it must stay enabled.
+- [ ] **Hidden launch.** `open -g -j -a <bundle> --args --background` starts the
+  app without stealing focus; `process.argv` carries `--background` in a packaged
+  build; how long from `open` to "HTTP port listening" on a cold start (this
+  bounds the shim's launch timeout).
+- [ ] **Single-instance lock and the e2e harness.** `requestSingleInstanceLock()`
+  is keyed by `userData`; confirm that with `WITENA_USER_DATA` applied *before*
+  the lock, parallel Playwright launches do not evict each other.
+- [ ] **What the clients really do.** Against a ten-line stdio MCP server with a
+  tool that sleeps: Claude Code's and Codex's actual startup and tool-call
+  timeouts and how each is configured; whether progress notifications are shown
+  or at least reset the timeout; what `claude mcp add` / `codex mcp add` accept
+  (scope, env, args) and where they write; how Claude Code surfaces MCP resources
+  (`@server:uri`) and prompts (`/mcp__server__prompt`), and whether Codex
+  surfaces either; and that a user-level Claude Code subagent file
+  (`~/.claude/agents/<name>.md`) whose tools are only `mcp__<server>__*` can be
+  `@`-mentioned and can call them (S10.5 stands on this).
+Acceptance: `context.md` answers each bullet with what was run and what happened;
+the default `maxWaitSeconds` and the shim's launch timeout are chosen from
+measured numbers, not from memory. Docs: `mcp-endpoint` (context only — the other
+three files say "not built yet").
+
+### S10.1 The endpoint and the discussion tools `[ ]`
+What: the transport-free core, testable without Electron or a shim.
+- [ ] `src/shared/mcp-tools.ts`: the six tool definitions (name, description,
+  JSON Schema input, result types, the `DiscussionStatus` union). Shared because
+  the shim serves `tools/list` from it without the app (S10.2). Descriptions are
+  written for a model: they say when to call `wait_for_discussion` again and that
+  the caller, not Witena, applies the conclusion.
+- [ ] `src/main/mcp-endpoint/discussion.ts`: `DiscussionWatcher` — subscribes to
+  the `EventBus` **before** sending, resolves on `run.finished`, on
+  `permission.requested` for that chat (`needs-attention`), or at the deadline
+  (`running`); then builds the result from `messages.list`: the latest
+  `ConclusionPart` message after the question, else `positions` (each
+  participant's last message of the final round, truncated), plus
+  `messages.usageSummary`. Maps `RunFinishReason` → status (`completed` with a
+  conclusion → `concluded`; `completed` without / `max-rounds` → `ended`;
+  `stopped`; `error`).
+- [ ] `src/main/mcp-endpoint/tools.ts`: the six tools over `HandlerMap` +
+  `AppContext` — never over repositories directly. `start_discussion`: resolve
+  `agents` by id or case-insensitive name (ambiguous or unknown → a validation
+  error that lists the candidates); refuse `executor` agents; `chats.create` with
+  `memberAgentIds`, `title` (default: first line of the question), `workdir`
+  (absolute, must exist; creation only); refuse `busy` when
+  `ctx.runners` reports `isRunning` for an existing chat; compose the message as
+  question + context (cap the total, say the cap in the error); `chat.send` with
+  `rounds`. `BackendFailure` → an MCP tool error (`isError: true`) carrying the
+  `BackendErrorCode`.
+- [ ] `src/main/mcp-endpoint/server.ts`: `createMcpEndpoint({ ctx, handlers,
+  token })` → a `node:http` request handler. SDK `McpServer` +
+  `StreamableHTTPServerTransport` in stateless mode (one server+transport per
+  request). Guards before the SDK sees anything: bearer token (constant-time
+  compare), no `Origin` header, loopback `Host`, body cap. Progress
+  notifications on `run.round` and on each agent `message.updated` when the
+  request carries a `progressToken`.
+- [ ] Extend the no-electron scanner (`src/server/no-electron.test.ts`, or a
+  sibling) to the import closure of `src/main/mcp-endpoint/`.
+- Tests: tool-level unit tests with the AI SDK mock model injected through
+  `runner.createModel` as `http.test.ts` does — concluded, ended-with-positions,
+  deadline-then-wait-again, stop, busy, executor refused, name resolution, a
+  pending permission; a contract test with a real endpoint on an ephemeral port
+  and the SDK `Client`, including the three refusals (no token, `Origin` present,
+  foreign `Host`).
+Acceptance: the contract test creates a chat from two agent names, asks a
+question and receives the mock group's conclusion through MCP; `npm test` and
+`npm run typecheck` pass. Docs: `mcp-endpoint` (all four), `orchestration`
+(nothing changes — say so in one line if the watcher leans on an ordering
+guarantee of `run.finished`).
+
+### S10.2 The shim `[ ]`
+What: `witena-mcp`, the command an IDE runs.
+- [ ] `src/mcp-shim/`: a low-level SDK `Server` on `StdioServerTransport`.
+  `initialize` and `tools/list` answered locally from `@shared/mcp-tools`;
+  `tools/call` forwarded through an SDK `Client` +
+  `StreamableHTTPClientTransport`, relaying progress and cancellation. Captures
+  `clientInfo.name` from `initialize` and sends it as `X-Witena-Client`.
+- [ ] Discovery: `src/shared/mcp-discovery.ts` — the file name, its schema and
+  the `userData` path rule (honouring `WITENA_USER_DATA`), used by both sides.
+  The shim reads it, checks `pid` is alive, connects; on `ECONNREFUSED` / `401`
+  re-reads once (app restarted) before failing.
+- [ ] Lazy launch (macOS, packaged only): derive the bundle from
+  `process.execPath`, `open -g -j -a <bundle> --args --background`, poll for the
+  discovery file up to the timeout S10.0 measured. In dev, and when the endpoint
+  is switched off, return a tool error that says exactly that — the text is for
+  the calling model, in English, and is not UI copy.
+- [ ] Build: a fourth Vite target → one bundled `out/mcp-shim/witena-mcp.cjs`
+  with the SDK inlined (no `node_modules` lookup at run time). Nothing but
+  `@shared/*` and the SDK may be imported — a test walks the closure and fails on
+  `electron`, `better-sqlite3` or anything under `src/main/`.
+- Tests: spawn the built shim with `node` against the S10.1 test endpoint and a
+  fake discovery file; drive it with the SDK's stdio client: `tools/list` with no
+  app, a forwarded call, the stale-file re-read, the endpoint-off error.
+Acceptance: `node out/mcp-shim/witena-mcp.cjs`, registered by hand in Claude Code
+against `npm run dev`, lists the tools and completes a `start_discussion`. Docs:
+`mcp-endpoint` (all four).
+
+### S10.3 Hosting it in the desktop app `[ ]`
+What: the app listens, can start in the background, and ships the shim.
+- [ ] `AppSettings.mcpEndpoint: { enabled: boolean }` (default `false`).
+  `src/main/index.ts`: when enabled, a `node:http` server on `127.0.0.1:0`
+  mounting `createMcpEndpoint`, a fresh random token, the discovery file written
+  `0600` after `listen` and removed in `before-quit`; toggling the setting starts
+  / stops it without a restart.
+- [ ] `app.requestSingleInstanceLock()` after the `WITENA_USER_DATA` override;
+  `second-instance` shows / creates the window. `--background` skips
+  `createWindow()`; the existing `activate` handler opens it from the Dock.
+- [ ] `witena://chat/<id>`: `protocols` in `electron-builder.yml`,
+  `setAsDefaultProtocolClient`, `open-url` (and the `second-instance` argv) →
+  show the window and emit a new `ui.open-chat` event on the bus; the renderer
+  navigates on it through `BackendClient.subscribe` (rule 6).
+- [ ] Packaging: `out/mcp-shim/witena-mcp.cjs` → `Contents/Resources/mcp/`, and a
+  `Contents/Resources/bin/witena-mcp` POSIX launcher that resolves the bundle
+  from its own path and `exec`s the app binary with `ELECTRON_RUN_AS_NODE=1`.
+  `packaging.test.ts` asserts both entries.
+- Tests: unit — the settings default and toggle, the discovery file's mode and
+  removal, deep-link parsing. e2e — `e2e/mcp-endpoint.spec.ts`: launch with the
+  switch on, run the built shim with `node`, `list_chats` answers, a
+  `start_discussion` message appears in the open window. `e2e/packaged.spec.ts`
+  gains one case: the bundled `bin/witena-mcp` answers `tools/list`.
+Acceptance: with Witena quit, a tool call from Claude Code launches it with no
+window, the discussion runs, the conclusion returns, and clicking the Dock icon
+shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`
+(all four each).
+
+### S10.4 Settings → Integrations, and provenance `[ ]`
+What: a user turns this on and connects an IDE without a terminal; the transcript
+says who typed what.
+- [ ] Handlers `integrations.status` / `integrations.connect` /
+  `integrations.disconnect` over an injected `IdeClients` interface
+  (`node:child_process`; reuse the binary lookup the `ant` / `gcloud` wrappers
+  use, because a GUI app does not inherit the shell's `PATH`). Status per client:
+  installed, connected, and whether the registered command still points at this
+  bundle (the app was moved) → "Repair". Connect runs the client's own CLI with
+  the forms S10.0 recorded. `system.capabilities` reports the feature absent on the
+  server host.
+- [ ] Settings page, new "Integrations" section: the enable switch with one
+  sentence on what it opens; endpoint status; a card each for Claude Code and
+  Codex (Connect / Disconnect / Repair); a generic copyable JSON + TOML snippet
+  for any other client. Every string through `t()`, both locales.
+- [ ] `OriginPart` (`{ type: 'origin', client: string }`): `chat.send` accepts an
+  optional `origin`, the endpoint fills it from `X-Witena-Client`, the message
+  row renders a "via {{client}}" chip, the history converter ignores it (test, as
+  for `ConclusionPart`).
+- Tests: handler tests with a fake `IdeClients`; the chip's row model; the
+  converter; the locale guard tests. e2e: the Integrations section toggles the
+  endpoint and shows the snippet (no real IDE needed).
+Acceptance: on a clean account — enable, click Connect for Claude Code, open
+Claude Code, ask it to consult two agents: works, and the message in Witena is
+marked "via claude-code". Docs: `mcp-endpoint`, `chats`, `agent-turn`, `i18n`
+(all four each).
+
+### S10.5 Committees through the endpoint `[ ]`
+Depends on: S9.1 merged (S9.3 for the e2e). Read `docs/features/` for the
+committee feature first and use its names; the ones below are this plan's guess
+and Phase 9's real ones win.
+What: "summon an expert group" from the IDE — the reason the endpoint exists.
+- [ ] Tool `list_committees` → `id`, `name`, description, member names in order
+  (from Phase 9's list handler). Added to `@shared/mcp-tools`.
+- [ ] `start_discussion` gains `committee?: string` (id or case-insensitive
+  name), allowed **together with** `agents` — the same "a committee plus single
+  agents" shape as S9.3's dialog. The tool resolves the name and passes the
+  committee id and the extra agent ids to `chats.create`; expansion, order and
+  de-duplication are Phase 9's. The endpoint's own rule stays on top: if the
+  expanded membership contains an `executor`, the chat is still created (it is
+  the user's committee) but the endpoint never hands off, and the result says
+  the caller is expected to apply the conclusion.
+- [ ] If Phase 9 has no way to ask "what would this committee expand to" and the
+  tool needs it for a useful error (unknown member, empty committee), add it to
+  Phase 9's handler file as a new method with its own tests, in agreement with
+  that feature's owner, and update that feature's four documents.
+- [ ] `@committee` in Claude Code (only if S10.0 found subagent files work as
+  assumed): Settings → Integrations gains "Create a Claude Code agent for each
+  committee". `integrations.syncCommittees` writes
+  `~/.claude/agents/witena-<slug>.md` per committee — tools limited to
+  `mcp__witena__*`, a body that tells the subagent to call `start_discussion`
+  with that committee and loop on `wait_for_discussion` — and removes files for
+  deleted committees. Only files carrying a `generated-by: witena` frontmatter
+  marker are ever overwritten or deleted. Re-synced on committee create / rename
+  / delete (a bus event if Phase 9 emits one, else on the handlers' success
+  path). Codex has no equivalent; its card shows the prompt to type instead.
+- Tests: tool tests — by name, by id, committee + agents with a duplicate,
+  unknown committee lists candidates, empty committee; the sync — create, rename
+  (old file removed), delete, a hand-written file with the same name left alone.
+  Contract test: `list_committees` then `start_discussion({ committee })`
+  returns the mock group's conclusion.
+Acceptance: in Claude Code, `@witena-<committee> <question>` starts a chat whose
+members are that committee's, visible in Witena with the committee's badge
+(S9.3), and the conclusion comes back. Docs: `mcp-endpoint` and the committee
+feature (all four each).
+
+### S10.6 Resources and prompts `[ ]`
+What: the parts of MCP beyond tools, scoped by what S10.0 found the clients
+actually surface. Drop any half no client shows.
+- [ ] Resources: `witena://chat/<id>` → the transcript as markdown (the
+  `get_discussion` renderer); `resources/list` = recent chats. The shim answers
+  an empty list when the app is not running rather than launching it.
+- [ ] Prompts: `consult` (`question`, `chat?` / `committee?` / `agents?`) expanding to an
+  instruction that makes the caller use `start_discussion`, pass the relevant
+  code as `context`, and loop on `wait_for_discussion`.
+- Tests: contract tests for both; the shim's no-launch rule.
+Acceptance: in Claude Code, `@witena:` offers recent chats and
+`/mcp__witena__consult` starts a discussion. Docs: `mcp-endpoint` (all four).
+
+### S10.7 Documentation and the demo `[ ]`
+- [ ] `README.md` and `docs/readme/README.zh-CN.md`: a "Use it from Claude Code /
+  Codex" section, kept in step.
+- [ ] Backlog entries under Phase 6, "MCP endpoint": a menu-bar item and
+  idle-quit for background launches; MCP elicitation as a remote permission
+  prompt; an update that wants to install while an endpoint-started run is in
+  flight; mounting the endpoint at `/mcp` on the server host after S8.2; Cursor /
+  Claude Desktop cards.
+Acceptance: a new user can follow the README section alone and get a conclusion
+back in their IDE.
