@@ -75,13 +75,14 @@ import {
   type GuardRefusal
 } from './guards'
 import type { ToolCallContext, ToolOutcome, ToolRegistry } from './tool-types'
+import { createTools } from './tools'
 
 export interface McpEndpointOptions {
   ctx: AppContext
   handlers: HandlerMap
   /** The bearer token of this launch, as the discovery file publishes it. */
   token: string
-  /** Defaults to `createTools()`; WP-4's tests pass a stub. */
+  /** Defaults to `createTools()`; the transport's own tests pass a stub. */
   tools?: ToolRegistry
 }
 
@@ -92,21 +93,16 @@ export interface McpEndpoint {
 }
 
 /**
- * The one seam WP-3 fills.
+ * The default registry: the six real tools.
  *
- * "Frozen contracts" has `tools` default to `createTools()` from `./tools.ts`,
- * which WP-3 writes after this package. Importing a module that does not exist
- * would not compile, and a silently empty registry would turn a wiring mistake
- * into six tools that answer "unknown tool", so the default is a throw that says
- * what to do. WP-3 replaces this body with `return createTools()` and imports it
- * from `./tools`; nothing else in this file changes.
+ * This was the one seam WP-3 filled — until `tools.ts` existed, the body threw a
+ * sentence naming the step, because importing a module that is not there would
+ * not compile and a silently empty registry would turn a wiring mistake into six
+ * tools that answer "unknown tool". A caller that wants something else (WP-4's
+ * own tests pass a stub) still passes `tools`.
  */
-function missingToolRegistry(): ToolRegistry {
-  throw new Error(
-    'createMcpEndpoint: pass `tools`. The default `createTools()` arrives with ' +
-      'src/main/mcp-endpoint/tools.ts (WP-3), which replaces the body of ' +
-      'missingToolRegistry() in server.ts.'
-  )
+function defaultToolRegistry(): ToolRegistry {
+  return createTools()
 }
 
 /** `MCP_TOOL_NAMES` as a set, so an unknown `tools/call` name is one lookup. */
@@ -172,7 +168,7 @@ const NO_ROUTE: GuardRefusal = {
 }
 
 export function createMcpEndpoint(o: McpEndpointOptions): McpEndpoint {
-  const tools = o.tools ?? missingToolRegistry()
+  const tools = o.tools ?? defaultToolRegistry()
 
   /** Everything still on the wire, so `close()` can end it. */
   const open = new Set<{ server: Server; transport: StreamableHTTPServerTransport }>()

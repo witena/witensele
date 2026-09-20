@@ -4089,7 +4089,7 @@ What: the transport-free core, testable without Electron or a shim.
   `messages.usageSummary`. Maps `RunFinishReason` → status (`completed` with a
   conclusion → `concluded`; `completed` without / `max-rounds` → `ended`;
   `stopped`; `error`). `readDiscussion` answers the same shape without waiting.
-- [ ] `src/main/mcp-endpoint/tools.ts`: the six tools over `HandlerMap` +
+- [x] (2026-09-20, WP-3) `src/main/mcp-endpoint/tools.ts`: the six tools over `HandlerMap` +
   `AppContext` — never over repositories directly. `start_discussion`: resolve
   `agents` by id or case-insensitive name (ambiguous or unknown → a validation
   error that lists the candidates); refuse `executor` agents; `chats.create` with
@@ -4098,7 +4098,10 @@ What: the transport-free core, testable without Electron or a shim.
   `ctx.runners` reports `isRunning` for an existing chat; compose the message as
   question + context (cap the total, say the cap in the error); `chat.send` with
   `rounds`. `BackendFailure` → an MCP tool error (`isError: true`) carrying the
-  `BackendErrorCode`.
+  `BackendErrorCode`. *(Plus `transcript.ts`, the markdown `get_discussion`
+  renders. The live run state is read from `ctx.runners.getState`, which is on
+  the context and in no repository; the `workdir` check is left to
+  `chats.create`, which refuses before it writes the row.)*
 - [x] (2026-09-20, WP-4) `src/main/mcp-endpoint/server.ts`: `createMcpEndpoint({ ctx, handlers,
   token })` → a `node:http` request handler. A low-level SDK `Server` +
   `StreamableHTTPServerTransport` in stateless mode (one server+transport per

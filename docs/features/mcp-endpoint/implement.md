@@ -214,6 +214,76 @@ in `tool-types.ts` and `server.ts` imports them from there. When `tools.ts` land
 
 Nothing else in `server.ts` changes.
 
+**Both were done by WP-3** (2026-09-20). `tools.ts` re-exports the three types,
+and the default registry is now `defaultToolRegistry()`, whose whole body is
+`return createTools()`. `tool-types.ts` still holds the declarations, because
+moving them would only relocate the same three lines and break the import
+`server.ts` already has.
+
+## The discussion tools (WP-3) — `tools.ts` and `transcript.ts`
+
+`createTools()` returns the `ToolRegistry` the transport takes by injection, and
+`tools.ts` re-exports `ToolCallContext`, `ToolOutcome` and `ToolRegistry` from
+`./tool-types`, so the frozen contract reads where it says it reads. The seam in
+`server.ts` is closed: its default registry is `createTools()`.
+
+Every tool is wrapped by one function, which is where three of the four rules in
+the file header stop being something each tool has to remember:
+
+```
+tools/call → MCP_TOOL_INPUTS[name].safeParse  → validation, in zod's own words
+           → the implementation               → ToolOutcome
+           → anything thrown                  → BackendFailure's code, else internal
+```
+
+| Tool | What it does beyond calling a handler |
+|---|---|
+| `list_chats` | Filters case-insensitively over the title **and the member names**, and flags a chat whose runner is live as `running`. Not `chats.search`: that also searches message bodies, and an answer that changed because a word appeared inside a message is a surprising thing to give a model |
+| `list_agents` | Labels each agent `<provider> · <model>` and marks an `executor` `invitable: false` |
+| `start_discussion` | Resolves the group, creates or continues the chat, sends, and waits. The order is load-bearing; see below |
+| `wait_for_discussion` | Reads the window from the chat's last **user** message, then either answers from the transcript (idle) or attaches a watcher (running) |
+| `get_discussion` | `conclusion` → `readDiscussion` over the same window; `transcript` → `renderTranscript` over the whole chat, or over what follows `afterMessageId` |
+| `stop_discussion` | `chat.stop`, plus the `wasRunning` the caller cannot otherwise know |
+
+### `start_discussion`, in order
+
+1. **The deadline first.** `Date.now() + (maxWaitSeconds ?? DEFAULT_WAIT_SECONDS)
+   * 1000` is taken before anything else, so the budget measures the caller's
+   wait and not what was left of it after a chat was created. `maxWaitSeconds`
+   has no zod default — the bounds are the schema's, the default is the tool's.
+2. **The input cap.** `question.length + context.length` against
+   `MAX_DISCUSSION_INPUT_CHARS`, refused with the number in the message so the
+   caller can trim rather than guess.
+3. **The chat.** `chatId` → `chats.get` (so an invented id is `not_found` before
+   anything is sent) and `busy` when its runner has live state. Otherwise the
+   group is resolved and `chats.create` is called with `memberAgentIds`, the
+   `title` (the question's first non-empty line, 60 characters) and `workdir`.
+4. **`watchDiscussion` before `chat.send`**, because a short discussion can reach
+   `run.finished` inside the same turn of the event loop the send resolved in. If
+   the send throws, `cancel()` runs before the error is re-thrown into the
+   wrapper: a subscription made in front of a send that never happened must not
+   outlive the call.
+
+Name resolution is **id first, then a case-insensitive exact name**. Exact rather
+than fuzzy because the caller has just been handed the list by `list_agents`, so
+a near-match is far likelier to be a different agent than a typo; and every
+refusal names what it could not use *and* what it could have used, because a
+model told only "unknown agent" can do nothing but guess again.
+
+### `transcript.ts`
+
+Pure: rows plus an `agentId → name` map in, markdown out. `**Name** (round n)`
+headers, the conclusion marked in its own header, one line per tool call, and
+reasoning dropped entirely — a `ReasoningPart` is a model talking to itself, and
+handing one model's private thinking to another is the opposite of what a
+transcript is for. A status worth a word (`passed`, `skipped`, `error`) is in the
+header; a `SystemNoticePart` renders as its key, because the backend writes
+notices as a key plus parameters and this transcript has no translator.
+
+It is a second rendering of the same rows rather than a reuse of the renderer's
+`transcript-rows.ts`: one produces a React model with streaming states and
+collapsible blocks, the other produces text, and the two have no shape in common.
+
 ## Tests
 
 | File | Covers |
@@ -224,6 +294,8 @@ Nothing else in `server.ts` changes.
 | `src/main/mcp-endpoint/guards.test.ts` | Each guard as a sentence, without a socket: the path claim; any `Origin`; a foreign `Host`, loopback on another port, a missing one; the bearer in every malformed spelling; the order the three run in; a repeated header; the body cap at, one over, and not-JSON |
 | `src/main/mcp-endpoint/server.test.ts` | A real listener driven by the SDK `Client`: `tools/list`; a call arriving with its arguments, `ctx`, `handlers` and `client`; `isError` for a failed outcome and for a tool that throws; a protocol error for an unknown tool; progress relayed in order and absent when unasked; `signal` aborting when a raw `fetch` is abandoned and when a client closes mid-call; `close()` aborting in-flight calls; the five refusals by raw request; `ToolOutcome` → `CallToolResult` without a socket |
 | `src/main/mcp-endpoint/no-electron.test.ts` | The import closure of `src/main/mcp-endpoint/` reaches `app-context.ts` and `chat-runner.ts` and contains no `electron`, in any of its spellings (CLAUDE.md rule 5) |
+| `src/main/mcp-endpoint/tools.test.ts` | All six against a **real** backend (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): each tool's happy path; name resolution by id, by name and by case, ambiguous and unknown; an executor refused; `busy` on a chat that is still talking; both caps; a relative and a missing `workdir` (and that neither left a chat behind); a `chat.send` that fails releasing the watcher; `wait_for_discussion` on an idle chat with and without a conclusion, and giving up at the deadline; `get_discussion` both details and `afterMessageId`; `stop_discussion` running and idle; `not_found` surfacing as `not_found`; and, for every tool, that garbage arguments are refused rather than thrown. In `afterEach`: the bus ends with as many listeners as it started with |
+| `src/main/mcp-endpoint/transcript.test.ts` | The rendering, from hand-built rows: the header shape, the conclusion mark, a tool call on one line and a failed one marked, reasoning and `[AGREED]` absent, `passed` / `skipped` / `error` in the header, a notice as its key, an unnamed agent as its id, and an empty transcript saying so |
 
 ## Known limitations and TODOs
 
