@@ -63,7 +63,8 @@ the endpoint both import.
 | `DiscussionStatus`, `DiscussionResult` | The one result shape `start_discussion`, `wait_for_discussion` and `get_discussion` all return |
 | `MCP_TOOL_INPUTS` | One `z.ZodObject` per tool. `z.infer` gives WP-3 its argument type, `.parse` gives it its validation |
 | `MCP_TOOLS` | `{ name, title, description, inputSchema }[]`, built from `MCP_TOOL_INPUTS` with `z.toJSONSchema` |
-| `chatUrl`, `parseChatUrl` | The `witena://chat/<uuid>` deep link, written by every result and read by WP-8 |
+| `chatUrl`, `parseChatUrl` | The `witena://chat/<uuid>` deep link, written by every result, read by WP-8, and the uri of every chat resource (WP-15) |
+| `MCP_PROMPT_NAMES`, `MCP_PROMPTS`, `MCP_PROMPT_INPUTS`, `renderPrompt` (WP-15) | The `consult` prompt: its argument table as MCP declares it, the zod shape both sides parse `arguments` with, and the pure function that expands it. See "Resources and the prompt" below |
 
 Three things are worth knowing before coding against it:
 
@@ -591,12 +592,94 @@ from `ctx.mcpEndpoint?.state`.
 `integrations.disconnect` refuses a client that is not installed, unregisters
 only when something is registered, and leaves the endpoint listening.
 
+## Resources and the prompt (WP-15) — `resources.ts`, `renderPrompt`, `src/mcp-shim/server.ts`
+
+The endpoint stops being tools-only. Three methods are added to each half, and
+the whole design question is *which of them may wake the app*.
+
+### What each method answers
+
+| Method | Endpoint | Shim |
+|---|---|---|
+| `resources/list` | The twenty most recently active chats as `witena://chat/<id>`, `mimeType: 'text/markdown'`, `name` and `title` both the chat's title. No `nextCursor` | Forwarded when a discovery file already describes a live app; `{ resources: [] }` otherwise |
+| `resources/read` | `renderChatTranscript(ctx, handlers, chat, await loadTranscript(…))` — literally the document `get_discussion { detail: 'transcript' }` returns | Forwarded on the same condition; an `McpError` carrying `RESOURCE_UNAVAILABLE_TEXT` otherwise |
+| `resources/templates/list` | `{ resourceTemplates: [] }` | The same |
+| `prompts/list` | `MCP_PROMPTS` | `MCP_PROMPTS` — the same table, no I/O |
+| `prompts/get` | `renderPrompt(name, arguments)` | `renderPrompt(name, arguments)` — the same function, no I/O |
+
+Both servers now declare `{ tools: {}, resources: {}, prompts: {} }` and nothing
+else: no `subscribe`, no `listChanged`. The endpoint is stateless, so a
+request-scoped `Server` has nobody to notify a moment later, and a client that
+subscribed to a chat would be subscribing to an object that stops existing when
+the response ends.
+
+### Which methods may launch Witena
+
+The rule, and the reason `Connector` now has two ways in:
+
+| Method | Connects | Launches |
+|---|---|---|
+| `initialize`, `tools/list`, `prompts/list`, `prompts/get` | never | **no** |
+| `resources/list`, `resources/read` | only when a discovery file already names a live app (`connector.openIfRunning`) | **no** |
+| `tools/call` | yes (`connector.open`) | **yes** |
+
+WP-0b measured Claude Code sending `tools/list`, `prompts/list` *and*
+`resources/list` on **every session start**. A listing that launched the app
+would launch it every time a user opened an editor, which is the one thing the
+whole shim exists to prevent. `resources/read` is held to the same rule by
+choice: it is a browse, the user asked for a document rather than for work, and
+a tool call — which does launch — is one step away. `openIfRunning` probes the
+file itself rather than calling `open()`, so there is no window in which a file
+that vanished between the probe and the connection could turn a listing into a
+launch; and it ignores the cache, because a cached endpoint that has since gone
+away would make a listing answer "running" and then fail.
+
+### Why the prompt lives in `@shared/mcp-tools`
+
+`renderPrompt` is a pure function of its arguments, so forwarding `prompts/get`
+would be a round trip — and, in an earlier design, a launch — for a string the
+shim can already produce. Sharing the function is what makes "the app and the
+shim expand it identically" a fact rather than an intention.
+
+`consult` takes `question` (required), `chat?` and `agents?`; every value is a
+string, because that is all `prompts/get` carries, so `agents` is comma-separated
+and the expansion tells the model to split it. It refuses `chat` and `agents`
+together in the same words `start_discussion` refuses them. `committee?` is
+**not** here: it belongs to WP-14, which is the package that gives
+`start_discussion` a `committee` field, and an argument that expanded into an
+instruction to pass one would be a prompt that teaches a model to fail.
+
+The expansion is a numbered procedure because the two failure modes it exists to
+prevent are skipping step 2 and giving up at step 3: a model that asks a group a
+question without pasting the code gets a generic answer, and one that reads
+`status: "running"` as an error abandons a discussion that was about to
+conclude.
+
+### The two refusals a read can produce
+
+- A uri `parseChatUrl` rejects — another scheme, an extra path segment, an id
+  that is not a uuid — never named a chat at all, so it is `InvalidParams` and
+  the message points at `resources/list`.
+- A well-formed uri whose chat is not in the database is `-32002` (the
+  specification's "resource not found", which this SDK's `ErrorCode` enum has no
+  name for; `McpError` takes a plain number). It comes from `chats.get` raising
+  a `BackendFailure` with code `not_found`.
+
+### `src/mcp-shim/server.ts`
+
+`createShimServer` moved out of `index.ts` into its own module. `index.ts` is the
+bundle's entry point and its last statement connects a `StdioServerTransport` to
+the real `process.stdin`, so importing it to test a handler would start a second
+MCP server on the test runner's own stdin. `index.ts` keeps the wiring — the
+real connector, the transport, the bootstrap — and re-exports `createShimServer`;
+everything that decides what a request *means* is in `server.ts`.
+
 ## Tests
 
 | File | Covers |
 |---|---|
 | `src/main/mcp-endpoint/discussion.test.ts` | Every row of the status table above, through a **real** run (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): consensus → `concluded` with the conclusion's text and author; a `rounds: 1` chain → `ended` with one truncated position per member; the deadline → `running`, then a second watch → the final result; `chat.stop` → `stopped`; a throwing model → `error`; an emitted `permission.requested` → `needs-attention`; abort and `cancel()` → `running`, with the run still finishing afterwards. Plus the `seq`-is-a-position assumption, paging past one page, `afterSeq` scoping, and — in an `afterEach` every case goes through — the event bus ending with as many listeners as it started with |
-| `src/shared/mcp-tools.test.ts` | The wire shape of every `inputSchema`; names against `MCP_TOOL_NAMES`; `start_discussion`'s three refinements; the wait and round bounds; `chatUrl` / `parseChatUrl`; the `z.infer` type test; that the module imports `zod` and nothing else |
+| `src/shared/mcp-tools.test.ts` | The wire shape of every `inputSchema`; names against `MCP_TOOL_NAMES`; `start_discussion`'s three refinements; the wait and round bounds; `chatUrl` / `parseChatUrl`; the `z.infer` type test; that the module imports `zod` and nothing else. Plus `describe('MCP_PROMPTS and renderPrompt')` (WP-15): the argument table in MCP's own shape rather than as a JSON Schema, the three sentences the expansion exists to say, a comma-separated `agents` becoming the array the tool takes, `chat` continuing a discussion, and the refusals `start_discussion` would give in the same words |
 | `src/shared/mcp-discovery.test.ts` | Every way the discovery file can be wrong; `userDataDirFor` with and without the override; that the module stays pure |
 | `src/main/mcp-endpoint/guards.test.ts` | Each guard as a sentence, without a socket: the path claim; any `Origin`; a foreign `Host`, loopback on another port, a missing one; the bearer in every malformed spelling; the order the three run in; a repeated header; the body cap at, one over, and not-JSON |
 | `src/main/mcp-endpoint/server.test.ts` | A real listener driven by the SDK `Client`: `tools/list`; a call arriving with its arguments, `ctx`, `handlers` and `client`; `isError` for a failed outcome and for a tool that throws; a protocol error for an unknown tool; progress relayed in order and absent when unasked; `signal` aborting when a raw `fetch` is abandoned and when a client closes mid-call; `close()` aborting in-flight calls; the five refusals by raw request; `ToolOutcome` → `CallToolResult` without a socket |
@@ -611,17 +694,19 @@ only when something is registered, and leaves the endpoint listening.
 | `src/main/mcp-endpoint/host.test.ts` | The host as a separate process meets it (WP-7): nothing listens until asked; `start()` publishes a port, a 32-byte token and this pid, mode `0600`; the published port answers `tools/list` through the SDK client with the token and `401` without; a fresh token on every start; `stop()` takes the file and the port away; both calls idempotent, and two overlapping `start()`s leave one socket; a discovery file naming another pid is neither deleted nor trusted; the injected `randomToken` / `pid` |
 | `src/main/handlers/settings.test.ts` | The row and the toggle (WP-7): the defaults, `mcpEndpoint.enabled` false, a row written before S10.3 gaining the group switched off, a patch merging rather than replacing, every malformed `mcpEndpoint` patch refused *before* the write, a context with no host storing the switch anyway, a fake host started and stopped as the switch is thrown, a patch about something else leaving it alone, and a `start()` that throws still storing the row |
 | `src/main/mcp-endpoint/transcript.test.ts` | The rendering, from hand-built rows: the header shape, the conclusion mark, a tool call on one line and a failed one marked, reasoning and `[AGREED]` absent, `passed` / `skipped` / `error` in the header, a notice as its key, an unnamed agent as its id, and an empty transcript saying so |
-| `src/mcp-shim/connect.test.ts` | The lookup against real temporary directories: the path rule; a good file; a missing one, a future version, a non-object and a dead pid all as "no endpoint"; `SingletonLock` as the liveness hint; each of the three refusals including which one a timed-out launch produces; connecting with the file's numbers and the IDE's name; the file read once and reused; the re-read after a `401` and after an `ECONNREFUSED`; a non-stale failure neither retried nor cached; staleness recognised in both spellings and not confused with a 403 or a 413 |
+| `src/mcp-shim/connect.test.ts` | The lookup against real temporary directories: the path rule; a good file; a missing one, a future version, a non-object and a dead pid all as "no endpoint"; `SingletonLock` as the liveness hint; each of the three refusals including which one a timed-out launch produces; connecting with the file's numbers and the IDE's name; the file read once and reused; the re-read after a `401` and after an `ECONNREFUSED`; a non-stale failure neither retried nor cached; staleness recognised in both spellings and not confused with a 403 or a 413; and `openIfRunning` (WP-15) — null with no file and with an app that wrote none, never launching in either case, connecting with the file's numbers when there is one, ignoring the cache, and reporting a refused socket as "nothing there" on stderr |
 | `src/mcp-shim/launch.test.ts` | `bundlePathFor` on a real bundle path, one with spaces, a nested bundle and four non-bundles; the `open` argument vector with and without the `WITENA_USER_DATA` override; `launch` with an injected `spawn` and clock — detached and unreferenced, polling until the file appears, giving up at the deadline, and not waiting at all when `open` cannot be run |
-| `src/mcp-shim/no-electron.test.ts` | The shim's closure reaches `index.ts`, `connect.ts`, `launch.ts` and WP-1's two shared modules, imports no `electron`, no `better-sqlite3` and nothing under `src/main/`, and no package outside the MCP SDK and zod |
+| `src/mcp-shim/no-electron.test.ts` | The shim's closure reaches `index.ts`, `server.ts`, `connect.ts`, `launch.ts` and WP-1's two shared modules, imports no `electron`, no `better-sqlite3` and nothing under `src/main/`, and no package outside the MCP SDK and zod |
 | `src/main/mcp-endpoint/tools.test.ts` — `describe('provenance (S10.4)')` | The calling client reaching the stored `OriginPart`; `mcp` for a caller that sent no header; a badly chosen name arriving sanitised; and the same mark on a question sent into an existing chat (WP-13) |
 | `src/main/handlers/chats.test.ts` — `describe('sanitizeOriginClient (S10.4)')` | The cleaning rules one by one: ordinary names, whitespace, newline, `\r`, tab, ANSI escape, NUL, bidi override, zero-width space, a non-Latin name kept; the cap, and that the cap does not leave a trailing space; `null` for empty, whitespace-only, control-only and every non-string (WP-13) |
 | `src/main/orchestration/chat-runner.test.ts` — `describe('provenance (S10.4)')` | The flag stored first and on the user message alone; a typed message left unmarked; the event sequence, mentions, round and finish reason unchanged; the client name absent from the prompt (WP-13) |
 | `src/main/agents/history.test.ts` | Two cases for the converter: a question with and without the flag producing byte-identical `ModelMessage`s, and a message that is nothing but the flag dropped (WP-13) |
 | `src/renderer/src/components/chat/transcript-rows.test.ts` — `describe('originClient (S10.4)')` | The row carrying the client name; the flag read wherever it sits; an empty name treated as none; the first of two winning; the two flag parts not confused (WP-13) |
-| `src/mcp-shim/shim.spawn.test.ts` | The **built** `out/mcp-shim/witena-mcp.cjs` (built in `beforeAll`), spawned with plain `node` and driven by the SDK's stdio client against a WP-4 endpoint with a stub registry: `tools/list` with no file and no app; a forwarded call carrying the token and `CLIENT_HEADER`; progress relayed across both hops in order; cancellation reaching the endpoint's `signal`; a failed `ToolOutcome` passed through; the switched-off and not-running refusals; the stale-file re-read |
+| `src/mcp-shim/shim.spawn.test.ts` | The **built** `out/mcp-shim/witena-mcp.cjs` (built in `beforeAll`), spawned with plain `node` and driven by the SDK's stdio client against a WP-4 endpoint with a stub registry: `tools/list` with no file and no app; a forwarded call carrying the token and `CLIENT_HEADER`; progress relayed across both hops in order; cancellation reaching the endpoint's `signal`; a failed `ToolOutcome` passed through; the switched-off and not-running refusals; the stale-file re-read. WP-15 added a whole Claude Code session start — `tools/list`, `prompts/list`, `resources/list` and `resources/templates/list` at once, with no app and no discovery file, answered in well under the client's budget and with the endpoint untouched — plus a `prompts/get` expanded out of the bundled `@shared/mcp-tools`, and a forwarded `resources/list` / `resources/read` proving the relay crosses both hops |
 | `src/main/packaging.test.ts` | The bundle's half of WP-9, over `electron-builder.yml` and `build/witena-mcp` as text: both `extraResources` destinations (`mcp/witena-mcp.cjs`, `bin/witena-mcp`), the `protocols` entry, the launcher's shebang, its `export ELECTRON_RUN_AS_NODE` and `exec` line, the two paths it derives, `productName === 'Witena'` (the executable the `exec` line names), and its **mode in the git index** — 755 there, because that is the mode a fresh clone and therefore the packaged bundle gets. Owned by [`../packaging/implement.md`](../packaging/implement.md) |
 | `e2e/packaged.spec.ts` | WP-9 against the shipped bundle: `Contents/Resources/bin/witena-mcp` exists and is executable, the shim is beside it at `mcp/witena-mcp.cjs`, and the launcher spawned the way a client spawns it answers `initialize` with `serverInfo.name === MCP_SERVER_NAME` and `tools/list` with the six names. The offline half on purpose — see [`backend.md`](./backend.md), "The bundled launcher" |
+| `src/mcp-shim/index.test.ts` | The shim's handlers over `InMemoryTransport.createLinkedPair()`, against a connector whose `open()` **throws** (WP-15): so the no-launch rule fails by name rather than by timing out. The three capabilities and the absence of `subscribe` / `listChanged`; `prompts/list` and `prompts/get` answered with the connector untouched, including the comma-separated `agents` and the two refusals; `resources/list` empty when `openIfRunning` finds nothing and forwarded — with its `cursor` — when it does; `resources/read` forwarded, and refused with `RESOURCE_UNAVAILABLE_TEXT` when nothing is listening; an empty `resources/templates/list`; and `tools/call` still taking the launching path |
+| `src/main/mcp-endpoint/contract.test.ts` — `describe('the parts of MCP beyond tools')` | The same three methods through the real socket and the real backend (WP-15): the capabilities; the listing in `chats.list`'s own order, capped at twenty, with no `nextCursor`; a read of a finished discussion byte-identical to `get_discussion`'s `markdown` and free of `[AGREED]`; a chat nobody has spoken in reading as its heading alone; a bad uri and a missing chat as two different errors; `prompts/list` and an expansion carrying the question, and a refusal that starts nothing |
 | `e2e/mcp-endpoint.spec.ts` | The two halves with **nothing stood in for** (WP-10): the built app on a temporary `userData`, the switch thrown through `settings.update` from inside the page, and the built shim spawned with plain `node` against the same directory. The discovery file appears within the poll; `tools/list` crosses the stdio hop; `list_chats` finds a chat seeded through the backend client, with its `witena://chat/<id>` and its member; a `start_discussion` with `maxWaitSeconds: 5` on a chat whose provider is a closed port puts the question in the open window's transcript (any status is accepted — the message is the claim); and, with the switch off, a fresh shim answers `SHIM_ERROR_TEXT['endpoint-off']` |
 
 ## Known limitations and TODOs

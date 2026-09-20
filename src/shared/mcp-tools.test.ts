@@ -21,11 +21,15 @@ import {
   chatUrl,
   DEFAULT_WAIT_SECONDS,
   MAX_WAIT_SECONDS,
+  MCP_PROMPT_INPUTS,
+  MCP_PROMPT_NAMES,
+  MCP_PROMPTS,
   MCP_TOOL_INPUTS,
   MCP_TOOL_NAMES,
   MCP_TOOLS,
   MIN_WAIT_SECONDS,
-  parseChatUrl
+  parseChatUrl,
+  renderPrompt
 } from './mcp-tools'
 
 /** A valid `randomUUID()` output, which is what every chat id in the database is. */
@@ -251,6 +255,91 @@ describe('chatUrl and parseChatUrl', () => {
     expect(parseChatUrl(`witena://chat/${UUID}0`)).toBeNull()
     expect(parseChatUrl(`witena://chat/${UUID.replace('3f', 'zz')}`)).toBeNull()
     expect(parseChatUrl('')).toBeNull()
+  })
+})
+
+/**
+ * The `consult` prompt (WP-15).
+ *
+ * Two processes answer `prompts/get` with this one function — the shim without
+ * the app, the endpoint with it — so what is worth pinning is the wire shape
+ * MCP requires (arguments are *strings*, and a prompt is a `name` plus an
+ * argument table) and the three sentences the expansion exists to say.
+ */
+describe('MCP_PROMPTS and renderPrompt', () => {
+  /** The expansion's text, or the refusal's message, for a set of arguments. */
+  function expand(args: Record<string, unknown> | undefined): string {
+    const rendered = renderPrompt('consult', args)
+    if (!rendered.ok) return rendered.message
+    const content = rendered.messages[0]?.content
+    return content?.type === 'text' ? content.text : ''
+  }
+
+  it('offers exactly one prompt, with a zod input beside it', () => {
+    expect(MCP_PROMPTS.map((prompt) => prompt.name)).toEqual([...MCP_PROMPT_NAMES])
+    expect(Object.keys(MCP_PROMPT_INPUTS).sort()).toEqual([...MCP_PROMPT_NAMES].sort())
+  })
+
+  it('declares its arguments the way MCP declares them, not as a JSON Schema', () => {
+    // `prompts/list` carries `{ name, description?, required? }` per argument,
+    // and `prompts/get` sends every value as a string. A JSON Schema here would
+    // be ignored by the client and would invite a non-string field.
+    const consult = MCP_PROMPTS[0]
+    expect(consult?.title.length).toBeGreaterThan(0)
+    expect(consult?.description.length).toBeGreaterThan(0)
+    expect(consult?.arguments.map((argument) => [argument.name, argument.required])).toEqual([
+      ['question', true],
+      ['chat', false],
+      ['agents', false]
+    ])
+    for (const argument of consult?.arguments ?? []) {
+      expect(argument.description.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('tells the agent the three things the prompt exists to say', () => {
+    const text = expand({ question: 'Is this migration safe?' })
+    // The question itself, so the expansion stands alone as a message.
+    expect(text).toContain('Is this migration safe?')
+    // Pass the material, or the group answers in generalities.
+    expect(text).toContain('`context`')
+    // `running` is not a failure.
+    expect(text).toContain('wait_for_discussion')
+    expect(text).toMatch(/running.*not a failure/i)
+    // And the caller is the executor.
+    expect(text).toMatch(/you are the one who writes/i)
+    // With nobody named, choosing the group is the agent's first step.
+    expect(text).toContain('list_agents')
+  })
+
+  it('turns a comma-separated agents argument into the array the tool takes', () => {
+    const text = expand({ question: 'Well?', agents: 'Ada, Lin , ' })
+    expect(text).toContain('`agents: ["Ada","Lin"]`')
+    expect(text).not.toContain('list_agents first and choose')
+  })
+
+  it('continues an existing chat when one is named', () => {
+    const text = expand({ question: 'And now?', chat: 'chat-1' })
+    expect(text).toContain('`chatId: "chat-1"`')
+    expect(text).toContain('no `agents`')
+  })
+
+  it('describes itself with the question, so a client can label the expansion', () => {
+    const rendered = renderPrompt('consult', { question: 'Is this migration safe?' })
+    expect(rendered.ok && rendered.description).toContain('Is this migration safe?')
+    expect(rendered.ok && rendered.messages[0]?.role).toBe('user')
+  })
+
+  it('refuses the argument sets start_discussion would refuse, in the same words', () => {
+    expect(renderPrompt('consult', {}).ok).toBe(false)
+    expect(expand({})).toContain('question')
+    expect(expand({ question: 'Well?', chat: 'c', agents: 'Ada' })).toContain('not both')
+  })
+
+  it('refuses a prompt it does not have, naming the ones it does', () => {
+    const rendered = renderPrompt('summon', { question: 'Well?' })
+    expect(rendered.ok).toBe(false)
+    expect(rendered.ok ? '' : rendered.message).toContain('consult')
   })
 })
 

@@ -4334,18 +4334,35 @@ members are that committee's, visible in Witena with the committee's badge
 (S9.3), and the conclusion comes back. Docs: `mcp-endpoint` and the committee
 feature (all four each).
 
-### S10.6 Resources and prompts `[ ]`
+### S10.6 Resources and prompts `[x]` (2026-09-20, WP-15)
 What: the parts of MCP beyond tools, scoped by what S10.0 found the clients
 actually surface. Drop any half no client shows.
-- [ ] Resources: `witena://chat/<id>` → the transcript as markdown (the
-  `get_discussion` renderer); `resources/list` = recent chats. The shim answers
-  an empty list when the app is not running rather than launching it.
-- [ ] Prompts: `consult` (`question`, `chat?` / `committee?` / `agents?`) expanding to an
-  instruction that makes the caller use `start_discussion`, pass the relevant
-  code as `context`, and loop on `wait_for_discussion`.
+- [x] (2026-09-20, WP-15) Resources: `witena://chat/<id>` → the transcript as
+  markdown (the `get_discussion` renderer); `resources/list` = recent chats. The
+  shim answers an empty list when the app is not running rather than launching
+  it. (`src/main/mcp-endpoint/resources.ts`: the twenty most recent chats and no
+  cursor. The body comes from `renderChatTranscript`, which `get_discussion`
+  now calls too, so the `@`-mention body and the tool result are one document. A
+  uri `parseChatUrl` rejects is `InvalidParams`; a well-formed link to a chat
+  that is not there is `-32002`. `resources/read` does not launch the app
+  either, by the same reasoning as the listing — see `backend.md`, "Which
+  methods may launch Witena".)
+- [x] (2026-09-20, WP-15) Prompts: `consult` (`question`, `chat?` / `agents?`)
+  expanding to an instruction that makes the caller use `start_discussion`, pass
+  the relevant code as `context`, and loop on `wait_for_discussion`. (Defined in
+  `src/shared/mcp-tools.ts` and rendered by `renderPrompt`, so the **shim
+  answers `prompts/list` and `prompts/get` with no I/O at all** — WP-0b measured
+  Claude Code asking for both on every session start, and Codex never asking at
+  all. `committee?` is left to S10.5: `start_discussion` has no `committee`
+  field yet, and a prompt that told a model to pass one would teach it to fail.)
 - Tests: contract tests for both; the shim's no-launch rule.
 Acceptance: in Claude Code, `@witena:` offers recent chats and
-`/mcp__witena__consult` starts a discussion. Docs: `mcp-endpoint` (all four).
+`/mcp__witena__consult` starts a discussion. **Not exercised by hand** — the
+`claude` CLI on this machine is not logged in, which is the wall WP-0b hit; the
+equivalent claims are asserted through the SDK client in `contract.test.ts`,
+`src/mcp-shim/index.test.ts` and `shim.spawn.test.ts`, and S10.7's README
+procedure is where a logged-in machine meets them. Docs: `mcp-endpoint` (all
+four).
 
 ### S10.7 Documentation and the demo `[ ]`
 - [ ] `README.md` and `docs/readme/README.zh-CN.md`: a "Use it from Claude Code /

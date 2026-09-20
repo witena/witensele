@@ -17,7 +17,8 @@ is the specification; this folder does not repeat it.
 
 - A local MCP endpoint hosted by the desktop app (`src/main/mcp-endpoint/`).
 - A stdio shim shipped inside the bundle (`src/mcp-shim/`, `bin/witena-mcp`).
-- Six discussion tools, later `list_committees`, resources and one prompt.
+- Six discussion tools and, since WP-15, chat resources and the `consult` prompt;
+  `list_committees` later.
 - Background launch, single-instance lock, the `witena://chat/<id>` link.
 - Settings → Integrations: the switch, and one-click install into Claude Code and
   Codex. Provenance of endpoint-sent messages (`OriginPart`).
@@ -157,6 +158,21 @@ PLAN's level are recorded here as work packages land.
 | Control characters are **removed, not escaped**, and the rule is `\p{C}` — so bidi overrides and zero-width characters go with them | Stripping only `\x00`–`\x1f`; escaping them for display | The chip is one item on a message header line. A newline, an ANSI escape or a right-to-left override in it is a client trying to look like something it is not, and no client name legitimately contains one. Letters outside ASCII are kept: a client may call itself by a word in its own script, and dropping those would mangle honest names without stopping a dishonest one |
 | A caller that sends no `CLIENT_HEADER` is labelled `mcp` rather than left unmarked | Omitting the flag for a direct HTTP caller | The message *did* arrive through the endpoint, and an unmarked row tells the user the opposite — that they typed it themselves. `mcp` says exactly what is known: it came through the endpoint, and the endpoint was not told by whom |
 | The history converter ignores the flag, and a test asserts the converted messages are **byte-identical** with and without it | Telling the group which tool is asking | Who *sent* a question is a fact about the transcript, not about the question. A group told that a machine is asking answers the machine: it shortens, it drops the caveats, it writes for a parser. It is `ConclusionPart`'s argument taken one step further |
+
+### Resources and the prompt (WP-15)
+
+| Decision | Alternatives considered | Why this one |
+|---|---|---|
+| The chat resource's body is **the same document** `get_discussion { detail: 'transcript' }` returns, produced by one shared `renderChatTranscript` | A second renderer for the resource; a JSON body | WP-0b measured both clients fetching it, by different routes: Claude Code pastes it into a conversation after `@witena:`, Codex hands it to a model through `read_mcp_resource`. Both of those read prose better than a structure, and both of them are the reader `transcript.ts` was already written for. Two renderings would be two things to keep in step, and the one a user sees would be the copy that drifted |
+| `resources/list` offers the **twenty** most recently active chats, with no `nextCursor` | Paging the whole history; a configurable number | The list is a mention menu, not an archive: twenty is more than a user scrolls and far less than a year of chats. A caller that wants the older ones wants `list_chats`, which takes a query and also says which are still running |
+| **`resources/read` does not launch the app either** — only `tools/call` does | Launching on a read, since the user asked for that one document | A read is a browse. The user asked to see a transcript, not to spend provider money, and Codex issues reads *mid-turn* from its own tool, which would make "the model got curious" a reason to start an application. The refusal names the switch, and a tool call — which does launch — is one step away. `openIfRunning` is the method that makes the rule structural rather than a habit |
+| `openIfRunning` probes the discovery file itself and **ignores the cache**, rather than calling `open()` behind a check | Calling `open()` after `probeDiscovery` returned non-null | Two windows closed at once: a file that vanished between the probe and the connection cannot turn a listing into a launch, and a cached endpoint that has since gone away cannot make a listing answer "running" and then fail. A listing has no way to tell those apart, so it must not be able to reach them |
+| A failed forward of `resources/list` answers `{ resources: [] }` and logs to stderr; a failed `resources/read` raises | Raising on both; answering empty on both | For a picker, "the endpoint answered badly" and "there is no endpoint" are the same thing, and an error there is a broken menu rather than an empty one. A read names one document, so an empty answer would be a lie |
+| The `consult` prompt is defined in `src/shared/mcp-tools.ts` and expanded by a pure `renderPrompt`, so the **shim answers `prompts/list` and `prompts/get` with no I/O at all** | Forwarding both to the endpoint, as the resource methods are forwarded | Claude Code asks for `prompts/list` on every session start (WP-0b), and the expansion is a function of its arguments — forwarding it would be a round trip, and in an earlier design a launch, for a string the shim already has. Sharing one function is also what makes "the app and the shim expand it identically" a fact rather than an intention |
+| `consult` takes `question`, `chat?` and `agents?` — **not** `committee?`, which S10.6 sketched | Adding `committee?` now and having the expansion mention it | `start_discussion` has no `committee` field until WP-14, and a prompt that told a model to pass one would be a prompt that teaches it to fail. WP-14 adds the argument and the tool field in one commit |
+| The prompt ships although only one client shows it | Dropping prompts entirely, as WP-0b's measurement would allow | It is ~60 lines of shared, pure code with no runtime cost to the client that ignores it, and it is where the "bring the code as `context`, keep waiting" procedure is stated to a model in one piece. Nothing depends on it: every claim it makes is also made by the tool descriptions |
+| Both servers declare `resources` and `prompts` with no `subscribe` and no `listChanged`; `resources/templates/list` answers an empty list rather than `Method not found` | Declaring `subscribe`; omitting the templates handler | The endpoint is stateless — a request-scoped `Server` has nobody to notify a moment later, and a subscription to a chat would outlive the object it was made on. Codex does ask for resource templates (WP-0b saw the handler in its binary), and an empty list is truthful where a method error is noise in somebody's log |
+| `createShimServer` moved into `src/mcp-shim/server.ts`; `index.ts` keeps only the wiring and the bootstrap | Guarding `main()` with an environment variable so `index.ts` could be imported by a test | `index.ts`'s last statement connects a `StdioServerTransport` to the real `process.stdin`, so importing it starts a server on the test runner's own stdin. A flag that made the entry point behave differently under test would be a second code path in the one file that has to work in a signed bundle; a second module is neither |
 
 ## What the spike found
 
@@ -493,4 +509,12 @@ restored byte-for-byte because the Codex app was running and owns that file.
 - Whether a user-level Claude Code subagent restricted to `mcp__witena__*` can be
   `@`-mentioned and reach those tools (WP-0b could not test it — the CLI on the
   spike machine was not logged in). S10.5's per-committee agent file depends on
-  it; WP-14/WP-15 must check it on a logged-in machine first.
+  it; WP-14 must check it on a logged-in machine first. **WP-15 could not**: the
+  same CLI, the same wall.
+- **Nothing has been exercised inside a real Claude Code session yet.** S10.6's
+  acceptance — `@witena:` offering recent chats, `/mcp__witena__consult` starting
+  a discussion — and WP-0b's unmeasured Claude Code *tool-call* timeout both need
+  a logged-in machine. WP-15 built to WP-0b's protocol-level measurements (which
+  methods each client sends, and when) and asserted every claim under them
+  through the SDK client; what is untested is the last hop, the client's own UI.
+  S10.7's README procedure is where that is met.

@@ -15,6 +15,7 @@
 | `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 `[x]` (2026-09-20) |
 | `src/main/integrations/ide-clients.ts`, `integrations.*` handlers | WP-11 `[x]` (2026-09-20) |
 | `OriginPart`, `ChatSendInput.origin` | WP-13 `[x]` (2026-09-20) |
+| `src/main/mcp-endpoint/resources.ts`, `MCP_PROMPTS` / `renderPrompt`, `src/mcp-shim/server.ts` | WP-15 `[x]` (2026-09-20) |
 
 Nothing under `src/main/mcp-endpoint/` or `src/mcp-shim/` imports electron; a
 closure test in each enforces it (rule 5). The shim's is stricter still: no
@@ -802,3 +803,115 @@ which belong to whoever is running the suite. Three things enforce it:
   records `detect:`/`registered:`/`register:`/`unregister:` calls in order — the
   only way to assert that connect does nothing when it is already right, and
   removes before adding when it is not.
+
+## Resources and the prompt (WP-15)
+
+Tools are what an IDE agent *does* to Witena. Resources are what it can *read*,
+and a prompt is what a user can invoke. Both halves were built to the shape
+WP-0b measured rather than to the shape the specification suggests, because the
+two clients that matter surface them by two different routes and one of them
+does not surface prompts at all.
+
+| Client | Resources | Prompts |
+|---|---|---|
+| Claude Code | `resources/list` on **every session start**; the user types `@witena:` and picks a chat, and the body is pasted into the conversation | `prompts/list` on every session start; `/mcp__witena__consult` |
+| Codex | Lazily, mid-turn, through its own `list_mcp_resources` / `read_mcp_resource` tools when the model asks | Never asked for; the binary carries no handler at all |
+
+So the resource must read well as prose *and* as a tool result — which is why
+its body is `transcript.ts`'s markdown — and the prompt is a Claude-Code-only
+extra that nothing else is allowed to depend on.
+
+### `src/main/mcp-endpoint/resources.ts`
+
+| Export | What it is |
+|---|---|
+| `listChatResources(ctx, handlers)` | The first `MAX_LISTED_CHAT_RESOURCES` (20) of `chats.list`, as `{ uri: chatUrl(id), name, title, description, mimeType }`. No `nextCursor` |
+| `readChatResource(ctx, handlers, uri)` | `chats.get` + `loadTranscript` + `renderChatTranscript` → one `text` content |
+| `MAX_LISTED_CHAT_RESOURCES`, `CHAT_RESOURCE_MIME` | 20 and `text/markdown` |
+
+Reads only, through handlers only, like everything else in this directory: no
+repository, no electron, and nothing that could start a run. `chats.list` is
+already `updatedAt` descending, which is the order a person wants — the
+discussion they had ten minutes ago is the one they are about to mention. The
+cap is there because the list is a mention menu rather than an archive; a caller
+that wants the older ones wants `list_chats`, which takes a query and says which
+are still running.
+
+The body is produced by `renderChatTranscript`, which was pulled out of
+`tools.ts`'s `get_discussion` and is now called by both. This is the one thing a
+later package must not undo: the `@`-mention body and
+`get_discussion { detail: 'transcript' }` are **one document**, and a second
+rendering of the same rows would be the copy that drifts — silently, and in the
+half a user sees.
+
+Two refusals, and they are different things:
+
+| Input | Error |
+|---|---|
+| A uri `parseChatUrl` rejects (another scheme, an extra segment, a non-uuid) | `InvalidParams`, pointing at `resources/list` |
+| A well-formed uri whose chat is not in the database | `-32002`, the specification's "resource not found" — this SDK's `ErrorCode` enum has no name for it, and `McpError` takes a plain number |
+
+Anything else `chats.get` or `loadTranscript` raises becomes `InternalError`
+with the message and no stack, exactly as the tools do with it.
+
+### The `consult` prompt
+
+Defined in `src/shared/mcp-tools.ts` (`MCP_PROMPT_NAMES`, `MCP_PROMPTS`,
+`MCP_PROMPT_INPUTS`, `renderPrompt`) rather than here, because **the shim answers
+it with no I/O at all**. The expansion is a pure function of its arguments, the
+app would produce the same string, and Claude Code asks for `prompts/list` every
+time a session starts — forwarding that would be a round trip for a string the
+shim already has. Sharing one function is what makes "both sides expand it
+identically" a fact rather than an intention.
+
+`prompts/get` carries strings and only strings, so `agents` is a comma-separated
+list that the expansion tells the model to split, and `renderPrompt` returns a
+`{ ok: false, message }` rather than throwing — this module may not import the
+SDK's `McpError`, and each side raises its own.
+
+`committee?`, which S10.6 sketched, is **not** implemented. It belongs to WP-14,
+the package that gives `start_discussion` a `committee` field; an argument here
+that expanded into an instruction to pass one would be a prompt that teaches a
+model to fail. WP-14 adds it to `CONSULT_ARGUMENTS` and to `consultText`'s
+"who" clause in the same commit as the tool field.
+
+### Which methods may launch Witena
+
+The decision, and the reason `Connector` grew a second way in:
+
+| Method | Connects | Launches | Why |
+|---|---|---|---|
+| `initialize`, `tools/list`, `prompts/list`, `prompts/get` | never | **no** | Answered out of `@shared/mcp-tools` |
+| `resources/list` | only when a discovery file already names a live app | **no** | Claude Code asks on every session start; launching for it would start Witena every time a user opened an editor |
+| `resources/read` | the same | **no** | A browse, not a request for work. The refusal names the switch, and a tool call — which does launch — is one step away |
+| `tools/call` | yes | **yes** | The user asked the group a question |
+
+`connector.openIfRunning(clientName)` is that second way: it probes the
+discovery file itself instead of calling `open()`, so there is no window in
+which a file that vanished between the probe and the connection could turn a
+listing into a launch, and it **ignores the cache**, because a cached endpoint
+that has since gone away would make a listing answer "running" and then fail. A
+socket that refuses is logged to stderr and reported as `null` — for a listing,
+"the endpoint answered badly" and "there is no endpoint" are the same thing, and
+an error there would surface as a broken `@`-mention menu rather than an empty
+one. A `resources/read` with nothing listening raises
+`RESOURCE_UNAVAILABLE_TEXT` instead, because a read names one document and an
+empty answer would be a lie; it is a JSON-RPC error rather than a tool result
+because `resources/read` has no `isError` shape to put a sentence in.
+
+Both servers now declare `{ tools: {}, resources: {}, prompts: {} }` — no
+`subscribe`, no `listChanged`. The endpoint is stateless, so a request-scoped
+`Server` has nobody to notify a moment later. `resources/templates/list` answers
+an empty list on both sides rather than being left out: Codex asks for it
+(WP-0b saw the handler in its binary), and an empty list is truthful where
+`Method not found` is noise in somebody's log.
+
+### `createShimServer` moved to `src/mcp-shim/server.ts`
+
+`index.ts` is the bundle's entry point and its last statement connects a
+`StdioServerTransport` to the real `process.stdin`, so a test that imported it
+to drive a handler would start a second MCP server on the test runner's own
+stdin. `index.ts` now keeps the wiring — `logToStderr`, `createProcessConnector`,
+`main()`, the bootstrap — and re-exports `createShimServer`; everything that
+decides what a request *means* is in `server.ts`. The Vite entry, the packaged
+file name and the launcher are unchanged.

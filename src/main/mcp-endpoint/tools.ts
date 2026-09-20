@@ -548,10 +548,7 @@ async function getDiscussion(
 
   if (args.detail === 'transcript') {
     const said = transcript.slice(from)
-    const markdown = renderTranscript(said, {
-      title: chat.title,
-      names: await agentNames(ctx, handlers)
-    })
+    const markdown = await renderChatTranscript(ctx, handlers, chat, said)
     const last = said[said.length - 1]
     const hint =
       'This is what was said, not a verdict. Call get_discussion with detail "conclusion" for the result, or pass the last message id as afterMessageId to read only what follows.'
@@ -625,6 +622,25 @@ function deadlineFor(maxWaitSeconds: number | undefined): number {
 async function agentNames(ctx: AppContext, handlers: HandlerMap): Promise<Map<string, string>> {
   const agents = await handlers['agents.list'](ctx)
   return new Map(agents.map((agent) => [agent.id, agent.name]))
+}
+
+/**
+ * Some messages of a chat, as the markdown a model reads.
+ *
+ * Exported because WP-15's `witena://chat/<id>` resource is *the same document*
+ * as `get_discussion { detail: 'transcript' }` — Claude Code fetches it as an
+ * `@`-mention body, Codex fetches it through its own `read_mcp_resource` tool,
+ * and both of them are the reader `transcript.ts` was written for. Two
+ * renderings of one transcript would be two things to keep in step, and the one
+ * a user sees after `@witena:` would be the copy that drifted.
+ */
+export async function renderChatTranscript(
+  ctx: AppContext,
+  handlers: HandlerMap,
+  chat: Chat,
+  messages: Message[]
+): Promise<string> {
+  return renderTranscript(messages, { title: chat.title, names: await agentNames(ctx, handlers) })
 }
 
 /**
