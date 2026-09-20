@@ -55,15 +55,16 @@ export const MCP_PATH = '/mcp'
 export const CLIENT_HEADER = 'x-witena-client'
 
 /**
- * The six discussion tools, in the order `tools/list` presents them.
+ * The seven discussion tools, in the order `tools/list` presents them.
  *
  * The order is the order a caller meets them in: find the room, find the people,
- * ask, wait, read, stop. `list_committees` joins it in WP-14, once Phase 9 has
- * committees to list.
+ * find the standing groups, ask, wait, read, stop. `list_committees` joined it
+ * in WP-14, when Phase 9 gave Witena committees to list.
  */
 export const MCP_TOOL_NAMES = [
   'list_chats',
   'list_agents',
+  'list_committees',
   'start_discussion',
   'wait_for_discussion',
   'get_discussion',
@@ -170,6 +171,8 @@ const listChatsInput = z.object({
 
 const listAgentsInput = z.object({})
 
+const listCommitteesInput = z.object({})
+
 /**
  * `start_discussion`'s shape, with the three rules that cannot be expressed as
  * field types.
@@ -180,6 +183,14 @@ const listAgentsInput = z.object({})
  * fields in it. A custom check has no JSON Schema representation, so the wire
  * schema describes the fields and the *message* of a refusal describes the rule
  * — which is the right way round for a model, which reads the error.
+ *
+ * Since WP-14 the first rule is *exactly one of* an existing `chatId` **or** a
+ * new group, where a new group is `committee`, `agents`, or both — the same "a
+ * committee plus single agents" shape S9.3's New chat dialog offers. The
+ * alternation is still binary, so one refinement still states it: `committee`
+ * together with `chatId` fails the same check `agents` together with `chatId`
+ * does, and for the same reason — a chat's membership is decided once, when it
+ * is created.
  */
 const startDiscussionInput = z
   .object({
@@ -198,13 +209,20 @@ const startDiscussionInput = z
       .min(1)
       .optional()
       .describe(
-        'Continue an existing discussion instead of starting one. Mutually exclusive with `agents`.'
+        'Continue an existing discussion instead of starting one. Mutually exclusive with `committee` and `agents`.'
+      ),
+    committee: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'A standing group to convene, as a name or id from `list_committees`. Starts a new chat with that committee’s members, in its own order. May be combined with `agents` to add people to it; mutually exclusive with `chatId`.'
       ),
     agents: z
       .array(z.string().min(1))
       .optional()
       .describe(
-        'Who to ask, as names or ids from `list_agents`. Starts a new chat with exactly these members. Mutually exclusive with `chatId`.'
+        'Who to ask, as names or ids from `list_agents`. Starts a new chat with these members, added after `committee`’s when both are given. Mutually exclusive with `chatId`.'
       ),
     title: z
       .string()
@@ -229,10 +247,12 @@ const startDiscussionInput = z
     maxWaitSeconds: maxWaitSecondsField
   })
   .refine(
-    (input) => (input.chatId !== undefined) !== ((input.agents?.length ?? 0) > 0),
+    (input) =>
+      (input.chatId !== undefined) !==
+      (input.committee !== undefined || (input.agents?.length ?? 0) > 0),
     {
       message:
-        'Pass exactly one of `chatId` (continue an existing discussion) or a non-empty `agents` (start a new one).'
+        'Pass exactly one of `chatId` (continue an existing discussion) or a new group (`committee`, a non-empty `agents`, or both).'
     }
   )
   .refine((input) => input.chatId === undefined || input.title === undefined, {
@@ -275,6 +295,7 @@ const stopDiscussionInput = z.object({ chatId: chatIdField })
 export const MCP_TOOL_INPUTS = {
   list_chats: listChatsInput,
   list_agents: listAgentsInput,
+  list_committees: listCommitteesInput,
   start_discussion: startDiscussionInput,
   wait_for_discussion: waitForDiscussionInput,
   get_discussion: getDiscussionInput,
@@ -298,13 +319,18 @@ const TOOL_TEXT: { [N in McpToolName]: { title: string; description: string } } 
   list_agents: {
     title: 'List Witena agents',
     description:
-      'List the agents configured in Witena — name, role and the model each one runs on. Call it before `start_discussion` to choose who should be in the group, then pass those names as `agents`. Agents flagged as executors cannot be invited: you are the executor.'
+      'List the agents configured in Witena — name, role and the model each one runs on. Call it before `start_discussion` to choose who should be in the group, then pass those names as `agents`. Agents flagged as executors cannot be invited individually: you are the executor.'
+  },
+  list_committees: {
+    title: 'List Witena committees',
+    description:
+      'List the standing groups the user has saved in Witena — name, description, and members in speaking order. A committee is the user’s own answer to "who should look at this", so prefer one over assembling a group by hand: pass its name or id as `committee` on `start_discussion` and the whole group is convened at once, and add anybody it is missing with `agents` in the same call. Read-only: it starts nothing and costs nothing.'
   },
   start_discussion: {
     title: 'Ask a Witena group',
     description: [
       'Put a question to a group of Witena agents and wait for their answer. Several models discuss it with each other over a few rounds and either agree on a conclusion or return their disagreement.',
-      'Start a new group by naming its members in `agents` (names or ids from `list_agents`), or continue an existing discussion by passing its `chatId` — exactly one of the two.',
+      'Start a new group by convening a saved `committee` (a name or id from `list_committees`), by naming individual members in `agents` (names or ids from `list_agents`), or by both at once — the committee’s members first, then the extras. Or continue an existing discussion by passing its `chatId`. A new group and a `chatId` are mutually exclusive: pass exactly one of the two.',
       'Put the material the group needs into `context`: the relevant code, the diff, the failing output, the design notes. The agents cannot see your files, and a question without its material gets a generic answer.',
       'The group only reads and argues; it never edits anything. You are the executor: the conclusion comes back to you and you are the one who applies it.',
       'The call returns within `maxWaitSeconds` whether the group is finished or not. `status: "running"` is not a failure — it means the discussion is still going, so call `wait_for_discussion` with the same `chatId` to keep waiting. `status: "ended"` means the group finished without agreeing; `positions` then holds each member\'s last word, which is the answer. Every result carries a `hint` saying what to do next.'
@@ -407,14 +433,17 @@ export interface McpPromptDefinition {
  * usually nothing else, and choosing who to ask is work the agent can do with
  * `list_agents`.
  *
- * `committee` is deliberately absent. It belongs to WP-14, which is the package
- * that adds `list_committees` and `start_discussion`'s `committee` field; an
- * argument here that expanded into an instruction to pass `committee` to a tool
- * that has no such field would be a prompt that teaches a model to fail.
+ * `committee` arrived with WP-14, in the same commit as `start_discussion`'s own
+ * `committee` field — WP-15 left it out on purpose, because an argument that
+ * expanded into an instruction to pass `committee` to a tool that had no such
+ * field would have been a prompt that teaches a model to fail. It obeys the
+ * tool's rule rather than a looser one of its own: `chat` continues a
+ * discussion, `committee` and `agents` start one, and the two sides do not mix.
  */
 const consultPromptInput = z.object({
   question: z.string().min(1),
   chat: z.string().min(1).optional(),
+  committee: z.string().min(1).optional(),
   agents: z.string().min(1).optional()
 })
 
@@ -433,6 +462,12 @@ const CONSULT_ARGUMENTS: McpPromptArgument[] = [
     name: 'chat',
     description:
       'The chatId of an existing Witena discussion to continue, from list_chats. Leave it out to start a new group.',
+    required: false
+  },
+  {
+    name: 'committee',
+    description:
+      'The name of a saved Witena committee to convene, from list_committees. May be combined with `agents` to add people to it; do not combine it with `chat`.',
     required: false
   },
   {
@@ -503,19 +538,21 @@ export function renderPrompt(
     }
   }
 
-  const { question, chat, agents } = parsed.data
-  if (chat !== undefined && agents !== undefined) {
+  const { question, chat, committee, agents } = parsed.data
+  if (chat !== undefined && (committee !== undefined || agents !== undefined)) {
     return {
       ok: false,
       message:
-        'Pass either `chat` (continue an existing discussion) or `agents` (start a new one), not both — start_discussion takes exactly one of them.'
+        'Pass either `chat` (continue an existing discussion) or a new group (`committee`, `agents`, or both), not both — start_discussion takes exactly one of them.'
     }
   }
 
   return {
     ok: true,
     description: `Consult a Witena group about: ${question}`,
-    messages: [{ role: 'user', content: { type: 'text', text: consultText(question, chat, agents) } }]
+    messages: [
+      { role: 'user', content: { type: 'text', text: consultText(question, chat, committee, agents) } }
+    ]
   }
 }
 
@@ -528,18 +565,33 @@ export function renderPrompt(
  * `status: "running"` as an error abandons a discussion that was about to
  * conclude.
  */
-function consultText(question: string, chat: string | undefined, agents: string | undefined): string {
+function consultText(
+  question: string,
+  chat: string | undefined,
+  committee: string | undefined,
+  agents: string | undefined
+): string {
+  const fields: string[] = []
+  if (committee !== undefined) fields.push(`\`committee: ${JSON.stringify(committee)}\``)
+  if (agents !== undefined) {
+    fields.push(
+      `\`agents: ${JSON.stringify(
+        agents
+          .split(',')
+          .map((name) => name.trim())
+          .filter((name) => name.length > 0)
+      )}\``
+    )
+  }
+
   const who =
     chat !== undefined
-      ? `Continue the existing discussion: pass \`chatId: ${JSON.stringify(chat)}\` to \`start_discussion\` (no \`agents\`).`
-      : agents !== undefined
-        ? `Start a new group with exactly these members: pass \`agents: ${JSON.stringify(
-            agents
-              .split(',')
-              .map((name) => name.trim())
-              .filter((name) => name.length > 0)
-          )}\` to \`start_discussion\`. If a name is not exact, call \`list_agents\` first and use the names it returns.`
-        : 'Call `list_agents` first and choose the two to four agents whose role fits this question, then pass their names as `agents` to `start_discussion`.'
+      ? `Continue the existing discussion: pass \`chatId: ${JSON.stringify(chat)}\` to \`start_discussion\` (no \`committee\`, no \`agents\`).`
+      : fields.length > 0
+        ? `Start a new group with exactly these members: pass ${fields.join(
+            ' and '
+          )} to \`start_discussion\`. If a name is not exact, call \`list_committees\` and \`list_agents\` first and use the names they return.`
+        : 'Call `list_committees` first: if one of the saved groups fits this question, convene it by passing its name as `committee` to `start_discussion`. Otherwise call `list_agents` and choose the two to four agents whose role fits, then pass their names as `agents`.'
 
   return [
     'Ask a Witena group about the question below and bring their answer back to me. Witena runs several models as a group chat: they argue for a few rounds and either agree on a conclusion or hand back their disagreement.',

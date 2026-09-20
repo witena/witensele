@@ -47,8 +47,13 @@ const SOURCE: string = Object.values(
 )[0]
 
 describe('MCP_TOOLS', () => {
-  it('lists exactly the six names, in MCP_TOOL_NAMES order', () => {
+  it('lists exactly the seven names, in MCP_TOOL_NAMES order', () => {
     expect(MCP_TOOLS.map((tool) => tool.name)).toEqual([...MCP_TOOL_NAMES])
+    // WP-14's addition sits beside the other two read-only finders, before the
+    // tool a caller reaches for once it has chosen who to ask.
+    expect(MCP_TOOL_NAMES.indexOf('list_committees')).toBeLessThan(
+      MCP_TOOL_NAMES.indexOf('start_discussion')
+    )
   })
 
   it('has a zod input for every name and no extras', () => {
@@ -97,9 +102,30 @@ describe('MCP_TOOLS', () => {
   it('describes the fields, since the schema is the only documentation a model gets', () => {
     const schema = MCP_TOOLS.find((tool) => tool.name === 'start_discussion')?.inputSchema
     const properties = (schema as { properties: Record<string, { description?: string }> }).properties
-    for (const field of ['question', 'context', 'chatId', 'agents', 'workdir', 'maxWaitSeconds']) {
+    for (const field of [
+      'question',
+      'context',
+      'chatId',
+      'committee',
+      'agents',
+      'workdir',
+      'maxWaitSeconds'
+    ]) {
       expect(properties[field]?.description, field).toBeTruthy()
     }
+  })
+
+  it('tells the caller what a committee is for, in list_committees and in start_discussion', () => {
+    const listing = MCP_TOOLS.find((tool) => tool.name === 'list_committees')
+    expect(listing?.description).toContain('`committee`')
+    expect(listing?.description).toContain('start_discussion')
+    // Read-only, like the other two finders: nothing it says may read as a way
+    // to start something.
+    expect(listing?.description).toMatch(/read-only/i)
+
+    const start = MCP_TOOLS.find((tool) => tool.name === 'start_discussion')?.description ?? ''
+    expect(start).toContain('list_committees')
+    expect(start).toContain('mutually exclusive')
   })
 })
 
@@ -121,12 +147,34 @@ describe('start_discussion input', () => {
     expect(parsed.error?.issues[0]?.message).toContain('exactly one')
   })
 
-  it('refuses neither chatId nor agents', () => {
+  it('refuses neither chatId nor a new group', () => {
     expect(input.safeParse({ question: 'q' }).success).toBe(false)
   })
 
   it('treats an empty agents array as "not given" rather than as a group of nobody', () => {
     expect(input.safeParse({ question: 'q', agents: [] }).success).toBe(false)
+  })
+
+  it('accepts a committee on its own, and a committee with extra agents', () => {
+    expect(input.safeParse({ question: 'q', committee: 'Architecture review' }).success).toBe(true)
+    // WP-14: the new-chat form is *at least one of* `committee` and `agents`,
+    // which is S9.3's "a committee plus single agents" dialog shape.
+    expect(input.safeParse({ question: 'q', committee: 'Review', agents: ['Ada'] }).success).toBe(
+      true
+    )
+    // An empty `agents` beside a committee is still "not given", and the
+    // committee alone carries the object.
+    expect(input.safeParse({ question: 'q', committee: 'Review', agents: [] }).success).toBe(true)
+  })
+
+  it('refuses a committee together with chatId, because membership is decided once', () => {
+    const parsed = input.safeParse({ question: 'q', chatId: UUID, committee: 'Review' })
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.issues[0]?.message).toContain('exactly one')
+  })
+
+  it('refuses an empty committee name rather than reading it as "no committee"', () => {
+    expect(input.safeParse({ question: 'q', committee: '' }).success).toBe(false)
   })
 
   it('refuses title together with chatId', () => {
@@ -193,10 +241,11 @@ describe('the wait bounds', () => {
 })
 
 describe('the other inputs', () => {
-  it('lets list_chats take an optional query and list_agents take nothing', () => {
+  it('lets list_chats take an optional query, and the other two finders take nothing', () => {
     expect(MCP_TOOL_INPUTS.list_chats.safeParse({}).success).toBe(true)
     expect(MCP_TOOL_INPUTS.list_chats.safeParse({ query: 'sharding' }).success).toBe(true)
     expect(MCP_TOOL_INPUTS.list_agents.safeParse({}).success).toBe(true)
+    expect(MCP_TOOL_INPUTS.list_committees.safeParse({}).success).toBe(true)
   })
 
   it('requires a chatId on get_discussion and stop_discussion', () => {
@@ -290,6 +339,7 @@ describe('MCP_PROMPTS and renderPrompt', () => {
     expect(consult?.arguments.map((argument) => [argument.name, argument.required])).toEqual([
       ['question', true],
       ['chat', false],
+      ['committee', false],
       ['agents', false]
     ])
     for (const argument of consult?.arguments ?? []) {
@@ -308,20 +358,35 @@ describe('MCP_PROMPTS and renderPrompt', () => {
     expect(text).toMatch(/running.*not a failure/i)
     // And the caller is the executor.
     expect(text).toMatch(/you are the one who writes/i)
-    // With nobody named, choosing the group is the agent's first step.
+    // With nobody named, choosing the group is the agent's first step — and
+    // since WP-14 the first question is whether the user already saved one.
+    expect(text).toContain('list_committees')
     expect(text).toContain('list_agents')
   })
 
   it('turns a comma-separated agents argument into the array the tool takes', () => {
     const text = expand({ question: 'Well?', agents: 'Ada, Lin , ' })
     expect(text).toContain('`agents: ["Ada","Lin"]`')
-    expect(text).not.toContain('list_agents first and choose')
+    expect(text).not.toContain('list_agents and choose')
+  })
+
+  it('convenes a committee, alone or with extra agents', () => {
+    const alone = expand({ question: 'Well?', committee: 'Architecture review' })
+    expect(alone).toContain('`committee: "Architecture review"`')
+    expect(alone).not.toContain('`agents:')
+
+    // The same "a committee plus single agents" shape the tool accepts, so the
+    // expansion cannot teach a model something `start_discussion` refuses.
+    const both = expand({ question: 'Well?', committee: 'Architecture review', agents: 'Ada' })
+    expect(both).toContain('`committee: "Architecture review"`')
+    expect(both).toContain('`agents: ["Ada"]`')
   })
 
   it('continues an existing chat when one is named', () => {
     const text = expand({ question: 'And now?', chat: 'chat-1' })
     expect(text).toContain('`chatId: "chat-1"`')
     expect(text).toContain('no `agents`')
+    expect(text).toContain('no `committee`')
   })
 
   it('describes itself with the question, so a client can label the expansion', () => {
@@ -334,6 +399,7 @@ describe('MCP_PROMPTS and renderPrompt', () => {
     expect(renderPrompt('consult', {}).ok).toBe(false)
     expect(expand({})).toContain('question')
     expect(expand({ question: 'Well?', chat: 'c', agents: 'Ada' })).toContain('not both')
+    expect(expand({ question: 'Well?', chat: 'c', committee: 'Review' })).toContain('not both')
   })
 
   it('refuses a prompt it does not have, naming the ones it does', () => {

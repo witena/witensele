@@ -151,17 +151,18 @@ describe('the shim’s handlers', () => {
     expect(listed.prompts[0]?.arguments?.map((argument) => argument.name)).toEqual([
       'question',
       'chat',
+      'committee',
       'agents'
     ])
 
     const got = await client.getPrompt({
       name: 'consult',
-      arguments: { question: 'Is this migration safe?', agents: 'Ada, Lin' }
+      arguments: { question: 'Is this migration safe?', committee: 'Architecture review' }
     })
     const text = got.messages[0]?.content
     expect(text?.type).toBe('text')
     expect(text?.type === 'text' ? text.text : '').toContain('Is this migration safe?')
-    expect(text?.type === 'text' ? text.text : '').toContain('["Ada","Lin"]')
+    expect(text?.type === 'text' ? text.text : '').toContain('"Architecture review"')
     expect(text?.type === 'text' ? text.text : '').toContain('wait_for_discussion')
 
     // The whole point of answering it here: a `prompts/list` on every Claude

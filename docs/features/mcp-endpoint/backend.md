@@ -6,7 +6,7 @@
 |---|---|
 | `src/shared/mcp-tools.ts`, `src/shared/mcp-discovery.ts` | WP-1 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/discussion.ts` — `watchDiscussion`, `readDiscussion` | WP-2 `[x]` (2026-09-20) |
-| `src/main/mcp-endpoint/tools.ts`, `transcript.ts` — the six tools | WP-3 `[x]` (2026-09-20) |
+| `src/main/mcp-endpoint/tools.ts`, `transcript.ts` — the discussion tools | WP-3 `[x]` (2026-09-20), `list_committees` and `committee` added by WP-14 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/server.ts`, `guards.ts`, `tool-types.ts` — transport and refusals | WP-4 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/contract.test.ts` — the two halves over a real socket (no surface of its own) | WP-6 `[x]` (2026-09-20) |
 | `src/mcp-shim/` and its Vite target | WP-5 `[x]` (2026-09-20) |
@@ -281,7 +281,7 @@ already carry it.
 1. A fresh `randomBytes(32).toString('base64url')` token — **per `start()`**, so
    stopping and starting invalidates the old one, which is exactly the property
    PLAN's decision table wanted from "a random token per launch".
-2. `createMcpEndpoint({ ctx, handlers, token })` — the real six tools, because
+2. `createMcpEndpoint({ ctx, handlers, token })` — the real tools, because
    `tools` is only passed by WP-4's own tests.
 3. `createServer((req, res) => void endpoint.handle(req, res))` and
    `listen(0, '127.0.0.1')`. The host routes nothing: `handle` answers `MCP_PATH`
@@ -360,7 +360,8 @@ a caller over `HandlerMap`, and `transcript.ts` is a pure renderer.
 
 The seam WP-4 left is closed: `missingToolRegistry()` in `server.ts` is now
 `defaultToolRegistry()`, whose body is `return createTools()`, so
-`createMcpEndpoint({ ctx, handlers, token })` without `tools` serves the real six.
+`createMcpEndpoint({ ctx, handlers, token })` without `tools` serves the real
+registry.
 That, plus the re-export line at the top of `tools.ts`, is the whole of the
 hand-over; nothing else in `server.ts` changed.
 
@@ -371,7 +372,8 @@ exception noted below.
 |---|---|
 | `list_chats` | `chats.list`, `chats.members.list` (per chat), `agents.list` |
 | `list_agents` | `agents.list`, `providers.list` |
-| `start_discussion` | `agents.list` (name resolution), `chats.get` **or** `chats.create`, `messages.list` (via `loadTranscript`), `chat.send`, and everything `watchDiscussion` reads |
+| `list_committees` (WP-14) | `committees.list`, `agents.list` |
+| `start_discussion` | `agents.list` (name resolution), `committees.list` (WP-14, only when `committee` was given), `chats.get` **or** `chats.create`, `messages.list` (via `loadTranscript`), `chat.send`, and everything `watchDiscussion` reads |
 | `wait_for_discussion` | `chats.get`, `messages.list`, then `watchDiscussion` or `readDiscussion` |
 | `get_discussion` | `chats.get`, `messages.list`, `agents.list`, and `readDiscussion` for `detail: 'conclusion'` |
 | `stop_discussion` | `chats.get`, `chat.stop` |
@@ -399,8 +401,8 @@ Pitfalls for the packages that build on this one:
 - **`chats.create` owns the `workdir` check**, not the tool. It validates
   absolute / exists / is-a-directory *before* the row is written, so a refused
   `workdir` leaves no half-created chat, and its message already names the path.
-  WP-14, which changes how the member list is built, must keep that ordering:
-  validation before creation.
+  WP-14, which changed how the member list is built, kept that ordering:
+  validation before creation, and the committee resolved before the row exists.
 - **Duplicate members are folded, not refused.** A caller that names the same
   agent by name and by id meant one seat, and `setMembers` would reject the
   duplicate outright.
@@ -641,7 +643,7 @@ command WP-5's *Verify* uses:
 |---|---|
 | `printf '<initialize>' \| …/Contents/Resources/bin/witena-mcp` | `{"result":{…,"serverInfo":{"name":"witena","version":"0.1.0"}},"jsonrpc":"2.0","id":1}`, exit 0 |
 | The same from `…/My Applications/Witena.app` (a path with a space) | Identical |
-| The same through a symlink to the launcher, followed by `tools/list` | Identical, plus the six tool names |
+| The same through a symlink to the launcher, followed by `tools/list` | Identical, plus every name in `MCP_TOOL_NAMES` |
 | `lsappinfo` count for `com.witena.app` while it ran | Unchanged: no Dock tile, no LaunchServices registration |
 
 So the launcher, `bundlePathFor`'s premise (`process.execPath` is the bundle's
@@ -941,3 +943,78 @@ stdin. `index.ts` now keeps the wiring — `logToStderr`, `createProcessConnecto
 `main()`, the bootstrap — and re-exports `createShimServer`; everything that
 decides what a request *means* is in `server.ts`. The Vite entry, the packaged
 file name and the launcher are unchanged.
+
+## Committees through the endpoint (WP-14)
+
+The last step that touches Phase 9. Two additions to the contract, one new tool
+over an existing handler, and **no new backend surface of its own**: no table,
+no migration, no `committees.*` method, no IPC channel.
+
+| Change | Where |
+|---|---|
+| `list_committees` in `MCP_TOOL_NAMES`, `MCP_TOOL_INPUTS` (`{}`) and `MCP_TOOLS` | `src/shared/mcp-tools.ts` |
+| `committee?: string` on `start_discussion`, and the first refinement widened to *exactly one of `chatId` or a new group (`committee`, `agents`, or both)* | `src/shared/mcp-tools.ts` |
+| `committee?` on the `consult` prompt, and its expansion | `src/shared/mcp-tools.ts` |
+| `listCommittees`, `resolveCommittee`, `executorNoteFor`; `resolveAgents` now takes the agent list instead of reading it | `src/main/mcp-endpoint/tools.ts` |
+
+This is the **one sanctioned change to "Frozen contracts"**, and it was made
+here and nowhere else. Everything downstream picked it up for free: the shim
+serves `tools/list` from `MCP_TOOLS`, and every test that pins the tool-name list
+— `src/mcp-shim/index.test.ts`, `shim.spawn.test.ts`, `server.test.ts`,
+`contract.test.ts`, `e2e/mcp-endpoint.spec.ts` — imports `MCP_TOOL_NAMES` rather
+than spelling the names out, so none of them needed editing.
+
+### Phase 9's real names, which the plan only guessed at
+
+`tasks.md` and STEPS.md S10.5 both said their names were a guess and that Phase
+9's win. They are:
+
+| What the plan called it | What it is |
+|---|---|
+| "Phase 9's list handler" | `handlers['committees.list'](ctx) → Committee[]`, in `src/main/handlers/committees.ts` |
+| "the committee type" | `Committee { id, name, description, memberAgentIds }` in `src/shared/types.ts`, where `memberAgentIds` is **ordered** — it is the speaking order a chat inherits |
+| "what `chats.create` expects" | `ChatCreateInput.committeeId?: string` beside `memberAgentIds?: string[]`; the chat's own `Chat.committeeId` is provenance, written once at creation and never by `chats.update` |
+| "the expansion" | `initialMembers()` in `src/main/handlers/chats.ts`: the committee's members in `position` order, then `memberAgentIds`, de-duplicated keeping the **first** occurrence |
+
+No new method was needed on Phase 9's side, which S10.5's third bullet allowed
+for: `committees.list` already carries `memberAgentIds`, so "what would this
+committee expand to" is answerable without asking, and that is what the empty-
+committee refusal is measured against.
+
+### The rules this package added, and what may not undo them
+
+- **The merge stays Phase 9's.** `tools.ts` resolves a name to a `Committee` and
+  hands `committeeId` over; it never expands, orders or de-duplicates. A second
+  merge would be a second rule to keep in step, and the one an IDE reached would
+  be the copy that drifted.
+- **An executor is refused in `agents` and accepted in a committee.** The rule
+  was never about membership — it is that the endpoint starts no hand-off, and
+  nothing here calls `chat.handoff`. A committee is the user's own group (S10.5:
+  "it is the user's committee"), so it is convened as built, and the result's
+  `hint` gains a sentence naming the executor and saying that nothing was handed
+  off. Phase 9's one-executor rule still applies, in `chats.create`, over the
+  merged list.
+- **An empty committee with no extra agents is refused before a chat exists.**
+  The alternative is a chat with nobody in it, created, sent to, and answered by
+  no one. With `agents` beside it the call succeeds and `committeeId` is still
+  recorded: the topic really was convened on that committee.
+- **`list_committees` answers `{ committees, hint }`**, an object like the other
+  two list tools, because `server.ts` drops a non-object `structured`.
+
+### What was deferred, and why
+
+S10.5's fourth bullet — the generated `~/.claude/agents/witena-<slug>.md` per
+committee, `integrations.syncCommittees`, the Integrations checkbox and the
+re-sync on committee create / rename / delete — is **not built**. `tasks.md`
+makes it conditional on WP-0b item 4 being *confirmed*, and WP-0b could not run
+it: the `claude` CLI on this machine is not logged in, so an `@`-mention of a
+subagent whose `tools:` is only `mcp__witena__*` could not be exercised at all
+(see `context.md`, "WP-0b clients", item 4, and "Open questions").
+
+So nothing was written under `~/.claude/`, `src/main/integrations/` was not
+touched, no `integrations.*` method was added and no locale key was added for
+it. The capability is not missing — a Claude Code session reaches a committee
+through `list_committees` and `start_discussion({ committee })` like any other
+tool — only the `@witena-<committee>` shorthand is. S10.5 stays `[~]` with that
+bullet annotated, and S10.7's backlog picks it up once the check can be run on a
+logged-in machine.

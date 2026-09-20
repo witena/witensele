@@ -113,7 +113,7 @@ export interface McpEndpoint {
 }
 
 /**
- * The default registry: the six real tools.
+ * The default registry: the real tools.
  *
  * This was the one seam WP-3 filled — until `tools.ts` existed, the body threw a
  * sentence naming the step, because importing a module that is not there would

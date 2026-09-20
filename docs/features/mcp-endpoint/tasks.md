@@ -84,6 +84,7 @@ export const CLIENT_HEADER = 'x-witena-client'
 export const MCP_TOOL_NAMES = [
   'list_chats', 'list_agents', 'start_discussion',
   'wait_for_discussion', 'get_discussion', 'stop_discussion'
+  // WP-14 inserted 'list_committees' after 'list_agents'.
 ] as const
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number]
 
@@ -136,9 +137,16 @@ Tool inputs (the zod shapes): `list_chats { query?: string }` ·
 agents?: string[]; title?: string; workdir?: string; rounds?: int 1..10;
 maxWaitSeconds?: int 5..600 }` with the refinement *exactly one of `chatId` or a
 non-empty `agents`*, and `title` / `workdir` only without `chatId` ·
+`list_committees {}` (WP-14) ·
 `wait_for_discussion { chatId; maxWaitSeconds? }` ·
 `get_discussion { chatId; detail: 'conclusion' | 'transcript'; afterMessageId? }` ·
-`stop_discussion { chatId }`. `committee` is added by WP-14, not before.
+`stop_discussion { chatId }`. **`committee` was added by WP-14**, which is the
+one sanctioned change to this section: `start_discussion` gained
+`committee?: string`, and its first refinement became *exactly one of `chatId`
+or a new group — `committee`, a non-empty `agents`, or both*. `title` /
+`workdir` are unchanged, and `committee` is only legal without `chatId`.
+WP-14 also added `committee?` to the `consult` prompt (WP-15 left it out on
+purpose). No other contract above was touched.
 
 ```ts
 // src/shared/mcp-discovery.ts — pure; no node: imports
@@ -646,6 +654,20 @@ A file without the marker is never written over or removed.
 **Verify** `npx vitest run src/main/mcp-endpoint src/main/integrations` · the
 contract test extended with `list_committees` → `start_discussion({ committee })`
 · gate. **Docs** `mcp-endpoint` and the committee feature.
+
+**Done (2026-09-20), in a reduced scope.** The tools half landed:
+`list_committees`, `start_discussion`'s `committee`, the widened refinement, the
+prompt argument, and their tests. Phase 9's real names are `committees.list`,
+`Committee.memberAgentIds` (ordered), `ChatCreateInput.committeeId` and
+`initialMembers()` in `src/main/handlers/chats.ts`; no committee API was added
+or changed, because `committees.list` already answers "what would this expand
+to". **The subagent-file half is deferred**: its condition — WP-0b item 4
+*confirmed* — was not met, the `claude` CLI on this machine is not logged in, so
+nothing was written under `~/.claude/`, `src/main/integrations/` was not touched
+and no locale key was added. Recorded in STEPS.md S10.5 (still `[~]`, that
+bullet annotated), in `context.md` "Open questions", in `implement.md` "Known
+limitations" and in S10.7's backlog. `npm run e2e` was not extended: S10.5's e2e
+would have driven the deferred UI.
 
 ## WP-15 Resources and the prompt
 

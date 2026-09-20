@@ -1,5 +1,5 @@
 /**
- * The six discussion tools, over `HandlerMap` and nothing else.
+ * The seven discussion tools, over `HandlerMap` and nothing else.
  *
  * This is the whole of what an IDE agent can do to Witena. `server.ts` decides
  * *who* may call (the token, the loopback checks) and turns one HTTP request
@@ -29,9 +29,12 @@
  *    nothing, and `server.ts` drops a non-object rather than inventing a wrapper
  *    key. `text` is a complete rendering of the same value, ending with the
  *    `hint` — the one sentence that tells the caller what to do next.
- * 4. **The caller is the executor.** No tool starts a hand-off, no chat created
- *    here may contain an executor agent, and every `hint` on a conclusion says
- *    that applying it is the caller's job (PLAN.md, "the role split").
+ * 4. **The caller is the executor.** No tool starts a hand-off and every `hint`
+ *    on a conclusion says that applying it is the caller's job (PLAN.md, "the
+ *    role split"). Since WP-14 that is a rule about *hand-offs*, not about
+ *    membership: an executor named individually in `agents` is still refused,
+ *    but a committee that happens to contain one is convened as the user built
+ *    it, and the `hint` says in so many words that nothing was handed off.
  *
  * No electron (CLAUDE.md rule 5); `no-electron.test.ts` in this folder proves it
  * for the whole closure.
@@ -45,7 +48,7 @@ import {
   type DiscussionResult,
   type McpToolName
 } from '@shared/mcp-tools'
-import type { Agent, Chat, Message } from '@shared/types'
+import type { Agent, Chat, Committee, Message } from '@shared/types'
 import type { AppContext } from '../app-context'
 import { isBackendFailure } from '../errors'
 import type { HandlerMap } from '../handlers/types'
@@ -86,6 +89,7 @@ export function createTools(): ToolRegistry {
   return {
     list_chats: tool('list_chats', listChats),
     list_agents: tool('list_agents', listAgents),
+    list_committees: tool('list_committees', listCommittees),
     start_discussion: tool('start_discussion', startDiscussion),
     wait_for_discussion: tool('wait_for_discussion', waitForDiscussion),
     get_discussion: tool('get_discussion', getDiscussion),
@@ -105,7 +109,7 @@ type ToolImpl<N extends McpToolName> = (
  * Parsing and the two failure rules, once, for every tool.
  *
  * The wrapper is what makes rules 1 and 2 of the header structural rather than
- * something each of the six has to remember: an implementation below receives
+ * something each of the seven has to remember: an implementation below receives
  * arguments that are already valid and may throw a `BackendFailure` freely,
  * because the only way out of this function is a `ToolOutcome`.
  */
@@ -293,6 +297,77 @@ function label(providerName: string | undefined, modelId: string): string {
 }
 
 /* -------------------------------------------------------------------------- */
+/* list_committees                                                             */
+/* -------------------------------------------------------------------------- */
+
+interface CommitteeSummary {
+  id: string
+  name: string
+  description: string
+  /** Member names in the committee's own speaking order. */
+  memberNames: string[]
+  /**
+   * True when one of those members is an executor.
+   *
+   * Not a refusal and not a warning: it is the user's committee, and Phase 9
+   * already allows at most one executor in it. It is here because it changes
+   * what the caller should expect — the chat will contain an agent that *can*
+   * write, and the endpoint still hands nothing off, so the conclusion is the
+   * caller's to apply (`start_discussion` says so again in its `hint`).
+   */
+  hasExecutor: boolean
+}
+
+/**
+ * The standing groups, as `committees.list` orders them.
+ *
+ * A committee is the user's own answer to "who should look at this", which
+ * makes it the better first question than `list_agents` for a caller that has
+ * no opinion about the individuals. Names are resolved here rather than shipped
+ * as ids, for the same reason `list_chats` resolves its members: the caller is
+ * choosing people, and an id tells it nothing about who they are.
+ *
+ * A member whose agent has since been deleted cannot appear — `committee_members`
+ * cascades — so the id fallback below is for the impossible case rather than
+ * for an expected one.
+ */
+async function listCommittees(
+  _args: ToolArgs<'list_committees'>,
+  call: ToolCallContext
+): Promise<ToolOutcome> {
+  const { ctx, handlers } = call
+  const committees = await handlers['committees.list'](ctx)
+  const agents = await handlers['agents.list'](ctx)
+  const byId = new Map(agents.map((agent) => [agent.id, agent]))
+
+  const summaries: CommitteeSummary[] = committees.map((committee) => ({
+    id: committee.id,
+    name: committee.name,
+    description: committee.description,
+    memberNames: committee.memberAgentIds.map((agentId) => byId.get(agentId)?.name ?? agentId),
+    hasExecutor: committee.memberAgentIds.some((agentId) => byId.get(agentId)?.role === 'executor')
+  }))
+
+  const hint =
+    summaries.length === 0
+      ? 'The user has saved no committees. Call list_agents and name the members yourself in `agents` on start_discussion.'
+      : 'Pass a committee name or id as `committee` on start_discussion to convene the whole group at once, and add anyone it is missing with `agents` in the same call.'
+
+  const lines = summaries.map(
+    (committee) =>
+      `- ${committee.name} — ${committee.id}\n  members: ${
+        committee.memberNames.join(', ') || 'none'
+      }${committee.description.length === 0 ? '' : `\n  ${committee.description}`}`
+  )
+
+  return {
+    ok: true,
+    structured: { committees: summaries, hint },
+    text: [`${summaries.length} committee(s).`, ...lines, '', hint].join('\n')
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* start_discussion                                                            */
 /* -------------------------------------------------------------------------- */
 
@@ -312,6 +387,14 @@ function label(providerName: string | undefined, modelId: string): string {
  * 4. Only then is the message sent. If the send throws, the watcher is
  *    cancelled: a subscription made in front of a send that never happened must
  *    not outlive the call.
+ *
+ * Since WP-14 a new chat has two sources of members — a `committee` and the
+ * individual `agents` — and **neither the expansion nor the order nor the
+ * de-duplication happens here**. Both are handed to `chats.create`, which has
+ * done that since S9.1: the committee's members in its own order, then the
+ * extras, first occurrence wins. A second merge in this file would be a second
+ * rule to keep in step with Phase 9's, and the one an IDE reached would be the
+ * copy that drifted.
  */
 async function startDiscussion(
   args: ToolArgs<'start_discussion'>,
@@ -328,6 +411,8 @@ async function startDiscussion(
   }
 
   let chatId: string
+  /** Appended to the result's `hint` when the convened group can write. */
+  let executorNote: string | undefined
   if (args.chatId !== undefined) {
     // `not_found` for an id the model invented, before anything is sent.
     await handlers['chats.get'](ctx, { id: args.chatId })
@@ -340,11 +425,35 @@ async function startDiscussion(
     }
     chatId = args.chatId
   } else {
-    const members = await resolveAgents(args.agents ?? [], ctx, handlers)
+    // One read of the agent library serves both resolvers and the executor
+    // check below, so naming a committee costs the same two handler calls as
+    // naming two agents did.
+    const agents = await handlers['agents.list'](ctx)
+
+    let committee: Committee | undefined
+    if (args.committee !== undefined) {
+      const resolved = await resolveCommittee(args.committee, ctx, handlers)
+      if ('refusal' in resolved) return resolved.refusal
+      committee = resolved.committee
+    }
+
+    const members = resolveAgents(args.agents ?? [], agents)
     if ('refusal' in members) return members.refusal
+
+    if (committee !== undefined && committee.memberAgentIds.length === 0 && members.agentIds.length === 0) {
+      return refuse(
+        `The committee "${committee.name}" has no members, so there would be nobody to ask. Add members to it in Witena, or name the agents yourself in \`agents\`.`
+      )
+    }
+
     const chat = await handlers['chats.create'](ctx, {
       input: {
         title: args.title ?? titleFrom(args.question),
+        // Phase 9's `chats.create` expands `committeeId` into the chat's first
+        // members, in the committee's own order, then appends these — keeping
+        // the first occurrence of an agent that is in both. That merge is not
+        // repeated here (see the header).
+        ...(committee === undefined ? {} : { committeeId: committee.id }),
         memberAgentIds: members.agentIds,
         // `workdir` is validated by `chats.create` against the real filesystem
         // (absolute, exists, is a directory) and refused before the row is
@@ -355,6 +464,9 @@ async function startDiscussion(
       }
     })
     chatId = chat.id
+    // Only a committee can seat an executor: `resolveAgents` refuses one that
+    // is named individually, so an `agents`-only chat never reaches this.
+    executorNote = committee === undefined ? undefined : executorNoteFor(committee, agents)
   }
 
   const text =
@@ -388,7 +500,29 @@ async function startDiscussion(
     throw cause
   }
 
-  return discussion(await watch.result)
+  const result = await watch.result
+  return discussion(
+    executorNote === undefined ? result : { ...result, hint: `${result.hint} ${executorNote}` }
+  )
+}
+
+/**
+ * The extra sentence a committee containing an executor earns.
+ *
+ * S10.5 settled the rule this states: the chat is created, because the
+ * committee is the user's and refusing it would make a group they assembled
+ * deliberately unusable from the IDE — but the endpoint still hands nothing
+ * off, so the conclusion is the caller's to apply. Without the sentence a model
+ * that read "an executor is in the room" could reasonably conclude that
+ * somebody else was going to write the code, and nobody would.
+ */
+function executorNoteFor(committee: Committee, agents: Agent[]): string | undefined {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]))
+  const executor = committee.memberAgentIds
+    .map((agentId) => byId.get(agentId))
+    .find((agent) => agent?.role === 'executor')
+  if (executor === undefined) return undefined
+  return `The committee "${committee.name}" contains the executor ${executor.name}, but nothing was handed off to it: you are the executor here, so apply the conclusion yourself.`
 }
 
 /** The first line of the question, as the new chat's name. */
@@ -413,13 +547,15 @@ function titleFrom(question: string): string {
  * Every refusal names what it could not use *and what it could have used*: a
  * model that is told "unknown agent" can only guess again, while one that is
  * handed the list corrects itself in the next call.
+ *
+ * The agent library is passed in rather than read here, because since WP-14 the
+ * caller of this function needs it for the committee's executor check as well,
+ * and one `agents.list` per `start_discussion` is the honest cost.
  */
-async function resolveAgents(
+function resolveAgents(
   wanted: string[],
-  ctx: AppContext,
-  handlers: HandlerMap
-): Promise<{ agentIds: string[] } | { refusal: ToolOutcome }> {
-  const agents = await handlers['agents.list'](ctx)
+  agents: Agent[]
+): { agentIds: string[] } | { refusal: ToolOutcome } {
   const byId = new Map(agents.map((agent) => [agent.id, agent]))
   const invitable = agents.filter((agent) => agent.role !== 'executor').map((agent) => agent.name)
 
@@ -455,9 +591,9 @@ async function resolveAgents(
     if (agent.role === 'executor') {
       return {
         refusal: refuse(
-          `${agent.name} is an executor and cannot be invited: you are the executor. Witena's group reads and argues, and you apply the conclusion. Pick from: ${
+          `${agent.name} is an executor and cannot be invited by name: you are the executor. Witena's group reads and argues, and you apply the conclusion. Pick from: ${
             invitable.join(', ') || 'none'
-          }.`
+          }, or convene a committee the user built with \`committee\`.`
         )
       }
     }
@@ -467,6 +603,56 @@ async function resolveAgents(
   }
 
   return { agentIds }
+}
+
+/**
+ * The committee to convene, from a name or an id.
+ *
+ * Resolved exactly as an agent is — id first, then a case-insensitive exact
+ * name, with every refusal listing the candidates — because the caller has just
+ * been handed the list by `list_committees` and learns one rule rather than
+ * two. Names are deliberately **not unique** in Phase 9 (a committee name is a
+ * label, not an identity), so "matches more than one" is a real state here
+ * rather than a theoretical one, and the answer to it is the id.
+ *
+ * The whole `Committee` comes back rather than its id: the caller needs
+ * `memberAgentIds` to refuse an empty committee before a chat exists, and
+ * `name` to say which one it refused.
+ */
+async function resolveCommittee(
+  wanted: string,
+  ctx: AppContext,
+  handlers: HandlerMap
+): Promise<{ committee: Committee } | { refusal: ToolOutcome }> {
+  const committees = await handlers['committees.list'](ctx)
+  const needle = wanted.trim()
+
+  const byId = committees.find((committee) => committee.id === needle)
+  const candidates =
+    byId !== undefined
+      ? [byId]
+      : committees.filter((committee) => committee.name.toLowerCase() === needle.toLowerCase())
+
+  if (candidates.length === 0) {
+    return {
+      refusal: refuse(
+        `There is no committee called "${wanted}". Available committees: ${
+          committees.map((committee) => committee.name).join(', ') || 'none'
+        }. Call list_committees to see them with their members, or name the agents yourself in \`agents\`.`
+      )
+    }
+  }
+  if (candidates.length > 1) {
+    return {
+      refusal: refuse(
+        `"${wanted}" matches more than one committee: ${candidates
+          .map((committee) => `${committee.name} (${committee.id})`)
+          .join(', ')}. Pass the id instead of the name.`
+      )
+    }
+  }
+
+  return { committee: candidates[0] as Committee }
 }
 
 /* -------------------------------------------------------------------------- */

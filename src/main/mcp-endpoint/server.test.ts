@@ -1,7 +1,7 @@
 /**
  * The endpoint over a real socket, driven by the real MCP client.
  *
- * The registry is a stub — WP-3 owns the six tools and tests them against real
+ * The registry is a stub — WP-3 owns the real tools and tests them against real
  * handlers, and WP-6's contract test puts the two halves together. What is under
  * test here is only the transport: that a `tools/call` reaches the registry with
  * the right `ToolCallContext`, that `ToolOutcome` becomes the right MCP result,

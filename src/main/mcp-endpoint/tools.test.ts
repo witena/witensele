@@ -1,5 +1,5 @@
 /**
- * The six tools, against the real backend.
+ * The seven tools, against the real backend.
  *
  * Nothing is stubbed except the model: a real `AppContext` over a temporary
  * database, the real `buildHandlers()`, the real `ChatRunner` and a
@@ -208,6 +208,73 @@ describe('the MCP discussion tools', () => {
     })
   })
 
+  /* ------------------------------------------------------------------------ */
+  /* list_committees (WP-14)                                                   */
+  /* ------------------------------------------------------------------------ */
+
+  describe('list_committees', () => {
+    it('lists the saved groups with their members in speaking order', async () => {
+      const committee = await handlers['committees.create'](ctx, {
+        input: {
+          name: 'Architecture review',
+          description: 'The two who argue about migrations.',
+          memberAgentIds: [lin.id, ada.id]
+        }
+      })
+
+      const outcome = await tools.list_committees({}, call())
+      const listed = structured<{
+        committees: {
+          id: string
+          name: string
+          description: string
+          memberNames: string[]
+          hasExecutor: boolean
+        }[]
+        hint: string
+      }>(outcome)
+
+      expect(listed.committees).toHaveLength(1)
+      expect(listed.committees[0]).toMatchObject({
+        id: committee.id,
+        name: 'Architecture review',
+        description: 'The two who argue about migrations.',
+        // Lin first: the committee's own order is the speaking order a chat
+        // inherits, so re-sorting it here would be a lie about the group.
+        memberNames: ['Lin', 'Ada'],
+        hasExecutor: false
+      })
+      expect(outcome.ok && outcome.text).toContain('Lin, Ada')
+      expect(outcome.ok && outcome.text.endsWith(listed.hint)).toBe(true)
+      expect(listed.hint).toMatch(/start_discussion/)
+    })
+
+    it('flags a committee its user put an executor in', async () => {
+      const provider = ctx.repos.providers.list(ctx.userId)[0] as { id: string }
+      const rex = ctx.repos.agents.create(
+        agentInput({ name: 'Rex', role: 'executor', providerId: provider.id }),
+        ctx.userId
+      )
+      await handlers['committees.create'](ctx, {
+        input: { name: 'Delivery', description: '', memberAgentIds: [ada.id, rex.id] }
+      })
+
+      const listed = structured<{ committees: { hasExecutor: boolean; memberNames: string[] }[] }>(
+        await tools.list_committees({}, call())
+      )
+      expect(listed.committees[0]?.hasExecutor).toBe(true)
+      expect(listed.committees[0]?.memberNames).toEqual(['Ada', 'Rex'])
+    })
+
+    it('points a caller with no committees at list_agents instead', async () => {
+      const listed = structured<{ committees: unknown[]; hint: string }>(
+        await tools.list_committees({}, call())
+      )
+      expect(listed.committees).toEqual([])
+      expect(listed.hint).toMatch(/list_agents/)
+    })
+  })
+
   describe('start_discussion', () => {
     it('creates a chat from agent names and returns the group’s conclusion', async () => {
       const outcome = await tools.start_discussion(
@@ -365,6 +432,200 @@ describe('the MCP discussion tools', () => {
       const outcome = await tools.start_discussion({ question: 'Well?', agents: ['Rex'] }, call())
       expect(outcome).toMatchObject({ ok: false, code: 'validation' })
       expect(!outcome.ok && outcome.message).toMatch(/you are the executor/i)
+    })
+
+    /**
+     * WP-14: convening a saved group instead of naming its members.
+     *
+     * Every case here is about *resolution and delegation*. The merge itself —
+     * the committee's members first, then the extras, first occurrence wins —
+     * is Phase 9's, made in `chats.create` and covered by
+     * `src/main/handlers/chats.test.ts`; what these assert is that the tool
+     * hands the committee id over rather than expanding it, and that a caller
+     * that names the wrong thing is told what the right ones are.
+     */
+    describe('committees (WP-14)', () => {
+      /** A committee of Lin then Ada, so its order is not the agent list's. */
+      async function review(name = 'Architecture review'): Promise<{ id: string }> {
+        return handlers['committees.create'](ctx, {
+          input: { name, description: '', memberAgentIds: [lin.id, ada.id] }
+        })
+      }
+
+      it('convenes a committee by name, case-insensitively, in the committee’s order', async () => {
+        const committee = await review()
+
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion(
+            { question: 'Is this migration safe?', committee: 'architecture REVIEW' },
+            call()
+          )
+        )
+
+        expect(result.status).toBe('concluded')
+        const created = await handlers['chats.get'](ctx, { id: result.chatId })
+        // Provenance, so the chat carries the committee's badge in the app.
+        expect(created.committeeId).toBe(committee.id)
+        const members = await handlers['chats.members.list'](ctx, { chatId: result.chatId })
+        expect(members.map((member) => member.agentId)).toEqual([lin.id, ada.id])
+      })
+
+      it('convenes a committee by id', async () => {
+        const committee = await review()
+
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion({ question: 'Well?', committee: committee.id }, call())
+        )
+        expect((await handlers['chats.get'](ctx, { id: result.chatId })).committeeId).toBe(
+          committee.id
+        )
+      })
+
+      it('adds the extra agents after the committee’s, keeping a duplicate in its place', async () => {
+        const provider = ctx.repos.providers.list(ctx.userId)[0] as { id: string }
+        const noor = ctx.repos.agents.create(
+          agentInput({ name: 'Noor', providerId: provider.id, modelId: 'deepseek-chat' }),
+          ctx.userId
+        )
+        await review()
+
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion(
+            // Ada is in the committee *and* named again: one seat, at the
+            // committee's position. That rule is `chats.create`'s, not ours.
+            { question: 'Well?', committee: 'Architecture review', agents: ['Ada', 'Noor'] },
+            call()
+          )
+        )
+
+        const members = await handlers['chats.members.list'](ctx, { chatId: result.chatId })
+        expect(members.map((member) => member.agentId)).toEqual([lin.id, ada.id, noor.id])
+      })
+
+      it('names a new chat after the question, as it does for a group of agents', async () => {
+        await review()
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion(
+            { question: 'Should we shard?\nNot the title.', committee: 'Architecture review' },
+            call()
+          )
+        )
+        expect((await handlers['chats.get'](ctx, { id: result.chatId })).title).toBe(
+          'Should we shard?'
+        )
+      })
+
+      it('refuses an unknown committee and lists the ones there are', async () => {
+        await review()
+
+        const outcome = await tools.start_discussion(
+          { question: 'Well?', committee: 'Archtecture review' },
+          call()
+        )
+        expect(outcome).toMatchObject({ ok: false, code: 'validation' })
+        expect(!outcome.ok && outcome.message).toContain('Archtecture review')
+        expect(!outcome.ok && outcome.message).toContain('Architecture review')
+        expect(!outcome.ok && outcome.message).toMatch(/list_committees/)
+        expect(await handlers['chats.list'](ctx)).toHaveLength(1)
+      })
+
+      it('refuses an ambiguous committee name and names the candidates with their ids', async () => {
+        // Phase 9 does not make committee names unique: a name is a label, so
+        // two groups may legitimately be called the same thing.
+        const first = await review('Review')
+        const second = await review('review')
+
+        const outcome = await tools.start_discussion(
+          { question: 'Well?', committee: 'Review' },
+          call()
+        )
+        expect(outcome).toMatchObject({ ok: false, code: 'validation' })
+        expect(!outcome.ok && outcome.message).toContain(first.id)
+        expect(!outcome.ok && outcome.message).toContain(second.id)
+        expect(!outcome.ok && outcome.message).toMatch(/Pass the id/)
+      })
+
+      it('refuses a committee together with a chatId, before anything is sent', async () => {
+        await review()
+
+        const outcome = await tools.start_discussion(
+          { question: 'Well?', chatId: chat.id, committee: 'Architecture review' },
+          call()
+        )
+        expect(outcome).toMatchObject({ ok: false, code: 'validation' })
+        expect(!outcome.ok && outcome.message).toContain('exactly one')
+        expect(await handlers['messages.list'](ctx, { chatId: chat.id, limit: 50 })).toHaveLength(0)
+      })
+
+      it('refuses a committee with no members, rather than creating a chat with nobody in it', async () => {
+        await handlers['committees.create'](ctx, {
+          input: { name: 'Empty', description: '', memberAgentIds: [] }
+        })
+
+        const outcome = await tools.start_discussion(
+          { question: 'Well?', committee: 'Empty' },
+          call()
+        )
+        expect(outcome).toMatchObject({ ok: false, code: 'validation' })
+        expect(!outcome.ok && outcome.message).toContain('Empty')
+        expect(!outcome.ok && outcome.message).toMatch(/`agents`/)
+        expect(await handlers['chats.list'](ctx)).toHaveLength(1)
+      })
+
+      it('accepts an empty committee when the caller also named agents', async () => {
+        const committee = await handlers['committees.create'](ctx, {
+          input: { name: 'Empty', description: '', memberAgentIds: [] }
+        })
+
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion(
+            { question: 'Well?', committee: 'Empty', agents: ['Ada'] },
+            call()
+          )
+        )
+        const created = await handlers['chats.get'](ctx, { id: result.chatId })
+        // The provenance is still recorded: the topic was convened on that
+        // committee, whatever it held at the time.
+        expect(created.committeeId).toBe(committee.id)
+        const members = await handlers['chats.members.list'](ctx, { chatId: result.chatId })
+        expect(members.map((member) => member.agentId)).toEqual([ada.id])
+      })
+
+      it('convenes a committee that contains an executor, and says nothing was handed off', async () => {
+        const provider = ctx.repos.providers.list(ctx.userId)[0] as { id: string }
+        const rex = ctx.repos.agents.create(
+          agentInput({ name: 'Rex', role: 'executor', providerId: provider.id, modelId: 'deepseek-chat' }),
+          ctx.userId
+        )
+        await handlers['committees.create'](ctx, {
+          input: { name: 'Delivery', description: '', memberAgentIds: [ada.id, rex.id] }
+        })
+
+        const outcome = await tools.start_discussion(
+          { question: 'Ship it?', committee: 'Delivery' },
+          call()
+        )
+        const result = structured<DiscussionResult>(outcome)
+
+        // Created, not refused: the committee is the user's, and `agents` is
+        // the only place the endpoint refuses an executor by name.
+        const members = await handlers['chats.members.list'](ctx, { chatId: result.chatId })
+        expect(members.map((member) => member.agentId)).toEqual([ada.id, rex.id])
+        expect(result.hint).toContain('Delivery')
+        expect(result.hint).toContain('Rex')
+        expect(result.hint).toMatch(/nothing was handed off/i)
+        expect(result.hint).toMatch(/apply the conclusion yourself/i)
+        // The text block still ends with the hint, extra sentence and all.
+        expect(outcome.ok && outcome.text.endsWith(result.hint)).toBe(true)
+      })
+
+      it('says nothing about hand-offs when the committee has no executor', async () => {
+        await review()
+        const result = structured<DiscussionResult>(
+          await tools.start_discussion({ question: 'Well?', committee: 'Architecture review' }, call())
+        )
+        expect(result.hint).not.toMatch(/handed off/i)
+      })
     })
 
     it('refuses a chat that is already talking, with busy', async () => {

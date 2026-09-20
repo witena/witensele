@@ -17,8 +17,8 @@ is the specification; this folder does not repeat it.
 
 - A local MCP endpoint hosted by the desktop app (`src/main/mcp-endpoint/`).
 - A stdio shim shipped inside the bundle (`src/mcp-shim/`, `bin/witena-mcp`).
-- Six discussion tools and, since WP-15, chat resources and the `consult` prompt;
-  `list_committees` later.
+- Seven discussion tools — including `list_committees` since WP-14 — plus chat
+  resources and the `consult` prompt (WP-15).
 - Background launch, single-instance lock, the `witena://chat/<id>` link.
 - Settings → Integrations: the switch, and one-click install into Claude Code and
   Codex. Provenance of endpoint-sent messages (`OriginPart`).
@@ -30,7 +30,8 @@ and verification commands — is [`tasks.md`](./tasks.md).
 
 | Not here | Owner |
 |---|---|
-| Committees themselves: data, page, new-chat dialog | STEPS.md Phase 9 and its feature folder. This feature only *calls* them (WP-14) |
+| Committees themselves: data, page, new-chat dialog, and the expansion of a committee into a chat's members | STEPS.md Phase 9 and its feature folder. This feature only *calls* them (WP-14), and never re-implements the merge |
+| A generated Claude Code subagent per committee (`~/.claude/agents/witena-<slug>.md`) | **Deferred** by WP-14 — the assumption it stands on could not be verified here. S10.7's backlog |
 | Witena as an MCP *client* | `../mcp/` |
 | The endpoint on the online server (`/mcp` behind accounts) | After S8.2; backlog |
 | A menu-bar item, idle-quit, MCP elicitation as a remote permission prompt | Backlog (S10.7 records them) |
@@ -44,7 +45,7 @@ and verification commands — is [`tasks.md`](./tasks.md).
 | `run.finished`, `run.round`, `permission.requested`, `ConclusionPart` | `../orchestration/` (S5.14, S5.16) |
 | Read-only workspace tools when a chat has a `workdir` | `../executor/` (S5.11) |
 | Bundle layout, `extraResources`, hardened runtime | `../packaging/` |
-| Committee handlers and the expansion inside `chats.create` | Phase 9, for WP-14 only |
+| `committees.list`, `Committee`, and `ChatCreateInput.committeeId`'s expansion inside `chats.create` | Phase 9 (S9.1), for WP-14 |
 
 ## Decisions and trade-offs
 
@@ -95,7 +96,7 @@ PLAN's level are recorded here as work packages land.
 | Agent names resolve **id first, then a case-insensitive exact name**, and every refusal lists the candidates | Fuzzy matching; names only; ids only | The caller has just been handed the list by `list_agents`, so a near-match is far likelier to be a different agent than a typo. A model told only "unknown agent" can do nothing but guess; one handed the list corrects itself in the next call |
 | `get_discussion { detail: 'conclusion' }` reads from the chat's **last user message** when no `afterMessageId` is given — the same window `wait_for_discussion` uses | Always the whole chat | The two tools then agree on a finished chat, which is exactly what `get_discussion`'s description promises ("the same result shape the waiting tools return, as it stands right now"). `detail: 'transcript'` still defaults to the whole chat, because that is what "the whole discussion as markdown" means |
 | `stop_discussion` answers `{ chatId, url, wasRunning, hint }` rather than a `DiscussionResult` | Reading the result back after stopping | The turns are still unwinding when `chat.stop` returns, so a result read there would describe a discussion mid-abort. `get_discussion` a moment later is the honest way to see what was said |
-| The list tools answer `{ chats, hint }` / `{ agents, hint }` | A bare array as `structured` | MCP's `structuredContent` is a JSON object or nothing, and WP-4 drops a non-object rather than inventing a wrapper key. The `hint` then means the same thing in all six tools: the sentence the text block ends with |
+| The list tools answer `{ chats, hint }` / `{ agents, hint }` | A bare array as `structured` | MCP's `structuredContent` is a JSON object or nothing, and WP-4 drops a non-object rather than inventing a wrapper key. The `hint` then means the same thing in every tool: the sentence the text block ends with |
 | `list_chats` filters over titles and member names in the tool | Reusing the `chats.search` handler | `chats.search` also searches message bodies and returns ids. A list whose membership changed because a word appeared inside somebody's message is a surprising thing to give a model |
 | `transcript.ts` is a second renderer, not a reuse of the renderer's `transcript-rows.ts` | Sharing one row model | One produces a React model with streaming states, avatars and collapsible reasoning; the other produces text for a model that wants the arguments. They share the rows and nothing else |
 
@@ -186,6 +187,21 @@ PLAN's level are recorded here as work packages land.
 | The snippets are **data**, built with `JSON.stringify` and a TOML escaper, and shown even when `launcherPath` is `null` | Translating them; hiding them in a development build; hard-coding the repository path | JSON, TOML and a path are the same in every language. A checkout's endpoint works perfectly well and only the *command* has no stable spelling, so the honest thing is the built shim run by `node` with `<witena-repo>` left as a placeholder the note explains — a guessed path would be wrong on every machine but the one it was guessed on |
 | Every label is a key, including `Claude Code` and `Codex`, which are identical in both locale files | Literals in the JSX for the two product names | `locales.test.ts` allows a deliberately identical value, and a key is what keeps the next client out of the component. It costs two lines and removes a class of exception |
 | The e2e launches the app with `WITENA_CLAUDE_BIN` / `WITENA_CODEX_BIN` pointing at a path that does not exist, and asserts there is **no action button on the screen** | Clicking Connect in the e2e and undoing it; skipping the section's e2e; mocking the CLIs in the app | Those buttons run `claude mcp add` and `codex mcp remove`, which rewrite files belonging to whoever runs the suite — on this machine both CLIs are installed, so a click would really do it. The overrides make both cards *not installed* deterministically on every machine, which is a state worth asserting anyway, and it leaves nothing dangerous to click. What happens after a press is the store's and the display module's unit tests |
+
+### Committees through the endpoint (WP-14)
+
+| Decision | Alternatives considered | Why this one |
+|---|---|---|
+| `start_discussion`'s new-chat form is *at least one of* `committee` and `agents`, expressed by widening the **existing** refinement rather than adding a second | A separate `convene_committee` tool; a second refinement for `committee` alone; three mutually exclusive fields | The alternation is still binary — an existing chat, or a new group — so one refinement still states the whole rule, and `committee` with `chatId` fails it for exactly the reason `agents` with `chatId` does. A separate tool would make the calling model choose between two tools before it has chosen a group, and it would need the same `question` / `context` / wait contract twice. Allowing both fields together is S9.3's own dialog shape: a committee plus the people it is missing |
+| The tool resolves the committee and hands `committeeId` to `chats.create`; expansion, order and de-duplication stay Phase 9's | Expanding `memberAgentIds` in the tool and passing a flat list; asking Phase 9 for an "expand this committee" method | A second merge is a second rule to keep in step, and the one an IDE reached would be the copy that drifted. Passing the id is also what records `Chat.committeeId`, which is what makes the topic carry S9.3's badge and its "Sync committee members" offer — a flat list would produce a chat that looked hand-assembled |
+| A committee that contains an executor is **convened**, and the `hint` gains a sentence saying nothing was handed off | Refusing it as `agents` refuses an executor; convening it silently; filtering the executor out of the members | S10.5 settled it: it is the user's committee, and a group they assembled deliberately must not be unusable from the IDE. Filtering would be this file editing the user's group behind their back. The rule the endpoint actually holds is that it starts no hand-off — nothing calls `chat.handoff` — and the sentence is there because a model that saw an executor in the room could otherwise conclude that somebody else would write the code, and nobody would |
+| An executor named individually in `agents` is still refused | Allowing it now that a committee may contain one | The two are different acts. Naming an executor is the caller choosing to seat a second writer; inheriting one is the caller convening a group somebody else built. The refusal also has somewhere to send the caller now, so its message ends by pointing at `committee` |
+| A committee with no members and no `agents` is refused, naming it | Creating the chat and letting the run answer with nobody; falling through to the bootstrap agent | The alternative is a chat that is created, sent to and answered by no one, which reaches the model as an empty discussion rather than as a mistake it can fix. `committees.list` already carries `memberAgentIds`, so this costs no extra call — and S10.5's third bullet, "add a method to Phase 9 if the tool needs one", turned out not to apply |
+| An **empty** committee *with* `agents` is accepted, and `committeeId` is still recorded | Refusing it too, for symmetry | The topic really was convened on that committee, whatever it held at the moment. Dropping the provenance would lose the badge for a chat the user will think of as that committee's |
+| `list_committees` resolves member ids to names and adds `hasExecutor` | Returning `memberAgentIds` verbatim; returning the whole `Committee` | The caller is choosing people, and an id tells it nothing about who they are — the same reason `list_chats` resolves its members. `hasExecutor` is the one property that changes what the caller should expect of the result, and it is cheaper to state than to make the caller cross-reference `list_agents` |
+| `committee?` was added to the `consult` prompt in the **same commit** as the tool field | Adding it in WP-15 with the rest of the prompt; leaving the prompt alone | WP-15 left it out on purpose: a prompt that told a model to pass `committee` to a tool with no such field is a prompt that teaches it to fail. The moment the field exists, the omission becomes the opposite mistake — a user who types `/mcp__witena__consult` with a committee in mind gets an expansion that never mentions committees |
+| The generated `~/.claude/agents/witena-<slug>.md` per committee was **deferred**, not built to an unverified assumption | Building it and marking the assumption in a comment; building it behind a hidden setting | `tasks.md` made it conditional on WP-0b item 4 being *confirmed*, and it is not: the `claude` CLI here is not logged in, so an `@`-mention of a tools-restricted subagent has never been run. What would be shipped is a generator that writes files into somebody's `~/.claude/`, a settings control and two locale files — all of it resting on a mechanism nobody has seen work. Nothing is stranded by waiting: the committee is reachable from Claude Code today through `list_committees` and `start_discussion` |
+
 
 ## What the spike found
 
@@ -506,7 +522,11 @@ restored byte-for-byte because the Codex app was running and owns that file.
 
 ## Open questions
 
-- The real names of Phase 9's handlers and types (WP-14 reads them, never guesses).
+- ~~The real names of Phase 9's handlers and types (WP-14 reads them, never
+  guesses).~~ Answered by WP-14: `committees.list`, `Committee.memberAgentIds`
+  (ordered), `ChatCreateInput.committeeId`, and `initialMembers()` in
+  `src/main/handlers/chats.ts` as the one place a committee becomes members. No
+  new Phase 9 method was needed.
 - **Nothing has woken a quit Witena yet** (WP-9). The launcher runs the shim out
   of a signed bundle, and `launch()` is unit-tested with an injected `spawn`, but
   the two have never met: proving it needs a second signed copy launched with a
@@ -522,8 +542,13 @@ restored byte-for-byte because the Codex app was running and owns that file.
 - Whether a user-level Claude Code subagent restricted to `mcp__witena__*` can be
   `@`-mentioned and reach those tools (WP-0b could not test it — the CLI on the
   spike machine was not logged in). S10.5's per-committee agent file depends on
-  it; WP-14 must check it on a logged-in machine first. **WP-15 could not**: the
-  same CLI, the same wall.
+  it; WP-14 was to check it on a logged-in machine first. **WP-15 could not**:
+  the same CLI, the same wall. **Neither could WP-14**, so it built the tools
+  half of S10.5 and left the subagent files, `integrations.syncCommittees` and
+  the Integrations checkbox unbuilt — nothing was written under `~/.claude/` and
+  `src/main/integrations/` was not touched. The condition is unchanged and the
+  work is carried into S10.7's backlog: someone runs the `@`-mention on a
+  logged-in machine, and only then is the generator worth writing.
 - **Nothing has been exercised inside a real Claude Code session yet.** S10.6's
   acceptance — `@witena:` offering recent chats, `/mcp__witena__consult` starting
   a discussion — and WP-0b's unmeasured Claude Code *tool-call* timeout both need

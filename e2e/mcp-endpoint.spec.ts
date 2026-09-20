@@ -203,7 +203,7 @@ test.afterAll(async () => {
   if (userDataDir) removeUserDataDir(userDataDir)
 })
 
-test('the shim serves the six tools while talking to a real app', async () => {
+test('the shim serves the seven tools while talking to a real app', async () => {
   const client = await startShim()
 
   const listed = await client.listTools()

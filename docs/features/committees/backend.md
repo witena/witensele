@@ -6,6 +6,13 @@ members" are built entirely on the five methods below plus `chats.create` and
 `chats.members.set`, and the one thing the page might have wanted — an event
 when a committee changes — is deliberately still absent (see "Events emitted").
 
+**S10.5 added no backend code either.** The MCP endpoint's `list_committees`
+calls `committees.list` and its `start_discussion` passes `committeeId` to
+`chats.create`, both unchanged — the endpoint resolves a committee by name or id
+against the list and never expands one itself, so the merge rule below stays the
+only one. See [`../mcp-endpoint/backend.md`](../mcp-endpoint/backend.md),
+"Committees through the endpoint".
+
 Two S9.3 notes about calls the frontend now makes:
 
 - The **merge rule below is duplicated in the renderer**, as
@@ -85,6 +92,13 @@ Migrations:
 | `committees.update` | `{ id, patch: CommitteePatch }` | `Committee` | `not_found` first, so a patch for a deleted committee does not fail as bad input; then the same field rules, applied only to the fields the patch carries |
 | `committees.delete` | `{ id }` | `void` | `not_found` for an unknown id |
 | `chats.create` | `{ input: ChatCreateInput }` | `Chat` | Additionally: `validation` for a `committeeId` that is not a non-empty string, `not_found` for one that names no committee, and the existing `second_executor` refusal now measured over the **merged** list, before the row exists |
+
+Callers of `committees.list`, for the record: the Committees page and the chat
+list (names for the badge), the New chat dialog, and — since S10.5 — the MCP
+endpoint's `list_committees` and `start_discussion`. The last one resolves a
+name or an id against the list rather than calling `committees.get`, because it
+needs the other committees anyway: an unknown or ambiguous name is refused with
+the candidates named.
 
 The merge rule, in one sentence: the committee's members in `position` order,
 then `memberAgentIds`, de-duplicated keeping the **first** occurrence — so an

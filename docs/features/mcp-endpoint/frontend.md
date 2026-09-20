@@ -16,7 +16,7 @@ Surface, by work package (`tasks.md`):
 | The "via {{client}}" chip on a message sent through the endpoint | WP-13 `[x]` (2026-09-20) |
 | Selecting a chat on the `ui.open-chat` event (`witena://chat/<id>`) | WP-8 `[x]` (2026-09-20) |
 | `AppSettings.mcpEndpoint.enabled` on the settings store — the value the switch writes, with no control of its own yet | WP-7 `[x]` (2026-09-20) |
-| "Create a Claude Code agent for each committee" | WP-14 |
+| "Create a Claude Code agent for each committee" | WP-14 — **deferred**, see below. WP-14 added no renderer surface and no locale key |
 
 ## HTTP endpoint and guards (WP-4)
 
@@ -453,3 +453,40 @@ The acceptance criterion S10.6 names — `@witena:` offering recent chats and
 `/mcp__witena__consult` starting a discussion, inside Claude Code — could not be
 exercised here: the `claude` CLI on this machine is not logged in, the same wall
 WP-0b hit. Everything under it is asserted through the SDK client instead.
+
+## Committees through the endpoint (WP-14)
+
+**Nothing in the renderer changed, and no locale key was added.** The package is
+entirely in `src/shared/mcp-tools.ts` and `src/main/mcp-endpoint/tools.ts`, and
+its whole user-visible effect is one the window already draws:
+
+- **A topic convened from the IDE is an ordinary committee chat.**
+  `start_discussion({ committee })` calls `chats.create` with `committeeId`, so
+  the chat is born with the committee's members in its order and with its
+  provenance recorded — which means the chat row and the chat header show S9.3's
+  committee badge, and the member panel offers **Sync committee members** when
+  the committee has moved on, with no change here. That is the acceptance
+  criterion of S10.5 read from the window's side.
+- **The strings this package wrote are not UI copy.** `list_committees`'
+  description, the refusals a caller reads when a committee name is unknown or
+  ambiguous, and the executor sentence appended to a result's `hint` are all
+  written in English for the calling model, exactly like the rest of
+  `mcp-tools.ts`. None of them is ever rendered; the boundary stated under
+  "Tools (WP-3)" above applies to them unchanged.
+
+### The Integrations checkbox that is not there
+
+S10.5 sketched a **"Create a Claude Code agent for each committee"** control in
+Settings → Integrations, writing `~/.claude/agents/witena-<slug>.md` per
+committee. It is **deferred**, because `tasks.md` makes it conditional on WP-0b
+item 4 being *confirmed* and it was not — the `claude` CLI on this machine is
+not logged in, so an `@`-mention of a subagent restricted to `mcp__witena__*`
+could not be run here at all. Building the UI for a mechanism nobody has seen
+work would mean two locale files, a control and a promise, on top of an
+unverified assumption.
+
+Nothing is stranded by leaving it out: a Claude Code session already reaches
+every committee through `list_committees` and `start_discussion`, and the
+section's existing cards do not mention committees, so there is no half-finished
+sentence to explain. See [`implement.md`](./implement.md), "Known limitations",
+and STEPS.md S10.5.

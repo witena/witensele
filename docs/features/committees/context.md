@@ -31,6 +31,17 @@ Phase 9, in three steps:
   chat row and in the chat header, and the member panel offers **Sync committee
   members** when the committee has moved on.
 
+Phase 10 then made committees reachable from outside the app, without adding
+anything here:
+
+- **S10.5 (2026-09-20, WP-14)** — the MCP endpoint's `list_committees` tool and
+  `start_discussion`'s `committee` argument, so an IDE agent convenes a topic
+  from a saved committee. It calls `committees.list` and passes `committeeId` to
+  `chats.create`; **no committee API was added or changed**, and the expansion
+  stays the one in `initialMembers()`. See
+  [`../mcp-endpoint/backend.md`](../mcp-endpoint/backend.md), "Committees
+  through the endpoint".
+
 Settled before the phase started, and true of all three steps:
 
 - **Joining is a snapshot.** A committee's members are expanded into
@@ -50,6 +61,7 @@ Settled before the phase started, and true of all three steps:
 | Several committees in one chat | Phase 6 backlog; the column is single-valued on purpose |
 | Grouping or filtering the chat list by committee | Phase 6 backlog; [`chats`](../chats/context.md) |
 | Anything a running chat does with its members | [`orchestration`](../orchestration/context.md) — it keeps reading `chat_members` and does not know committees exist |
+| Convening a committee from an IDE, and the wording an agent reads while doing it | [`mcp-endpoint`](../mcp-endpoint/context.md) (S10.5) — it only *calls* `committees.list` and `chats.create` |
 | Automatic reconciliation of a topic with its committee | Nowhere. Drift is the price of the snapshot and "Sync committee members" is the whole answer: explicit, append-only, and pressed by the user |
 | Removing members during a sync | Nowhere, for the same reason — a member the user took out of a chat took themselves out of that chat |
 
@@ -67,7 +79,9 @@ Settled before the phase started, and true of all three steps:
 Depending on this feature in return: [`chats`](../chats/context.md), for the
 New chat dialog, the provenance badge and the sync button — all three read
 `Committee` and none of them is reachable while a chat runs. Orchestration
-never will.
+never will. Since S10.5, [`mcp-endpoint`](../mcp-endpoint/context.md) does too:
+`list_committees` reads `committees.list`, and `start_discussion` passes a
+committee id to `chats.create` exactly as the New chat dialog does.
 
 ## Decisions and trade-offs
 
@@ -82,6 +96,8 @@ never will.
 | **S9.3**: a modal for New chat, where everything else in the app is in place | Keep creating on "+" and choose members afterwards in the panel | Convening is one decision made of three parts (a title, a committee, a set of agents) that only make sense written together. The in-place patterns the app prefers — two-step Delete, the rename row, the member popover — each edit one field of a record that already exists; there is no record here yet. Pressing Create with nothing chosen is still exactly the old "+" |
 | **S9.3**: the dialog's open state is in `stores/ui` | Local state in `ChatsPage`, with a prop from the Committees page | "New topic" has to navigate *and* preselect, and the component that pressed it is unmounted before the dialog renders. One boolean in the store is the whole mechanism |
 | **S9.3**: sync **appends** | Reconcile (add and remove), or offer a diff to approve | The committee is not an authority over a chat that has already started — it is where the chat came from. Appending is the only operation that cannot destroy a decision the user made inside the conversation |
+| **S10.5**: the MCP endpoint convenes a committee by passing `committeeId` to `chats.create`, and never expands one itself | Giving the endpoint its own expansion; adding a `committees.expand` method for it | One place turns a committee into members, and it is `initialMembers()`. A second would drift, and the chat it produced would carry no `committeeId` — so it would lose the badge and the sync offer and look hand-assembled. `committees.list` already carries `memberAgentIds`, so the endpoint can still refuse an empty committee before it creates anything |
+| **S10.5**: a committee that contains an executor is convened from the IDE as built | Refusing it there, as the endpoint refuses an executor named individually | It is the user's own group; a committee they assembled deliberately must not be unusable from an IDE, and filtering a member out would be the endpoint editing that group behind their back. What the endpoint holds to is that it starts no hand-off, and it says so in the result. Phase 9's one-executor rule still decides what may be in the room |
 
 ## Open questions
 

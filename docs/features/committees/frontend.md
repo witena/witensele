@@ -124,3 +124,24 @@ copy at all.
   be worse than one.
 - Every list row is a real `<button>`; the editor's fields are `Field` +
   `Input`, which wire `htmlFor` to the control's id.
+
+## What S10.5 changed here: nothing
+
+The MCP endpoint's `list_committees` and `start_discussion({ committee })`
+(2026-09-20, WP-14) added **no component, no store field and no locale key** to
+this feature. They call `committees.list` and `chats.create` from the main
+process, so the whole of their effect on the window is a chat that was already
+described above: a topic convened on a committee, carrying `committeeId`, which
+means the chat row and the chat header draw the S9.3 badge and the member panel
+offers **Sync committee members** when the committee moves on — whether the
+topic was convened from the New chat dialog or from an IDE.
+
+The strings that package wrote — the tool descriptions, the refusals for an
+unknown or ambiguous committee name — are English text for a calling model and
+are never rendered; see
+[`../mcp-endpoint/frontend.md`](../mcp-endpoint/frontend.md).
+
+S10.5 also sketched a **"Create a Claude Code agent for each committee"**
+control for Settings → Integrations, which would write one subagent file per
+committee. It is **deferred** and no key was reserved for it, because the
+mechanism it depends on has never been exercised on this machine.

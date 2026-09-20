@@ -4599,14 +4599,19 @@ Claude Code, ask it to consult two agents: works, and the message in Witena is
 marked "via claude-code". Docs: `mcp-endpoint`, `chats`, `agent-turn`, `i18n`
 (all four each).
 
-### S10.5 Committees through the endpoint `[ ]`
+### S10.5 Committees through the endpoint `[~]`
 Depends on: S9.1 merged (S9.3 for the e2e). Read `docs/features/` for the
 committee feature first and use its names; the ones below are this plan's guess
-and Phase 9's real ones win.
+and Phase 9's real ones win. *(They were `committees.list`, `Committee` with an
+ordered `memberAgentIds`, `ChatCreateInput.committeeId` and `initialMembers()`
+in `src/main/handlers/chats.ts`.)*
 What: "summon an expert group" from the IDE — the reason the endpoint exists.
-- [ ] Tool `list_committees` → `id`, `name`, description, member names in order
-  (from Phase 9's list handler). Added to `@shared/mcp-tools`.
-- [ ] `start_discussion` gains `committee?: string` (id or case-insensitive
+- [x] (2026-09-20, WP-14) Tool `list_committees` → `id`, `name`, description, member names in order
+  (from Phase 9's list handler). Added to `@shared/mcp-tools`. *(Plus
+  `hasExecutor`, the one property that changes what the caller should expect;
+  the structured answer is `{ committees, hint }`, an object like the other two
+  list tools.)*
+- [x] (2026-09-20, WP-14) `start_discussion` gains `committee?: string` (id or case-insensitive
   name), allowed **together with** `agents` — the same "a committee plus single
   agents" shape as S9.3's dialog. The tool resolves the name and passes the
   committee id and the extra agent ids to `chats.create`; expansion, order and
@@ -4614,11 +4619,21 @@ What: "summon an expert group" from the IDE — the reason the endpoint exists.
   expanded membership contains an `executor`, the chat is still created (it is
   the user's committee) but the endpoint never hands off, and the result says
   the caller is expected to apply the conclusion.
-- [ ] If Phase 9 has no way to ask "what would this committee expand to" and the
+  *(The first refinement was widened from "exactly one of `chatId` or `agents`"
+  to "exactly one of `chatId` or a new group (`committee`, `agents`, or both)" —
+  the one sanctioned change to `tasks.md`'s frozen contracts, made in WP-14 and
+  nowhere else. `committee?` was added to the `consult` prompt in the same
+  commit, which is what WP-15 deliberately left for this step. An executor named
+  individually in `agents` is still refused; only an inherited one is convened,
+  and the result's `hint` names it and says nothing was handed off.)*
+- [x] (2026-09-20, WP-14) If Phase 9 has no way to ask "what would this committee expand to" and the
   tool needs it for a useful error (unknown member, empty committee), add it to
   Phase 9's handler file as a new method with its own tests, in agreement with
   that feature's owner, and update that feature's four documents.
-- [ ] `@committee` in Claude Code (only if S10.0 found subagent files work as
+  *(Not needed: `committees.list` already carries `memberAgentIds`, so an empty
+  committee is refused — naming it, and only when no `agents` were given either —
+  without asking Phase 9 for anything. No committee API was added or changed.)*
+- [ ] **Deferred** (WP-14, 2026-09-20) `@committee` in Claude Code (only if S10.0 found subagent files work as
   assumed): Settings → Integrations gains "Create a Claude Code agent for each
   committee". `integrations.syncCommittees` writes
   `~/.claude/agents/witena-<slug>.md` per committee — tools limited to
@@ -4628,15 +4643,36 @@ What: "summon an expert group" from the IDE — the reason the endpoint exists.
   marker are ever overwritten or deleted. Re-synced on committee create / rename
   / delete (a bus event if Phase 9 emits one, else on the handlers' success
   path). Codex has no equivalent; its card shows the prompt to type instead.
-- Tests: tool tests — by name, by id, committee + agents with a duplicate,
-  unknown committee lists candidates, empty committee; the sync — create, rename
-  (old file removed), delete, a hand-written file with the same name left alone.
+  *(The condition was not met. S10.0 item 4 reads "could not be run here" — the
+  `claude` CLI on this machine is not logged in, so an `@`-mention of a subagent
+  restricted to `mcp__witena__*` has never been exercised. WP-14 therefore wrote
+  nothing under `~/.claude/`, touched no file in `src/main/integrations/`, added
+  no `integrations.*` method and reserved no locale key. Nothing is stranded: a
+  Claude Code session reaches every committee through `list_committees` and
+  `start_discussion` today, and what is missing is the shorthand. S10.7's
+  backlog carries it, together with the verification it waits on.)*
+- [~] Tests: tool tests — by name, by id, committee + agents with a duplicate,
+  unknown committee lists candidates, empty committee; ~~the sync — create, rename
+  (old file removed), delete, a hand-written file with the same name left alone~~
+  (deferred with the bullet above).
   Contract test: `list_committees` then `start_discussion({ committee })`
   returns the mock group's conclusion.
+  *(2026-09-20, WP-14: `tools.test.ts` gained `describe('list_committees')` and
+  `describe('committees (WP-14)')` — the listing in the committee's own order,
+  an executor flagged, an empty library pointed at `list_agents`; convening by
+  name, by case and by id, extras appended with a duplicate kept in the
+  committee's place, the default title, and the four refusals — and
+  `contract.test.ts` gained the round trip through the real socket, asserting
+  the new chat's `committeeId` and its members. `mcp-tools.test.ts` covers the
+  widened refinement and the prompt's new argument. Every test that pins the
+  tool-name list imports `MCP_TOOL_NAMES`, so none needed editing.)*
 Acceptance: in Claude Code, `@witena-<committee> <question>` starts a chat whose
 members are that committee's, visible in Witena with the committee's badge
-(S9.3), and the conclusion comes back. Docs: `mcp-endpoint` and the committee
-feature (all four each).
+(S9.3), and the conclusion comes back. **Not met, and it cannot be while the
+subagent bullet is deferred** — the reachable form today is a session calling
+`start_discussion({ committee })`, whose chat does carry the badge (the tool
+passes `committeeId` to `chats.create`). Docs: `mcp-endpoint` and the committee
+feature (all four each) — done.
 
 ### S10.6 Resources and prompts `[x]` (2026-09-20, WP-15)
 What: the parts of MCP beyond tools, scoped by what S10.0 found the clients
@@ -4651,14 +4687,18 @@ actually surface. Drop any half no client shows.
   that is not there is `-32002`. `resources/read` does not launch the app
   either, by the same reasoning as the listing — see `backend.md`, "Which
   methods may launch Witena".)
-- [x] (2026-09-20, WP-15) Prompts: `consult` (`question`, `chat?` / `agents?`)
+- [x] (2026-09-20, WP-15) Prompts: `consult` (`question`, `chat?` / `committee?` /
+  `agents?`)
   expanding to an instruction that makes the caller use `start_discussion`, pass
   the relevant code as `context`, and loop on `wait_for_discussion`. (Defined in
   `src/shared/mcp-tools.ts` and rendered by `renderPrompt`, so the **shim
   answers `prompts/list` and `prompts/get` with no I/O at all** — WP-0b measured
   Claude Code asking for both on every session start, and Codex never asking at
-  all. `committee?` is left to S10.5: `start_discussion` has no `committee`
-  field yet, and a prompt that told a model to pass one would teach it to fail.)
+  all. `committee?` was left to S10.5: `start_discussion` had no `committee`
+  field yet, and a prompt that told a model to pass one would teach it to fail.
+  S10.5 added both in one commit, 2026-09-20, WP-14, and the expansion obeys the
+  tool's rule — `chat` continues a discussion, `committee` and `agents` start
+  one, and the two sides do not mix.)
 - Tests: contract tests for both; the shim's no-launch rule.
 Acceptance: in Claude Code, `@witena:` offers recent chats and
 `/mcp__witena__consult` starts a discussion. **Not exercised by hand** — the
@@ -4675,6 +4715,11 @@ four).
   idle-quit for background launches; MCP elicitation as a remote permission
   prompt; an update that wants to install while an endpoint-started run is in
   flight; mounting the endpoint at `/mcp` on the server host after S8.2; Cursor /
-  Claude Desktop cards.
+  Claude Desktop cards; **and S10.5's deferred `@committee` half** — verify on a
+  logged-in machine that a user-level Claude Code subagent whose `tools:` is only
+  `mcp__witena__*` can be `@`-mentioned and reach them (S10.0 item 4, still
+  unrun), and only then build `integrations.syncCommittees`, the generated
+  `~/.claude/agents/witena-<slug>.md` per committee and the Integrations
+  checkbox that drives them.
 Acceptance: a new user can follow the README section alone and get a conclusion
 back in their IDE.

@@ -2,7 +2,7 @@
  * The whole endpoint, end to end, with nothing stubbed but the model.
  *
  * `server.test.ts` proves the transport against a stub registry and
- * `tools.test.ts` proves the six tools against a real backend; neither one ever
+ * `tools.test.ts` proves the seven tools against a real backend; neither one ever
  * runs the two halves together. This file does: a real `AppContext` over a
  * temporary database, the real `buildHandlers()`, the real `ChatRunner` and
  * `AgentTurn` against a `MockLanguageModelV4`, `createMcpEndpoint({ ctx,
@@ -288,6 +288,56 @@ describe('Witena over MCP, end to end', () => {
     expect(transcript.messageCount).toBeGreaterThan(2)
   })
 
+  it('convenes a committee the user saved, from its name alone (WP-14)', async () => {
+    // Phase 9's handler, through the endpoint's own registry — the committee is
+    // created the way the Committees page creates one.
+    const committee = await handlers['committees.create'](ctx, {
+      input: {
+        name: 'Architecture review',
+        description: 'The two who argue about migrations.',
+        memberAgentIds: [lin.id, ada.id]
+      }
+    })
+
+    const listed = await call<{
+      committees: { id: string; name: string; memberNames: string[] }[]
+      hint: string
+    }>('list_committees')
+    expect(listed.committees).toEqual([
+      {
+        id: committee.id,
+        name: 'Architecture review',
+        description: 'The two who argue about migrations.',
+        memberNames: ['Lin', 'Ada'],
+        hasExecutor: false
+      }
+    ])
+    expect(listed.hint).toMatch(/start_discussion/)
+
+    const started = await callRaw('start_discussion', {
+      question: 'Is this migration safe?',
+      // The name the listing just handed over, not the id: this is the round
+      // trip a model actually makes.
+      committee: listed.committees[0]?.name,
+      context: 'diff --git a/migrations/003.sql b/migrations/003.sql'
+    })
+    const result = started.structuredContent as unknown as DiscussionResult
+    expect(started.isError).toBeUndefined()
+    expect(result.status).toBe('concluded')
+    expect(result.conclusion?.markdown).toContain('Ship it, the migration is safe.')
+
+    // A new topic, convened on that committee: its members in the committee's
+    // order, and `committeeId` recorded so the app can badge it (S9.3).
+    expect(result.chatId).not.toBe(chat.id)
+    const created = await handlers['chats.get'](ctx, { id: result.chatId })
+    expect(created.committeeId).toBe(committee.id)
+    expect(
+      (await handlers['chats.members.list'](ctx, { chatId: result.chatId })).map(
+        (member) => member.agentId
+      )
+    ).toEqual([lin.id, ada.id])
+  })
+
   it('refuses a group it cannot resolve as isError, in words the caller can act on', async () => {
     const result = await callRaw('start_discussion', { question: 'Well?', agents: ['Adaa'] })
     expect(result.isError).toBe(true)
@@ -531,6 +581,7 @@ describe('Witena over MCP, end to end', () => {
       expect(listed.prompts[0]?.arguments?.map((argument) => argument.name)).toEqual([
         'question',
         'chat',
+        'committee',
         'agents'
       ])
 

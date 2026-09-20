@@ -57,7 +57,7 @@ the endpoint both import.
 | Export | What it is |
 |---|---|
 | `MCP_SERVER_NAME` (`'witena'`), `MCP_PATH` (`'/mcp'`), `CLIENT_HEADER` (`'x-witena-client'`) | The three names both halves have to spell identically |
-| `MCP_TOOL_NAMES`, `McpToolName` | The six tools, in the order `tools/list` presents them |
+| `MCP_TOOL_NAMES`, `McpToolName` | The seven tools, in the order `tools/list` presents them. WP-14 added `list_committees` between `list_agents` and `start_discussion` — the order is the order a caller meets them in |
 | `MIN_WAIT_SECONDS` 5, `MAX_WAIT_SECONDS` 600, `DEFAULT_WAIT_SECONDS` 50 | The chunking window PLAN's decision table describes. WP-0b may move the default |
 | `MAX_DISCUSSION_INPUT_CHARS` 200 000, `MAX_POSITION_CHARS` 4 000 | The two caps WP-3 enforces and names in its errors |
 | `DiscussionStatus`, `DiscussionResult` | The one result shape `start_discussion`, `wait_for_discussion` and `get_discussion` all return |
@@ -74,10 +74,15 @@ Three things are worth knowing before coding against it:
   again. They never go through `t()` — CLAUDE.md rule 4 is about the renderer,
   and the calling model has no language setting.
 - **`start_discussion`'s three cross-field rules live in zod refinements**, which
-  have no JSON Schema representation: exactly one of `chatId` and a non-empty
-  `agents`, and `title` / `workdir` only when a chat is being created. The wire
+  have no JSON Schema representation: exactly one of `chatId` and a **new group**,
+  and `title` / `workdir` only when a chat is being created. The wire
   schema therefore describes the fields and the *refusal message* describes the
-  rule, which is the right way round for a model — it reads the error.
+  rule, which is the right way round for a model — it reads the error. Since
+  WP-14 a new group is `committee`, a non-empty `agents`, or both, which is the
+  same "a committee plus single agents" shape S9.3's New chat dialog offers; the
+  alternation stays binary, so it is still one refinement, and `committee` with
+  `chatId` fails it for the same reason `agents` with `chatId` does — a chat's
+  membership is decided once, when it is created.
 - **`MCP_TOOL_INPUTS` is declared with `satisfies`**, not with the annotation the
   contract writes. An annotation of `{ [N in McpToolName]: z.ZodObject<z.ZodRawShape> }`
   would widen every entry and `z.infer` would hand each tool an index signature
@@ -156,7 +161,7 @@ dropped: the request it would have been reported to is over.
 
 `src/main/mcp-endpoint/` now holds the transport half of the endpoint: the door
 (`guards.ts`), the MCP server over Streamable HTTP (`server.ts`) and the three
-types the tools are written against (`tool-types.ts`). The six tools themselves
+types the tools are written against (`tool-types.ts`). The tools themselves
 are WP-3's; the endpoint takes a `ToolRegistry` by injection and a stub is what
 its own tests pass.
 
@@ -233,7 +238,7 @@ in `tool-types.ts` and `server.ts` imports them from there. When `tools.ts` land
    at the top of `tools.ts`, so the contract reads where it says it reads.
 2. Replace the body of `missingToolRegistry()` in `server.ts` with
    `return createTools()`. That function currently throws a sentence naming this
-   step — a wiring mistake must not become six tools that answer "unknown tool".
+   step — a wiring mistake must not become a registry of tools that answer "unknown tool".
 
 Nothing else in `server.ts` changes.
 
@@ -345,6 +350,7 @@ tools/call → MCP_TOOL_INPUTS[name].safeParse  → validation, in zod's own wor
 |---|---|
 | `list_chats` | Filters case-insensitively over the title **and the member names**, and flags a chat whose runner is live as `running`. Not `chats.search`: that also searches message bodies, and an answer that changed because a word appeared inside a message is a surprising thing to give a model |
 | `list_agents` | Labels each agent `<provider> · <model>` and marks an `executor` `invitable: false` |
+| `list_committees` (WP-14) | Phase 9's `committees.list`, with each committee's members resolved to names **in its own order** — that order is the speaking order a chat inherits — and `hasExecutor` for the one thing that changes what the caller should expect |
 | `start_discussion` | Resolves the group, creates or continues the chat, sends, and waits. The order is load-bearing; see below |
 | `wait_for_discussion` | Reads the window from the chat's last **user** message, then either answers from the transcript (idle) or attaches a watcher (running) |
 | `get_discussion` | `conclusion` → `readDiscussion` over the same window; `transcript` → `renderTranscript` over the whole chat, or over what follows `afterMessageId` |
@@ -361,8 +367,9 @@ tools/call → MCP_TOOL_INPUTS[name].safeParse  → validation, in zod's own wor
    caller can trim rather than guess.
 3. **The chat.** `chatId` → `chats.get` (so an invented id is `not_found` before
    anything is sent) and `busy` when its runner has live state. Otherwise the
-   group is resolved and `chats.create` is called with `memberAgentIds`, the
-   `title` (the question's first non-empty line, 60 characters) and `workdir`.
+   group is resolved and `chats.create` is called with `committeeId`,
+   `memberAgentIds`, the `title` (the question's first non-empty line, 60
+   characters) and `workdir`.
 4. **`watchDiscussion` before `chat.send`**, because a short discussion can reach
    `run.finished` inside the same turn of the event loop the send resolved in. If
    the send throws, `cancel()` runs before the error is re-thrown into the
@@ -374,6 +381,44 @@ than fuzzy because the caller has just been handed the list by `list_agents`, so
 a near-match is far likelier to be a different agent than a typo; and every
 refusal names what it could not use *and* what it could have used, because a
 model told only "unknown agent" can do nothing but guess again.
+
+### Committees (WP-14) — the rule and the four refusals
+
+A new chat has two sources of members since WP-14, and **neither the expansion
+nor the order nor the de-duplication happens in `tools.ts`**. `resolveCommittee`
+turns a name or an id into a `Committee` and the tool hands `committeeId` and
+`memberAgentIds` to `chats.create`, which has merged the two since S9.1: the
+committee's members in `position` order, then the extras, first occurrence wins.
+A second merge here would be a second rule to keep in step with Phase 9's, and
+the one an IDE reached would be the copy that drifted.
+
+A committee is resolved exactly as an agent is — id first, then a
+case-insensitive exact name, every refusal listing the candidates — so a caller
+learns one rule rather than two. Committee names are deliberately **not unique**
+in Phase 9 (a name is a label, not an identity), which makes "matches more than
+one" a real state here rather than a theoretical one; the answer to it is the id.
+
+| Situation | Answer |
+|---|---|
+| `committee` names nothing | `validation`, listing every committee's name and pointing at `list_committees` and at `agents` |
+| `committee` matches two by name | `validation`, naming both with their ids and saying to pass the id |
+| `committee` together with `chatId` | `validation` from the schema's refinement, before a handler is touched |
+| The committee has no members and no `agents` were named | `validation` naming it — a chat with nobody in it would be created, sent to, and answered by no one |
+
+An **empty committee plus `agents` is accepted**: the members are the extras and
+`committeeId` is still recorded, because the topic really was convened on that
+committee, whatever it held at the time.
+
+The one rule that is *not* a refusal is the executor. `agents` still refuses an
+executor by name — the caller is the executor — but a committee that contains
+one is convened as the user built it (S10.5: "it is the user's committee"), and
+what changes is the `hint`: the result's sentence gains *"The committee "X"
+contains the executor Y, but nothing was handed off to it: you are the executor
+here, so apply the conclusion yourself."* No tool has ever called `chat.handoff`
+and none does now, so "no hand-off is started" stays structural; the sentence
+exists because a model that saw an executor in the room could otherwise
+reasonably conclude that somebody else was going to write the code, and nobody
+would.
 
 ### `transcript.ts`
 
@@ -687,8 +732,8 @@ everything that decides what a request *means* is in `server.ts`.
 | `src/main/launch-args.test.ts` | Both argv shapes, the accepted and rejected link forms, and the scheme pin (WP-8) |
 | `src/renderer/src/stores/chats.test.ts` | `describe('ui.open-chat')`: select, ignore, hold until the list lands, drop (WP-8) |
 | `e2e/launch.spec.ts` | `--background` yields no window and `activate` still opens one; a link opens one; two `WITENA_USER_DATA` directories coexist (WP-8) |
-| `src/main/mcp-endpoint/tools.test.ts` | All six against a **real** backend (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): each tool's happy path; name resolution by id, by name and by case, ambiguous and unknown; an executor refused; `busy` on a chat that is still talking; both caps; a relative and a missing `workdir` (and that neither left a chat behind); a `chat.send` that fails releasing the watcher; `wait_for_discussion` on an idle chat with and without a conclusion, and giving up at the deadline; `get_discussion` both details and `afterMessageId`; `stop_discussion` running and idle; `not_found` surfacing as `not_found`; and, for every tool, that garbage arguments are refused rather than thrown. In `afterEach`: the bus ends with as many listeners as it started with |
-| `src/main/mcp-endpoint/contract.test.ts` | The two halves together (WP-6), which no other file does: a real `AppContext`, the real `buildHandlers()`, the real `ChatRunner` against a `MockLanguageModelV4`, and `createMcpEndpoint({ ctx, handlers, token })` **without** `tools` — so the registry is the real `createTools()` — on an ephemeral port, driven by the SDK `Client`. `tools/list`; `list_agents` → `start_discussion({ agents: ['Ada', 'lin'] })` → `concluded` with the mock's text, no `[AGREED]` on either half of the result → `list_chats` finds the chat under the question's first line → `get_discussion` `transcript` has both names and the `context` that was sent. Then the status mapping of "Frozen contracts" row by row, each through the socket: `concluded`; `rounds: 1` → `ended` with one position per member; a wait in flight when `stop_discussion` lands → `stopped`; a throwing provider → `error`; an emitted `permission.requested` → `needs-attention` with the run still live; `maxWaitSeconds: MIN_WAIT_SECONDS` → `running` and the next `wait_for_discussion` → the conclusion. Plus a validation refusal arriving as `isError` `"validation: …"` with no `structuredContent`, and 401 / 403 from the real door. The counting bus rides along in `afterEach` |
+| `src/main/mcp-endpoint/tools.test.ts` | All seven against a **real** backend (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): each tool's happy path; name resolution by id, by name and by case, ambiguous and unknown; an executor refused; `busy` on a chat that is still talking; both caps; a relative and a missing `workdir` (and that neither left a chat behind); a `chat.send` that fails releasing the watcher; `wait_for_discussion` on an idle chat with and without a conclusion, and giving up at the deadline; `get_discussion` both details and `afterMessageId`; `stop_discussion` running and idle; `not_found` surfacing as `not_found`; and, for every tool, that garbage arguments are refused rather than thrown. WP-14 added `describe('list_committees')` and `describe('committees (WP-14)')`: the listing in the committee's own member order, an executor flagged, a caller with none pointed at `list_agents`; and convening by name, by case, by id, with extra agents appended and a duplicate kept in the committee's place, the default title, the four refusals (unknown with candidates, ambiguous with ids, `committee` with `chatId`, an empty committee with no extras), an empty committee accepted when `agents` were named, and the executor `hint` present for a committee that has one and absent for a committee that has not. In `afterEach`: the bus ends with as many listeners as it started with |
+| `src/main/mcp-endpoint/contract.test.ts` | The two halves together (WP-6), which no other file does: a real `AppContext`, the real `buildHandlers()`, the real `ChatRunner` against a `MockLanguageModelV4`, and `createMcpEndpoint({ ctx, handlers, token })` **without** `tools` — so the registry is the real `createTools()` — on an ephemeral port, driven by the SDK `Client`. `tools/list`; `list_agents` → `start_discussion({ agents: ['Ada', 'lin'] })` → `concluded` with the mock's text, no `[AGREED]` on either half of the result → `list_chats` finds the chat under the question's first line → `get_discussion` `transcript` has both names and the `context` that was sent. Then the status mapping of "Frozen contracts" row by row, each through the socket: `concluded`; `rounds: 1` → `ended` with one position per member; a wait in flight when `stop_discussion` lands → `stopped`; a throwing provider → `error`; an emitted `permission.requested` → `needs-attention` with the run still live; `maxWaitSeconds: MIN_WAIT_SECONDS` → `running` and the next `wait_for_discussion` → the conclusion. Plus a validation refusal arriving as `isError` `"validation: …"` with no `structuredContent`, and 401 / 403 from the real door. WP-14 added the committee round trip through the same socket: a committee created with Phase 9's own handler, `list_committees` answering with its members in the committee's order, and `start_discussion({ committee: <the name it just returned> })` concluding on a **new** chat whose `committeeId` is that committee and whose members are its own, in its order. The counting bus rides along in `afterEach` |
 | `src/main/integrations/ide-clients.test.ts` | The real implementation with **no CLI ever run** (WP-11): `newestVersionFirst` against both directions a string sort gets wrong; `claudeCodeDirs` over a temporary home and over a machine that never installed it; `detect` confirming with `--version` and reading three kinds of no; the exact argument vector of each of the six commands, with a launcher path containing a space kept as one argument; `claude mcp get`'s exit 1 read as "not registered"; Codex's entry found by name among plugin-injected servers; both parsers degrading to `null` on output they do not recognise; a CLI that refused surfacing as `internal` with its own words; and a missing binary carrying `integrations_client_not_installed` |
 | `src/main/handlers/integrations.test.ts` | The policy over a stateful fake `IdeClients` that records every call in order (WP-11): a machine with neither client, asked once each and no more; installed separated from connected; a registration naming another installation flagged `stale`, and never flagged in a build with no launcher; `enabled` and `listening` disagreeing honestly; `connect` opening the endpoint **before** it registers, leaving an already-correct client completely alone, and repairing a stale one by removing and adding; both refusals touching neither the CLI nor the settings row; `disconnect` idempotent and leaving the endpoint up; and the default test context — `absentIdeClients()` — answering as the Node host does |
 | `src/main/mcp-endpoint/host.test.ts` | The host as a separate process meets it (WP-7): nothing listens until asked; `start()` publishes a port, a 32-byte token and this pid, mode `0600`; the published port answers `tools/list` through the SDK client with the token and `401` without; a fresh token on every start; `stop()` takes the file and the port away; both calls idempotent, and two overlapping `start()`s leave one socket; a discovery file naming another pid is neither deleted nor trusted; the injected `randomToken` / `pid` |
@@ -704,7 +749,7 @@ everything that decides what a request *means* is in `server.ts`.
 | `src/renderer/src/components/chat/transcript-rows.test.ts` — `describe('originClient (S10.4)')` | The row carrying the client name; the flag read wherever it sits; an empty name treated as none; the first of two winning; the two flag parts not confused (WP-13) |
 | `src/mcp-shim/shim.spawn.test.ts` | The **built** `out/mcp-shim/witena-mcp.cjs` (built in `beforeAll`), spawned with plain `node` and driven by the SDK's stdio client against a WP-4 endpoint with a stub registry: `tools/list` with no file and no app; a forwarded call carrying the token and `CLIENT_HEADER`; progress relayed across both hops in order; cancellation reaching the endpoint's `signal`; a failed `ToolOutcome` passed through; the switched-off and not-running refusals; the stale-file re-read. WP-15 added a whole Claude Code session start — `tools/list`, `prompts/list`, `resources/list` and `resources/templates/list` at once, with no app and no discovery file, answered in well under the client's budget and with the endpoint untouched — plus a `prompts/get` expanded out of the bundled `@shared/mcp-tools`, and a forwarded `resources/list` / `resources/read` proving the relay crosses both hops |
 | `src/main/packaging.test.ts` | The bundle's half of WP-9, over `electron-builder.yml` and `build/witena-mcp` as text: both `extraResources` destinations (`mcp/witena-mcp.cjs`, `bin/witena-mcp`), the `protocols` entry, the launcher's shebang, its `export ELECTRON_RUN_AS_NODE` and `exec` line, the two paths it derives, `productName === 'Witena'` (the executable the `exec` line names), and its **mode in the git index** — 755 there, because that is the mode a fresh clone and therefore the packaged bundle gets. Owned by [`../packaging/implement.md`](../packaging/implement.md) |
-| `e2e/packaged.spec.ts` | WP-9 against the shipped bundle: `Contents/Resources/bin/witena-mcp` exists and is executable, the shim is beside it at `mcp/witena-mcp.cjs`, and the launcher spawned the way a client spawns it answers `initialize` with `serverInfo.name === MCP_SERVER_NAME` and `tools/list` with the six names. The offline half on purpose — see [`backend.md`](./backend.md), "The bundled launcher" |
+| `e2e/packaged.spec.ts` | WP-9 against the shipped bundle: `Contents/Resources/bin/witena-mcp` exists and is executable, the shim is beside it at `mcp/witena-mcp.cjs`, and the launcher spawned the way a client spawns it answers `initialize` with `serverInfo.name === MCP_SERVER_NAME` and `tools/list` with every name in `MCP_TOOL_NAMES`. The offline half on purpose — see [`backend.md`](./backend.md), "The bundled launcher" |
 | `src/mcp-shim/index.test.ts` | The shim's handlers over `InMemoryTransport.createLinkedPair()`, against a connector whose `open()` **throws** (WP-15): so the no-launch rule fails by name rather than by timing out. The three capabilities and the absence of `subscribe` / `listChanged`; `prompts/list` and `prompts/get` answered with the connector untouched, including the comma-separated `agents` and the two refusals; `resources/list` empty when `openIfRunning` finds nothing and forwarded — with its `cursor` — when it does; `resources/read` forwarded, and refused with `RESOURCE_UNAVAILABLE_TEXT` when nothing is listening; an empty `resources/templates/list`; and `tools/call` still taking the launching path |
 | `src/main/mcp-endpoint/contract.test.ts` — `describe('the parts of MCP beyond tools')` | The same three methods through the real socket and the real backend (WP-15): the capabilities; the listing in `chats.list`'s own order, capped at twenty, with no `nextCursor`; a read of a finished discussion byte-identical to `get_discussion`'s `markdown` and free of `[AGREED]`; a chat nobody has spoken in reading as its heading alone; a bad uri and a missing chat as two different errors; `prompts/list` and an expansion carrying the question, and a refusal that starts nothing |
 | `e2e/mcp-endpoint.spec.ts` | The two halves with **nothing stood in for** (WP-10): the built app on a temporary `userData`, the switch thrown through `settings.update` from inside the page, and the built shim spawned with plain `node` against the same directory. The discovery file appears within the poll; `tools/list` crosses the stdio hop; `list_chats` finds a chat seeded through the backend client, with its `witena://chat/<id>` and its member; a `start_discussion` with `maxWaitSeconds: 5` on a chat whose provider is a closed port puts the question in the open window's transcript (any status is accepted — the message is the claim); and, with the switch off, a fresh shim answers `SHIM_ERROR_TEXT['endpoint-off']` |
@@ -719,6 +764,18 @@ until somebody runs it by hand:
   quit Witena" is not, because reproducing it means a second signed copy of the
   app with a fresh `WITENA_USER_DATA` and therefore the Keychain prompt WP-0a
   measured. See [`backend.md`](./backend.md), "The bundled launcher".
+- **The generated Claude Code subagent per committee is deferred** (WP-14).
+  S10.5's last bullet — `~/.claude/agents/witena-<slug>.md` with `tools:` limited
+  to `mcp__witena__*`, re-synced on the Integrations toggle and on committee
+  create / rename / delete — was conditional on WP-0b item 4 being *confirmed*,
+  and it was not: the `claude` CLI on the spike machine is not logged in, so an
+  `@`-mention of a tools-restricted subagent could not be run at all. Nothing was
+  written under `~/.claude/`, `src/main/integrations/` was not touched, and no
+  locale key was added for it. The tools half of S10.5 is complete and works
+  without it — a Claude Code session calls `list_committees` and
+  `start_discussion({ committee })` like any other tool — so what is missing is
+  the `@witena-<committee>` shorthand, not the capability. S10.7's backlog picks
+  it up once somebody can run the check on a logged-in machine.
 
 ## Settings → Integrations (WP-12)
 
