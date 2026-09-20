@@ -878,6 +878,24 @@ export interface EditorSettings {
   command: string
 }
 
+/**
+ * The local MCP endpoint's switch (S10.3).
+ *
+ * One boolean, deliberately: the port is ephemeral and the bearer token is
+ * regenerated on every `start()`, so there is nothing else about the endpoint a
+ * user could sensibly configure — and nothing worth persisting, since neither
+ * number survives a restart. PLAN.md's decision table is why it exists at all:
+ * the endpoint is a local door that can spend the user's provider money and read
+ * their chats, so it is **off until somebody says otherwise**.
+ *
+ * A group rather than a top-level `mcpEndpointEnabled`, because WP-11's
+ * "Connect" button and later work (a chosen port, an idle-quit timer) belong
+ * beside it, and a group merges field by field on a write.
+ */
+export interface McpEndpointSettings {
+  enabled: boolean
+}
+
 export interface AppSettings {
   /** `'system'` follows the OS language, which is the first-launch default. */
   language: Language | 'system'
@@ -887,6 +905,8 @@ export interface AppSettings {
   editor: EditorSettings
   /** How `run_command` is confined (S5.15). */
   executor: ExecutorSettings
+  /** Whether the local MCP endpoint listens (S10.3). Off on a fresh install. */
+  mcpEndpoint: McpEndpointSettings
   timeouts: AppTimeouts
   /**
    * True once the user pressed Skip on the first-run card (S7.5).
@@ -912,6 +932,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   executor: {
     sandbox: 'workdir-write'
   },
+  mcpEndpoint: {
+    enabled: false
+  },
   timeouts: {
     stallTimeoutMs: 30_000,
     hardTimeoutMs: 120_000,
@@ -934,6 +957,14 @@ export interface AppSettingsPatch {
   theme?: AppSettings['theme']
   editor?: Partial<EditorSettings>
   executor?: Partial<ExecutorSettings>
+  /**
+   * The endpoint's switch (S10.3).
+   *
+   * Partial like the other groups, and the one patch key with a **side effect**:
+   * the `settings.update` handler starts or stops the listening host after it has
+   * stored the row, so the switch takes effect without a restart.
+   */
+  mcpEndpoint?: Partial<McpEndpointSettings>
   timeouts?: Partial<AppTimeouts>
   onboardingDismissed?: boolean
 }

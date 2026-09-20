@@ -10,7 +10,7 @@
 | `src/main/mcp-endpoint/server.ts`, `guards.ts`, `tool-types.ts` — transport and refusals | WP-4 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/contract.test.ts` — the two halves over a real socket (no surface of its own) | WP-6 `[x]` (2026-09-20) |
 | `src/mcp-shim/` and its Vite target | WP-5 `[x]` (2026-09-20) |
-| `src/main/mcp-endpoint/host.ts`, `AppSettings.mcpEndpoint` | WP-7 |
+| `src/main/mcp-endpoint/host.ts`, `AppSettings.mcpEndpoint` | WP-7 `[x]` (2026-09-20) |
 | Single-instance lock, `--background`, `witena://`, `ui.open-chat` | WP-8 `[x]` (2026-09-20) |
 | `bin/witena-mcp` and `mcp/witena-mcp.cjs` in the bundle | WP-9 |
 | `integrations.*` handlers over an injected `IdeClients` | WP-11 |
@@ -255,6 +255,99 @@ to translate.
 directory quits: the losing process never reaches `ready`, so driving it through
 Playwright would be a race against its own teardown. WP-0a measured that case
 directly instead.
+
+## Host and the setting (WP-7)
+
+The endpoint stops being a request handler and becomes a **door**: a socket, a
+file that says where it is, and one boolean that decides whether either exists.
+
+| Module | What it owns |
+|---|---|
+| `src/main/mcp-endpoint/host.ts` | `createMcpEndpointHost({ ctx, handlers, userDataDir, randomToken?, pid? })` → `{ state, start, stop }`. `node:http`, `node:fs`, `node:crypto`, `node:path`; no electron |
+| `src/shared/types.ts` | `McpEndpointSettings { enabled }`, `AppSettings.mcpEndpoint` (default `{ enabled: false }`), `AppSettingsPatch.mcpEndpoint?: Partial<…>` |
+| `src/main/db/repositories/settings.ts` | `mcpEndpoint` merged field by field on the read **and** on the write, like `editor` and `timeouts` |
+| `src/main/handlers/settings.ts` | `assertMcpEndpointPatch`, and the live toggle: `ctx.mcpEndpoint?.start()` / `.stop()` after the row is written |
+| `src/main/app-context.ts` | `AppContext.mcpEndpoint: McpEndpointHost \| null`, built when `AppContextOptions.mcpEndpoint = { handlers }` is given |
+| `src/main/index.ts` | Builds `buildHandlers()` once, passes the option, starts the host when the setting says so, stops it in `before-quit` |
+
+No new table and no new IPC method: the switch is a field of the settings row
+that already exists, and `settings.get` / `settings.update` are the methods that
+already carry it.
+
+### What `start()` does, in order
+
+1. A fresh `randomBytes(32).toString('base64url')` token — **per `start()`**, so
+   stopping and starting invalidates the old one, which is exactly the property
+   PLAN's decision table wanted from "a random token per launch".
+2. `createMcpEndpoint({ ctx, handlers, token })` — the real six tools, because
+   `tools` is only passed by WP-4's own tests.
+3. `createServer((req, res) => void endpoint.handle(req, res))` and
+   `listen(0, '127.0.0.1')`. The host routes nothing: `handle` answers `MCP_PATH`
+   and 404s the rest itself.
+4. Only then the discovery file, because only then is the port knowable — which
+   is also why `guards.ts` checks `Host` against `req.socket.localPort` rather
+   than against a number it was told.
+
+`stop()` is the reverse and starts with the file. It removes it **synchronously
+and first**, ahead of anything awaited, because `before-quit` in
+`src/main/index.ts` is a synchronous listener that cannot await: a quit is only
+guaranteed to reach the first synchronous statement. Then `endpoint.close()` —
+which is what ends the in-flight `wait_for_discussion` calls, by closing the
+transports whose `signal` those tool calls hold — and then the socket, with
+`closeAllConnections()` so a keep-alive cannot hold `close()` open.
+
+Pitfalls for the packages that build on it:
+
+- **`writeFileSync`'s `mode` only applies to a file it creates.** The second
+  launch writes over a file that already exists, where the option is ignored, so
+  the `chmodSync` after it is not belt and braces — it is the half that covers
+  every run but the first.
+- **`stop()` removes the discovery file only when its `pid` is ours.** A file
+  naming another process is a *running* Witena on the same directory; the
+  single-instance lock (WP-8) should make that impossible, but a lock is not a
+  proof, and deleting somebody else's file would break a live IDE session to tidy
+  up after ourselves. Unreadable, unparseable and absent are all "nothing of ours
+  is there", and all leave the file exactly as found.
+- **`start()` and `stop()` are serialised, not merely idempotent.** Both go
+  through one promise chain, so a switch answered twice in a tick cannot leave a
+  socket with nothing pointing at it. A second `start()` on a live host is a
+  no-op that keeps the same port *and the same token* — a shim already holding
+  one must not be invalidated by a caller that asked twice.
+- **The host never reads the setting**, and `createAppContext` never starts it.
+  A context that opened a port on construction is a context no test could build;
+  reading the setting is `src/main/index.ts`'s job at launch and the handler's
+  job on a toggle.
+- **`ctx.mcpEndpoint` is `null` off the desktop**, so `ctx.mcpEndpoint?.start()`
+  is a no-op in `src/server/` and in every suite. The *setting* is not
+  desktop-only — the row is written wherever the handler runs — only the door is.
+
+### The toggle, and what happens when it fails
+
+`settings.update` stores the row and then makes the process match it. Two
+decisions are worth stating because WP-11 and WP-12 both lean on them:
+
+- It acts on the **stored** value, not on the patch, so a patch carrying an empty
+  `mcpEndpoint: {}` still means "make the process match the row".
+- A `start()` that throws is logged and swallowed. The row is the user's intent;
+  whether a socket came up is a fact about this launch, and WP-11's
+  `integrations.status` reports it from `host.state`. Rejecting would leave the
+  row saying one thing and the UI — which reverts a switch on a rejected update —
+  saying the other.
+
+### In `src/main/index.ts`
+
+Three edits, all outside the window's code path:
+
+| Where | What |
+|---|---|
+| Before `createAppContext` | `const handlers = buildHandlers()`, passed both to `createAppContext({ … mcpEndpoint: { handlers } })` and to `registerIpc` — one map, so a discussion started by a coding agent goes through exactly the handlers the window goes through |
+| After `registerIpc` / `forwardEvents`, **before** `if (!launch.background) createWindow()` | `if (settings.mcpEndpoint.enabled) void ctx.mcpEndpoint?.start().catch(…)` |
+| `before-quit`, first | `void context?.mcpEndpoint?.stop().catch(…)`, ahead of `context.close()` |
+
+The middle one is the load-bearing placement: `--background` (WP-8) is a launch
+with **no window at all** — a coding agent's shim started it and is polling for
+the discovery file — so anything hanging off `createWindow()` would be a door
+that only opens when somebody is looking.
 
 ## Tools (WP-3)
 
