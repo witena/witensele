@@ -4217,6 +4217,12 @@ What: the app listens, can start in the background, and ships the shim.
   switch on, run the built shim with `node`, `list_chats` answers, a
   `start_discussion` message appears in the open window. `e2e/packaged.spec.ts`
   gains one case: the bundled `bin/witena-mcp` answers `tools/list`.
+  (2026-09-20, WP-10: `e2e/mcp-endpoint.spec.ts` done — the switch is thrown
+  through `settings.update` because there is no launch-time override, the shim
+  is spawned with plain `node` so it can never launch a second app, and the
+  switched-off case asserts `SHIM_ERROR_TEXT['endpoint-off']` exactly, which is
+  the sentence an unpackaged app's `SingletonLock` earns. The
+  `e2e/packaged.spec.ts` case is WP-9's.)
 Acceptance: with Witena quit, a tool call from Claude Code launches it with no
 window, the discussion runs, the conclusion returns, and clicking the Dock icon
 shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`
