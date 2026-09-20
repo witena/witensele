@@ -2,8 +2,8 @@
  * Purely local navigation state: which page the shell shows and, inside
  * Settings, which section is selected.
  *
- * Deliberately *not* a router. The app is a desktop window with three top-level
- * destinations and no addressable URLs, no deep links and no history to
+ * Deliberately *not* a router. The app is a desktop window with a handful of
+ * top-level destinations and no addressable URLs, no deep links and no history to
  * reconstruct — a router library would only add a second source of truth next to
  * the store the rest of the UI already reads. If deep links ever matter (the VS
  * Code extension, or the server version), the router becomes the thing that
@@ -14,8 +14,8 @@
  */
 import { create } from 'zustand'
 
-/** The three destinations of the navigation rail, in rail order. */
-export type Page = 'chats' | 'agents' | 'settings'
+/** The destinations of the navigation rail, in rail order. */
+export type Page = 'chats' | 'committees' | 'agents' | 'settings'
 
 /** The sections of the settings page, in the order the settings nav lists them. */
 export type SettingsSection =
@@ -28,8 +28,20 @@ export type SettingsSection =
   | 'about'
   | 'developer'
 
-/** Rail order. The rail renders `chats` and `agents`; `settings` is pinned last. */
-export const PAGES = ['chats', 'agents', 'settings'] as const satisfies readonly Page[]
+/**
+ * Rail order. The rail renders `chats`, `committees` and `agents`; `settings` is
+ * pinned last.
+ *
+ * `committees` sits between Chats and Agents (S9.2) because that is the order
+ * the three are used in: a topic is convened from a committee, and a committee
+ * is assembled from agents.
+ */
+export const PAGES = [
+  'chats',
+  'committees',
+  'agents',
+  'settings'
+] as const satisfies readonly Page[]
 
 /**
  * Settings nav order. `developer` is last on purpose: it is the transport and

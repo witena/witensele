@@ -17,6 +17,22 @@ Three layers, each the ordinary shape of its neighbours:
   `committeeId` it reads the committee **once**, merges its members with the
   caller's extras, and stores the id on the chat as provenance. Nothing reads
   the committee afterwards — that is what makes joining a snapshot.
+- **The page (S9.2).** `stores/committees.ts` on `stores/agents.ts`' pattern —
+  a `CommitteeInput` draft, `dirty`, and one write on Save — and
+  `pages/committees-page.tsx` on the Agents page's layout. The member list is
+  edited *in the draft*, never through a call of its own, because membership
+  rides on the entity; `addMember` / `removeMember` / `moveMember` are all
+  `patchDraft`.
+
+  The two interactions the list needs already existed in the member panel, so
+  S9.2 **extracted** them rather than writing a second copy:
+  `components/agents/agent-picker.tsx` (the candidate popover, with the
+  one-executor rule and its `chat.executorTaken` explanation) and
+  `components/ui/reorderable-list.tsx` (the draggable rows). Both are shaped by
+  what the member panel must keep: the picker leaves the open state, the
+  outside-click and the positioning to its caller, and the list renders no
+  container element, so the panel's DOM, classes and test ids are byte for byte
+  what they were and `e2e/members.spec.ts` needed no edit.
 
 Orchestration, `AgentTurn` and the supervisor are untouched: they read
 `chat_members`, which now simply has members in it sooner.
@@ -60,6 +76,23 @@ committees.delete({ id })
   → one chat.updated per affected topic
 ```
 
+Building one on the page (S9.2). Nothing is written until Save, and Save writes
+the record and its members together:
+
+```
+CommitteesPage mounts
+  → committees.list / agents.list / providers.list / chats.list
+"+"  → startCreate()                   draft = { name: '', description: '',
+                                                 memberAgentIds: [] }, dirty
+Add  → AgentPicker → addMember(id)     patchDraft, order = click order
+drag │ ▲ ▼ → moveMember(from, to)      patchDraft, via lib/reorder
+Save → validateDraft(draft)            name trimmed, non-empty, within the cap
+     → committees.create | update      the one call; members ride along
+     → mode = 'edit' on the new row    the user usually keeps editing
+     ↳ refused → errorCode + errorDetails → translateFailure → one line
+Delete (twice) → committees.delete     the topics keep their members
+```
+
 ## Key types and contracts
 
 In `src/shared/types.ts`:
@@ -100,6 +133,10 @@ provenance, which `chat.updated` already carries.
 | `src/main/db/postgres/schema-drift.test.ts` | The two new tables and the new column are declared identically in both dialects |
 | `src/main/db/migrations.test.ts` | `committees` and `committee_members` are created when the database is opened |
 | `src/shared/contracts.test.ts` | The five methods are in `BACKEND_METHODS`, and `committees` is a namespace |
+| `src/renderer/src/stores/committees.test.ts` | **S9.2**, against a fake `BackendClient`: load and a failed load; `validateDraft` (blank, whitespace-only and over-cap names, measured trimmed); create from an empty draft, which trims the name and leaves the editor on the row it produced; an invalid draft calling nothing; add / move / remove writing one `committees.update` with the whole list in order; `dirty` going back to false when an edit is undone, the member list included; a `second_executor` refusal kept as `errorCode` + `errorDetails` with the list untouched; delete closing the editor only when it was the open record |
+| `src/renderer/src/stores/ui.test.ts` | **S9.2**: `PAGES` is `['chats', 'committees', 'agents', 'settings']` — rail order, Settings last |
+| `src/renderer/src/i18n/locales.test.ts` / `used-keys.test.ts` | **S9.2**: `committees` is an expected namespace, the two trees match, and every `t('committees.…')` resolves |
+| `e2e/committees.spec.ts` | **S9.2**, offline: the page starts empty and Save is disabled until the name is filled; two agents added through the picker and counted on the list row; a drag reordering them, saved, and still in that order after the app is relaunched; the move-up / move-down buttons doing the same thing without a pointer; a removal; deleting an *agent* emptying the committee; the two-step delete |
 
 ## Known limitations and TODOs
 
@@ -110,5 +147,14 @@ provenance, which `chat.updated` already carries.
 - **The Postgres migration has not been executed here** — no Docker on the
   machine S9.1 was written on, so `0002_committees.sql` is checked by reading
   and by `schema-drift.test.ts`, like `0001_permission_grants.sql` before it.
-- **No renderer.** `committees.*` has no caller until S9.2; `Chat.committeeId`
-  is carried through the stores and rendered nowhere until S9.3.
+- **The page cannot convene anything yet.** S9.2 builds and orders a committee;
+  the **New topic** button, the New chat dialog, the committee badge and "Sync
+  committee members" are all S9.3. Until then `Chat.committeeId` is read in
+  exactly one place — the topics list — and a topic can only be created the way
+  it always was.
+- **`committees.get` has no caller.** The page holds the list it edits, so the
+  method exists for the server host and for S9.3.
+- **The committee list is one reload behind its own ordering.** `committees.list`
+  is `updatedAt desc` and a save does not re-sort the row it updated; see
+  [`frontend.md`](./frontend.md) for why a row that jumped under the cursor
+  would be the worse of the two.

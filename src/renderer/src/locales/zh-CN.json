@@ -15,7 +15,8 @@
     "primary": "主导航",
     "chats": "对话",
     "agents": "智能体",
-    "settings": "设置"
+    "settings": "设置",
+    "committees": "专家组"
   },
   "chat": {
     "newChat": "新建对话",
@@ -188,6 +189,38 @@
     "fileRefTitle": "在编辑器中打开该文件",
     "fileRefFailed": "无法打开该文件，请检查「设置 → 开发者 → 编辑器」。",
     "openInEditor": "在编辑器中打开"
+  },
+  "committees": {
+    "title": "专家组",
+    "newCommittee": "新建专家组",
+    "emptyTitle": "还没有专家组",
+    "empty": "把经常一起讨论的 agent 存成一个组。",
+    "selectOrCreateTitle": "选择或新建专家组",
+    "selectOrCreateDescription": "专家组是一组固定顺序、有名字的 agent,可以随时被召集来讨论一个话题。",
+    "memberCount": "{{members}} 位成员",
+    "deleteConfirm": "再点一次确认",
+    "basicInfo": "基本信息",
+    "name": "名称",
+    "namePlaceholder": "这组 agent 叫什么",
+    "description": "描述",
+    "descriptionHint": "只有你能看到",
+    "descriptionPlaceholder": "一句话说明这个专家组是干什么的",
+    "members": "成员",
+    "emptyMembersTitle": "还没有成员",
+    "emptyMembersDescription": "从 agent 库里添加成员,排列顺序就是发言顺序。",
+    "addMemberAll": "所有 agent 都已经在这个专家组里了。",
+    "addMemberEmpty": "还没有 agent,先去 Agents 页面创建一个。",
+    "removeMember": "从这个专家组移除",
+    "reorderMember": "拖动可以调整发言顺序",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "topics": "话题",
+    "topicsEmptyTitle": "还没有话题",
+    "topicsEmptyDescription": "由这个专家组召集的会话会出现在这里。",
+    "validation": {
+      "nameRequired": "名称不能为空。",
+      "nameTooLong": "名称最多 {{max}} 个字符。"
+    }
   },
   "agents": {
     "title": "智能体",

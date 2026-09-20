@@ -79,8 +79,9 @@ rule #6).
 
 ## Copy and i18n
 
-This feature *is* the copy. The namespaces are `common`, `nav`, `chat`, `agents`,
-`settings`, `presence`, `errors` and `notices` — see the key-tree table in
+This feature *is* the copy. The namespaces are `common`, `nav`, `chat`,
+`committees` (S9.2), `agents`, `settings`, `presence`, `errors` and `notices` —
+see the key-tree table in
 [implement.md](./implement.md). S1.5 removed the ninth, `smoke`: the screen it
 belonged to became Settings -> Developer and its strings moved under
 `settings.developer.*`, with `EXPECTED_NAMESPACES` in `locales.test.ts` updated to

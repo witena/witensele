@@ -1,5 +1,10 @@
 # committees — Backend
 
+Everything here is S9.1. **S9.2 added no backend code at all**: the Committees
+page is built entirely on the five methods below, and the one thing it might
+have wanted — an event when a committee changes — is deliberately still absent
+(see "Events emitted").
+
 ## Modules
 
 | File | Responsibility |

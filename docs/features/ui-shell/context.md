@@ -17,8 +17,10 @@ so S1.6 and S1.7 assemble screens instead of re-inventing a button.
 - `stores/ui.ts`: the current page and the selected settings section.
 - `AppShell` + `NavRail`: the frame, the rail, the active state, and the window
   drag regions required by `titleBarStyle: 'hiddenInset'`.
-- The three pages as static shells: `ChatsPage` (list / conversation / member
-  panel), `AgentsPage` (list / editor), `SettingsPage` (section nav / content).
+- The pages as static shells: `ChatsPage` (list / conversation / member
+  panel), `AgentsPage` (list / editor), `SettingsPage` (section nav / content),
+  and since S9.2 `CommitteesPage` (list / editor), owned by
+  [`committees`](../committees/context.md) and routed here.
 - The primitives under `components/ui/` and the layout helpers under
   `components/layout/`.
 - **The two palettes and the appearance setting (S5.8).** The dark tokens

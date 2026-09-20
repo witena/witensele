@@ -15,7 +15,8 @@
     "primary": "Primary navigation",
     "chats": "Chats",
     "agents": "Agents",
-    "settings": "Settings"
+    "settings": "Settings",
+    "committees": "Committees"
   },
   "chat": {
     "newChat": "New chat",
@@ -188,6 +189,38 @@
     "fileRefTitle": "Open this file in your editor",
     "fileRefFailed": "Could not open this file. Check Settings -> Developer -> Editor.",
     "openInEditor": "Open in editor"
+  },
+  "committees": {
+    "title": "Committees",
+    "newCommittee": "New committee",
+    "emptyTitle": "No committees yet",
+    "empty": "Save the agents you convene together as a group.",
+    "selectOrCreateTitle": "Select or create a committee",
+    "selectOrCreateDescription": "A committee is a named group of agents in a fixed order, ready to be convened on a topic.",
+    "memberCount": "{{members}} members",
+    "deleteConfirm": "Click again to confirm",
+    "basicInfo": "Basic info",
+    "name": "Name",
+    "namePlaceholder": "What this group of agents is called",
+    "description": "Description",
+    "descriptionHint": "only you see this",
+    "descriptionPlaceholder": "One line about what this committee is for",
+    "members": "Members",
+    "emptyMembersTitle": "No members yet",
+    "emptyMembersDescription": "Add agents from your library; their order is the speaking order.",
+    "addMemberAll": "Every agent is already in this committee.",
+    "addMemberEmpty": "No agents yet. Create one on the Agents page.",
+    "removeMember": "Remove from this committee",
+    "reorderMember": "Drag to change the speaking order",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "topics": "Topics",
+    "topicsEmptyTitle": "No topics yet",
+    "topicsEmptyDescription": "Chats convened from this committee appear here.",
+    "validation": {
+      "nameRequired": "A name is required.",
+      "nameTooLong": "A name is at most {{max}} characters."
+    }
   },
   "agents": {
     "title": "Agents",

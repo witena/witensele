@@ -1,10 +1,10 @@
 /**
- * The 56px navigation rail: the app mark, Chats, Agents, and Settings pinned to
- * the bottom.
+ * The 56px navigation rail: the app mark, Chats, Committees, Agents, and
+ * Settings pinned to the bottom.
  *
  * Two things are deliberate:
  *
- * - **The labels are three literal `t()` calls**, resolved by a `switch`, not
+ * - **The labels are literal `t()` calls**, resolved by a `switch`, not
  *   `t(LABEL_KEYS[page])`. A key assembled at runtime is invisible to the
  *   `used-keys` guard (it says so in its own header), and the rail is exactly the
  *   place where a typo would be noticed last.
@@ -14,7 +14,7 @@
  */
 import clsx from 'clsx'
 import type { TFunction } from 'i18next'
-import { MessagesSquare, Settings, Users, type LucideIcon } from 'lucide-react'
+import { MessagesSquare, Settings, Users, UsersRound, type LucideIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { BrandMark } from '../ui/brand-mark'
 import { useUiStore, type Page } from '../../stores/ui'
@@ -22,15 +22,18 @@ import { DRAG_REGION, NO_DRAG, TRAFFIC_LIGHT_INSET } from './window-chrome'
 
 const ICONS: Record<Page, LucideIcon> = {
   chats: MessagesSquare,
+  committees: UsersRound,
   agents: Users,
   settings: Settings
 }
 
-/** Literal keys, so `used-keys.test.ts` can verify all three resolve. */
+/** Literal keys, so `used-keys.test.ts` can verify every one resolves. */
 function navLabel(t: TFunction, page: Page): string {
   switch (page) {
     case 'chats':
       return t('nav.chats')
+    case 'committees':
+      return t('nav.committees')
     case 'agents':
       return t('nav.agents')
     case 'settings':
@@ -95,6 +98,12 @@ export function NavRail(): React.JSX.Element {
         active={page === 'chats'}
         onSelect={setPage}
         label={navLabel(t, 'chats')}
+      />
+      <NavButton
+        page="committees"
+        active={page === 'committees'}
+        onSelect={setPage}
+        label={navLabel(t, 'committees')}
       />
       <NavButton
         page="agents"

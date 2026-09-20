@@ -4103,7 +4103,7 @@ nowhere), `ChatCreateInput.committeeId` — accepted only at creation, never by
 `chats.update` — and the merge rule the renderer's `mergeMembers` has to match:
 committee members in `position` order, then the extras, first occurrence wins.
 
-### S9.2 Committees page `[ ]`
+### S9.2 Committees page `[x]` (2026-09-20)
 What: the user can build a committee.
 - `stores/ui.ts`: `Page` gains `'committees'`; `PAGES` becomes
   `['chats', 'committees', 'agents', 'settings']`; `nav-rail.tsx` renders it
@@ -4136,6 +4136,44 @@ unit tests and typecheck green. "New topic" is **not** in this step — the
 button arrives with the dialog in S9.3. Docs: `committees` (`frontend.md`,
 `implement.md`), `ui-shell` (rail, `Page`), `chats` (`frontend.md`: the
 extraction), `i18n` (key tree).
+Done: the rail has a fourth button, `stores/committees.ts` is the Agents store's
+shape, and `pages/committees-page.tsx` plus `committee-list` / `committee-editor`
+/ `committee-topics` are the Agents page's layout — 1963 unit tests and the
+typecheck green, and `e2e/committees.spec.ts` (7 tests) green with the whole
+suite at 111 passed. Three things worth knowing. **The extraction produced two
+components, not one shared panel**: `components/agents/agent-picker.tsx` (the
+candidate popover, `testIdPrefix` reproducing `member-picker` /
+`member-candidate` / `member-candidate-executor` exactly) and
+`components/ui/reorderable-list.tsx` (the draggable rows, generic in the item).
+Both are shaped by what the member panel had to keep byte for byte: the picker
+leaves the **open state, the outside-click and the positioning** to its caller,
+because a `mousedown` listener anchored inside the popover would fire before the
+Add button's own click and reopen what it just closed; and the list renders **no
+container element**, because the panel's rows are laid out by its own
+`flex … gap-1.5` and a wrapper would swallow the gap. `MemberRow` is now the
+row's *contents*; `e2e/members.spec.ts` was not touched and passes unchanged.
+**The member list is reorderable without a pointer**: each row carries Move up /
+Move down beside Remove, which is the honest way to keep the a11y promise
+`frontend.md` made — dragging is pointer-only, and this list decides who speaks
+first. **Two strings are deliberately borrowed rather than duplicated**:
+`chat.executorTaken` under a blocked candidate and `agents.executorBadge` on a
+member row are the same rule and the same tag as in a chat, and a second
+translation of either would be free to drift; everything else is the new
+`committees.*` namespace, which is in both locale files, in `CLAUDE.md`'s list
+and in `locales.test.ts`'s `EXPECTED_NAMESPACES`. Two smaller notes for S9.3:
+`committees.get` still has no caller (the page owns the list it edits), and a
+save replaces its row **in place** rather than re-sorting the `updatedAt desc`
+list, so the ordering is one reload behind on purpose. **Three specs failed in
+the full `npm run e2e` run** (111 passed) and none of them for a reason this
+step could cause. `presence.spec.ts`'s third test failed only in its `afterAll`
+teardown and passes on a re-run. `closure.spec.ts` ("no permission prompt in 3
+attempts [consensus=0 conclusion=0 handoffDeliver=0]") and `executor.spec.ts`
+("`tool-card` expected 0, received 1") both reproduce on their own, and both are
+assertions about what a local `llama3.2:3b` chose to do — their own code says so
+("Recorded rather than asserted, because each of them is the model's reliability
+and not the product's"; "this case measures a small local model reading it"). A
+renderer-only change cannot move either. Re-running `committees`, `members`,
+`ui-shell` and `presence` together is 20/20.
 
 ### S9.3 New chat dialog and committee-aware chats `[ ]`
 What: a topic is convened from a committee, individual agents, or both.

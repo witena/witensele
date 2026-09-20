@@ -197,7 +197,8 @@ Everything new is renderer-local; no shared type and no IPC channel was added.
 
 | Export | Where | Notes |
 |---|---|---|
-| `Page`, `SettingsSection`, `PAGES`, `SETTINGS_SECTIONS`, `useUiStore` | `stores/ui.ts` | `SETTINGS_SECTIONS` is the render order of the settings nav |
+| `Page`, `SettingsSection`, `PAGES`, `SETTINGS_SECTIONS`, `useUiStore` | `stores/ui.ts` | Both constants are render order: `PAGES` is the rail top to bottom (`chats`, `committees` since S9.2, `agents`, `settings`), `SETTINGS_SECTIONS` the settings nav |
+| `ReorderableList` | `components/ui/reorderable-list.tsx` | S9.2. The drag-to-reorder rows, extracted from the member panel for the committee editor. Generic in the item, no container element, `onReorder(from, to)` — the arithmetic stays in `lib/reorder.ts` |
 | `presenceColorClass(state)` | `components/ui/presence-dot.tsx` | `PresenceState` → `bg-presence-*`. Pure, total, unit-tested |
 | `TRAFFIC_LIGHT_INSET`, `DRAG_REGION`, `NO_DRAG` | `components/layout/window-chrome.ts` | Class names, not styles |
 | `applyLanguageSetting(setting)` | `pages/settings/language.ts` | The single handler both language controls call |

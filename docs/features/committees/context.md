@@ -17,11 +17,14 @@ transcript, and nothing in it is read while a chat runs.
 
 Phase 9, in three steps:
 
-- **S9.1 (this step)** — committees exist in the backend: the two tables, the
+- **S9.1 (done)** — committees exist in the backend: the two tables, the
   `Committee` type, the five `committees.*` methods, and `chats.create`
   expanding a committee's members into a new chat.
-- **S9.2** — the Committees page: build a committee, reorder its members, see
-  its topics.
+- **S9.2 (done)** — the Committees page: a fourth rail destination where a
+  committee is named and described, its members are added, reordered and
+  removed, and the topics it has been convened on are listed. The member picker
+  and the drag-to-reorder list are extracted from the chat's member panel so
+  both screens behave identically.
 - **S9.3** — the New chat dialog, the committee badge on a topic, and "Sync
   committee members" in the member panel.
 
@@ -44,8 +47,7 @@ Settled before the phase started, and true of all three steps:
 | Several committees in one chat | Phase 6 backlog; the column is single-valued on purpose |
 | Grouping or filtering the chat list by committee | Phase 6 backlog; [`chats`](../chats/context.md) |
 | Anything a running chat does with its members | [`orchestration`](../orchestration/context.md) — it keeps reading `chat_members` and does not know committees exist |
-| The Committees page, its store and its i18n keys | S9.2 |
-| The New chat dialog and the committee badge | S9.3 |
+| The New chat dialog, "New topic", the committee badge, "Sync committee members" | S9.3. S9.2's page builds a committee; it cannot yet start a conversation with one |
 
 ## Dependencies
 
@@ -55,9 +57,11 @@ Settled before the phase started, and true of all three steps:
 | [`database`](../database/context.md) | The two tables in both dialects, the migrations and the repository pattern |
 | [`chats`](../chats/context.md) | `chats.create` expands a committee; `Chat.committeeId` is the provenance |
 | [`backend-client`](../backend-client/context.md) | The five methods on `BackendApi` and in `BACKEND_METHODS` |
+| [`ui-shell`](../ui-shell/context.md) | S9.2's rail button, the `Page` union and the primitives the page is built from |
+| [`i18n`](../i18n/context.md) | S9.2's `nav.committees` and the `committees.*` namespace |
 
-Depending on this feature in return: nothing yet. S9.2 and S9.3 add the
-renderer; orchestration never will.
+Depending on this feature in return: nothing yet. S9.3 adds the New chat dialog;
+orchestration never will.
 
 ## Decisions and trade-offs
 

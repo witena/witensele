@@ -51,6 +51,14 @@ describe('ui store', () => {
     expect(useUiStore.getState().page).toBe('agents')
   })
 
+  it('lists the rail destinations in rail order, Settings last', () => {
+    // The order is what the rail renders top to bottom (S9.2 inserted
+    // `committees` between Chats and Agents), and `app-shell.tsx` keys its page
+    // lookup off the same union — a page added to one and not the other is a
+    // compile error there and a missing button here.
+    expect([...PAGES]).toEqual(['chats', 'committees', 'agents', 'settings'])
+  })
+
   it('lists the sections the settings nav renders, without duplicates', () => {
     expect(new Set(SETTINGS_SECTIONS).size).toBe(SETTINGS_SECTIONS.length)
     expect(new Set(PAGES).size).toBe(PAGES.length)
