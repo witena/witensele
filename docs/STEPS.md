@@ -4014,3 +4014,145 @@ messages live. Docs: `backend-client`, `ui-shell`.
 The executor online: a per-user container with the folder, the same seven
 tools over a small agent inside it, the permission prompt unchanged.
 
+
+## Phase 9: Committees (PLAN "User interface", Committees page)
+
+A committee is a named, ordered standing group of agents; a chat is a topic the
+committee — or any set of individual agents — is convened on. Settled before the
+phase started: joining is a **snapshot** (members are expanded into
+`chat_members` at creation, `chats.committee_id` records the source), and a chat
+belongs to **at most one** committee plus any number of individual agents. The
+identifier is `committee` everywhere: `group` already means "Group settings" and
+`panel` already means a side panel. Orchestration, `agent-turn` and the
+supervisor are not touched by this phase — they keep reading `chat_members`.
+
+Each step is one commit on `feat/committees`, ends with `npm test` and
+`npm run typecheck` green, and updates the feature documents it names in the
+same commit. The new feature folder is `docs/features/committees/` (copied from
+`_template` in S9.1, indexed in `docs/README.md`).
+
+### S9.1 Committees: data and API `[ ]`
+What: committees exist in the backend and `chats.create` can convene one.
+- Schema, both dialects: table `committees` (`id`, `user_id`, `name`,
+  `description`, `created_at`, `updated_at`); table `committee_members`
+  (`committee_id`, `agent_id`, `position`, composite primary key, both foreign
+  keys `ON DELETE CASCADE`); nullable column `chats.committee_id` referencing
+  `committees.id` `ON DELETE SET NULL`. SQLite migration `0005_*`, Postgres
+  migration `0002_*`; `postgres/schema-drift.test.ts` and `migrations.test.ts`
+  stay green. A chat written before this step reads `committeeId: null`.
+- `src/shared/types.ts`: `Committee extends EntityBase { name: string;
+  description: string; memberAgentIds: string[] }` (ordered — the order is the
+  speaking order a chat inherits), `CommitteeInput`, `CommitteePatch`,
+  `MAX_COMMITTEE_NAME_CHARS`; `Chat.committeeId: string | null`;
+  `ChatCreateInput.committeeId?: string`. Membership rides on the entity — there
+  is no `committees.members.*` method; the repository reads and replaces the
+  join rows in the same transaction as the committee row.
+- `src/shared/backend.ts`: `committees.list` (ordered by `updatedAt` desc),
+  `committees.get`, `committees.create`, `committees.update`,
+  `committees.delete`, each added to `BACKEND_METHODS`; `contracts.test.ts`
+  stays green. The server host mounts them with no change of its own.
+- `src/main/db/repositories/committees.ts` + `Repositories.committees`;
+  `src/main/handlers/committees.ts` registered in `handlers/index.ts`. No
+  electron import (rule 5). Validation: trimmed non-empty name within the cap;
+  every `memberAgentIds` entry names an existing agent of this user; duplicates
+  are refused; **at most one executor** — reuse the chat rule's check and its
+  `second_executor` reason rather than writing a second one.
+- `chats.create`: when `committeeId` is given the member list is the
+  committee's members in `position` order followed by `memberAgentIds`,
+  de-duplicated keeping first occurrence, then passed through the existing
+  one-executor assertion *before* the row exists; `committeeId` is stored. An
+  unknown `committeeId` is `not_found`. `chats.update` does **not** accept
+  `committeeId` — provenance is written once. The bootstrap-agent fallback is
+  unchanged and applies only when the merged list is empty and the library is.
+- Tests (`repositories` via `src/main/db/committees.test.ts`,
+  `src/main/handlers/committees.test.ts`, additions to `chats.test.ts`): CRUD;
+  member order survives a round trip and a reorder; deleting an agent removes it
+  from the committee and closes the position gap on read; deleting a committee
+  leaves its chats with `committeeId: null` and their members intact; create
+  with committee + extra agents merges in order without duplicates; two
+  executors across committee and extras is refused with `second_executor` and no
+  chat row is left behind; a committee edited *after* the chat was created does
+  not change that chat's members (the snapshot assertion).
+Acceptance: all of the above tests pass; `npm test` and `npm run typecheck`
+green; `grep -r "from 'electron'" src/main/handlers src/main/db` finds nothing
+new. Docs: new `committees` (four files + index row), `database`, `chats`
+(`backend.md`: the create expansion), `backend-client` (method list).
+
+### S9.2 Committees page `[ ]`
+What: the user can build a committee.
+- `stores/ui.ts`: `Page` gains `'committees'`; `PAGES` becomes
+  `['chats', 'committees', 'agents', 'settings']`; `nav-rail.tsx` renders it
+  between Chats and Agents with its own icon and `nav.committees`;
+  `app-shell.tsx` routes it. `ui.test.ts` updated.
+- `stores/committees.ts` on the pattern of `stores/agents.ts`: `load`,
+  `startCreate`, `startEdit`, `save`, `remove`, `error` / `errorCode`; every
+  backend call goes through `getBackend()` (rule 6).
+- `pages/committees-page.tsx` + `components/committees/committee-list.tsx`,
+  `committee-editor.tsx`, `committee-topics.tsx`: the Agents page's two-column
+  layout. Left: list with member count and "+". Right: name, description, the
+  ordered member list with add / remove / drag-to-reorder, the topics list
+  (chats whose `committeeId` is this one, newest first, click → select that chat
+  and `setPage('chats')`), two-step delete like the Agents page.
+- The member picker and the drag-to-reorder list are **extracted** from
+  `components/chat/member-panel.tsx` into shared components that both the member
+  panel and the committee editor use; the member panel's behaviour and test ids
+  do not change. A second executor is greyed out in the picker with the existing
+  `chat.executorTaken` sentence.
+- i18n: `nav.committees` and a new top-level `committees.*` namespace in both
+  locale files; refusals are translated from `ValidationReason` /
+  `translateFailure`, never from a backend string. CLAUDE.md's namespace list
+  gains `committees`.
+- Tests: `stores/committees.test.ts` (load, create, save, remove, failure
+  path); `locales.test.ts` and `used-keys.test.ts` green; a new
+  `e2e/committees.spec.ts`: create a committee, add two agents, reorder them,
+  relaunch the app, the committee and its order are still there; delete it.
+Acceptance: the e2e spec and the whole existing e2e suite pass (`npm run e2e`);
+unit tests and typecheck green. "New topic" is **not** in this step — the
+button arrives with the dialog in S9.3. Docs: `committees` (`frontend.md`,
+`implement.md`), `ui-shell` (rail, `Page`), `chats` (`frontend.md`: the
+extraction), `i18n` (key tree).
+
+### S9.3 New chat dialog and committee-aware chats `[ ]`
+What: a topic is convened from a committee, individual agents, or both.
+- `components/ui/dialog.tsx`: the first modal primitive — focus trap, Escape
+  closes, backdrop click closes, `role="dialog"` + `aria-modal`, theme tokens
+  only. Exported from `components/ui/index.ts`.
+- `components/chat/new-chat-dialog.tsx`: optional title; committees as a
+  single-select list that can be left empty (name + member count); agents as a
+  multi-select list where the selected committee's members are checked and
+  locked; executor candidates beyond the first greyed out; a live "n members
+  will join" line; Create and Cancel. Create calls
+  `useChatsStore.create({ title?, committeeId?, memberAgentIds })` — the store's
+  `create` is widened to that object while the onboarding card's call keeps
+  working. **Pressing Create with nothing selected behaves exactly as "+" does
+  today** (empty chat, or the bootstrap agent on an empty library).
+- Open state lives in `stores/ui.ts` (`newChatDialog: { open, committeeId? }`)
+  so the Committees page's **New topic** button (added here, in
+  `committee-topics.tsx`) can `setPage('chats')` and open the dialog with that
+  committee preselected. The chat list's "+" (`data-testid="chats-new"`) opens
+  the dialog instead of creating.
+- Pure functions in `src/renderer/src/lib/committee-members.ts`:
+  `mergeMembers(committeeIds, extraIds)` (the same rule the backend applies) and
+  `missingCommitteeMembers(committee, chatMemberIds)`.
+- Provenance surfaces: a committee badge on the chat-list row and in the chat
+  header when `chat.committeeId` resolves; in `member-panel.tsx`, when
+  `missingCommitteeMembers` is non-empty, a **Sync committee members** button
+  that calls `chats.members.set` with the current members plus the missing ones
+  appended — it never removes anyone, and a `second_executor` refusal is shown
+  through the existing error path.
+- e2e: a shared helper `e2e/helpers` `createChat(page)` = click `chats-new`,
+  click `new-chat-create`; every existing spec that clicked `chats-new` to get a
+  chat uses it (`e2e/demo.record.ts` and `e2e/packaged.spec.ts` included, edited
+  but not run here). `e2e/committees.spec.ts` gains: New topic from the
+  committee page with one extra agent → the chat's member panel lists committee
+  members in committee order then the extra; add an agent to the committee →
+  the Sync button appears in that chat → click → the member is appended.
+- Tests: `committee-members.test.ts`; `ui.test.ts` for the dialog state;
+  `chats.test.ts` for the widened `create`; locale tests green.
+Acceptance: `npm test`, `npm run typecheck` and `npm run e2e` all green; the
+README's description of creating a chat (both languages) matches the new flow if
+it mentions it. Docs: `committees` (all four), `chats` (`context.md` scope,
+`frontend.md`), `ui-shell` (`Dialog`), `i18n`.
+After this step, record under Phase 6 a "Committees" backlog entry: charter in
+the system prompt, committee default chat settings, several committees per chat,
+chat list grouped / filtered by committee.
