@@ -87,10 +87,53 @@ comes from `APP_NAME`, which `app.setName` sets before anything reads `userData`
 Neither module imports `node:` anything, and callers join `DISCOVERY_FILE` onto
 the directory themselves.
 
+### Discussion watcher (WP-2) — `src/main/mcp-endpoint/discussion.ts`
+
+The adapter between a run, which announces itself as a stream of events, and a
+calling model, which has one tool timeout and wants one answer.
+
+| Export | Signature | Notes |
+|---|---|---|
+| `watchDiscussion` | `(ctx, handlers, WatchOptions) => { result: Promise<DiscussionResult>; cancel(): void }` | Subscribes **synchronously**, so WP-3 calls it before `chat.send` |
+| `readDiscussion` | `(ctx, handlers, { chatId, afterSeq }) => Promise<DiscussionResult>` | No waiting: what the transcript says right now |
+| `loadTranscript` | `(ctx, handlers, chatId) => Promise<Message[]>` | Oldest first, paged; index + 1 is the message's `seq` |
+| `DiscussionProgress` | `(update: { message: string; round?: number }) => void` | The frozen contract's `ToolCallContext['progress']` is this type |
+
+`WatchOptions` is the frozen contract's, with one thing made explicit that the
+contract left to the reader: **`deadlineMs` is an absolute epoch-millisecond
+timestamp**, `Date.now() + maxWaitSeconds * 1000`, not a duration. Its
+`progress` is typed `DiscussionProgress` rather than `ToolCallContext['progress']`,
+because `tools.ts` does not exist yet and the dependency runs the other way —
+WP-3 defines `ToolCallContext['progress']` *from* this type, so the two cannot
+drift.
+
+The watch settles once, on the first of:
+
+| Event | Status | Note |
+|---|---|---|
+| `run.finished` `completed` with a `ConclusionPart` message after `afterSeq` | `concluded` | |
+| `run.finished` `completed` without one, or `max-rounds` | `ended` | `positions` is filled |
+| `run.finished` `stopped` / `error` | `stopped` / `error` | `error` carries the runner's `runFailed` detail, else the failed message's `error` |
+| `permission.requested` for the chat | `needs-attention` | The run keeps going; the hint names the `witena://` link |
+| the deadline, or `signal` / `cancel()` | `running` | Aborting the *wait* never stops the *run* |
+
+`readDiscussion` adds one row of its own: a chat whose runner is busy is
+`running`, and an idle one is read exactly as a finished `completed` run would
+be. It is also the only one of the two that throws — WP-3 turns a
+`BackendFailure` into the tool's error, and `get_discussion` on an invented chat
+id has to say `not_found`.
+
+`progress` is called on `run.round` ("Round 2 — Ada, Lin") and on each agent
+`message.updated` that has reached a final status ("Ada has spoken"), with names
+read once through `agents.list` and memoised on a single promise so the updates
+keep their order. An update whose name lookup lands after the watch settled is
+dropped: the request it would have been reported to is over.
+
 ## Tests
 
 | File | Covers |
 |---|---|
+| `src/main/mcp-endpoint/discussion.test.ts` | Every row of the status table above, through a **real** run (real `AppContext`, real `buildHandlers()`, real `ChatRunner`, `MockLanguageModelV4`): consensus → `concluded` with the conclusion's text and author; a `rounds: 1` chain → `ended` with one truncated position per member; the deadline → `running`, then a second watch → the final result; `chat.stop` → `stopped`; a throwing model → `error`; an emitted `permission.requested` → `needs-attention`; abort and `cancel()` → `running`, with the run still finishing afterwards. Plus the `seq`-is-a-position assumption, paging past one page, `afterSeq` scoping, and — in an `afterEach` every case goes through — the event bus ending with as many listeners as it started with |
 | `src/shared/mcp-tools.test.ts` | The wire shape of every `inputSchema`; names against `MCP_TOOL_NAMES`; `start_discussion`'s three refinements; the wait and round bounds; `chatUrl` / `parseChatUrl`; the `z.infer` type test; that the module imports `zod` and nothing else |
 | `src/shared/mcp-discovery.test.ts` | Every way the discovery file can be wrong; `userDataDirFor` with and without the override; that the module stays pure |
 

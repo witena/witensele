@@ -59,6 +59,16 @@ PLAN's level are recorded here as work packages land.
 | `parseChatUrl` refuses anything but exactly `witena://chat/<uuid>` — no trailing slash, query, fragment or extra segment (WP-1) | Parsing with `new URL` and reading the first path segment | The argument arrives from the operating system when a user clicks a link, so being charitable about its shape is how a wrong link becomes a wrong chat. The refusal is `null`, which WP-8 already has to handle |
 | `userDataDirFor` re-derives electron's macOS path rule instead of importing anything | Passing the directory in from `src/main/index.ts` | The shim is not an Electron process and has nobody to be told by, and the endpoint's host may not import electron (rule 5). Both halves now agree by construction, including under `WITENA_USER_DATA` |
 
+### Decisions made in WP-2 (the discussion watcher)
+
+| Decision | Alternatives considered | Why this one |
+|---|---|---|
+| `afterSeq` is a **position** in the chat's ascending transcript, and the module derives the `seq` from it by reading the whole chat through `messages.list` | Adding `seq` to the shared `Message` type; reading `repos.messages` directly | `seq` is deliberately internal to the repository and never crosses IPC, and the endpoint reads through handlers so it can be mounted on the server host later. `seq` is dense — `max(seq) + 1` inside the insert transaction, and no message row is ever deleted on its own — so the two are the same number, and a test pins that against `nextSeq` |
+| `watchDiscussion`'s `result` never rejects; `readDiscussion` does | Both throwing; both tolerant | They have different callers. WP-3 calls `cancel()` when `chat.send` throws and never awaits the result, so a rejection there would be an unhandled one; `get_discussion` on a chat id a model invented has to come back as `not_found` rather than as an empty discussion |
+| `deadlineMs` is an absolute epoch-millisecond timestamp | A duration in milliseconds or seconds | The caller's budget starts when the tool call arrives, not when the subscription is made, and "a deadline that has already passed" is then a legal input with an obvious meaning instead of a negative duration |
+| The result is re-read from the transcript after `run.finished`, never assembled from the events themselves | Accumulating messages from `message.updated` while waiting | Every row is written by the awaited turn before the run can finish, so the store is both complete and authoritative — and the same function then serves `get_discussion`, which has no events to accumulate. It also means the watcher depends on no ordering between `message.updated` and `run.finished` |
+| `positions` are each member's last `done` message of the *discussion*, not of the final round | The final round only (STEPS.md's first wording) | A member that was silent in the last round still has a position, and returning nothing for it would read as agreement. Executors are skipped: they write files rather than positions |
+
 ## What the spike found
 
 > Filled by WP-0a and WP-0b. Until then every number in this feature that came

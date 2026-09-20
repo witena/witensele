@@ -5,7 +5,7 @@
 | Surface | Package |
 |---|---|
 | `src/shared/mcp-tools.ts`, `src/shared/mcp-discovery.ts` | WP-1 `[x]` (2026-09-20) |
-| `src/main/mcp-endpoint/discussion.ts` — `watchDiscussion`, `readDiscussion` | WP-2 |
+| `src/main/mcp-endpoint/discussion.ts` — `watchDiscussion`, `readDiscussion` | WP-2 `[x]` (2026-09-20) |
 | `src/main/mcp-endpoint/tools.ts`, `transcript.ts` — the six tools | WP-3 |
 | `src/main/mcp-endpoint/server.ts`, `guards.ts` — transport and refusals | WP-4 |
 | `src/mcp-shim/` and its Vite target | WP-5 |
@@ -49,3 +49,57 @@ Pitfalls a later package would otherwise hit:
 - **`DEFAULT_WAIT_SECONDS` is an assumption** (Codex's ~60 s tool timeout) until
   WP-0b measures it. Changing the number is a one-line change here and touches
   nothing else.
+
+## Discussion watcher (WP-2)
+
+`src/main/mcp-endpoint/discussion.ts`. No new table, no new handler, no IPC
+method: it is a reader over the existing `EventBus` and `HandlerMap`, and the
+only main-process module it imports is the *type* of each (`../app-context`,
+`../handlers/types`), so the closure test WP-4 adds has nothing to complain
+about.
+
+| Export | What it is |
+|---|---|
+| `watchDiscussion(ctx, handlers, options)` | `{ result, cancel() }`. Subscribes synchronously, settles once, releases everything on every path |
+| `readDiscussion(ctx, handlers, { chatId, afterSeq })` | The same `DiscussionResult` without waiting |
+| `loadTranscript(ctx, handlers, chatId)` | The whole chat, oldest first, paged through `messages.list` |
+| `DiscussionProgress` | `(update: { message: string; round?: number }) => void` |
+
+Handlers it calls: `chats.get` (existence), `messages.list`, `agents.list`,
+`chats.members.list`, `messages.usageSummary`. Nothing reaches a repository.
+
+Pitfalls for the packages that build on it:
+
+- **`afterSeq` is a position, and positions are `seq`s.** `seq` is internal to
+  `MessageRepository` and never crosses IPC, so this module derives it: `seq` is
+  assigned as `max(seq) + 1` inside the insert transaction and no message row is
+  ever deleted on its own, therefore the *k*-th message of a chat in ascending
+  order has `seq === k`. WP-3 gets both numbers it needs from `loadTranscript`:
+  the `afterSeq` of a message about to be sent is the array's `length`, and
+  `wait_for_discussion`'s "the `seq` of the last user message minus one" is that
+  message's index. A test asserts `transcript.length + 1 === repos.messages.nextSeq(chatId)`.
+- **`deadlineMs` is an absolute epoch-millisecond timestamp**, not a duration:
+  `Date.now() + maxWaitSeconds * 1000` at the call site. A deadline already in
+  the past is legal and answers immediately.
+- **`result` never rejects.** WP-3 calls `cancel()` when `chat.send` throws and
+  does not await the result; a rejection there would be an unhandled one. A read
+  that fails while building the result is reported *inside* the result instead
+  (`status: 'error'`, or `running` when the caller had already given up).
+  `readDiscussion` is the opposite and does throw — a `get_discussion` on a chat
+  id the model invented must surface as `not_found`, which is why it asks
+  `chats.get` first: `messages.list` answers an unknown chat with an empty page.
+- **Aborting the wait never stops the run.** `signal` belongs to the MCP request;
+  the discussion is an ordinary chat that keeps going in the window, and
+  `stop_discussion` is the tool that ends it.
+- **The watcher does not depend on event ordering.** It settles on
+  `run.finished` and then *re-reads the transcript*, and every message row is
+  written by the awaited turn before the run can finish, so no assumption about
+  `message.updated` arriving before `run.finished` is made or needed. The
+  "concludes when the group agrees" test is what pins it: a conclusion that was
+  not yet committed would come back as `ended`.
+- **`usage` is chat-wide**, because `messages.usageSummary` prices a whole chat.
+  For a chat the endpoint created they are the same number; for a continued one
+  the total is still the honest answer. Omitted when nothing was spent.
+- **Text is read the way the renderer reads it**: `text` parts only, and
+  `stripTrailingMarkers` — `[AGREED]` is how the group talks to the runner, not
+  something an IDE agent should be handed.
