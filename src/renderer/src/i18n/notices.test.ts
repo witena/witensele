@@ -35,6 +35,10 @@ describe('translateNotice', () => {
       'Kai did not respond and was skipped this round'
     )
     expect(translateNotice(i18n.t, notice('maxRoundsReached', { max: 3 }))).toContain('3')
+    // A capped chain that was not a vote: its own number, and no vote in it.
+    const cap = translateNotice(i18n.t, notice('roundsCapReached', { max: 4 }))
+    expect(cap).toContain('4')
+    expect(cap).not.toMatch(/vote/i)
   })
 
   it('follows the active language, so a stored notice is never stale', async () => {

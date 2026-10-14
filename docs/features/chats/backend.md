@@ -74,7 +74,7 @@ is the only thing that reads it. See
 | `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | `validation` on an empty id, `not_found` for an unknown chat. A chat with no `document` goal answers `{ deliverable: null, delivered: false }` rather than rejecting — the header asks for every chat it draws |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` newest first | `validation` on an empty chat id or a non-positive limit; `not_found` for an unknown cursor |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` over the whole transcript | `validation` on an empty id, `not_found` for an unknown chat |
-| `chat.send` | `{ chatId, text, mentions?, rounds? }` | `Message` | `validation` for a non-string or blank text, for a `rounds` that is not an integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` (S5.14), and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
+| `chat.send` | `{ chatId, text, mentions?, rounds?, vote?, origin? }` | `Message` | `validation` for a non-string or blank text, for a `rounds` that is not an integer in `[MIN_AUTO_ROUNDS, MAX_AUTO_ROUNDS]` (S5.14), for a `vote` that is not a boolean or is `true` without `rounds` (fix, 2026-10-14), and for **`chat has no members`**; `not_found` for an unknown chat — all checked **before** anything is written |
 | `chat.handoff` | `{ chatId, intent? }` | `Message` (the stored hand-off row; for `intent: 'deliver'` it carries the chat's latest conclusion as a quoted second part since S5.16) | `validation` on an empty id; `not_found` for an unknown chat; `validation` plus one of `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` in `details`. The handler checks only the id: the other three are facts about the **run**, and [`orchestration`](../orchestration/backend.md)'s `ChatRunner.handoff` is the only object that holds all of them |
 | `chat.stop` | `{ chatId }` | `void` | `validation` on an empty id; otherwise idempotent |
 
@@ -152,8 +152,16 @@ same number arriving by a different route, and a caller must not buy an unbounde
 run by sending the cap per message instead of storing it. It is passed straight
 through to `ctx.runners.send`, is **not** written to the chat, and applies only to
 the chain that message starts — [`orchestration`](../orchestration/backend.md)
-owns what it then does. Its one caller today is the Actions card's "Start a vote",
-which sends `1`.
+owns what it then does. Its callers are the Actions card's "Start a vote", which
+sends `1`, and the MCP endpoint's `start_discussion`, which passes its caller's
+number through.
+
+Beside it, an optional `vote: boolean` says that cap is a vote's, which is the
+only thing that makes the chain end with `notices.voteClosed`; every other cap
+ends with `notices.roundsCapReached { max }`. Only "Start a vote" sends it. It is
+refused unless it is a boolean, and `vote: true` is refused without `rounds`
+(fix, 2026-10-14: before it, the endpoint's capped discussions said a vote had
+closed).
 
 ### A message a tool sent for the user (S10.4)
 

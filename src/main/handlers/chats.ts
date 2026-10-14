@@ -659,6 +659,14 @@ export const chatHandlers: HandlerModule = {
         throw validation(`rounds must be an integer between ${MIN_AUTO_ROUNDS} and ${MAX_AUTO_ROUNDS}`)
       }
     }
+    // …and whether that cap is a vote's, which is what `voteClosed` is written
+    // for. A flag on its own would be a vote with no number of rounds, so it is
+    // refused rather than read as "one round".
+    const vote = (input as { vote?: unknown }).vote
+    if (vote !== undefined) {
+      if (typeof vote !== 'boolean') throw validation('vote must be a boolean')
+      if (vote && rounds === undefined) throw validation('vote needs rounds')
+    }
 
     // S10.4: who sent this for the user. Sanitised rather than validated — see
     // `sanitizeOriginClient` — so a client with an unusable name still gets its
@@ -670,6 +678,7 @@ export const chatHandlers: HandlerModule = {
       text: input.text,
       ...(input.mentions ? { mentions: input.mentions } : {}),
       ...(rounds !== undefined ? { rounds } : {}),
+      ...(vote === true ? { vote } : {}),
       ...(origin === null ? {} : { origin })
     })
   },

@@ -13,7 +13,7 @@
  * `run.started` arrives.
  */
 import { create } from 'zustand'
-import type { BackendErrorCode, HandoffIntent } from '@shared/types'
+import type { BackendErrorCode, ChainCap, HandoffIntent } from '@shared/types'
 import { BackendClientError } from '../lib/backend'
 import { getBackend } from '../lib/backend-provider'
 
@@ -63,11 +63,12 @@ export interface RunState {
    * so they are a hint rather than the source of truth — but they are what lets
    * a future autocomplete name a member the plain text does not spell out.
    *
-   * `rounds` (S5.14) caps the automatic rounds of the chain this message starts,
+   * `cap` (S5.14) caps the automatic rounds of the chain this message starts,
    * instead of the chat's `maxAutoRounds`. Only "Start a vote" passes it, with
-   * `1`; every other send leaves it out and the chat's own setting applies.
+   * `VOTE_CAP` (`rounds: 1, vote: true`); every other send leaves it out and
+   * the chat's own setting applies.
    */
-  send: (chatId: string, text: string, mentions?: string[], rounds?: number) => Promise<boolean>
+  send: (chatId: string, text: string, mentions?: string[], cap?: ChainCap) => Promise<boolean>
   /**
    * Hands the chat to its executor (S5.6). Never rejects; a refusal lands in
    * `error` / `errorCode` / `errorDetails`, which is what the composer prints.
@@ -110,7 +111,7 @@ export const useRunStore = create<RunState>()((set) => ({
     set({ error: undefined, errorCode: undefined, errorDetails: undefined })
   },
 
-  async send(chatId, text, mentions, rounds) {
+  async send(chatId, text, mentions, cap) {
     const trimmed = text.trim()
     if (trimmed.length === 0) return false
 
@@ -127,7 +128,8 @@ export const useRunStore = create<RunState>()((set) => ({
         chatId,
         text: trimmed,
         ...(mentions && mentions.length > 0 ? { mentions } : {}),
-        ...(rounds !== undefined ? { rounds } : {})
+        ...(cap !== undefined ? { rounds: cap.rounds } : {}),
+        ...(cap?.vote === true ? { vote: true } : {})
       })
       return true
     } catch (cause) {

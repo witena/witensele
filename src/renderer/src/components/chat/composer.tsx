@@ -49,7 +49,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MENTION_ALL_KEYWORDS, parseMentions, type MentionMember } from '@shared/mentions'
-import type { Agent } from '@shared/types'
+import type { Agent, ChainCap } from '@shared/types'
 import { avatarStyle } from '../agents/agent-display'
 import { Avatar, Badge, Button, IconButton, TextArea } from '../ui'
 import {
@@ -73,11 +73,11 @@ export interface ComposerHandle {
   /**
    * Sends `text` as if it had been typed, resolving mentions the same way.
    *
-   * `rounds` (S5.14) caps the chain that message starts; it travels with the
+   * `cap` (S5.14) caps the chain that message starts; it travels with the
    * send rather than being a second path into the backend, so "Start a vote" is
    * still an ordinary message the transcript records in full.
    */
-  submitText: (text: string, rounds?: number) => Promise<boolean>
+  submitText: (text: string, cap?: ChainCap) => Promise<boolean>
 }
 
 export interface ComposerProps {
@@ -90,10 +90,10 @@ export interface ComposerProps {
   /**
    * Resolves true when the message was accepted, which clears the box.
    *
-   * `rounds` is set only by `submitText` (S5.14); a typed message never carries
+   * `cap` is set only by `submitText` (S5.14); a typed message never carries
    * one and runs under the chat's own `maxAutoRounds`.
    */
-  onSend: (text: string, mentions: string[], rounds?: number) => Promise<boolean>
+  onSend: (text: string, mentions: string[], cap?: ChainCap) => Promise<boolean>
   onStop: () => void
   /** Already-translated reason the last send was refused. */
   error?: string | undefined
@@ -146,12 +146,12 @@ export function Composer({
     setActive(0)
   }, [chatId])
 
-  const send = async (value: string, rounds?: number): Promise<boolean> => {
+  const send = async (value: string, cap?: ChainCap): Promise<boolean> => {
     const trimmed = value.trim()
     if (disabled || trimmed.length === 0) return false
     setBusy(true)
     try {
-      return await onSend(trimmed, parseMentions(trimmed, mentionMembers), rounds)
+      return await onSend(trimmed, parseMentions(trimmed, mentionMembers), cap)
     } finally {
       setBusy(false)
     }

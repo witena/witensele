@@ -3,8 +3,8 @@
  *
  * The first two actions are **ordinary messages**. "Summarise" opens a small
  * picker and sends `@Name` plus a localized request; "Start a vote" sends `@all`
- * plus its own, with `rounds: 1` so the vote is one round (S5.14) rather than
- * the chat's whole automatic budget. Neither bypasses `chat.send`: the
+ * plus its own, with `rounds: 1, vote: true` so the vote is one round (S5.14)
+ * rather than the chat's whole automatic budget. Neither bypasses `chat.send`: the
  * orchestrator schedules the
  * reply, the transcript records what was asked, and the user can see — and edit,
  * next time — exactly the sentence that produced the summary. A dedicated
@@ -34,7 +34,7 @@ import { FileDown, ListChecks, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MENTION_ALL_KEYWORDS } from '@shared/mentions'
-import type { Agent, ChatGoal } from '@shared/types'
+import type { Agent, ChainCap, ChatGoal } from '@shared/types'
 import { validationReasonMessage } from '../../i18n/errors'
 import { avatarStyle } from '../agents/agent-display'
 import { Avatar, SectionTitle } from '../ui'
@@ -49,6 +49,14 @@ import { handoffBlocker } from './handoff'
  */
 export const VOTE_ROUNDS = 1
 
+/**
+ * The cap "Start a vote" sends: its one round, flagged as a vote so the chain
+ * closes with `notices.voteClosed`. The flag, not the number, is what says a
+ * vote happened — an MCP caller may ask for one round of an ordinary
+ * discussion, and that one closes with `notices.roundsCapReached`.
+ */
+export const VOTE_CAP: ChainCap = { rounds: VOTE_ROUNDS, vote: true }
+
 export interface ActionsCardProps {
   /** `null` disables every action: there is no chat to send into. */
   chatId: string | null
@@ -57,10 +65,10 @@ export interface ActionsCardProps {
   /**
    * Sends one composed message through the composer's own send path.
    *
-   * `rounds` caps the chain that message starts (S5.14); "Start a vote" passes
-   * `1` and "Summarise" passes nothing.
+   * `cap` caps the chain that message starts (S5.14); "Start a vote" passes
+   * `VOTE_CAP` and "Summarise" passes nothing.
    */
-  onSend: (text: string, rounds?: number) => void
+  onSend: (text: string, cap?: ChainCap) => void
   /** The chat's working directory, for the hand-off rules (S5.12). */
   workdir?: string | null | undefined
   /** The chat's goal; "Write the deliverable" needs a `document` one. */
@@ -117,7 +125,7 @@ export function ActionsCard({
   // members spend the remaining rounds voting on each other's votes.
   const vote = (): void => {
     const [everyone] = MENTION_ALL_KEYWORDS
-    onSend(`@${everyone as string} ${t('chat.actions.votePrompt')}`, VOTE_ROUNDS)
+    onSend(`@${everyone as string} ${t('chat.actions.votePrompt')}`, VOTE_CAP)
   }
 
   return (

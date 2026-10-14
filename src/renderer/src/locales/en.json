@@ -630,6 +630,7 @@
     "handoff": "Handed to {{agent}}: implement what the group decided, then report what changed",
     "handoffDeliver": "Asked {{agent}} to write {{path}} now, from what the group decided",
     "consensus": "Everyone agreed, so the discussion ends here and the conclusion follows.",
-    "voteClosed": "The vote is closed: every member answered once. Send a message to carry on."
+    "voteClosed": "The vote is closed: every member answered once. Send a message to carry on.",
+    "roundsCapReached": "The discussion ran the {{max}} rounds it was asked for. Send a message to carry on."
   }
 }
