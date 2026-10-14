@@ -138,6 +138,14 @@ a full read is not going to appear later.
 Navigation is not re-sent in that path, because a window created for a link is a
 fresh one and the shell already opens on Chats (`stores/ui.ts`).
 
+That cold launch was first reached by hand on 2026-10-14, and only after the
+shim stopped passing `ELECTRON_RUN_AS_NODE` to the app it wakes
+([backend.md](./backend.md), "The bundled launcher"): until then a tool call made
+while Witena was quit never produced an app at all, so nothing on this page
+could be seen. What the user sees now is what the design promised — no window,
+no change of focus, the Dock icon, and the chat in the sidebar when they open
+it.
+
 `stores/ui.ts` is unchanged. Its header calls the shell "deliberately not a
 router" and says a deep link would become "the thing that writes these two
 fields" — this is that, one `setPage` call from the event bridge, with the

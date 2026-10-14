@@ -3217,7 +3217,13 @@ machine is not logged in and no package was permitted to write `~/.claude.json`,
 
 **Verification owed (nothing new to build; somebody has to run it).**
 
-- **Follow the README section on a logged-in machine** (S10.7's acceptance).
+- [x] (2026-10-14) **Follow the README section on a logged-in machine** (S10.7's acceptance).
+  *Done by the owner on the installed app built from `e63f491`: Connect
+  registered `witena` at user scope (`claude mcp list`: Connected), a two-agent
+  discussion started from Claude Code ran in Witena with the user message marked
+  `via claude-code` and its answer came back to the terminal, `@witena:` offered
+  recent chats and `/mcp__witena__consult` started a discussion. S10.2, S10.4
+  and S10.6's acceptance are met by the same run.* Originally:
   Install the dmg, open Settings → Integrations, press Connect for Claude Code,
   and ask it to consult two agents. This is the first thing to run, because it
   is also the acceptance criterion of S10.2 (the shim registered by hand lists
@@ -3226,7 +3232,17 @@ machine is not logged in and no package was permitted to write `~/.claude.json`,
   `/mcp__witena__consult` starts a discussion). All four are asserted through the
   SDK client in `contract.test.ts`, `src/mcp-shim/index.test.ts` and
   `shim.spawn.test.ts`; what is untested is the last hop, each client's own UI.
-- **Wake a quit Witena with a tool call** (S10.3's acceptance, and the open
+- [x] (2026-10-14) **Wake a quit Witena with a tool call** — *run, failed, fixed.*
+  Every call made while Witena was quit ended in "Timed out starting Witena; it
+  did not publish its MCP endpoint within 20 seconds", although the shim's own
+  `open -g -j -a … --args --background` typed in a terminal woke the app in a
+  second. `bin/witena-mcp` exports `ELECTRON_RUN_AS_NODE=1`, the shim spawned
+  `open` with its own environment, and `open(1)` passes the caller's environment
+  to the app it launches: Witena ran as plain Node and exited on `--background`.
+  `launchEnvFor` in `src/mcp-shim/launch.ts` now strips that one variable, and
+  `launch.test.ts` pins it. With the fix installed, `claude -p` calling
+  `list_agents` against a quit Witena returned in 9 s; the app came up with
+  `--background`, not visible, not frontmost. Originally: **Wake a quit Witena with a tool call** (S10.3's acceptance, and the open
   question `docs/features/mcp-endpoint/context.md` carries). `build/witena-mcp`,
   `src/mcp-shim/launch.ts`, `--background` and the discovery file are each
   tested and the launcher has been run four ways against a signed `dist:dir`
@@ -4634,6 +4650,10 @@ Acceptance: with Witena quit, a tool call from Claude Code launches it with no
 window, the discussion runs, the conclusion returns, and clicking the Dock icon
 shows the chat that was created. Docs: `mcp-endpoint`, `packaging`, `ui-shell`
 (all four each).
+*Verified 2026-10-14, on the installed app — after a fix this step needed and
+did not have: the shim handed `ELECTRON_RUN_AS_NODE=1` to the app it woke, so a
+quit Witena never came up. `launchEnvFor` strips it; see the Phase 6 entry
+"Wake a quit Witena with a tool call".*
 
 ### S10.4 Settings → Integrations, and provenance `[x]` (2026-09-20)
 What: a user turns this on and connects an IDE without a terminal; the transcript
@@ -4850,3 +4870,7 @@ logged in anyway — the same wall WP-0b, WP-14 and WP-15 hit. Every claim in th
 section was instead checked against the merged source, and the procedure is
 carried into the backlog below as the thing a logged-in machine runs first.
 Docs: `mcp-endpoint`, `packaging` (the README is packaging's).
+*Met 2026-10-14: the owner followed the section on a logged-in machine against
+the installed app and got the group's answer back in Claude Code; the one
+failure it turned up — a quit Witena could not be woken — is fixed in
+`src/mcp-shim/launch.ts`. The demo bullet above is still open.*

@@ -447,7 +447,7 @@ outside the app. Three modules and one Vite target:
 |---|---|
 | `index.ts` | The MCP server on `StdioServerTransport`. `initialize` is the SDK's; `tools/list` is `MCP_TOOLS` with no I/O; `tools/call` opens a connection and forwards. The bundle's entry point, so it calls `main()` at the bottom of the file |
 | `connect.ts` | The discovery file, the liveness checks, the one retry, the three refusals, and the real `Client` factory |
-| `launch.ts` | `bundlePathFor` and the `open(1)` call, with `spawn`, the clock and the probe injected |
+| `launch.ts` | `bundlePathFor` and the `open(1)` call, with `spawn`, the clock and the probe injected; `launchEnvFor`, the environment that call runs with — the shim's own minus `ELECTRON_RUN_AS_NODE` |
 | `vite.mcp-shim.config.ts` | → `out/mcp-shim/witena-mcp.cjs`, one CommonJS file with the SDK and zod inlined |
 
 ### What it answers without the app
@@ -781,11 +781,13 @@ should be read are repeated here.
   therefore cannot tell a stopped discussion from one that finished without
   agreeing. Both `hint`s say nothing more is coming, which is the fact that
   matters.
-- **Lazy launch has never run in one piece** (WP-9). The launcher, `launch.ts`,
-  `--background` and the discovery file are each tested; "a tool call wakes a
-  quit Witena" is not, because reproducing it means a second signed copy of the
-  app with a fresh `WITENA_USER_DATA` and therefore the Keychain prompt WP-0a
-  measured. See [`backend.md`](./backend.md), "The bundled launcher".
+- ~~**Lazy launch has never run in one piece** (WP-9).~~ It ran on 2026-10-14, on
+  the installed app, and failed until `launchEnvFor` stopped `open` handing
+  `ELECTRON_RUN_AS_NODE=1` to the woken app; see
+  [`backend.md`](./backend.md), "The bundled launcher". It is still not an
+  automated test — that needs the second signed copy and the Keychain prompt
+  WP-0a measured — so `launch.test.ts` pins the environment `open` receives
+  instead.
 - **The generated Claude Code subagent per committee is deferred** (WP-14).
   S10.5's last bullet — `~/.claude/agents/witena-<slug>.md` with `tools:` limited
   to `mcp__witena__*`, re-synced on the Integrations toggle and on committee

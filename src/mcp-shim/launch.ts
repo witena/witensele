@@ -73,8 +73,35 @@ export function bundlePathFor(execPath: string): string | null {
 export type SpawnLike = (
   command: string,
   args: readonly string[],
-  options: { detached: boolean; stdio: 'ignore' }
+  options: { detached: boolean; stdio: 'ignore'; env: Record<string, string | undefined> }
 ) => { unref: () => void }
+
+/**
+ * The variable that makes the bundle's binary a plain Node runtime.
+ *
+ * `bin/witena-mcp` sets it so that `Contents/MacOS/Witena` runs the shim, and it
+ * is therefore in the shim's own environment. It must **not** reach the app the
+ * shim wakes: `open(1)` hands the caller's environment to the application it
+ * launches, so an `open` that inherited it starts Witena as Node, which reads
+ * `--background` as the name of a script and exits at once — no window, no
+ * endpoint, and a caller told twenty seconds later that the app never came up.
+ */
+export const RUN_AS_NODE_VARIABLE = 'ELECTRON_RUN_AS_NODE'
+
+/**
+ * The environment `open` runs with: the shim's own, minus `RUN_AS_NODE_VARIABLE`.
+ *
+ * A copy, so the shim keeps running as what it is. Everything else is passed
+ * through untouched — `PATH` for `open` itself, and whatever else the IDE gave
+ * the server that the app may legitimately want.
+ */
+export function launchEnvFor(
+  env: Record<string, string | undefined>
+): Record<string, string | undefined> {
+  const copy = { ...env }
+  delete copy[RUN_AS_NODE_VARIABLE]
+  return copy
+}
 
 export interface LaunchOptions {
   /** The bundle to open, as `bundlePathFor` derived it. */
@@ -89,6 +116,8 @@ export interface LaunchOptions {
    * work package specifies.
    */
   userDataDirOverride?: string | undefined
+  /** The shim's own environment; `launchEnvFor` decides what `open` gets of it. */
+  env: Record<string, string | undefined>
   spawn: SpawnLike
   /** What the shim is waiting for: the discovery file, read and validated. */
   probe: () => Promise<McpDiscovery | null>
@@ -139,7 +168,7 @@ export async function launch(o: LaunchOptions): Promise<McpDiscovery | null> {
 
   try {
     o.log(`launching ${o.bundlePath} in the background`)
-    o.spawn('open', args, { detached: true, stdio: 'ignore' }).unref()
+    o.spawn('open', args, { detached: true, stdio: 'ignore', env: launchEnvFor(o.env) }).unref()
   } catch (cause) {
     // `open` missing, or the bundle path refused: nothing has been started, so
     // waiting for a file would only spend the caller's timeout.
