@@ -57,8 +57,8 @@ about the collapsed block changed; there is just far less of it. The toggle
 itself is [`agents`](../agents/frontend.md)'s.
 
 S5.14's other renderer-visible change is two notice keys, `notices.consensus` and
-`notices.voteClosed`, both stored by the runner and drawn like every other
-notice, and the closing turn itself — which was, until S5.16, an ordinary agent
+`notices.voteClosed` — joined by `notices.roundsCapReached` in the 2026-10-14
+fix — all stored by the runner and drawn like every other notice, and the closing turn itself — which was, until S5.16, an ordinary agent
 message with an ordinary round number.
 
 S5.16 gives that message one more **part**, and it is the first part in the

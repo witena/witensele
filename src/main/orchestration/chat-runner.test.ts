@@ -40,6 +40,7 @@ import {
   NOTICE_HANDOFF_DELIVER,
   NOTICE_MATERIALS_TRUNCATED,
   NOTICE_MAX_ROUNDS,
+  NOTICE_ROUNDS_CAP,
   NOTICE_VOTE_CLOSED,
   type ChatRunnerOptions
 } from './chat-runner'
@@ -1094,12 +1095,17 @@ describe('ChatRunner (discussion closure)', () => {
   })
 
   describe('a message that caps its own chain', () => {
-    it('runs exactly one round for rounds: 1 and closes the vote', async () => {
+    it('runs exactly one round for a vote and closes it', async () => {
       // Both keep handing the floor to the other; only the cap stops them.
       models.set('Ada', sequence(`@Bob I vote for A. ${CONTINUE_TOKEN}`))
       models.set('Bob', sequence(`@Ada I vote for B. ${CONTINUE_TOKEN}`))
 
-      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all vote please', rounds: 1 })
+      await handlers['chat.send'](ctx, {
+        chatId: chat.id,
+        text: '@all vote please',
+        rounds: 1,
+        vote: true
+      })
       await settle()
 
       expect(rounds(events).map((event) => event.round)).toEqual([1])
@@ -1112,7 +1118,12 @@ describe('ChatRunner (discussion closure)', () => {
       models.set('Ada', sequence('I vote for A.'))
       models.set('Bob', sequence('I vote for B.'))
 
-      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all vote please', rounds: 1 })
+      await handlers['chat.send'](ctx, {
+        chatId: chat.id,
+        text: '@all vote please',
+        rounds: 1,
+        vote: true
+      })
       await settle()
 
       expect(rounds(events)).toHaveLength(1)
@@ -1123,14 +1134,19 @@ describe('ChatRunner (discussion closure)', () => {
       models.set('Ada', sequence(`I vote for A. ${AGREED_TOKEN}`))
       models.set('Bob', sequence(`A works. ${AGREED_TOKEN}`))
 
-      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all vote please', rounds: 1 })
+      await handlers['chat.send'](ctx, {
+        chatId: chat.id,
+        text: '@all vote please',
+        rounds: 1,
+        vote: true
+      })
       await settle()
 
       expect(rounds(events)).toHaveLength(1)
       expect(noticeKeys(ctx, chat)).toEqual([NOTICE_VOTE_CLOSED])
     })
 
-    it('caps above one round too, and still says the vote closed', async () => {
+    it('caps above one round too, and says the cap was spent rather than a vote', async () => {
       models.set('Ada', sequence(`@Bob your turn. ${CONTINUE_TOKEN}`))
       models.set('Bob', sequence(`@Ada your turn. ${CONTINUE_TOKEN}`))
 
@@ -1138,6 +1154,65 @@ describe('ChatRunner (discussion closure)', () => {
       await settle()
 
       expect(rounds(events).map((event) => event.round)).toEqual([1, 2])
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_ROUNDS_CAP])
+      expect(noticeParams(ctx, chat, NOTICE_ROUNDS_CAP)).toEqual({ max: 2 })
+      expect(finished()[0]).toMatchObject({ reason: 'max-rounds' })
+    })
+
+    // The MCP endpoint's `start_discussion({ rounds: 1 })`: one round of an
+    // ordinary discussion, not a vote. The number alone must not decide.
+    it('does not call one capped round a vote without the vote flag', async () => {
+      models.set('Ada', sequence('I think A.'))
+      models.set('Bob', sequence('I think B.'))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all discuss', rounds: 1 })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(1)
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_ROUNDS_CAP])
+      expect(noticeParams(ctx, chat, NOTICE_ROUNDS_CAP)).toEqual({ max: 1 })
+    })
+
+    // The 2026-10-14 transcript: three rounds from the MCP endpoint, one member
+    // still writing [CONTINUE] when the last round ended. It closed with
+    // "the vote is closed" although nobody had started one.
+    it('ends an MCP-style capped discussion without a vote notice', async () => {
+      // A chat budget above the cap, so it is the message's own three that end it.
+      await configure({ maxAutoRounds: 5 })
+      models.set(
+        'Ada',
+        sequence(
+          `@Bob first take. ${CONTINUE_TOKEN}`,
+          `@Bob not yet. ${CONTINUE_TOKEN}`,
+          `@Bob fine. ${AGREED_TOKEN}`
+        )
+      )
+      models.set(
+        'Bob',
+        sequence(
+          `@Ada a reply. ${CONTINUE_TOKEN}`,
+          `@Ada still no. ${CONTINUE_TOKEN}`,
+          `@Ada hm. ${CONTINUE_TOKEN}`
+        )
+      )
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: '@all decide', rounds: 3 })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(3)
+      expect(noticeKeys(ctx, chat)).toEqual([NOTICE_ROUNDS_CAP])
+      expect(noticeKeys(ctx, chat)).not.toContain(NOTICE_VOTE_CLOSED)
+      expect(noticeParams(ctx, chat, NOTICE_ROUNDS_CAP)).toEqual({ max: 3 })
+    })
+
+    it('closes a vote with the vote notice above one round as well', async () => {
+      models.set('Ada', sequence(`@Bob your turn. ${CONTINUE_TOKEN}`))
+      models.set('Bob', sequence(`@Ada your turn. ${CONTINUE_TOKEN}`))
+
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Vote', rounds: 2, vote: true })
+      await settle()
+
+      expect(rounds(events)).toHaveLength(2)
       expect(noticeKeys(ctx, chat)).toEqual([NOTICE_VOTE_CLOSED])
     })
 
@@ -1146,7 +1221,7 @@ describe('ChatRunner (discussion closure)', () => {
       models.set('Ada', sequence(`@Bob your turn. ${CONTINUE_TOKEN}`))
       models.set('Bob', sequence(`@Ada your turn. ${CONTINUE_TOKEN}`))
 
-      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Vote', rounds: 1 })
+      await handlers['chat.send'](ctx, { chatId: chat.id, text: 'Vote', rounds: 1, vote: true })
       await settle()
       events.length = 0
 
@@ -1167,6 +1242,17 @@ describe('ChatRunner (discussion closure)', () => {
     ])('rejects %s with validation and stores nothing', async (_label, rounds) => {
       await expect(
         handlers['chat.send'](ctx, { chatId: chat.id, text: 'Vote', rounds })
+      ).rejects.toMatchObject({ code: 'validation' })
+
+      expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])
+    })
+
+    it.each([
+      ['a vote flag without rounds', { vote: true }],
+      ['a vote flag that is not a boolean', { rounds: 1, vote: 'yes' as never }]
+    ])('rejects %s with validation and stores nothing', async (_label, extra) => {
+      await expect(
+        handlers['chat.send'](ctx, { chatId: chat.id, text: 'Vote', ...extra })
       ).rejects.toMatchObject({ code: 'validation' })
 
       expect(ctx.repos.messages.listForContext(chat.id, ctx.userId)).toEqual([])

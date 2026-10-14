@@ -408,17 +408,20 @@ The chip row is the same path through `appendMention`, and the Actions card is
 the same path again through the composer's `submitText` handle — one send, one
 parser, one store.
 
-Since S5.14 that handle carries one more argument, `rounds`, all the way down:
+Since S5.14 that handle carries one more argument all the way down — since the
+2026-10-14 fix a `ChainCap` (`{ rounds, vote? }`) rather than a bare `rounds`, so
+the backend can tell a vote from any other cap:
 
 ```
-ActionsCard.onSend(text, rounds?)
-  → composer.submitText(text, rounds?)
-  → ComposerProps.onSend(text, parseMentions(text, members), rounds?)
-  → useRunStore.send(chatId, text, mentions, rounds?)
-  → invoke('chat.send', { chatId, text, mentions?, rounds? })
+ActionsCard.onSend(text, cap?)
+  → composer.submitText(text, cap?)
+  → ComposerProps.onSend(text, parseMentions(text, members), cap?)
+  → useRunStore.send(chatId, text, mentions, cap?)
+  → invoke('chat.send', { chatId, text, mentions?, rounds?, vote? })
 ```
 
-"Start a vote" passes `VOTE_ROUNDS` (`1`); everything else passes nothing and
+"Start a vote" passes `VOTE_CAP` (`rounds: VOTE_ROUNDS` = `1`, `vote: true`);
+everything else passes nothing and
 runs under the chat's own `maxAutoRounds`. It is threaded through the composer
 rather than given its own store call precisely so the card keeps its rule —
 nothing there bypasses `chat.send`, and the transcript records the sentence.
@@ -510,7 +513,7 @@ two input types next to them —
 | `chats.goalStatus` | `{ chatId }` | `ChatGoalStatus` | S5.10. Where the `document` goal's deliverable is and whether it exists. A chat with no such goal answers `{ deliverable: null, delivered: false }` |
 | `messages.list` | `{ chatId, before?, limit? }` | `Message[]` | Newest first; `before` is a message id |
 | `messages.usageSummary` | `{ chatId }` | `ChatUsageSummary` | Tokens and estimated cost, total and per agent, over the whole transcript |
-| `chat.send` | `{ chatId, text, mentions?, rounds?, origin? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written. `rounds` (S5.14) caps the automatic rounds of this chain only, bounded like `maxAutoRounds`. `origin` (S10.4) says a tool sent this for the user and becomes an `OriginPart`; its `client` is sanitised, never refused |
+| `chat.send` | `{ chatId, text, mentions?, rounds?, vote?, origin? }` | `Message` | The stored user message; output arrives as events. `validation('chat has no members')` before anything is written. `rounds` (S5.14) caps the automatic rounds of this chain only, bounded like `maxAutoRounds`; `vote` (fix, 2026-10-14) marks that cap as a vote, refused without `rounds`. `origin` (S10.4) says a tool sent this for the user and becomes an `OriginPart`; its `client` is sanitised, never refused |
 | `chat.handoff` | `{ chatId }` | `Message` | S5.6. The stored hand-off row; the executor's round and the review round after it arrive as events. Refused with `handoff_no_workdir` / `handoff_no_executor` / `handoff_run_active` |
 | `chat.stop` | `{ chatId }` | `void` | Idempotent |
 

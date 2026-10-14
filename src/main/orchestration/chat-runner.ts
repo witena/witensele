@@ -25,7 +25,9 @@
  *        aborted                           → finish `stopped`
  *        every speaker errored             → finish `error`
  *        plan = mentions of the round that just ended
- *        this message's own `rounds` spent  → finish `max-rounds` (+ voteClosed)
+ *        this message's own `rounds` spent  → finish `max-rounds` (+ voteClosed
+ *                                             for a vote, roundsCapReached
+ *                                             otherwise)
  *        everybody wrote `[AGREED]`         → consensus notice, one closing
  *                                             turn, then — for a document goal
  *                                             with an executor and a folder —
@@ -108,10 +110,13 @@
  *   argument comes from and `autoDeliverExecutor` for the conditions.
  * - **A message may cap its own chain** (S5.14). `ChatSendInput.rounds`
  *   overrides `maxAutoRounds` for the chain that message starts and nothing
- *   else; the Actions card's "Start a vote" sends `1`, so every member answers
- *   once and the run closes with `voteClosed`. The cap is checked at the *end*
- *   of a round as well as at the top of one, because a vote whose answers
- *   mention nobody would otherwise end in silence.
+ *   else; the Actions card's "Start a vote" sends `1` with `vote: true`, so
+ *   every member answers once and the run closes with `voteClosed`. Any other
+ *   capped chain — an MCP `start_discussion({ rounds })` — closes with
+ *   `roundsCapReached { max }` instead: only the flag says a vote happened,
+ *   never the number. The cap is checked at the *end* of a round as well as at
+ *   the top of one, because a capped chain whose answers mention nobody would
+ *   otherwise end in silence.
  * - **A message may say a tool sent it** (S10.4). `ChatSendInput.origin` becomes
  *   an `OriginPart` in front of the user message's text and changes nothing else
  *   about the run: the MCP endpoint's question is scheduled, mentioned and
@@ -136,6 +141,7 @@ import { parseMentions } from '@shared/mentions'
 import {
   HANDOFF_INTENTS,
   type Agent,
+  type ChainCap,
   type Chat,
   type HandoffIntent,
   type Message,
@@ -207,14 +213,24 @@ export const NOTICE_HANDOFF_DELIVER = 'handoffDeliver'
  */
 export const NOTICE_CONSENSUS = 'consensus'
 /**
- * A chain whose message carried an explicit `rounds` cap has run them (S5.14).
+ * A vote has run its round (S5.14): the chain's message carried `vote: true`.
  *
- * Its only producer today is the Actions card's "Start a vote", which sends
- * `rounds: 1` — hence the name. `maxRoundsReached` is the wrong sentence for it:
+ * Its only producer is the Actions card's "Start a vote", which sends
+ * `rounds: 1, vote: true`. `maxRoundsReached` is the wrong sentence for it:
  * that one says "the chat hit its automatic limit, send a message to continue",
  * while this run ended exactly where the user asked it to.
  */
 export const NOTICE_VOTE_CLOSED = 'voteClosed'
+/**
+ * A chain whose message carried its own `rounds` cap, and was **not** a vote,
+ * has run them.
+ *
+ * Its producer is the MCP endpoint's `start_discussion({ rounds })`. It used to
+ * end with `voteClosed` too, which told the user a vote had closed when nobody
+ * had started one; and `maxRoundsReached` would blame the chat's setting for a
+ * number the caller chose. Carries `{ max }`, the cap that was spent.
+ */
+export const NOTICE_ROUNDS_CAP = 'roundsCapReached'
 
 /**
  * How much of a conclusion a `deliver` hand-off quotes (S5.16).
@@ -287,6 +303,7 @@ export interface ChatSendInput {
    * `1 … MAX_AUTO_ROUNDS`, validated in the handler. The Actions card's "Start a
    * vote" sends `1`: a vote is one question and one answer per member, and a
    * chat set to three automatic rounds would otherwise answer it twice more.
+   * The MCP endpoint sends whatever its caller asked for.
    *
    * It is a property of the message rather than of the chat on purpose — it is
    * not a setting the user changed, it is what this one request needs — so it
@@ -294,6 +311,12 @@ export interface ChatSendInput {
    * to `chat.settings.maxAutoRounds`.
    */
   rounds?: number
+  /**
+   * True when the cap is a vote's (S5.14): the chain closes with `voteClosed`
+   * rather than `roundsCapReached`. Only "Start a vote" sets it, and it means
+   * nothing without `rounds` — the handler refuses it alone.
+   */
+  vote?: boolean
   /**
    * Who sent this message on the user's behalf (S10.4), when it was not the
    * human at the composer.
@@ -378,8 +401,8 @@ export class ChatRunner {
    */
   #handoff: { agentId: string; intent: HandoffIntent } | null = null
   /**
-   * The `rounds` cap the next batch of pending messages carries, or `null` for
-   * the chat's own `maxAutoRounds` (S5.14).
+   * The cap the next batch of pending messages carries, or `null` for the
+   * chat's own `maxAutoRounds` (S5.14).
    *
    * Beside `#pending` rather than on the stored `Message`, because it is not
    * part of the transcript: the row is what the user said, and how many rounds
@@ -387,7 +410,7 @@ export class ChatRunner {
    * that land in the same gap are answered in one round either way, so there is
    * one chain and it can only have one cap.
    */
-  #pendingRounds: number | null = null
+  #pendingCap: ChainCap | null = null
 
   constructor(ctx: AppContext, chatId: string, options: ChatRunnerOptions = {}) {
     this.#ctx = ctx
@@ -463,9 +486,12 @@ export class ChatRunner {
 
     this.#pending.push(message)
     // S5.14: the cap this chain runs under, replaced rather than merged — see
-    // `#pendingRounds`. `undefined` clears an earlier one, so a typed message
+    // `#pendingCap`. `undefined` clears an earlier one, so a typed message
     // that joins a vote mid-run puts the chat's own limit back.
-    this.#pendingRounds = input.rounds ?? null
+    this.#pendingCap =
+      input.rounds === undefined
+        ? null
+        : { rounds: input.rounds, ...(input.vote === true ? { vote: true } : {}) }
     if (this.#running === null) this.#start()
     return message
   }
@@ -612,7 +638,7 @@ export class ChatRunner {
   /** Aborts the active run and drops anything pending. Idempotent. */
   stop(): void {
     this.#pending = []
-    this.#pendingRounds = null
+    this.#pendingCap = null
     this.#controller?.abort()
   }
 
@@ -677,14 +703,14 @@ export class ChatRunner {
     let carried: RoundPlan = EMPTY_PLAN
     let chat: Chat | null = null
     /**
-     * The `rounds` cap the last batch of user messages carried, or `null` for
-     * the chat's own `maxAutoRounds` (S5.14).
+     * The cap the last batch of user messages carried, or `null` for the
+     * chat's own `maxAutoRounds` (S5.14).
      *
      * A loop local rather than a field, because it belongs to the chain and not
-     * to the runner: it is taken from `#pendingRounds` at the same boundary that
+     * to the runner: it is taken from `#pendingCap` at the same boundary that
      * resets `roundsSinceUser`, and a run that ends forgets it.
      */
-    let roundsCap: number | null = null
+    let cap: ChainCap | null = null
 
     try {
       for (;;) {
@@ -714,7 +740,7 @@ export class ChatRunner {
           // previous round mentioned, rather than replacing it.
           roundsSinceUser = 0
           // …and brings its own cap with it, or puts the chat's back (S5.14).
-          roundsCap = this.#takePendingRounds()
+          cap = this.#takePendingCap()
           plan = mergePlans(
             memberIds,
             planFromUserMessages(chat.settings.mode, memberIds, pending),
@@ -766,11 +792,11 @@ export class ChatRunner {
         plan = { ...plan, speakers: speaking }
 
         // The chain's cap: what this message asked for, or the chat's setting.
-        const limit = roundsCap ?? chat.settings.maxAutoRounds
+        const limit = cap?.rounds ?? chat.settings.maxAutoRounds
         if (reachedRoundLimit(roundsSinceUser, limit)) {
           // An explicit cap ends with its own sentence: "the vote is closed" is
           // not "this chat hit its automatic limit" (S5.14).
-          if (roundsCap !== null) this.#notice(chat, NOTICE_VOTE_CLOSED)
+          if (cap !== null) this.#noticeCapSpent(chat, cap)
           else this.#notice(chat, NOTICE_MAX_ROUNDS, { max: limit })
           reason = 'max-rounds'
           break
@@ -831,8 +857,8 @@ export class ChatRunner {
         // which would end the run in silence, with no line saying the vote was
         // the point. Checked before consensus because the user named the number:
         // one round means one round, agreement or not.
-        if (roundsCap !== null && reachedRoundLimit(roundsSinceUser, roundsCap)) {
-          this.#notice(chat, NOTICE_VOTE_CLOSED)
+        if (cap !== null && reachedRoundLimit(roundsSinceUser, cap.rounds)) {
+          this.#noticeCapSpent(chat, cap)
           reason = 'max-rounds'
           break
         }
@@ -1286,11 +1312,21 @@ export class ChatRunner {
     return pending
   }
 
-  /** Takes the `rounds` cap those pending messages carried, if any (S5.14). */
-  #takePendingRounds(): number | null {
-    const rounds = this.#pendingRounds
-    this.#pendingRounds = null
-    return rounds
+  /** Takes the cap those pending messages carried, if any (S5.14). */
+  #takePendingCap(): ChainCap | null {
+    const cap = this.#pendingCap
+    this.#pendingCap = null
+    return cap
+  }
+
+  /**
+   * The line a capped chain ends with: `voteClosed` for a vote, and
+   * `roundsCapReached { max }` for any other cap (S5.14). Only the `vote` flag
+   * decides — `rounds: 1` from the MCP endpoint is one round, not a vote.
+   */
+  #noticeCapSpent(chat: Chat, cap: ChainCap): void {
+    if (cap.vote === true) this.#notice(chat, NOTICE_VOTE_CLOSED)
+    else this.#notice(chat, NOTICE_ROUNDS_CAP, { max: cap.rounds })
   }
 
   /**

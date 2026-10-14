@@ -57,8 +57,9 @@ that owns the `AbortController` the Stop button reaches.
 - **Discussion closure** (S5.14, S5.16): reading `[AGREED]` / `[CONTINUE]` off
   the round that just ended, in **both** modes; the `consensus` notice; the
   single **closing turn**, given to `ChatSettings.closingAgentId` when it can be
-  and to the first eligible member otherwise; and `ChatSendInput.rounds` with its
-  `voteClosed` notice.
+  and to the first eligible member otherwise; and `ChatSendInput.rounds` with
+  the line its chain ends with — `voteClosed` when `ChatSendInput.vote` says it
+  was a vote, `roundsCapReached { max }` otherwise (fix, 2026-10-14).
 - **The conclusion quote** (S5.16): a `deliver` hand-off stores the chat's latest
   conclusion as a block quote beside its notice, so the executor is told which
   answer to write out.
@@ -140,6 +141,23 @@ The scheduling is again **untouched**: `scheduling.ts` has no new function, no
 plan is built differently, and the closing turn is an ordinary round with one
 speaker. What changed is the set of reasons the loop may `break`.
 
+## Which line a capped chain ends with (fix, 2026-10-14)
+
+A discussion started from Claude Code through the MCP endpoint
+(`start_discussion` with `rounds: 3`) ended with "The vote is closed: every
+member answered once" — and nobody had started a vote. S5.14 wrote `voteClosed`
+for **any** chain whose message carried its own cap, on the assumption that
+"Start a vote" was the only sender of `rounds`; S10.1 made the endpoint a
+second one.
+
+| Change | Where |
+|---|---|
+| **`ChatSendInput.vote`**, sent only by "Start a vote" (`VOTE_CAP`, `rounds: 1, vote: true`); the handler refuses it without `rounds` and when it is not a boolean | `chat-runner.ts`, `handlers/chats.ts`, `@shared/backend` |
+| **`ChainCap`** (`{ rounds, vote? }`), the one shape `#pendingCap`, the loop's `cap` and the renderer's send path pass around | `@shared/types` |
+| **The `roundsCapReached { max }` notice** for every capped chain that was not a vote, written by `#noticeCapSpent` at both places the cap is checked | `NOTICE_ROUNDS_CAP` |
+
+The MCP endpoint sends no `vote`, so it can no longer produce `voteClosed`.
+
 ## What S5.16 added
 
 S5.14 produced a conclusion and then drew it as one more reply. This step makes
@@ -208,6 +226,8 @@ open union, and a setting is one field of a JSON column.
 | **`rounds` travels on the message, not on the chat** | A `maxAutoRounds` write before the send and another after it | Two writes with a run between them is a setting the user never chose, visible in the member panel, and wrong for ever if the app is closed in between. The cap belongs to one request and dies with its chain |
 | **A capped chain is checked again at the end of a round** | Only at the top of the next round, like `maxAutoRounds` | A vote whose answers mention nobody schedules nothing, so the loop would exit through the empty-plan branch in silence and the user would never be told the vote was the point |
 | **The cap wins over consensus when both apply** | Close with the conclusion instead | The user named the number. One round means one round, and `voteClosed` says exactly what happened |
+| **A vote is a flag on the send, not a number of rounds** (fix, 2026-10-14) | Treat `rounds === VOTE_ROUNDS` as a vote | An MCP caller may ask for `rounds: 1` of an ordinary discussion, and would be told a vote closed. The flag costs one optional field and says what the click meant |
+| **A non-vote cap gets `roundsCapReached`, not `maxRoundsReached`** (fix, 2026-10-14) | Reuse `maxRoundsReached` with the chain's own `max` | That sentence is about the chat's *Max automatic rounds* setting, and a user who looks there finds a different number. The caller chose this one, and the line says so |
 
 ## Open questions
 

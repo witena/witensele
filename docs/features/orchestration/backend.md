@@ -50,7 +50,7 @@ One row per user message:
 | Column | Value |
 |---|---|
 | `sender_type` / `sender_id` | `system` / `system` |
-| `parts` | one `system-notice` part: `noMentions`, `maxRoundsReached { max }`, `runFailed { message }`, `consensus` or `voteClosed` (both S5.14, both without parameters) |
+| `parts` | one `system-notice` part: `noMentions`, `maxRoundsReached { max }`, `runFailed { message }`, `consensus` or `voteClosed` (both S5.14, both without parameters), or `roundsCapReached { max }` (fix, 2026-10-14) |
 | `status` / `round` | `done` / the round the run was in when it stopped |
 
 It reads `chat_members` (ordered by `position`) and `agents` to resolve the
@@ -183,10 +183,10 @@ round, after `carried` has been computed and after the abort and error checks.
 
 ### The capped chain
 
-`send({ rounds })` writes `#pendingRounds`; `#loop` takes it into a local
-`roundsCap` at the same boundary that resets `roundsSinceUser`, so the cap and
-the counter it caps always change together. The limit each round is checked
-against is `roundsCap ?? chat.settings.maxAutoRounds`.
+`send({ rounds, vote })` writes `#pendingCap` (a `ChainCap`); `#loop` takes it
+into a local `cap` at the same boundary that resets `roundsSinceUser`, so the
+cap and the counter it caps always change together. The limit each round is
+checked against is `cap?.rounds ?? chat.settings.maxAutoRounds`.
 
 It is tested **twice**, and both are necessary:
 
@@ -195,9 +195,18 @@ It is tested **twice**, and both are necessary:
 | Top of the next iteration, beside the `maxAutoRounds` check | The ordinary path, and the only one that can fire when something is still scheduled |
 | End of the round that just ran | A vote whose answers mention nobody schedules nothing, so the loop would exit through the empty-plan branch in silence — and `noMentions` is only written when a user message was pending, so there would be no line at all |
 
-Either way the notice is `voteClosed` rather than `maxRoundsReached` and the
-reason is `max-rounds`. An override dies with its chain: the next typed message
-takes `#takePendingRounds()`'s `null` and the chat's own setting applies again.
+Either way the reason is `max-rounds`, and the notice is written by
+`#noticeCapSpent`: `voteClosed` when the cap carried `vote: true` — "Start a
+vote" and nothing else — and `roundsCapReached { max: cap.rounds }` for every
+other cap, which today means the MCP endpoint's `start_discussion({ rounds })`.
+Never `maxRoundsReached`, which is about the chat's setting. Only the flag
+decides; `rounds: 1` without it is one round of an ordinary discussion (fix,
+2026-10-14 — before it, every capped chain said a vote had closed). An override
+dies with its chain: the next typed message takes `#takePendingCap()`'s `null`
+and the chat's own setting applies again.
+
+`chat.send` refuses `vote` that is not a boolean, and `vote: true` without
+`rounds` — a vote with no number of rounds is not something to guess at.
 
 ### The agreed chain
 
@@ -363,4 +372,4 @@ through `ChatRepository.update` and broadcast as `chat.updated`.
 
 ## Closure notices reach the model (fix after S5.16)
 
-The `consensus` and `voteClosed` notices (S5.14) are rendered into the history like the hand-off ones. The first real use found the case the S5.14 tests had not: the closing speaker was also the last speaker of the agreed round, the consensus notice was not rendered, so its prompt ended with its own reply and the Anthropic provider rejected the turn. `history.ts` now renders both notices and, as a general guard, ends every prompt with a user message (`YOUR_TURN_TEXT`).
+The `consensus` and `voteClosed` notices (S5.14) — and since the 2026-10-14 fix `roundsCapReached`, for the same reason — are rendered into the history like the hand-off ones. The first real use found the case the S5.14 tests had not: the closing speaker was also the last speaker of the agreed round, the consensus notice was not rendered, so its prompt ended with its own reply and the Anthropic provider rejected the turn. `history.ts` now renders both notices and, as a general guard, ends every prompt with a user message (`YOUR_TURN_TEXT`).

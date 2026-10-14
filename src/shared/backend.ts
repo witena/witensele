@@ -522,7 +522,12 @@ export interface BackendApi {
    * starts**, instead of `chat.settings.maxAutoRounds`, and applies to nothing
    * else: the next typed message is back on the chat's own setting. It must be
    * an integer from `MIN_AUTO_ROUNDS` to `MAX_AUTO_ROUNDS`. The Actions card's
-   * "Start a vote" is its one caller and sends `1`.
+   * "Start a vote" sends `1`; the MCP endpoint's `start_discussion` passes its
+   * caller's `rounds` through.
+   *
+   * `vote` (S5.14) says that cap is a vote: the chain ends with
+   * `notices.voteClosed` instead of `notices.roundsCapReached`. Only "Start a
+   * vote" sends it, and it is refused without `rounds`.
    *
    * `origin` (S10.4) says that a **tool** sent this message on the user's
    * behalf, and is stored as the message's `OriginPart`. Its one caller is the
@@ -535,6 +540,7 @@ export interface BackendApi {
     text: string
     mentions?: string[]
     rounds?: number
+    vote?: boolean
     origin?: { client: string }
   }) => Promise<Message>
   /** Aborts the whole chain for this chat. Idempotent when nothing is running. */

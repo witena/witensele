@@ -98,7 +98,11 @@ const NOTICE_TEXT: Record<string, (params: Record<string, string | number>) => s
   // member who spoke last, and without this line its history would end with
   // its own reply — which some providers reject outright (see `endsWithUser`).
   consensus: () => 'The group has reached agreement. Sum up what was decided, for the user.',
-  voteClosed: () => 'The vote is closed: every member answered once.'
+  voteClosed: () => 'The vote is closed: every member answered once.',
+  // A capped chain that was not a vote (an MCP caller's `rounds`): the same
+  // place in the history as `voteClosed`, for the same reason.
+  roundsCapReached: (params) =>
+    `The discussion ran the ${String(params['max'] ?? 'requested')} rounds it was given; the user has the floor.`
 }
 
 /**

@@ -3250,6 +3250,22 @@ machine is not logged in and no package was permitted to write `~/.claude.json`,
   *second* signed copy with a fresh `WITENA_USER_DATA`, which is the macOS
   Keychain prompt WP-0a measured. On an *installed* app the prompt does not
   arise, so the README procedure above exercises it for free.
+- [x] (2026-10-14) **A capped discussion from Claude Code said a vote had closed**
+  — *found on the installed app, fixed.* A `start_discussion` with `rounds: 3`
+  ran its three rounds (one member still writing `[CONTINUE]`) and ended with
+  `notices.voteClosed`, "The vote is closed: every member answered once" —
+  nobody had started a vote. S5.14 wrote that line for any chain whose message
+  carried its own `rounds`, on the assumption that "Start a vote" was the only
+  sender; S10.1 made `src/main/mcp-endpoint/tools.ts` a second one. `chat.send`
+  now takes `vote?: boolean` beside `rounds` (refused alone or when not a
+  boolean), "Start a vote" sends `VOTE_CAP` (`rounds: 1, vote: true`), and the
+  runner's `#noticeCapSpent` writes `voteClosed` only for a vote and the new
+  `notices.roundsCapReached { max }` for every other cap — the number alone
+  decides nothing, because an MCP caller may ask for `rounds: 1`. The key is in
+  both locale files and in `NOTICE_TEXT`; covered by `chat-runner.test.ts`
+  (including that transcript's shape), `history.test.ts`, `notices.test.ts` and
+  `run.test.ts`. Docs: `orchestration` (all four), plus the lines of `chats`,
+  `agent-turn` and `i18n` that described the vote's send path and keys.
 - **`npm run e2e:packaged` has never been run** (S10.3), for the same reason: the
   spec launches a second signed copy and Playwright then waits on `firstWindow()`
   while a human answers a Keychain dialog. Its fourth case — the bundled

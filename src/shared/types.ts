@@ -591,6 +591,23 @@ export const MIN_AUTO_ROUNDS = 1
 export const MAX_AUTO_ROUNDS = 10
 
 /**
+ * A cap one message puts on the chain it starts (S5.14), instead of the chat's
+ * `maxAutoRounds`.
+ *
+ * `vote` says the cap is the Actions card's "Start a vote", and is the only
+ * thing that makes the chain close with `notices.voteClosed`; every other
+ * capped chain — an MCP `start_discussion({ rounds })` among them — closes with
+ * `notices.roundsCapReached`. A flag rather than a rule on the number, because
+ * `rounds: 1` is not a vote: a caller may ask for one round of anything.
+ */
+export interface ChainCap {
+  /** `MIN_AUTO_ROUNDS … MAX_AUTO_ROUNDS`. */
+  rounds: number
+  /** True only for "Start a vote". */
+  vote?: boolean
+}
+
+/**
  * Membership of an agent in a chat. `position` is the speaking order in
  * `roundrobin` mode, ascending from 0.
  */

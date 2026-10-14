@@ -559,9 +559,9 @@ export function ChatsPage(): React.JSX.Element {
           members={members}
           running={running}
           {...(runError ? { error: translateFailure(t, runErrorCode, runErrorDetails) } : {})}
-          onSend={(text, mentions, rounds) =>
+          onSend={(text, mentions, cap) =>
             selectedId
-              ? useRunStore.getState().send(selectedId, text, mentions, rounds)
+              ? useRunStore.getState().send(selectedId, text, mentions, cap)
               : Promise.resolve(false)
           }
           onStop={() => {
@@ -759,7 +759,7 @@ export function ChatsPage(): React.JSX.Element {
           <ActionsCard
             chatId={selectedId}
             members={members}
-            onSend={(text, rounds) => void composer.current?.submitText(text, rounds)}
+            onSend={(text, cap) => void composer.current?.submitText(text, cap)}
             workdir={selected?.workdir}
             goal={selected?.goal}
             running={running}

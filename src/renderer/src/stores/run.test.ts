@@ -127,14 +127,19 @@ describe('run store', () => {
   })
 
   // S5.14: "Start a vote" is the only caller that sets it.
-  it('passes a round cap through, and omits it when there is none', async () => {
+  it('passes a round cap and its vote flag through, and omits both when there is none', async () => {
     const calls = fakeBackend()
 
-    await useRunStore.getState().send(CHAT, '@all vote please', [], 1)
+    await useRunStore.getState().send(CHAT, '@all vote please', [], { rounds: 1, vote: true })
+    await useRunStore.getState().send(CHAT, 'two rounds only', [], { rounds: 2 })
     await useRunStore.getState().send(CHAT, 'and now discuss')
 
     expect(calls).toEqual([
-      { method: 'chat.send', input: { chatId: CHAT, text: '@all vote please', rounds: 1 } },
+      {
+        method: 'chat.send',
+        input: { chatId: CHAT, text: '@all vote please', rounds: 1, vote: true }
+      },
+      { method: 'chat.send', input: { chatId: CHAT, text: 'two rounds only', rounds: 2 } },
       { method: 'chat.send', input: { chatId: CHAT, text: 'and now discuss' } }
     ])
   })

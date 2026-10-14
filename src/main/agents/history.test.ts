@@ -225,6 +225,28 @@ describe('toModelMessages', () => {
     ])
   })
 
+  // A capped chain that was not a vote has a line of its own, with the cap,
+  // and never the vote's sentence.
+  it('renders the rounds-cap notice with its number, distinct from the vote', () => {
+    const rendered = (key: string, params?: Record<string, number>): string =>
+      String(
+        toModelMessages({
+          self: ada,
+          agentsById,
+          messages: [
+            message('system', 'system', [
+              { type: 'system-notice', key, ...(params ? { params } : {}) }
+            ])
+          ]
+        })[0]?.content
+      )
+
+    const cap = rendered('roundsCapReached', { max: 3 })
+    expect(cap).toContain('3 rounds')
+    expect(cap).not.toContain('vote')
+    expect(rendered('voteClosed')).toContain('vote is closed')
+  })
+
   it('skips a system notice whose key it has no rendering for', () => {
     const result = toModelMessages({
       self: ada,
