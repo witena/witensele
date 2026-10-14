@@ -13,7 +13,7 @@
 | `src/renderer/src/components/settings/provider-sign-in.tsx` | **S5.3**, generalised in **S5.13** (it was `anthropic-sign-in.tsx`). The sign-in panel for whichever vendor its `type` prop names: the three states, that vendor's install command, the Sign in / Sign out buttons, and — for a Google login with no quota project — the project field |
 | `src/renderer/src/components/settings/preset-grid.tsx` | The three-column preset picker, rendered straight from `PROVIDER_PRESETS` |
 | `src/renderer/src/components/settings/provider-logo.ts` | Monogram initials, and the palette **slot** derived from the preset id. Since S5.17 it returns `{ text, palette, color, textColor }` where the two colours are `var(--color-avatar-N-…)` references from the shared eight-slot palette in [`../agents/frontend.md`](../agents/frontend.md), not hexes of its own |
-| `src/renderer/src/components/settings/provider-display.ts` | `providerHost`, `providerStatus`, `providerStatusTone`, (S5.3) `authControl`, `signedInName`, `formatExpiry` and (S7.6) `keyUnreadable` — the editor's decisions as pure functions, because the suite has no DOM |
+| `src/renderer/src/components/settings/provider-display.ts` | `providerHost`, `providerStatus`, `providerStatusTone`, (S5.3) `authControl`, `signedInName`, `formatExpiry`, (S7.6) `keyUnreadable` and `signInLabel`, the Authentication control's sign-in option named after the vendor — the editor's decisions as pure functions, because the suite has no DOM |
 | `src/renderer/src/components/ui/chip.tsx` | New primitive: an item in an editable set, optionally removable or clickable |
 | `src/renderer/src/components/ui/spinner.tsx` | New primitive: the indeterminate ring |
 | `src/renderer/src/components/ui/status-pill.tsx` | New primitive: dot + label in three tones, with the exported tone → token mapping |
@@ -152,8 +152,18 @@ user is about to hand an account to a named company and the control should say
 which — and added `gcloudMissing`, `signedOutGoogle` and the five
 `quotaProject*` keys, plus `errors.gcloud_missing`,
 `errors.gcloud_not_logged_in` and `errors.gcloud_no_project`. The vendor branch
-is a ternary over **two literal `t()` calls**, never `t(KEYS[type])`, because
+was a ternary over **two literal `t()` calls**, never `t(KEYS[type])`, because
 `used-keys.test.ts` reads literals and a computed key would ship a typo.
+
+That ternary had a third case it did not name: OpenAI shows the control too
+(disabled, with `authUnavailable` under it), and fell through to "Sign in with
+Anthropic". On 2026-10-14 it became `signInLabel(type, t)` in
+`provider-display.ts` — a switch over the whole `ProviderType` union, every
+branch still a literal `t()` call (the guard reads `.ts` files as well as
+`.tsx`), with `t` passed in so the rule is unit-tested without a DOM — and
+`settings.providers.authSignInOpenAI` ("Sign in with OpenAI") was added in
+both locale files. `openai-compatible`, which never shows the control, gets
+the plain `signIn` so the switch stays total.
 `GCLOUD_INSTALL_COMMAND` follows the same data-not-copy rule as its Anthropic
 counterpart, selected by `cliInstallCommand(type)`.
 

@@ -11,6 +11,7 @@ import type { Provider } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import {
   authControl,
+  signInLabel,
   formatExpiry,
   keyUnreadable,
   providerHost,
@@ -199,5 +200,23 @@ describe('keyUnreadable', () => {
     expect(keyUnreadable({})).toBe(false)
     expect(keyUnreadable(undefined)).toBe(false)
     expect(keyUnreadable(null)).toBe(false)
+  })
+})
+
+describe('signInLabel', () => {
+  /** A `t` that answers with the key it was asked for. */
+  const key = (k: string): string => k
+
+  it('names the vendor whose account the user would hand over', () => {
+    expect(signInLabel('anthropic', key)).toBe('settings.providers.authSignInAnthropic')
+    expect(signInLabel('google', key)).toBe('settings.providers.authSignInGoogle')
+    // The regression: OpenAI's editor offered "Sign in with Anthropic".
+    expect(signInLabel('openai', key)).toBe('settings.providers.authSignInOpenAI')
+  })
+
+  it('never names Anthropic for a provider that is not Anthropic', () => {
+    for (const type of ['google', 'openai', 'openai-compatible'] as const) {
+      expect(signInLabel(type, key)).not.toContain('Anthropic')
+    }
   })
 })

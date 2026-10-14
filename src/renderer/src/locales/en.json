@@ -473,6 +473,7 @@
       "authApiKey": "API key",
       "authSignInAnthropic": "Sign in with Anthropic",
       "authSignInGoogle": "Sign in with Google",
+      "authSignInOpenAI": "Sign in with OpenAI",
       "authUnavailable": "Signing in is not available for this provider yet. Use an API key.",
       "signedIn": "Signed in as {{account}}",
       "signedInDetail": "{{organization}} · {{workspace}}",

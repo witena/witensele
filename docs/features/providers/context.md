@@ -51,7 +51,7 @@ mean something.
 | Deliberately absent | Owned by |
 |---|---|
 | Choosing a provider and model *for an agent* | S2.1 (`agents`) |
-| Signing in to OpenAI | "Provider authentication beyond Anthropic" in `docs/STEPS.md`'s Phase 6 backlog. "Sign in with ChatGPT" is a gated program for third-party apps, so the control stays visible and disabled with a hint |
+| Signing in to OpenAI | "Provider authentication beyond Anthropic" in `docs/STEPS.md`'s Phase 6 backlog. "Sign in with ChatGPT" is a gated program for third-party apps, so the control stays visible and disabled with a hint. Its disabled option reads "Sign in with OpenAI" — until 2026-10-14 it read "Sign in with Anthropic", because the label was a two-way ternary that sent every non-Google type to Anthropic's wording; `signInLabel` is now a switch over the whole union |
 | Creating a Google Cloud project, or enabling an API on one | The user's own console. The panel names the project it needs and sets it on the credentials; it does not provision anything |
 | Cloud-platform credentials (Vertex AI, Bedrock, Azure) | The same backlog section |
 | Actually generating text with one | S1.7 (`agent-turn`) |

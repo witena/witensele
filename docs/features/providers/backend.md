@@ -130,7 +130,13 @@ Pitfalls, every one of them hit while writing this step:
   written from memory of V2/V3 will not type-check.
 - **`openai.languageModel(id)` is the Responses API** (`openai.responses`), while
   `.chat(id)` is Chat Completions. The default is deliberate; a provider that only
-  speaks Chat Completions belongs behind `openai-compatible` anyway.
+  speaks Chat Completions belongs behind `openai-compatible` anyway. Since
+  2026-10-14 `registry.test.ts` pins the request itself — `POST
+  https://api.openai.com/v1/responses` (or `<baseUrl>/responses`) with
+  `Authorization: Bearer <key>` and nothing from another vendor — so an adapter
+  upgrade that moves the endpoint is a failing test. The `openai` branch never
+  reads `auth`: OpenAI has no sign-in, the handler refuses `oauth` for it, and a
+  stale draft that still says `oauth` sends its key regardless.
 - **The SDK has no "list models" call.** `/models` is spoken by hand in
   `discovery.ts`.
 - **`includeUsage: true` is not optional if you want token counts.** Without it

@@ -7,7 +7,7 @@
  * that each branch reaches the right adapter (`model.provider`) and passes the
  * model id straight through (`model.modelId`).
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Provider } from '@shared/types'
 import { LOCAL_USER_ID } from '@shared/types'
 import { BackendFailure } from '../errors'
@@ -306,6 +306,67 @@ describe('oauthFetch', () => {
       wrapped('https://generativelanguage.googleapis.com/v1beta/models', {})
     ).rejects.toMatchObject({ code: 'gcloud_no_project' })
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe('createLanguageModel: what an OpenAI model sends', () => {
+  // The keyed adapters use the global `fetch` (only a sign-in provider gets a
+  // wrapper), so the recorder stands in for it. Nothing here reaches a network.
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** Makes the model's first real request and returns what it sent. */
+  async function firstRequest(
+    overrides: ProviderOverrides
+  ): Promise<{ url: string; headers: Record<string, string> } | undefined> {
+    const { fetchImpl, calls } = recordingFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    const model = createLanguageModel(
+      provider({ type: 'openai', name: 'OpenAI', ...overrides }),
+      'gpt-4o'
+    )
+    if (typeof model === 'string') throw new Error('expected a model object')
+    try {
+      await model.doGenerate({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]
+      })
+    } catch {
+      /* expected: `{}` is not a real OpenAI payload; the request is the assertion */
+    }
+    expect(calls).toHaveLength(1)
+    return calls[0]
+  }
+
+  it('goes to api.openai.com with the stored key as a bearer token', async () => {
+    const call = await firstRequest({ apiKey: 'sk-openai-test' })
+
+    // `@ai-sdk/openai`'s `languageModel` is the Responses API since v2 of the
+    // adapter; pinned so an upgrade that moves it is a test failure, not a
+    // surprise in someone's proxy logs.
+    expect(call?.url).toBe('https://api.openai.com/v1/responses')
+    expect(call?.headers['authorization']).toBe('Bearer sk-openai-test')
+    // Nothing from another vendor rides along.
+    expect(call?.headers['x-api-key']).toBeUndefined()
+    expect(call?.headers['anthropic-beta']).toBeUndefined()
+  })
+
+  it('uses a base URL the user set instead of the default', async () => {
+    const call = await firstRequest({
+      apiKey: 'sk-openai-test',
+      baseUrl: 'https://proxy.example.com/v1'
+    })
+
+    expect(call?.url).toBe('https://proxy.example.com/v1/responses')
+    expect(call?.headers['authorization']).toBe('Bearer sk-openai-test')
+  })
+
+  it('still sends the key when a stale record claims sign-in, which OpenAI does not have', async () => {
+    // The handler refuses `auth: 'oauth'` for OpenAI, but a draft can carry it;
+    // the adapter must not quietly drop the key and send an anonymous request.
+    const call = await firstRequest({ apiKey: 'sk-openai-test', auth: 'oauth' })
+
+    expect(call?.headers['authorization']).toBe('Bearer sk-openai-test')
   })
 })
 

@@ -457,3 +457,27 @@ test('sign-in mode explains what to install when `gcloud` is absent', async () =
 
   await expect(window.getByTestId('provider-card')).toHaveCount(before)
 })
+
+/**
+ * OpenAI has no sign-in flow, so its Authentication control is shown disabled
+ * with a hint — and its sign-in option used to read "Sign in with Anthropic",
+ * because the label was a two-way choice that sent every non-Google type to
+ * Anthropic's wording. The option must name OpenAI, stay disabled, and leave
+ * the key field in place.
+ */
+test('OpenAI offers its own, disabled, sign-in option and keeps the key field', async () => {
+  const providers = (
+    zhCN.settings as unknown as { providers: Record<string, string> }
+  ).providers
+
+  await window.getByTestId('providers-add').click()
+  await window.getByTestId('preset-openai').click()
+
+  const option = window.getByTestId('provider-auth-oauth')
+  await expect(option).toHaveText(providers['authSignInOpenAI'] as string)
+  await expect(option).not.toContainText('Anthropic')
+  await expect(option).toBeDisabled()
+  await expect(window.getByText(providers['authUnavailable'] as string)).toBeVisible()
+  await expect(window.getByTestId('provider-api-key-input')).toBeVisible()
+  await expect(window.getByTestId('provider-sign-in')).toHaveCount(0)
+})
