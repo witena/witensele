@@ -122,6 +122,34 @@ export function authControl(type: ProviderType): AuthControlState {
 }
 
 /**
+ * The Authentication control's sign-in option, named after the vendor.
+ *
+ * The user is about to hand an account to a specific company, and the option
+ * has to say which. It was a two-way ternary — Google, else Anthropic — until
+ * the OpenAI editor was seen offering "Sign in with Anthropic" (disabled, but
+ * wrong). A switch over the whole union means a fourth vendor cannot be added
+ * without answering; `openai-compatible` never shows the control
+ * (`authControl`) and gets the plain "Sign in" so the function stays total.
+ *
+ * `t` is a parameter so the rule is a unit test rather than a render, and every
+ * branch calls it with a **literal** key: `used-keys.test.ts` checks literal keys
+ * in every renderer file, so a typo here fails the suite, which a key computed
+ * from a table would not.
+ */
+export function signInLabel(type: ProviderType, t: (key: string) => string): string {
+  switch (type) {
+    case 'anthropic':
+      return t('settings.providers.authSignInAnthropic')
+    case 'google':
+      return t('settings.providers.authSignInGoogle')
+    case 'openai':
+      return t('settings.providers.authSignInOpenAI')
+    case 'openai-compatible':
+      return t('settings.providers.signIn')
+  }
+}
+
+/**
  * Who the user is signed in as, in one string.
  *
  * The account email is the identity a person recognises; a profile without one

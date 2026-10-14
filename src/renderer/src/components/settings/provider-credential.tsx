@@ -35,7 +35,7 @@ import { getPreset, providerAuth, supportsOAuth } from '@shared/presets'
 import type { ProviderAuth } from '@shared/types'
 import { Field, Input, SegmentedControl } from '../ui'
 import { useProvidersStore } from '../../stores/providers'
-import { authControl, keyUnreadable } from './provider-display'
+import { authControl, keyUnreadable, signInLabel } from './provider-display'
 import { ProviderSignIn } from './provider-sign-in'
 
 export function ProviderCredential(): React.JSX.Element | null {
@@ -91,13 +91,8 @@ export function ProviderCredential(): React.JSX.Element | null {
               },
               {
                 value: 'oauth',
-                // Named after the vendor rather than a generic "sign in": the
-                // user is about to hand an account to a specific company, and
-                // the button should say which.
-                label:
-                  draft.type === 'google'
-                    ? t('settings.providers.authSignInGoogle')
-                    : t('settings.providers.authSignInAnthropic'),
+                // Named after the vendor; see `signInLabel`.
+                label: signInLabel(draft.type, t),
                 testId: 'provider-auth-oauth'
               }
             ]}

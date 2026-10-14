@@ -473,6 +473,7 @@
       "authApiKey": "API 密钥",
       "authSignInAnthropic": "使用 Anthropic 账号登录",
       "authSignInGoogle": "使用 Google 账号登录",
+      "authSignInOpenAI": "使用 OpenAI 账号登录",
       "authUnavailable": "该提供方暂不支持账号登录,请使用 API 密钥。",
       "signedIn": "已登录:{{account}}",
       "signedInDetail": "{{organization}} · {{workspace}}",
