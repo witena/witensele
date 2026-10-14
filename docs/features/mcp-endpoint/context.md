@@ -110,6 +110,7 @@ PLAN's level are recorded here as work packages land.
 | Only `name` and `arguments` are forwarded; the incoming `_meta` is dropped | Forwarding `params` verbatim | The IDE's `progressToken` means nothing to the endpoint, and the SDK mints this hop's own token when `onprogress` is passed. Forwarding the first hop's token would have the endpoint number its notifications against an id only the IDE's client knows |
 | "Is Witena up?" is answered by `readlink(<userData>/SingletonLock)` | Running `pgrep`; asking `open`; not distinguishing the two cases at all | It is used for nothing but choosing between two English sentences, and it is free — WP-0a already established that Electron keeps that `<host>-<pid>` symlink inside `userData` and that it is what makes the single-instance lock per-directory. Every way of failing to read it answers "not running", which falls back to the weaker message, so nothing depends on it |
 | `launch()` adds `--env WITENA_USER_DATA=…` when, and only when, the shim was given the override | The plain command in every case | Without it a harness that points the shim at a temporary directory would launch an app writing to the real one and then wait twenty seconds for a file that could never appear. The ordinary launch is still the plain `open -g -j -a <bundle> --args --background` the work package specifies |
+| `launch()` runs `open` **without** `ELECTRON_RUN_AS_NODE` (`launchEnvFor`, 2026-10-14) | Passing the shim's environment through unchanged, which is what `spawn` does by default | Found on the installed app, the first time anybody woke it: `open(1)` hands the caller's environment to the application it launches, and the shim's environment carries the variable its own launcher sets. Witena then started as plain Node, read `--background` as a script name and exited, and every tool call made while the app was quit ended in "did not publish its MCP endpoint within 20 seconds". The same `open` typed in a terminal worked, which is why only the real path could find it. Everything else in the environment is passed through; only that one variable is removed, on a copy |
 | `bundlePathFor` is a suffix match on `<x>.app/Contents/MacOS/<name>`, and `null` is the development branch | Walking up the path looking for any `.app`; reading `Info.plist` | WP-0a measured what `process.execPath` actually is inside the bundle, and WP-9's launcher is what puts it there. A charitable match would let a `node` in some unrelated bundle look launchable, and "there is no bundle" is a *message*, not a failure |
 | The shim's closure test also bans `better-sqlite3`, `src/main/` and any package outside the SDK and zod | The electron-only scan its two siblings run | The shim's failure mode is worse: it is bundled with everything inlined and run from a bundle with no `node_modules`, so a stray import is either an unloadable native binary or the whole backend in a file an IDE reads on every project it opens. `import type { HandlerMap }` is the realistic mistake, and it is indistinguishable from a value import to a scan — so the rule is the directory, not the `type` keyword |
 
@@ -531,13 +532,13 @@ work from, and this one says why each question is open.
   (ordered), `ChatCreateInput.committeeId`, and `initialMembers()` in
   `src/main/handlers/chats.ts` as the one place a committee becomes members. No
   new Phase 9 method was needed.
-- **Nothing has woken a quit Witena yet** (WP-9). The launcher runs the shim out
-  of a signed bundle, and `launch()` is unit-tested with an injected `spawn`, but
-  the two have never met: proving it needs a second signed copy launched with a
-  fresh `WITENA_USER_DATA`, which is the Keychain prompt WP-0a measured. It is
-  the acceptance criterion of STEPS.md S10.3 and the first thing S10.7's README
-  procedure will exercise by hand — on the *installed* app, where the prompt does
-  not arise.
+- ~~**Nothing has woken a quit Witena yet** (WP-9).~~ Answered 2026-10-14, on the
+  installed app, by following S10.7's README procedure — and the first attempt
+  **failed**: the shim's `open` passed `ELECTRON_RUN_AS_NODE=1` on to the app it
+  woke, which then ran as Node and exited (see the decision table above). With
+  `launchEnvFor` stripping it, a `list_agents` call from `claude -p` with Witena
+  quit returned in 9 s, the app came up with `--background`, not visible and not
+  frontmost.
 - ~~Whether Codex surfaces MCP resources or prompts at all (WP-0b); S10.6 drops
   whatever no client shows.~~ Answered by WP-0b: Codex reads resources (through
   its own `list_mcp_resources` / `read_mcp_resource` tools) and ignores prompts
@@ -553,7 +554,13 @@ work from, and this one says why each question is open.
   `src/main/integrations/` was not touched. The condition is unchanged and the
   work is carried into S10.7's backlog: someone runs the `@`-mention on a
   logged-in machine, and only then is the generator worth writing.
-- **Nothing has been exercised inside a real Claude Code session yet.** S10.6's
+- ~~**Nothing has been exercised inside a real Claude Code session yet.**~~
+  Answered 2026-10-14: the owner followed the README section on a logged-in
+  machine — Connect registered `witena` at user scope, a two-agent discussion
+  started from Claude Code ran with the user message marked `via claude-code`,
+  `@witena:` offered recent chats and `/mcp__witena__consult` started a
+  discussion. The paragraph below is kept for the history of why it waited.
+  Originally: **Nothing has been exercised inside a real Claude Code session yet.** S10.6's
   acceptance — `@witena:` offering recent chats, `/mcp__witena__consult` starting
   a discussion — and WP-0b's unmeasured Claude Code *tool-call* timeout both need
   a logged-in machine. WP-15 built to WP-0b's protocol-level measurements (which

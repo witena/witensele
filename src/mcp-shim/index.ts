@@ -89,6 +89,7 @@ export function createProcessConnector(log: (line: string) => void): Connector {
             launch({
               bundlePath,
               userDataDirOverride: env.WITENA_USER_DATA,
+              env,
               spawn,
               probe,
               now: () => Date.now(),

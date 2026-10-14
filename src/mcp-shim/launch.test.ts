@@ -13,8 +13,10 @@ import type { McpDiscovery } from '@shared/mcp-discovery'
 import {
   LAUNCH_POLL_MS,
   LAUNCH_TIMEOUT_MS,
+  RUN_AS_NODE_VARIABLE,
   bundlePathFor,
   launch,
+  launchEnvFor,
   openArgsFor,
   type SpawnLike
 } from './launch'
@@ -27,12 +29,29 @@ const DISCOVERY: McpDiscovery = {
   startedAt: 1_700_000_000_000
 }
 
+/**
+ * The environment `bin/witena-mcp` gives the shim: the IDE's own, plus the
+ * variable that makes the bundle's binary run as Node.
+ */
+const SHIM_ENV: Record<string, string | undefined> = {
+  PATH: '/usr/bin:/bin',
+  HOME: '/Users/someone',
+  [RUN_AS_NODE_VARIABLE]: '1'
+}
+
 /** A `spawn` that records its call and never starts anything. */
-function recordingSpawn(): { spawn: SpawnLike; calls: { command: string; args: readonly string[] }[]; unrefs: number } {
+function recordingSpawn(): {
+  spawn: SpawnLike
+  calls: { command: string; args: readonly string[] }[]
+  envs: Record<string, string | undefined>[]
+  unrefs: number
+} {
   const calls: { command: string; args: readonly string[] }[] = []
+  const envs: Record<string, string | undefined>[] = []
   const state = { unrefs: 0 }
-  const spawn: SpawnLike = (command, args) => {
+  const spawn: SpawnLike = (command, args, options) => {
     calls.push({ command, args })
+    envs.push(options.env)
     return {
       unref: () => {
         state.unrefs += 1
@@ -42,6 +61,7 @@ function recordingSpawn(): { spawn: SpawnLike; calls: { command: string; args: r
   return {
     spawn,
     calls,
+    envs,
     get unrefs() {
       return state.unrefs
     }
@@ -133,6 +153,7 @@ describe('launch', () => {
 
     const found = await launch({
       bundlePath: '/Applications/Witena.app',
+      env: SHIM_ENV,
       spawn: spawned.spawn,
       probe: async () => {
         probes += 1
@@ -162,6 +183,7 @@ describe('launch', () => {
 
     const found = await launch({
       bundlePath: '/Applications/Witena.app',
+      env: SHIM_ENV,
       spawn: spawned.spawn,
       probe: async () => {
         probes += 1
@@ -192,6 +214,7 @@ describe('launch', () => {
     let probes = 0
     const found = await launch({
       bundlePath: '/Applications/Witena.app',
+      env: SHIM_ENV,
       spawn: () => {
         throw new Error('spawn open ENOENT')
       },
@@ -214,6 +237,7 @@ describe('launch', () => {
     const lines: string[] = []
     await launch({
       bundlePath: '/Applications/Witena.app',
+      env: SHIM_ENV,
       spawn: recordingSpawn().spawn,
       probe: async () => DISCOVERY,
       now: () => 0,
@@ -222,5 +246,46 @@ describe('launch', () => {
       timeoutMs: 10
     })
     expect(lines.some((line) => line.includes('/Applications/Witena.app'))).toBe(true)
+  })
+
+  // The regression this pins down was found by hand on an installed app: a tool
+  // call made while Witena was quit always ended in "Timed out starting Witena",
+  // while the very same `open` typed in a terminal woke it in a second. The shim
+  // runs with ELECTRON_RUN_AS_NODE=1, `open` hands its environment to the app it
+  // launches, and Witena started as plain Node and exited on `--background`.
+  it('does not hand ELECTRON_RUN_AS_NODE to the app it wakes', async () => {
+    const spawned = recordingSpawn()
+    await launch({
+      bundlePath: '/Applications/Witena.app',
+      env: SHIM_ENV,
+      spawn: spawned.spawn,
+      probe: async () => DISCOVERY,
+      now: () => 0,
+      sleep: async () => undefined,
+      log: () => undefined
+    })
+
+    expect(spawned.envs).toHaveLength(1)
+    const env = spawned.envs[0] ?? {}
+    expect(env).not.toHaveProperty(RUN_AS_NODE_VARIABLE)
+    // Everything else is passed through: `open` itself needs PATH.
+    expect(env.PATH).toBe(SHIM_ENV.PATH)
+    expect(env.HOME).toBe(SHIM_ENV.HOME)
+    // …and the shim keeps running as what it is.
+    expect(SHIM_ENV[RUN_AS_NODE_VARIABLE]).toBe('1')
+  })
+})
+
+describe('launchEnvFor', () => {
+  it('drops the run-as-node variable and keeps the rest, on a copy', () => {
+    const env = { PATH: '/usr/bin', WITENA_USER_DATA: '/tmp/x', [RUN_AS_NODE_VARIABLE]: '1' }
+    const result = launchEnvFor(env)
+    expect(result).toEqual({ PATH: '/usr/bin', WITENA_USER_DATA: '/tmp/x' })
+    expect(result).not.toBe(env)
+    expect(env[RUN_AS_NODE_VARIABLE]).toBe('1')
+  })
+
+  it('is a plain copy when the variable is absent', () => {
+    expect(launchEnvFor({ PATH: '/usr/bin' })).toEqual({ PATH: '/usr/bin' })
   })
 })

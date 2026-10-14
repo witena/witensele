@@ -427,7 +427,7 @@ imports it and nothing in it imports the app. Three modules:
 |---|---|---|
 | `index.ts` | `createShimServer`, `createProcessConnector`, `main`, `forwardTimeoutMs`, `toolErrorResult`, `logToStderr` | The bundle's entry point: it calls `main()` at the bottom of the file, so importing it starts a server |
 | `connect.ts` | `createConnector`, `probeDiscovery`, `appIsRunning`, `isStaleEndpoint`, `discoveryPathFor`, `openEndpointClient`, `ShimError`, `SHIM_ERROR_TEXT` | The lookup, the one retry and the three refusals |
-| `launch.ts` | `bundlePathFor`, `openArgsFor`, `launch`, `LAUNCH_TIMEOUT_MS` (20 000), `LAUNCH_POLL_MS` (250) | `open(1)`, with `spawn` and the clock injected |
+| `launch.ts` | `bundlePathFor`, `openArgsFor`, `launchEnvFor`, `RUN_AS_NODE_VARIABLE`, `launch`, `LAUNCH_TIMEOUT_MS` (20 000), `LAUNCH_POLL_MS` (250) | `open(1)`, with `spawn` and the clock injected. `launch` takes the shim's `env` and spawns `open` with `launchEnvFor(env)` |
 
 ### The build
 
@@ -652,6 +652,23 @@ command WP-5's *Verify* uses:
 So the launcher, `bundlePathFor`'s premise (`process.execPath` is the bundle's
 binary), the hardened runtime's tolerance of run-as-node and the shim's offline
 half are all proven from a real bundle.
+
+**Lazy launch ran end to end on 2026-10-14 — after a fix.** On the installed
+app, with Witena quit, every tool call timed out after twenty seconds, while
+`open -g -j -a /Applications/Witena.app --args --background` typed in a terminal
+woke it in one. The difference was the environment: `bin/witena-mcp` exports
+`ELECTRON_RUN_AS_NODE=1` so the bundle's binary runs the shim, `spawn` passes
+the shim's environment to `open` by default, and `open(1)` hands the caller's
+environment to the application it launches — so the woken Witena ran as plain
+Node, took `--background` for a script and exited. (`ELECTRON_RUN_AS_NODE=1 open
+… --args --background` in a terminal reproduces it exactly.) `launch` now spawns
+`open` with `launchEnvFor(env)`, a copy without that one variable; with it a
+`list_agents` call from `claude -p` returned in 9 s and the app came up with
+`--background`, not visible and not frontmost. `launch.test.ts` pins the
+environment `open` receives, because the end-to-end path still needs a second
+signed copy to automate.
+
+What follows is the paragraph as WP-9 left it.
 
 **Lazy launch is still unproven end to end.** Every piece of it exists — the
 launcher makes `execPath` the bundle, `launch.ts` builds the `open -g -j` vector
